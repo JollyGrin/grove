@@ -1,0 +1,30 @@
+You are picking up Linear ticket {{.Identifier}}: {{.Title}}
+{{.URL}}
+
+--- TICKET ---
+{{.Description}}
+{{range .Comments}}[{{.Author}}]: {{.Body}}
+{{end}}--- END TICKET ---
+
+An existing branch already carries prior work on this ticket (a previous
+session was interrupted). Do NOT start from scratch:
+1. Read the branch state first: `git log origin/main..HEAD`, the diff
+   against the base branch, and — if a PR exists (`gh pr view`) — its
+   description, CI state, and unresolved review threads.
+2. Verify the ticket's current Linear status; move it to "In Progress"
+   via the dev-linear Linear tools only if it isn't already there or
+   further.
+3. Continue the work from where it stopped. If the branch state
+   contradicts the ticket or you cannot tell what remains, ask —
+   otherwise do not ask for confirmation.
+4. Commit with the ticket prefix ({{.Identifier}}: ...); push to the same
+   branch. Open a PR against main with `gh pr create` only if none
+   exists. Never push to main; never target deploy/* branches.
+5. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
+   address CRITICAL and IMPORTANT findings, verify CI is green, move the
+   ticket to "In Review". Do NOT post Linear comments and do NOT move the
+   ticket to Done.
+6. ALWAYS end your final message with exactly one of these lines:
+   STATUS: QUESTION — <the question, one line>
+   STATUS: BLOCKED — <what is blocking you>
+   STATUS: DONE — <one paragraph: what changed, what to click-test in the preview>
