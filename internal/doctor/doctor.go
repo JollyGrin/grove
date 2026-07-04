@@ -1,155 +1,117 @@
-// Package doctor preflights the environment gv depends on. Exists because
-// of a real incident: the ccwork profile had zero grid plugins installed,
-// which would have spawned conventionless workers (LEARNINGS.md 2026-06-10).
+// Package doctor renders the connections manifest (internal/connections).
+// It owns presentation only — marks, fix lines, the grid-pack heading, the
+// exit-code policy; every check lives in the manifest. Exists because of a
+// real incident: the ccwork profile had zero grid plugins installed, which
+// would have spawned conventionless workers (LEARNINGS.md 2026-06-10).
 package doctor
 
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"io"
 
 	"github.com/JollyGrin/grove/internal/config"
-	"github.com/JollyGrin/grove/internal/hooks"
+	"github.com/JollyGrin/grove/internal/connections"
 )
 
-type Check struct {
-	Name string
-	OK   bool
-	Info string
-	Fix  string
+// Row is one evaluated connection, flattened for rendering and --json.
+type Row struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Step     string `json:"step,omitempty"`
+	Kind     string `json:"kind"`
+	Pack     string `json:"pack,omitempty"`
+	Severity string `json:"severity"`
+	State    string `json:"state"`
+	Info     string `json:"info,omitempty"`
+	Fix      string `json:"fix,omitempty"`
 }
 
-func Run(cfg *config.Config, cfgErr error) []Check {
-	var checks []Check
-	add := func(name string, ok bool, info, fix string) {
-		checks = append(checks, Check{name, ok, info, fix})
-	}
-	home, _ := os.UserHomeDir()
-
-	for _, bin := range []string{"tmux", "gh", "git", "terminal-notifier", "claude"} {
-		_, err := exec.LookPath(bin)
-		add(bin+" installed", err == nil, "", "brew install "+bin)
-	}
-
-	if err := exec.Command("gh", "auth", "status").Run(); err != nil {
-		add("gh authenticated", false, "", "gh auth login")
-	} else {
-		add("gh authenticated", true, "", "")
-	}
-
-	if cfgErr != nil {
-		add("config.yaml", false, cfgErr.Error(), "cp config.example.yaml ~/.config/grove/config.yaml and edit")
-	} else {
-		add("config.yaml", true, fmt.Sprintf("%d repo(s)", len(cfg.Repos)), "")
-
-		keyEnv := cfg.Linear.APIKeyEnv
-		add(keyEnv+" set", os.Getenv(keyEnv) != "",
-			"", "create a personal API key at linear.app/settings/api, export "+keyEnv+" in ~/.zshrc")
-
-		// Universal CLAUDE.md at the repos' parent dir (grid convention).
-		seen := map[string]bool{}
-		for _, r := range cfg.Repos {
-			parent := filepath.Dir(r.Path)
-			if seen[parent] {
-				continue
-			}
-			seen[parent] = true
-			_, err := os.Stat(filepath.Join(parent, "CLAUDE.md"))
-			add("universal CLAUDE.md at "+parent, err == nil, "",
-				"ln -sn <workspace>/plugins/dev-core/templates/grid-claude-md.md "+filepath.Join(parent, "CLAUDE.md"))
-		}
-	}
-
-	// The worker command's first word must resolve in an interactive shell —
-	// `ccwork` is usually a zsh alias, invisible to LookPath, but panes run
-	// interactive shells where aliases work. Probe via `zsh -ic whence`.
-	if cfgErr == nil {
-		probed := map[string]bool{}
-		for _, r := range cfg.Repos {
-			word := strings.Fields(r.Claude)[0]
-			if probed[word] {
-				continue
-			}
-			probed[word] = true
-			err := exec.Command("zsh", "-ic", "whence "+word).Run()
-			add("worker command `"+word+"` resolves", err == nil, "",
-				"add to ~/.zshrc: alias "+word+"='CLAUDE_CONFIG_DIR=$HOME/.cc-work claude'")
-		}
-	}
-
-	// Grid plugins in the ccwork profile — workers are conventionless without them.
-	pluginsOK, info := ccworkPlugins(home)
-	add("grid plugins in ~/.cc-work", pluginsOK, info,
-		"CLAUDE_CONFIG_DIR=~/.cc-work claude plugin marketplace add <workspace-clone> && claude plugin install dev-core@workspace ...")
-
-	// dev-linear MCP auth can't be probed cheaply; surface as a reminder.
-	add("dev-linear MCP authed (manual check)", true,
-		"verify once: open a ccwork session, call a Linear tool", "")
-
-	if installed, err := hooks.Installed(); err == nil && len(installed) == 4 {
-		add("gv hooks installed", true, "", "")
-	} else {
-		add("gv hooks installed", false,
-			fmt.Sprintf("%d/4 events wired", countTrue(installed)), "gv hooks install")
-	}
-
-	return checks
+// Run evaluates the full manifest against the real machine.
+func Run(cfg *config.Config, cfgErr error) []Row {
+	return FromResults(connections.EvaluateAll(connections.NewEnv(cfg, cfgErr)))
 }
 
-func ccworkPlugins(home string) (bool, string) {
-	raw, err := os.ReadFile(filepath.Join(home, ".cc-work", "plugins", "installed_plugins.json"))
-	if err != nil {
-		return false, "no installed_plugins.json"
+// FromResults flattens manifest results into rows — the seam tests use to
+// inject a fake connections.Env.
+func FromResults(results []connections.Result) []Row {
+	rows := make([]Row, 0, len(results))
+	for _, r := range results {
+		rows = append(rows, Row{
+			ID:       r.Connection.ID,
+			Title:    r.Connection.Title,
+			Step:     r.Connection.Step,
+			Kind:     r.Connection.Kind,
+			Pack:     r.Connection.Pack,
+			Severity: string(r.Connection.Severity),
+			State:    string(r.Status.State),
+			Info:     r.Status.Info,
+			Fix:      r.Connection.Fix,
+		})
 	}
-	var data struct {
-		Plugins map[string]json.RawMessage `json:"plugins"`
-	}
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return false, err.Error()
-	}
-	need := []string{"dev-core@workspace", "dev-superpowers@workspace", "dev-linear@workspace", "dev-safety@workspace"}
-	var missing []string
-	for _, n := range need {
-		if _, ok := data.Plugins[n]; !ok {
-			missing = append(missing, n)
-		}
-	}
-	if len(missing) > 0 {
-		return false, "missing: " + strings.Join(missing, ", ")
-	}
-	return true, fmt.Sprintf("%d plugins", len(data.Plugins))
+	return rows
 }
 
-func countTrue(m map[string]bool) int {
+// Errors counts rows that block: error-severity connections not ok.
+// Warnings never count — `gv doctor` exits 0 on a warnings-only board
+// (flutter taxonomy; deliberate change from the P0 doctor).
+func Errors(rows []Row) int {
 	n := 0
-	for _, v := range m {
-		if v {
+	for _, r := range rows {
+		if r.Severity == string(connections.SeverityError) && r.State != string(connections.StateOK) {
 			n++
 		}
 	}
 	return n
 }
 
-// Print renders checks human-readably; returns true when all pass.
-func Print(checks []Check) bool {
-	allOK := true
-	for _, c := range checks {
-		mark := "✓"
-		if !c.OK {
-			mark = "✗"
-			allOK = false
+const (
+	ansiGreen  = "\033[32m"
+	ansiYellow = "\033[33m"
+	ansiRed    = "\033[31m"
+	ansiDim    = "\033[2m"
+	ansiReset  = "\033[0m"
+)
+
+// Render prints the board: ✓/!/✗ per row, an indented fix line per
+// failure, grid-interim rows under their own heading, then "N/M passed"
+// and the 🌳 terminal state when nothing blocks.
+func Render(w io.Writer, rows []Row) {
+	passed := 0
+	inGrid := false
+	for _, r := range rows {
+		if r.Pack == connections.PackGridInterim && !inGrid {
+			inGrid = true
+			fmt.Fprintf(w, "\n %s── grid pack (interim) ──%s\n", ansiDim, ansiReset)
 		}
-		line := fmt.Sprintf(" %s %s", mark, c.Name)
-		if c.Info != "" {
-			line += "  (" + c.Info + ")"
+		var mark string
+		switch r.State {
+		case string(connections.StateOK):
+			mark = ansiGreen + "✓" + ansiReset
+			passed++
+		case string(connections.StateWarn):
+			mark = ansiYellow + "!" + ansiReset
+		default:
+			mark = ansiRed + "✗" + ansiReset
 		}
-		fmt.Println(line)
-		if !c.OK && c.Fix != "" {
-			fmt.Printf("   → %s\n", c.Fix)
+		line := fmt.Sprintf(" %s %s", mark, r.Title)
+		if r.Info != "" {
+			line += "  (" + r.Info + ")"
+		}
+		fmt.Fprintln(w, line)
+		if r.State != string(connections.StateOK) && r.Fix != "" {
+			fmt.Fprintf(w, "   → %s\n", r.Fix)
 		}
 	}
-	return allOK
+	fmt.Fprintf(w, "\n %d/%d passed\n", passed, len(rows))
+	if Errors(rows) == 0 {
+		fmt.Fprintln(w, " 🌳 ready to grow")
+	}
+}
+
+// RenderJSON emits the rows for the orchestrator (`gv doctor --json`).
+func RenderJSON(w io.Writer, rows []Row) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(rows)
 }

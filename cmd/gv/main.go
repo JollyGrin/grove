@@ -28,17 +28,22 @@ import (
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/kickoff"
 	"github.com/JollyGrin/grove/internal/linear"
+	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
+	"github.com/JollyGrin/grove/internal/wizard"
 	"github.com/JollyGrin/grove/internal/worktree"
 	"github.com/JollyGrin/grove/orchestrator"
+
+	"github.com/charmbracelet/huh"
+	"golang.org/x/term"
 )
 
 const usage = `gv — grove
 
-  gv init                                     register this repo + scaffold .grove/tasks/
+  gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
   gv grab [<task>] [--repo name] [--manual]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
@@ -86,7 +91,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "init":
-		err = cmdInit()
+		err = cmdInit(args)
 	case "grab":
 		err = cmdGrab(args)
 	case "ls":
@@ -124,7 +129,7 @@ func main() {
 	case "mobile":
 		err = cmdMobile()
 	case "doctor":
-		err = cmdDoctor()
+		err = cmdDoctor(args)
 	case "hooks":
 		err = cmdHooks(args)
 	case "run-setup":
@@ -501,34 +506,158 @@ func printBacklog(prov provider.Provider, repoName string, tracked map[string]*s
 // cmdInit is the P0 deterministic scaffold: register the cwd repo in
 // ~/.config/grove/config.yaml and create .grove/tasks/ with a sample task.
 // The probe/wizard/AGENTS.md bootstrap is Phase 1.
-func cmdInit() error {
+// cmdInit is the wizard (plan 2026-07-04-phase-1a): probe → detect-then-
+// confirm steps → apply confirmed diffs → summary board. Re-running is the
+// reconfigure path (pre-populated with current values). Non-TTY behaves as
+// --yes; --yes never invents values, never installs hooks it didn't have,
+// and never spawns the paid agents-md run.
+func cmdInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	var f wizard.Flags
+	fs.BoolVar(&f.Yes, "yes", false, "accept all detections; fill unset fields only")
+	fs.StringVar(&f.Only, "only", "", "run a single step: "+strings.Join(wizard.StepIDs, "|"))
+	fs.StringVar(&f.Base, "base", "", "base branch")
+	fs.StringVar(&f.Setup, "setup", "", "worktree setup command")
+	fs.StringVar(&f.Worker, "worker", "", "worker command")
+	fs.StringVar(&f.Provider, "provider", "", "task backend: markdown|linear")
+	fs.StringVar(&f.Ntfy, "ntfy", "", "ntfy topic URL")
+	fs.BoolVar(&f.Hooks, "hooks", false, "install session hooks")
+	fs.BoolVar(&f.NoHooks, "no-hooks", false, "skip the hooks step")
+	fs.BoolVar(&f.AgentsMD, "agents-md", false, "generate AGENTS.md via a one-shot agent")
+	fs.BoolVar(&f.NoAgentsMD, "no-agents-md", false, "skip the AGENTS.md step")
+	fs.BoolVar(&f.ForceAgentsMD, "force-agents-md", false, "write AGENTS.md.new when AGENTS.md exists")
+	_ = parseAnywhere(fs, args)
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		f.Yes = true // non-TTY must never hang (/dev/null IS a char device, so stat-mode checks lie)
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	root, err := git.RepoRoot(cwd)
+	if err != nil {
+		return fmt.Errorf("gv init must run inside a git repo: %w", err)
+	}
+	name := filepath.Base(root)
 	cfgPath := filepath.Join(config.Dir(), "config.yaml")
-	res, err := bootstrap.Run(cwd, cfgPath, time.Now().Format("2006-01-02"))
+	doc, err := bootstrap.LoadDoc(cfgPath)
 	if err != nil {
 		return err
 	}
-	if res.WroteConfig {
-		fmt.Printf("✓ registered repo %q (base %s) in %s\n", res.RepoName, res.Base, res.ConfigPath)
-	} else {
-		fmt.Printf("• repo %q already registered in %s\n", res.RepoName, res.ConfigPath)
+	keyEnv := doc.Get("linear", "api_key_env")
+	if keyEnv == "" {
+		keyEnv = "LINEAR_API_KEY"
 	}
-	if res.WroteSample {
-		fmt.Printf("✓ scaffolded %s with a sample task\n", res.TasksDir)
-	} else {
-		fmt.Printf("• task dir %s already exists\n", res.TasksDir)
+	p, err := probe.Run(root, keyEnv)
+	if err != nil {
+		return err
 	}
-	fmt.Printf(`
-next steps:
-  1. edit %s (title, description, acceptance criteria)
-  2. gv doctor                  # preflight
-  3. gv grab                    # list grabbable tasks
-  4. gv grab task-001           # worktree + tmux + autonomous worker
-  5. gv ls                      # watch the fleet
-`, filepath.Join(res.TasksDir, "task-001.md"))
+	installed, _ := hooks.Installed()
+	in := wizard.Input{
+		Probe: p, RepoName: name, RepoPath: root, Doc: doc,
+		HooksInstalled: len(installed) == 4, Flags: f,
+	}
+	steps, err := wizard.Build(in)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("🌱 grove init — %s (%s%s)\n", name, p.Stack, shapeNote(p.Shape))
+	if !f.Yes {
+		if err := runWizardForms(steps); err != nil {
+			fmt.Println("aborted — nothing written")
+			return nil
+		}
+	}
+	wizard.Apply(in, steps)
+	if err := doc.Save(); err != nil {
+		return err
+	}
+	a := wizard.Collect(steps)
+	if doc.Dirty() {
+		fmt.Printf("✓ config updated: %s\n", cfgPath)
+	} else {
+		fmt.Printf("• config already up to date: %s\n", cfgPath)
+	}
+
+	if a.Provider == "" || a.Provider == "markdown" {
+		if dir, wrote, err := bootstrap.ScaffoldTasks(root, time.Now().Format("2006-01-02")); err == nil && wrote {
+			fmt.Printf("✓ scaffolded %s with a sample task\n", dir)
+		}
+	}
+	if a.InstallHooks && !in.HooksInstalled {
+		if err := hooks.Install(); err != nil {
+			fmt.Fprintf(os.Stderr, "hooks install failed: %v\n", err)
+		} else {
+			fmt.Println("✓ session hooks wired into ~/.cc-work/settings.json")
+		}
+	}
+	if a.RunAgentsMD {
+		worker := doc.Get("repos", name, "claude")
+		if worker == "" {
+			worker = "claude"
+		}
+		facts := bootstrap.Facts{
+			RepoName: name, Stack: p.Stack, Shape: p.Shape,
+			Setup: a.Setup, Build: p.Build, Test: p.Test, Lint: p.Lint,
+		}
+		fmt.Println("→ bootstrap agent writing the repo brain (one-shot, review before committing)…")
+		target, err := bootstrap.GenerateAgentsMD(root, worker, facts, f.ForceAgentsMD, os.Stdout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agents-md: %v\n", err)
+		} else {
+			fmt.Printf("✓ wrote %s — review it, then commit\n", target)
+		}
+	}
+
+	// The summary board: what's available, what would improve this repo.
+	fmt.Println()
+	cfg, cfgErr := config.Load()
+	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr))
+	fmt.Printf("\nnext: gv grab   (list backlog) · gv grab task-001 · gv   (cockpit)\n")
+	return nil
+}
+
+func shapeNote(shape string) string {
+	if shape == "" || shape == "single" {
+		return ""
+	}
+	return " · " + shape
+}
+
+// runWizardForms is the thin huh loop — every decision was made in
+// internal/wizard; this only collects human edits into the steps.
+func runWizardForms(steps []wizard.Step) error {
+	for i := range steps {
+		s := &steps[i]
+		var field huh.Field
+		switch s.Kind {
+		case wizard.KindConfirm:
+			field = huh.NewConfirm().Title(s.Title).Value(&s.On)
+		case wizard.KindSelect:
+			opts := make([]huh.Option[string], 0, len(s.Options)+2)
+			if s.Value == "" {
+				opts = append(opts, huh.NewOption("(keep config default)", ""))
+			}
+			seen := map[string]bool{"": true}
+			for _, o := range append([]string{s.Value}, s.Options...) {
+				if o == "" || seen[o] {
+					continue
+				}
+				seen[o] = true
+				opts = append(opts, huh.NewOption(o, o))
+			}
+			field = huh.NewSelect[string]().Title(s.Title).Options(opts...).Value(&s.Value)
+		default:
+			if s.Detected != "" && s.Value == s.Detected && s.Current == "" {
+				s.Title += " (detected)"
+			}
+			field = huh.NewInput().Title(s.Title).Value(&s.Value)
+		}
+		if err := huh.NewForm(huh.NewGroup(field)).Run(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1601,14 +1730,31 @@ func cmdSweep(args []string) error {
 
 // --- doctor / hooks ---
 
-func cmdDoctor() error {
-	cfg, cfgErr := config.Load()
-	fmt.Println("GROVE DOCTOR")
-	if doctor.Print(doctor.Run(cfg, cfgErr)) {
-		fmt.Println("all clear 🌳")
-		return nil
+// cmdDoctor renders the connections manifest. Exits 1 only when *errors*
+// remain — a warnings-only board exits 0 (deliberate change from the P0
+// doctor, which failed on any red row).
+func cmdDoctor(args []string) error {
+	jsonOut := false
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+			continue
+		}
+		return fmt.Errorf("usage: gv doctor [--json]")
 	}
-	os.Exit(1)
+	cfg, cfgErr := config.Load()
+	rows := doctor.Run(cfg, cfgErr)
+	if jsonOut {
+		if err := doctor.RenderJSON(os.Stdout, rows); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("GROVE DOCTOR")
+		doctor.Render(os.Stdout, rows)
+	}
+	if doctor.Errors(rows) > 0 {
+		os.Exit(1)
+	}
 	return nil
 }
 
