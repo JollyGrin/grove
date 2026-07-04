@@ -1,7 +1,7 @@
 # Phase 1a+ — the visible wizard: probe · connections · doctor-from-manifest · AGENTS.md brain
 
-> Status: revised per plan-reviewer (round 1: REVISE, all findings applied)
-> → execute.
+> Status: plan-reviewer approved (round 1 REVISE fixes + round 2 --yes
+> precedence fix applied)> → execute.
 > Driver (Dean, 2026-07-04, after first live test): "the wizard is hidden —
 > I should know what's available and how to further improve repo
 > accessibility" + "does gv analyze stuff in a templated way to build its
@@ -176,7 +176,10 @@ prompt.
   renderer as doctor. This is the "what's available / what would improve
   accessibility" screen.
 - Contract: idempotent; re-run = reconfigure pre-populated with current
-  values; writes only confirmed diffs via Task 4's field-merge writer;
+  values; **value precedence under `--yes` (review round-2): an existing
+  non-empty (hand-edited) value always wins over fresh detection —
+  `--yes` only fills unset/empty fields;** writes only confirmed diffs
+  via Task 4's field-merge writer;
   flag twins `--base --setup --worker --provider --ntfy --hooks/--no-hooks
   --agents-md/--no-agents-md --force-agents-md`; `--yes`; non-TTY ⇒
   `--yes`; `--only <step>`.
@@ -193,8 +196,9 @@ re-run, --only, --yes autonomy rule); manual TTY smoke.
 - e2e/dummy.sh: bare `gv init` → `gv init --yes`.
 - e2e/wizard.sh: scratch env — `gv init --yes` on a pnpm-shaped fixture
   asserts detected setup command in config; **pre-seeded hand-edited
-  config with comments survives `gv init --yes` byte-comparable except
-  confirmed fields** (FMA row 1 promise, now enumerated); `gv init --only
+  config with comments (including a `setup` value that DIFFERS from the
+  fixture's detected one) survives `gv init --yes` byte-comparable —
+  hand-edited values win over detection** (FMA row 1 promise); `gv init --only
   hooks` wires scratch settings.json exactly once; `gv init --yes` does
   NOT spawn the agents-md stub; `gv init --agents-md` with stub claude
   writes AGENTS.md; doctor exit codes (all-green 0, warn-only 0,
