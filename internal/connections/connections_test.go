@@ -362,7 +362,10 @@ func TestDevLinearMCPStaticWarn(t *testing.T) {
 
 func TestGridUniversalClaudeMdDedupsParents(t *testing.T) {
 	cfg := testConfig()
-	cfg.Repos["demo2"] = &config.Repo{Path: "/repos/demo2", Base: "main", Claude: "ccwork"}
+	// The grid check is scoped to linear-driven repos (see the scoping
+	// test below) — mark both so the shared parent is in scope at all.
+	cfg.Repos["demo"].Provider = "linear"
+	cfg.Repos["demo2"] = &config.Repo{Path: "/repos/demo2", Base: "main", Claude: "ccwork", Provider: "linear"}
 	results := EvaluateAll(happyEnv(cfg))
 	n := 0
 	for _, r := range results {

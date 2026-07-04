@@ -90,6 +90,10 @@
 
 ## Go / CLI
 
+- **2026-07-04 · never pipe the test gate** — `go test ./... | tail` (or
+  `| grep -c FAIL`) reports the PIPE's exit status, not the tests'; two
+  red runs merged to main that way in one evening. Gates run bare and
+  check $? — filtering happens on a saved log, never inline.
 - **2026-07-04 · `/dev/null` IS a character device** — detecting "am I
   interactive?" via `os.Stdin.Stat()` + `ModeCharDevice` passes for
   `< /dev/null`, so the wizard tried to render forms headless and
