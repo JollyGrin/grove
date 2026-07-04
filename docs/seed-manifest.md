@@ -61,3 +61,13 @@ exercised for real. This is the Phase-0 acceptance harness (DESIGN.md
 | Date | Package/file | Divergence | Plan task |
 |---|---|---|---|
 | 2026-07-03 | all | Module path `JollyGrin/overstory-tui` → `JollyGrin/grove`; `cmd/ovs/` → `cmd/gv/` | seed |
+| 2026-07-04 | `internal/config` | P0.0 paths (`~/.config/grove`, `~/.local/state/grove`, `GROVE_STATE_DIR`) + new `provider:` section (kind default `markdown`, `markdown.dir`) | phase-0 T1/T2 |
+| 2026-07-04 | `internal/hooks` | gv notifier group/titles; installer predicate rewritten to basename matching (`isGvEntry`) so shared-settings ovs entries are never claimed; `install`/`installed` made path-injectable for tests | phase-0 T1 |
+| 2026-07-04 | `internal/transcript/session.go` | `OVS_CLAUDE_CONFIG_DIR` → `GV_CLAUDE_CONFIG_DIR` (parse/session logic untouched) | phase-0 T1 |
+| 2026-07-04 | `internal/audit` · `internal/tui` · `internal/doctor` · `cmd/gv` · `orchestrator/CLAUDE.md` · `config.example.yaml` | Mechanical ovs→gv/grove rename of command strings, banners, hints | phase-0 T1 |
+| 2026-07-04 | `internal/tmux/ovs.go` | Relay buffer `ovs-relay` → `gv-relay` (tmux buffers are server-global; avoids clobbering live ovs relays) | phase-0 T1 |
+| 2026-07-04 | `internal/kickoff` | Generalized: renders `provider.Task` + `Verbs`, per-provider template sets. Linear output **byte-identical** (goldens in `testdata/`); `{{.Identifier}}` alias kept for repo overrides; new generic `md_*.tmpl` set. Linear templates keep the Review sentence literal (its multi-line wrap defeats clean verb slotting) — full verb assembly is Phase 4 | phase-0 T3 |
+| 2026-07-04 | `internal/provider` (new) | TaskProvider seam — **P0 read subset of DESIGN §5.1**: no `Attach`; `Capabilities{CanList}` only (`canTransition`/`canComment`/`autoLinksPR` deferred until a write path needs them) | phase-0 T2 |
+| 2026-07-04 | `internal/git/grove.go` (new file) | `HasRemote` + `BaseRef` (no-remote grab fallback); upstream files untouched | phase-0 T3 |
+| 2026-07-04 | `internal/bootstrap` (new) | P0 `gv init` scaffold (register repo, `.grove/tasks/`, sample task) | phase-0 T5 |
+| 2026-07-04 | `cmd/gv/main.go` | grab/adopt/findTask/done rewired through the provider; no-arg grab lists the backlog; done no-remote degraded path (`--force` = human confirmation) | phase-0 T3/T4 |

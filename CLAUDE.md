@@ -14,22 +14,27 @@ Read [HANDOFF.md](HANDOFF.md) first if you are picking this repo up fresh.
 the status board; [LEARNINGS.md](LEARNINGS.md) holds verified surprises —
 update both when you ship or get surprised. Plans go in `docs/plans/`.
 
-## ⚠️ Do not run the binary yet (pre-P0.0)
+## Running the binary (P0.0 done — safe, with two cautions)
 
-The Go tree is a **verbatim copy of ovs** (only the module path changed).
-Every runtime namespace still says overstory: config at
-`~/.config/overstory/`, state at `~/.local/state/overstory/` (env override
-`OVERSTORY_STATE_DIR`), hooks that install `ovs hook` commands referencing
-`~/go/bin/ovs`. **Running `gv` (doctor, hooks install, ui, grab) before the
-P0.0 namespace rename would read/write the live overstory fleet's state.**
-`go build/vet/test` are safe and expected; `go install` / executing the
-binary is not, until TASKS.md P0.0 is done.
+**Resolved 2026-07-04 (Phase 0):** the P0.0 namespace rename is done —
+config `~/.config/grove/`, state `~/.local/state/grove/` (env override
+`GROVE_STATE_DIR`), `gv hook` commands, `grove`/`grove-mobile` cockpit
+sessions. The binary is safe to run and no longer touches overstory
+state (`e2e/dummy.sh` asserts it). Two live-coexistence cautions remain:
+`gv hooks install` writes the **shared** `~/.cc-work/settings.json`
+(tested to preserve ovs entries — but treat it with respect), and
+worker tmux sessions still use ovs's `pr-<repo>` naming, so a repo
+tracked by BOTH tools shares one session (windows differ per branch).
 
 ## Build / test
 
 - `go build ./... && go vet ./... && go test ./...` must be green;
-  `gofmt -l .` empty. (Verified at seed time.)
-- After P0.0: `go install ./cmd/gv` refreshes `~/go/bin/gv` in place.
+  `gofmt -l .` empty.
+- `go install ./cmd/gv` refreshes `~/go/bin/gv` in place (hooks reference
+  the absolute path, so no re-install of hooks after rebuilds).
+- `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
+  scratch everything (the dummy-data pattern) — run it before merging
+  anything that touches the task lifecycle.
 
 ## Hard rules (inherited from ovs, provider-neutral)
 

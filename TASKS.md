@@ -9,26 +9,37 @@
 
 ## Now
 
-- [ ] **Write the Phase 0 plan** (`docs/plans/2026-MM-DD-phase-0.md`):
-      P0.0 + markdown provider + dummy-repo E2E + dual-hook smoke test.
-      Run plan-reviewer before executing.
+- [ ] **Dean: first live test** — `gv init` + `gv grab` a real task in a
+      real repo with a real Claude worker (Phase 0 shipped 2026-07-04).
+      Then `gv hooks install` for live status capture (verified to
+      preserve ovs entries; deliberately not run overnight —
+      propose-then-dispose).
+- [ ] Fold live-test findings into the Phase 1 plan.
 
-## Phase 0 — extraction proven (skeleton + local-md)
+## Phase 0 — extraction proven (skeleton + local-md) ✅ 2026-07-04
+
+Plan: [docs/plans/2026-07-04-phase-0.md](docs/plans/2026-07-04-phase-0.md)
+(plan-reviewer approved). Divergences logged in docs/seed-manifest.md.
 
 - [x] Seed: copy ovs tree byte-identical, module path rewrite, build/vet/
       test green (2026-07-03, see docs/seed-manifest.md)
-- [ ] **P0.0 namespace rename — BLOCKS running the binary** (see
-      CLAUDE.md warning + seed-manifest generalization map): config dir,
-      state dir + env var, hook command names + binary path, tmux session
-      names, notifier strings
-- [ ] `markdown` TaskProvider (DESIGN.md §5.2 incl. the event-state-
-      authoritative rule and the no-remote degraded path)
-- [ ] `TaskProvider` interface extraction; `linear` moves behind it
-      (read paths only for now)
-- [ ] `gv grab/ls/done` E2E on a dummy repo (`.grove/tasks/` file, worker
-      = `echo`) via the dummy-data pattern
-- [ ] Dual-hook coexistence smoke test with live ovs (DESIGN.md §12:
-      task-ownership no-op contract)
+- [x] **P0.0 namespace rename** (2026-07-04): config `~/.config/grove/`,
+      state `~/.local/state/grove/` + `GROVE_STATE_DIR`, `gv hook` +
+      basename-matched installer predicate (never claims ovs entries),
+      `grove`/`grove-mobile` cockpit sessions, notifier group/titles
+- [x] `markdown` TaskProvider (frontmatter schema; backlog = todo/backlog;
+      event-state-authoritative in-flight exclusion; no-remote degraded
+      grab/done paths per DESIGN §5.2)
+- [x] `TaskProvider` interface extraction (P0 read subset of DESIGN §5.1);
+      `linear` behind it; kickoff render byte-identical (golden-tested)
+- [x] `gv init` P0 scaffold (register repo + `.grove/tasks/` + sample —
+      probe/wizard stays Phase 1)
+- [x] `gv grab/ls/done` E2E on a dummy repo (`e2e/dummy.sh`, remote-less,
+      worker = `echo`) — also covers hooks, untrack, re-grab, audit
+- [x] Dual-hook coexistence smoke test (scratch env over a copy of the
+      real settings.json: ovs entries byte-identical, gv added once,
+      `gv hook` no-ops on a live ovs worktree cwd). Live install = Dean's
+      morning step.
 
 ## Phase 1 — bootstrap (drop-in-to-any-repo)
 

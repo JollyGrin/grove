@@ -90,6 +90,27 @@
 
 ## Go / CLI
 
+- **2026-07-04 · shared tmux namespaces during ovs coexistence** — worker
+  sessions keep ovs's `pr-<repo>` naming (byte-comparable `internal/tmux`),
+  so a repo tracked by BOTH ovs and gv lands windows in the SAME tmux
+  session. Window names differ per branch and each tool finds its own by
+  stored names, so it works — but don't be surprised seeing gv windows
+  inside an "ovs" session. Same class of clash made us rename the relay
+  buffer (`ovs-relay` → `gv-relay`): tmux buffers are server-global, and
+  a shared name would let one tool's relay clobber the other's mid-paste.
+- **2026-07-04 · settings.json hook matching must be basename-precise** —
+  the ovs-era installer predicate matched `"ovs"` as a substring anywhere
+  in the command. The gv equivalent would have CLAIMED (and replaced) ovs
+  entries in the shared `~/.cc-work/settings.json` on `gv hooks install`.
+  Match on the hook command's binary basename (`gv`, `*grove*`) — never
+  substring-across-the-path. Table-tested against a real transition-window
+  settings fixture.
+- **2026-07-04 · `yaml.Node` keeps flow style when you append** — seeding
+  a config with `repos: {}` and appending via node surgery emits the whole
+  map single-line (`repos: {r: {path: …}}`) because the `{}` scalar's
+  flow style sticks. Set `node.Style = 0` after lookup/creation to force
+  block style. (yaml.v3 round-trip via Node DOES preserve comments —
+  that part worked as hoped in `gv init`.)
 - **stdlib `flag` stops at the first positional** — `gv grab <url> --repo
   x` silently ignores `--repo` without a re-parse loop (`parseAnywhere`).
   Flags-after-positionals is table stakes; stdlib doesn't give it to you.

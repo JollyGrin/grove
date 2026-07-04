@@ -4,6 +4,11 @@
 > scaffold. You are (probably) a fresh agent in a fresh repo. This file is
 > the complete pickup path; nothing about grove lives only in someone's
 > head.
+>
+> **Update 2026-07-04: Phase 0 shipped** — P0.0 rename done (binary safe
+> to run), TaskProvider seam + markdown provider + `gv init` + E2E green
+> (`e2e/dummy.sh`). The do-not-run trap below is historical; CLAUDE.md and
+> TASKS.md carry the current state. Next: Dean's live test → Phase 1 plan.
 
 ## What this repo is
 
