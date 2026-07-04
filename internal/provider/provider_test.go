@@ -120,10 +120,10 @@ func TestProviderKindValidation(t *testing.T) {
 
 func TestIDCandidates(t *testing.T) {
 	cases := map[string][]string{
-		"DEV-1234": {"DEV-1234", "dev-1234"}, // linear shape; lowercase is also a valid md slug
-		"task-001": {"TASK-001", "task-001"}, // md id uppercases into the linear regex too
+		"DEV-1234":                               {"DEV-1234", "dev-1234"}, // linear shape; lowercase is also a valid md slug
+		"task-001":                               {"TASK-001", "task-001"}, // md id uppercases into the linear regex too
 		"https://linear.app/x/issue/DEV-77/slug": {"DEV-77"},
-		"!!!": nil,
+		"!!!":                                    nil,
 	}
 	for raw, want := range cases {
 		got := IDCandidates(raw)

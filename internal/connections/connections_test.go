@@ -425,3 +425,27 @@ func TestEvaluateAllOrderCoreThenGrid(t *testing.T) {
 		t.Fatal("no grid-interim rows")
 	}
 }
+
+// The universal-CLAUDE.md grid convention applies to linear-driven repos
+// only — markdown side-repos sharing a parent (e.g. ~/git) must not
+// red-flag the doctor.
+func TestGridUniversalClaudeMDScopedToLinearRepos(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Provider.Kind = "markdown"
+	cfg.Repos = map[string]*config.Repo{
+		"side": {Path: "/home/x/side"},
+		"grid": {Path: "/home/x/thegrid/mono", Provider: "linear"},
+	}
+	env := Env{Cfg: cfg, Stat: func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }}
+	var ids []string
+	for _, c := range GridInterim(env) {
+		ids = append(ids, c.ID)
+	}
+	joined := strings.Join(ids, " ")
+	if !strings.Contains(joined, "grid:universal-claude-md:/home/x/thegrid") {
+		t.Errorf("linear repo parent must be checked: %v", ids)
+	}
+	if strings.Contains(joined, "/home/x/side") || strings.Contains(joined, "universal-claude-md:/home/x ") {
+		t.Errorf("markdown repo parent must NOT be checked: %v", ids)
+	}
+}
