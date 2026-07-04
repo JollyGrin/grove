@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/hooks"
 )
 
 // Core returns the built-in connection instances, in render order. Rows
@@ -86,16 +87,25 @@ func Core(env Env) []Connection {
 		conns = append(conns, agentsMdConnections(env)...)
 	}
 
-	conns = append(conns, Connection{
-		ID:          "hooks",
-		Step:        "hooks",
-		Kind:        KindHooks,
-		Severity:    SeverityError,
-		RequiredFor: []string{"ls", "ui"},
-		Title:       "gv hooks installed",
-		Fix:         "gv hooks install",
-		Check:       checkHooks,
-	})
+	// One row per worker-profile settings.json — hooks only fire for the
+	// profile they're installed in (a plain-claude fleet needs ~/.claude,
+	// the Grid's ccwork needs ~/.cc-work).
+	var workers []string
+	if env.Cfg != nil && env.CfgErr == nil {
+		workers = hooks.WorkerCommands(env.Cfg)
+	}
+	for _, path := range env.HookSettingsPaths(workers) {
+		conns = append(conns, Connection{
+			ID:          "hooks:" + path,
+			Step:        "hooks",
+			Kind:        KindHooks,
+			Severity:    SeverityError,
+			RequiredFor: []string{"ls", "ui"},
+			Title:       "gv hooks in " + path,
+			Fix:         "gv hooks install",
+			Check:       checkHooksAt(path),
+		})
+	}
 
 	return conns
 }

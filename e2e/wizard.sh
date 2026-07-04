@@ -66,17 +66,21 @@ cp "$CFG" "$SCRATCH/before.yaml"
 "$GV" init --yes > /dev/null
 cmp "$CFG" "$SCRATCH/before.yaml" || { diff "$SCRATCH/before.yaml" "$CFG" || true; fail "hand-edited config changed under --yes"; }
 
-say "--only hooks wires settings.json once, ovs entries intact"
+say "--only hooks wires the WORKER'S profile (echo → ~/.claude), once"
+# Hooks land in the settings.json of the profile the worker command runs
+# under. This fleet's worker is `echo` → the default ~/.claude profile —
+# NOT the Grid's ~/.cc-work, which must stay byte-untouched.
 mkdir -p "$HOME/.cc-work"
 cat > "$HOME/.cc-work/settings.json" <<'EOF'
 {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/Users/x/go/bin/ovs hook stop"}]}]}}
 EOF
+cp "$HOME/.cc-work/settings.json" "$SCRATCH/ccwork-before.json"
 "$GV" init --only hooks > /dev/null
 "$GV" init --only hooks > /dev/null
-GV_COUNT=$(grep -c 'gv hook stop' "$HOME/.cc-work/settings.json" || true)
-OVS_COUNT=$(grep -c 'ovs hook stop' "$HOME/.cc-work/settings.json" || true)
-[ "$GV_COUNT" -eq 1 ] || fail "gv Stop hook count = $GV_COUNT, want 1 (idempotent)"
-[ "$OVS_COUNT" -eq 1 ] || fail "ovs entry lost"
+[ -f "$HOME/.claude/settings.json" ] || fail "hooks must land in the worker's profile (~/.claude)"
+GV_COUNT=$(grep -c 'gv hook stop' "$HOME/.claude/settings.json" || true)
+[ "$GV_COUNT" -eq 1 ] || fail "gv Stop hook count in ~/.claude = $GV_COUNT, want 1 (idempotent)"
+cmp -s "$HOME/.cc-work/settings.json" "$SCRATCH/ccwork-before.json" || fail "unrelated profile (~/.cc-work) was touched"
 
 say "--agents-md with a stub worker writes the brain"
 STUB="$SCRATCH/stub-claude"
@@ -105,9 +109,10 @@ python3 -c "
 import json,sys
 rows = json.load(open('$SCRATCH/doctor.json'))
 ids = {r['id'] for r in rows}
-need = {'binary:tmux','gh-auth','hooks'}
+need = {'binary:tmux','gh-auth'}
 missing = need - ids
 assert not missing, f'doctor rows missing {missing}'
+assert any(i.startswith('hooks:') for i in ids), f'per-profile hooks row missing: {ids}'
 assert any(r.get('pack') == 'grid-interim' for r in rows), 'grid-interim section missing'
 print(f'doctor board: {len(rows)} rows ok')
 " || fail "doctor --json board malformed"

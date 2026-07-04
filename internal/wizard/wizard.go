@@ -64,6 +64,7 @@ type Input struct {
 	RepoPath       string
 	Doc            *bootstrap.Doc // current global config
 	HooksInstalled bool
+	HooksPaths     []string // worker-profile settings.json files hooks would land in
 	Flags          Flags
 }
 
@@ -121,7 +122,7 @@ func Build(in Input) ([]Step, error) {
 		},
 		{
 			ID: "provider", Kind: KindSelect,
-			Title:    "task backend",
+			Title:    "task backend (github-issues adapter is on the roadmap — Phase 3)",
 			Options:  providerOptions(in),
 			Detected: "markdown", Current: in.Doc.Get("provider", "kind"),
 			Value: resolve(f.Provider, in.Doc.Get("provider", "kind"), "markdown"),
@@ -134,7 +135,7 @@ func Build(in Input) ([]Step, error) {
 		},
 		{
 			ID: "hooks", Kind: KindConfirm,
-			Title:   "install the session hooks into ~/.cc-work/settings.json (live status/question capture)",
+			Title:   "install the session hooks (live status/question capture) into " + hooksPathsLabel(in.HooksPaths),
 			Current: boolWord(in.HooksInstalled),
 			On:      resolveHooks(f, in.HooksInstalled),
 		},
@@ -260,6 +261,16 @@ func Apply(in Input, steps []Step) {
 	if has("ntfy") && a.Ntfy != "" {
 		in.Doc.Set(a.Ntfy, "notify", "ntfy")
 	}
+}
+
+// hooksPathsLabel names the worker-profile settings files hooks land in —
+// derived from the configured worker commands, so a personal-claude fleet
+// sees ~/.claude, not the Grid's ~/.cc-work.
+func hooksPathsLabel(paths []string) string {
+	if len(paths) == 0 {
+		return "your worker profile's settings.json"
+	}
+	return strings.Join(paths, " + ")
 }
 
 func boolWord(b bool) string {

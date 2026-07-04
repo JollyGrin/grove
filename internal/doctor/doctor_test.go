@@ -50,11 +50,16 @@ func happyEnv(cfg *config.Config) connections.Env {
 				`"dev-linear@workspace":{},"dev-safety@workspace":{}}}`), nil
 		},
 		Run: func(time.Duration, string, ...string) error { return nil },
-		HooksInstalled: func() (map[string]bool, error) {
-			return map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}, nil
+		HooksInstalled: func(paths []string) map[string]map[string]bool {
+			out := map[string]map[string]bool{}
+			for _, p := range paths {
+				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}
+			}
+			return out
 		},
-		GOOS: "darwin",
-		Home: "/home/u",
+		HookSettingsPaths: func([]string) []string { return []string{"/profiles/work/settings.json"} },
+		GOOS:              "darwin",
+		Home:              "/home/u",
 	}
 }
 
@@ -85,7 +90,7 @@ func TestFullRowSet(t *testing.T) {
 		{"provider:markdown:demo", "error", "ok", ""},
 		{"worker:ccwork", "error", "ok", ""},
 		{"agents-md:demo", "warn", "warn", ""},
-		{"hooks", "error", "ok", ""},
+		{"hooks:/profiles/work/settings.json", "error", "ok", ""},
 		{"grid:ccwork-plugins", "error", "ok", "grid-interim"},
 		{"grid:dev-linear-mcp", "warn", "warn", "grid-interim"},
 	}

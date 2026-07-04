@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/hooks"
 )
 
 // --- fakes ---
@@ -55,11 +57,16 @@ func happyEnv(cfg *config.Config) Env {
 		},
 		ReadFile: func(string) ([]byte, error) { return []byte(allPluginsJSON), nil },
 		Run:      func(time.Duration, string, ...string) error { return nil },
-		HooksInstalled: func() (map[string]bool, error) {
-			return map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}, nil
+		HooksInstalled: func(paths []string) map[string]map[string]bool {
+			out := map[string]map[string]bool{}
+			for _, p := range paths {
+				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}
+			}
+			return out
 		},
-		GOOS: "darwin",
-		Home: "/home/u",
+		HookSettingsPaths: func([]string) []string { return []string{"/profiles/work/settings.json"} },
+		GOOS:              "darwin",
+		Home:              "/home/u",
 	}
 }
 
@@ -236,22 +243,56 @@ func TestCheckAgentContext(t *testing.T) {
 }
 
 func TestCheckHooks(t *testing.T) {
-	e := Env{HooksInstalled: func() (map[string]bool, error) {
-		return map[string]bool{"Stop": true, "SessionEnd": true}, nil
-	}}
-	st := checkHooks(e)
+	fake := func(events map[string]bool) func([]string) map[string]map[string]bool {
+		return func(paths []string) map[string]map[string]bool {
+			out := map[string]map[string]bool{}
+			for _, p := range paths {
+				out[p] = events
+			}
+			return out
+		}
+	}
+	e := Env{HooksInstalled: fake(map[string]bool{"Stop": true, "SessionEnd": true})}
+	st := checkHooksAt("/p/settings.json")(e)
 	if st.State != StateMissing || st.Info != "2/4 events wired" {
 		t.Errorf("got %v %q, want missing 2/4 events wired", st.State, st.Info)
 	}
-	e.HooksInstalled = func() (map[string]bool, error) {
-		return map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}, nil
-	}
-	if st := checkHooks(e); st.State != StateOK {
+	e.HooksInstalled = fake(map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true})
+	if st := checkHooksAt("/p/settings.json")(e); st.State != StateOK {
 		t.Errorf("got %v, want ok", st.State)
 	}
-	e.HooksInstalled = func() (map[string]bool, error) { return nil, errors.New("no settings.json") }
-	if st := checkHooks(e); st.State != StateMissing {
-		t.Errorf("read error: got %v, want missing", st.State)
+	e.HooksInstalled = fake(nil) // missing file reads as nothing installed
+	if st := checkHooksAt("/p/settings.json")(e); st.State != StateMissing {
+		t.Errorf("missing file: got %v, want missing", st.State)
+	}
+}
+
+// SettingsPaths maps worker commands to their profiles' settings files —
+// the fix for hooks landing only in the Grid's ~/.cc-work while personal
+// plain-claude workers went uncaptured.
+func TestSettingsPathsDerivation(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	got := hooks.SettingsPaths([]string{
+		"ccwork --dangerously-skip-permissions",
+		"claude --dangerously-skip-permissions",
+		"claude",
+		"CLAUDE_CONFIG_DIR=~/.cc-hobby claude",
+	})
+	want := []string{
+		filepath.Join(home, ".cc-hobby", "settings.json"),
+		filepath.Join(home, ".cc-work", "settings.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("path %d: got %s, want %s", i, got[i], want[i])
+		}
+	}
+	if def := hooks.SettingsPaths(nil); len(def) != 1 || def[0] != filepath.Join(home, ".claude", "settings.json") {
+		t.Errorf("empty fleet must yield the default profile, got %v", def)
 	}
 }
 
@@ -406,8 +447,9 @@ func TestConfigErrorSkipsRepoDerivedRows(t *testing.T) {
 			t.Errorf("row %s must not exist when config failed to load", id)
 		}
 	}
-	// Machine/profile rows survive without config.
-	for _, id := range []string{"binary:git", "gh-auth", "hooks", "grid:ccwork-plugins"} {
+	// Machine/profile rows survive without config — hooks fall back to the
+	// default profile's settings path.
+	for _, id := range []string{"binary:git", "gh-auth", "hooks:/profiles/work/settings.json", "grid:ccwork-plugins"} {
 		if !hasResult(results, id) {
 			t.Errorf("row %s must exist even when config failed to load", id)
 		}

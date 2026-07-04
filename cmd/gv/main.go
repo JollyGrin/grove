@@ -596,10 +596,12 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	installed, _ := hooks.Installed()
+	hookPaths := hookSettingsPaths()
 	in := wizard.Input{
 		Probe: p, RepoName: name, RepoPath: root, Doc: doc,
-		HooksInstalled: len(installed) == 4, Flags: f,
+		HooksInstalled: hooks.AllInstalled(hookPaths),
+		HooksPaths:     hookPaths,
+		Flags:          f,
 	}
 	steps, err := wizard.Build(in)
 	if err != nil {
@@ -629,10 +631,14 @@ func cmdInit(args []string) error {
 		}
 	}
 	if a.InstallHooks && !in.HooksInstalled {
-		if err := hooks.Install(); err != nil {
+		// Re-derive after Save so a worker chosen THIS run gets its
+		// profile's settings.json included.
+		done, err := hooks.Install(hookSettingsPaths())
+		for _, p := range done {
+			fmt.Printf("✓ session hooks wired into %s\n", p)
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "hooks install failed: %v\n", err)
-		} else {
-			fmt.Println("✓ session hooks wired into ~/.cc-work/settings.json")
 		}
 	}
 	if a.RunAgentsMD {
@@ -1820,28 +1826,40 @@ func cmdDoctor(args []string) error {
 	return nil
 }
 
+// hookSettingsPaths derives every worker profile's settings.json from the
+// configured worker commands; a broken config still yields the default
+// profile so hooks stay installable.
+func hookSettingsPaths() []string {
+	cfg, err := config.Load()
+	if err != nil {
+		return hooks.SettingsPaths(nil)
+	}
+	return hooks.SettingsPaths(hooks.WorkerCommands(cfg))
+}
+
 func cmdHooks(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: gv hooks install|status")
 	}
+	paths := hookSettingsPaths()
 	switch args[0] {
 	case "install":
-		if err := hooks.Install(); err != nil {
-			return err
+		done, err := hooks.Install(paths)
+		for _, p := range done {
+			fmt.Printf("✓ hooks wired into %s\n", p)
 		}
-		fmt.Println("✓ hooks wired into ~/.cc-work/settings.json (SessionStart, Notification, Stop, SessionEnd)")
-		return nil
+		return err
 	case "status":
-		installed, err := hooks.Installed()
-		if err != nil {
-			return err
-		}
-		for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
-			mark := "✗"
-			if installed[ev] {
-				mark = "✓"
+		byPath := hooks.Installed(paths)
+		for _, path := range paths {
+			fmt.Println(path)
+			for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
+				mark := "✗"
+				if byPath[path][ev] {
+					mark = "✓"
+				}
+				fmt.Printf("  %s %s\n", mark, ev)
 			}
-			fmt.Printf(" %s %s\n", mark, ev)
 		}
 		return nil
 	}

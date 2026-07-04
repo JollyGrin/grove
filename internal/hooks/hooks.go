@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -186,23 +187,80 @@ var hookEvents = map[string]string{
 	"SessionEnd":   "session-end",
 }
 
-func settingsPath() string {
+// SettingsPaths derives every Claude settings.json the fleet's workers
+// live under — hooks only fire for sessions of the profile whose settings
+// they're installed in, so a ccwork (Grid) worker and a plain-claude
+// (personal) worker need entries in DIFFERENT files. Recognized shapes:
+// `ccwork …` → ~/.cc-work; `CLAUDE_CONFIG_DIR=<dir> …` → <dir>; anything
+// else (plain `claude …`) → ~/.claude, the default profile. Deduped,
+// sorted; empty input still yields the default profile.
+func SettingsPaths(workerCmds []string) []string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cc-work", "settings.json")
+	seen := map[string]bool{}
+	var out []string
+	add := func(dir string) {
+		p := filepath.Join(dir, "settings.json")
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(workerCmds) == 0 {
+		add(filepath.Join(home, ".claude"))
+	}
+	for _, cmd := range workerCmds {
+		fields := strings.Fields(cmd)
+		switch {
+		case len(fields) == 0:
+			add(filepath.Join(home, ".claude"))
+		case strings.HasPrefix(fields[0], "CLAUDE_CONFIG_DIR="):
+			dir := strings.TrimPrefix(fields[0], "CLAUDE_CONFIG_DIR=")
+			if strings.HasPrefix(dir, "~/") {
+				dir = filepath.Join(home, dir[2:])
+			}
+			add(dir)
+		case fields[0] == "ccwork":
+			add(filepath.Join(home, ".cc-work"))
+		default:
+			add(filepath.Join(home, ".claude"))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
-// Install merges the four gv hooks into ~/.cc-work/settings.json without
-// clobbering existing hooks. Idempotent: an existing "gv hook" entry for an
-// event is replaced (binary path may have changed), others are preserved.
-// During the ovs→grove transition window both tools' hooks coexist in the
-// same file — ovs entries must never match isGvEntry (DESIGN.md §12).
-func Install() error {
+// WorkerCommands extracts the per-repo worker commands for SettingsPaths.
+func WorkerCommands(cfg *config.Config) []string {
+	var out []string
+	for _, r := range cfg.Repos {
+		out = append(out, r.Claude)
+	}
+	return out
+}
+
+// Install merges the four gv hooks into every derived settings.json
+// without clobbering existing hooks. Idempotent: an existing "gv hook"
+// entry for an event is replaced (binary path may have changed), others
+// are preserved. During the ovs→grove transition window both tools' hooks
+// coexist in the shared ~/.cc-work file — ovs entries must never match
+// isGvEntry (DESIGN.md §12).
+func Install(paths []string) ([]string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
-	return install(settingsPath(), exe)
+	var done []string
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return done, err
+		}
+		if err := install(path, exe); err != nil {
+			return done, fmt.Errorf("%s: %w", path, err)
+		}
+		done = append(done, path)
+	}
+	return done, nil
 }
 
 // install is Install with the file path and binary path injectable (tests).
@@ -243,9 +301,28 @@ func install(path, exe string) error {
 	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
-// Installed reports which hook events currently have a gv entry.
-func Installed() (map[string]bool, error) {
-	return installed(settingsPath())
+// Installed reports, per settings path, which hook events currently have
+// a gv entry. A missing file reads as nothing-installed, not an error.
+func Installed(paths []string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for _, path := range paths {
+		got, err := installed(path)
+		if err != nil {
+			got = map[string]bool{}
+		}
+		out[path] = got
+	}
+	return out
+}
+
+// AllInstalled reports whether every event is wired in every path.
+func AllInstalled(paths []string) bool {
+	for _, events := range Installed(paths) {
+		if len(events) != len(hookEvents) {
+			return false
+		}
+	}
+	return len(paths) > 0
 }
 
 func installed(path string) (map[string]bool, error) {

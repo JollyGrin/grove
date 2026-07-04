@@ -83,30 +83,32 @@ type Env struct {
 	Cfg    *config.Config
 	CfgErr error
 
-	LookPath       func(file string) (string, error)
-	Getenv         func(key string) string
-	Stat           func(name string) (os.FileInfo, error)
-	ReadFile       func(name string) ([]byte, error)
-	Run            func(timeout time.Duration, name string, args ...string) error
-	HooksInstalled func() (map[string]bool, error)
-	GOOS           string
-	Home           string
+	LookPath          func(file string) (string, error)
+	Getenv            func(key string) string
+	Stat              func(name string) (os.FileInfo, error)
+	ReadFile          func(name string) ([]byte, error)
+	Run               func(timeout time.Duration, name string, args ...string) error
+	HooksInstalled    func(paths []string) map[string]map[string]bool
+	HookSettingsPaths func(workers []string) []string
+	GOOS              string
+	Home              string
 }
 
 // NewEnv builds the real-machine Env.
 func NewEnv(cfg *config.Config, cfgErr error) Env {
 	home, _ := os.UserHomeDir()
 	return Env{
-		Cfg:            cfg,
-		CfgErr:         cfgErr,
-		LookPath:       exec.LookPath,
-		Getenv:         os.Getenv,
-		Stat:           os.Stat,
-		ReadFile:       os.ReadFile,
-		Run:            run,
-		HooksInstalled: hooks.Installed,
-		GOOS:           runtime.GOOS,
-		Home:           home,
+		Cfg:               cfg,
+		CfgErr:            cfgErr,
+		LookPath:          exec.LookPath,
+		Getenv:            os.Getenv,
+		Stat:              os.Stat,
+		ReadFile:          os.ReadFile,
+		Run:               run,
+		HooksInstalled:    hooks.Installed,
+		HookSettingsPaths: hooks.SettingsPaths,
+		GOOS:              runtime.GOOS,
+		Home:              home,
 	}
 }
 
@@ -219,16 +221,18 @@ func checkAgentContext(repoPath string) func(Env) Status {
 	}
 }
 
-func checkHooks(e Env) Status {
-	installed, err := e.HooksInstalled()
-	wired := 0
-	for _, ok := range installed {
-		if ok {
-			wired++
+func checkHooksAt(path string) func(Env) Status {
+	return func(e Env) Status {
+		installed := e.HooksInstalled([]string{path})[path]
+		wired := 0
+		for _, ok := range installed {
+			if ok {
+				wired++
+			}
 		}
+		if wired == 4 {
+			return Status{State: StateOK}
+		}
+		return Status{State: StateMissing, Info: fmt.Sprintf("%d/4 events wired", wired)}
 	}
-	if err == nil && wired == 4 {
-		return Status{State: StateOK}
-	}
-	return Status{State: StateMissing, Info: fmt.Sprintf("%d/4 events wired", wired)}
 }
