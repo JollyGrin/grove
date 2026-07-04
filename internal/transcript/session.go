@@ -34,7 +34,7 @@ func ProjectDir(worktreePath string) string {
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
-	configDir := os.Getenv("OVS_CLAUDE_CONFIG_DIR")
+	configDir := os.Getenv("GV_CLAUDE_CONFIG_DIR")
 	if configDir == "" {
 		configDir = filepath.Join(home, ".cc-work")
 	}

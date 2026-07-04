@@ -36,7 +36,7 @@ func (m Model) viewHeader() string {
 			working++
 		}
 	}
-	left := sTitle.Render(" ❉ OVERSTORY ") + sChrome.Render("· the canopy")
+	left := sTitle.Render(" ❉ GROVE ") + sChrome.Render("· the canopy")
 	right := fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
@@ -57,7 +57,7 @@ func (m Model) viewAgents() string {
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
 	if len(m.tasks) == 0 {
-		rows = append(rows, sDim.Render("  no active tasks — ovs grab <ticket> plants one"))
+		rows = append(rows, sDim.Render("  no active tasks — gv grab <ticket> plants one"))
 	}
 	for i, t := range m.tasks {
 		label := t.Label()

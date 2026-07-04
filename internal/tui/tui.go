@@ -1,4 +1,4 @@
-// Package tui is the Overstory dashboard: one screen answering "what can I
+// Package tui is the grove dashboard: one screen answering "what can I
 // act on right now?" Three panels — agents, mail, review queue — with inline
 // reply, mirroring the jayminwest/overstory cockpit (see DESIGN.md).
 package tui
@@ -335,7 +335,7 @@ func (m Model) handleConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// FinishTask is injected by cmd/ovs (the done flow lives there); wired at
+// FinishTask is injected by cmd/gv (the done flow lives there); wired at
 // startup to avoid an import cycle.
 var FinishTask = func(cfg *config.Config, t *state.Task, force bool) error {
 	return fmt.Errorf("done flow not wired")

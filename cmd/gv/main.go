@@ -1,4 +1,4 @@
-// ovs — Overstory: turns Linear tickets into autonomous Claude Code sessions
+// gv — grove: turns Linear tickets into autonomous Claude Code sessions
 // in detached tmux and answers "what can I act on right now?"
 package main
 
@@ -34,32 +34,32 @@ import (
 	"github.com/JollyGrin/grove/orchestrator"
 )
 
-const usage = `ovs — Overstory
+const usage = `gv — grove
 
-  ovs grab <ticket> [--repo name] [--manual]   ticket → worktree → agent
-  ovs ls [--json]                              fleet table
-  ovs audit [--json]                           cross-check tasks vs reality (pure read)
-  ovs cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
-  ovs answer <ticket> [text]                   reply to a waiting agent
-  ovs nudge <ticket> [text]                    follow-up prompt to a session
-  ovs attach <ticket>                          jump into the tmux window
-  ovs diff <ticket> [--stat]                   branch diff vs base — review without attach
-  ovs adopt <ticket> [--branch b] [--manual]   revive a disconnected task / adopt a branch
-  ovs done <ticket> [--force]                  verify merged → clean up everything
-  ovs untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
-  ovs sweep                                    clean up all merged tasks
-  ovs ui                                       cockpit: dashboard + orchestrator chat
-  ovs mobile                                   phone-sized dashboard session (for SSH/Termius)
-  ovs doctor                                   preflight checks
-  ovs hooks install|status                     wire ~/.cc-work/settings.json
-  ovs hook <event>                             (internal) hook receiver
-  ovs run-setup <repo>                         (internal) serialized worktree setup
+  gv grab <ticket> [--repo name] [--manual]   ticket → worktree → agent
+  gv ls [--json]                              fleet table
+  gv audit [--json]                           cross-check tasks vs reality (pure read)
+  gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
+  gv answer <ticket> [text]                   reply to a waiting agent
+  gv nudge <ticket> [text]                    follow-up prompt to a session
+  gv attach <ticket>                          jump into the tmux window
+  gv diff <ticket> [--stat]                   branch diff vs base — review without attach
+  gv adopt <ticket> [--branch b] [--manual]   revive a disconnected task / adopt a branch
+  gv done <ticket> [--force]                  verify merged → clean up everything
+  gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
+  gv sweep                                    clean up all merged tasks
+  gv ui                                       cockpit: dashboard + orchestrator chat
+  gv mobile                                   phone-sized dashboard session (for SSH/Termius)
+  gv doctor                                   preflight checks
+  gv hooks install|status                     wire ~/.cc-work/settings.json
+  gv hook <event>                             (internal) hook receiver
+  gv run-setup <repo>                         (internal) serialized worktree setup
 `
 
 func main() {
 	if len(os.Args) < 2 {
 		if err := cmdDashboard(); err != nil {
-			fmt.Fprintln(os.Stderr, "ovs:", err)
+			fmt.Fprintln(os.Stderr, "gv:", err)
 			os.Exit(1)
 		}
 		return
@@ -70,7 +70,7 @@ func main() {
 	if cmd == "hook" {
 		if len(args) == 1 {
 			if err := hooks.Receive(config.StateDir(), args[0], os.Stdin); err != nil {
-				fmt.Fprintln(os.Stderr, "ovs hook:", err)
+				fmt.Fprintln(os.Stderr, "gv hook:", err)
 			}
 		}
 		return
@@ -119,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ovs:", err)
+		fmt.Fprintln(os.Stderr, "gv:", err)
 		os.Exit(1)
 	}
 }
@@ -146,7 +146,7 @@ func cmdDashboard() error {
 	return nil
 }
 
-// cmdUI builds the cockpit (jayminwest-style): tmux session `ovs`, pane 0 =
+// cmdUI builds the cockpit (jayminwest-style): tmux session `gv`, pane 0 =
 // dashboard TUI, pane 1 = orchestrator Claude chat in its own directory.
 // The orchestrator cwd is untracked, so worker hooks ignore it; --continue
 // resumes the same conversation across cockpit launches.
@@ -167,7 +167,7 @@ func cmdUI() error {
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
 	}
 
-	const session = "ovs"
+	const session = "grove"
 	if !tmux.SessionExists(session) {
 		if err := tmux.CreateSession(session, dir); err != nil {
 			return err
@@ -175,7 +175,7 @@ func cmdUI() error {
 		if err := tmux.SplitVerticalWindow(session, dir); err != nil {
 			return err
 		}
-		if err := tmux.SendKeys(session+".0", "ovs"); err != nil {
+		if err := tmux.SendKeys(session+".0", "gv"); err != nil {
 			return err
 		}
 		orchCmd := fmt.Sprintf("%s --continue 2>/dev/null || %s", cfg.Orchestrator.Claude, cfg.Orchestrator.Claude)
@@ -187,25 +187,25 @@ func cmdUI() error {
 }
 
 // cmdMobile is the phone cockpit. tmux sizes a session to its SMALLEST
-// attached client, so attaching a phone to the desktop `ovs` session would
+// attached client, so attaching a phone to the desktop `gv` session would
 // shrink every desk pane — mobile gets its own single-pane session running
-// the dashboard, sized independently. Termius flow: `ssh <mac> -t 'ovs
+// the dashboard, sized independently. Termius flow: `ssh <mac> -t 'gv
 // mobile'`.
 func cmdMobile() error {
-	const session = "ovs-mobile"
+	const session = "grove-mobile"
 	if !tmux.SessionExists(session) {
 		home, _ := os.UserHomeDir()
 		if err := tmux.CreateSession(session, home); err != nil {
 			return err
 		}
-		if err := tmux.SendKeys(session+".0", "ovs"); err != nil {
+		if err := tmux.SendKeys(session+".0", "gv"); err != nil {
 			return err
 		}
 	}
 	return tmux.AttachSession(session)
 }
 
-// parseAnywhere lets flags appear after positionals (`ovs grab <url> --repo
+// parseAnywhere lets flags appear after positionals (`gv grab <url> --repo
 // monorepo`) — stdlib flag stops at the first non-flag arg otherwise.
 func parseAnywhere(fs *flag.FlagSet, args []string) []string {
 	var positionals []string
@@ -242,7 +242,7 @@ func cmdGrab(args []string) error {
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous kickoff")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: ovs grab <ticket-id-or-url> [--repo name] [--manual]")
+		return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
 	}
 
 	cfg, err := config.Load()
@@ -265,7 +265,7 @@ func cmdGrab(args []string) error {
 		return err
 	}
 	if t, ok := tasks[issue.Identifier]; ok && !t.Done {
-		return fmt.Errorf("%s is already tracked (worktree %s) — `ovs attach %s`, `ovs done %s`, or `ovs adopt %s` if its window died",
+		return fmt.Errorf("%s is already tracked (worktree %s) — `gv attach %s`, `gv done %s`, or `gv adopt %s` if its window died",
 			issue.Identifier, t.Worktree, issue.Identifier, issue.Identifier, issue.Identifier)
 	}
 
@@ -349,7 +349,7 @@ func cmdGrab(args []string) error {
 	if *manual {
 		mode = "manual — attach to drive it"
 	}
-	fmt.Printf("✓ %s grabbed (%s)\n  watch:  ovs ls\n  attach: ovs attach %s\n", issue.Identifier, mode, issue.Identifier)
+	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", issue.Identifier, mode, issue.Identifier)
 	return nil
 }
 
@@ -357,7 +357,7 @@ func cmdGrab(args []string) error {
 // simultaneous grabs don't run three pnpm installs at once.
 func cmdRunSetup(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: ovs run-setup <repo>")
+		return fmt.Errorf("usage: gv run-setup <repo>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -377,13 +377,13 @@ func cmdRunSetup(args []string) error {
 		return err
 	}
 	defer lock.Close()
-	fmt.Printf("ovs: waiting for setup lock (%s)…\n", args[0])
+	fmt.Printf("gv: waiting for setup lock (%s)…\n", args[0])
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
-	fmt.Printf("ovs: running setup: %s\n", repo.Setup)
+	fmt.Printf("gv: running setup: %s\n", repo.Setup)
 	cmd := exec.Command("sh", "-c", repo.Setup)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return cmd.Run()
@@ -447,7 +447,7 @@ func cmdLs(args []string) error {
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no active tasks — `ovs grab <ticket>` to start one")
+		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
 	}
 	fmt.Printf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s\n",
@@ -560,7 +560,7 @@ func cmdAudit(args []string) error {
 	}
 
 	if len(rep.Orphans) > 0 {
-		fmt.Printf("\nORPHAN WORKTREES (not tracked by ovs — report only, never deleted by ovs):\n")
+		fmt.Printf("\nORPHAN WORKTREES (not tracked by gv — report only, never deleted by gv):\n")
 		for _, o := range rep.Orphans {
 			dirty := ""
 			if o.Dirty {
@@ -570,7 +570,7 @@ func cmdAudit(args []string) error {
 		}
 	}
 	if len(rep.StalePrompts) > 0 {
-		fmt.Printf("\n%d stale prompt file(s) for done tasks (ovs sweep prunes them)\n", len(rep.StalePrompts))
+		fmt.Printf("\n%d stale prompt file(s) for done tasks (gv sweep prunes them)\n", len(rep.StalePrompts))
 	}
 	fmt.Printf("\nevents.jsonl: %.1f KB\n", float64(rep.EventsSizeBytes)/1024)
 	return nil
@@ -819,7 +819,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 		verb = "answer"
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("usage: ovs %s <ticket> [text]", verb)
+		return fmt.Errorf("usage: gv %s <ticket> [text]", verb)
 	}
 	t, err := findTask(args[0])
 	if err != nil {
@@ -866,7 +866,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 
 func cmdAttach(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: ovs attach <ticket>")
+		return fmt.Errorf("usage: gv attach <ticket>")
 	}
 	t, err := findTask(args[0])
 	if err != nil {
@@ -899,7 +899,7 @@ func cmdDiff(args []string) error {
 	stat := fs.Bool("stat", false, "summary form (files + line counts)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: ovs diff <ticket> [--stat]")
+		return fmt.Errorf("usage: gv diff <ticket> [--stat]")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -910,7 +910,7 @@ func cmdDiff(args []string) error {
 		return err
 	}
 	if _, statErr := os.Stat(t.Worktree); statErr != nil {
-		return fmt.Errorf("%s: worktree %s is gone — `ovs adopt %s` to re-create it", t.Ticket, t.Worktree, t.Ticket)
+		return fmt.Errorf("%s: worktree %s is gone — `gv adopt %s` to re-create it", t.Ticket, t.Worktree, t.Ticket)
 	}
 	base := "main"
 	if repo, ok := cfg.Repos[t.Repo]; ok {
@@ -930,7 +930,7 @@ func cmdDiff(args []string) error {
 
 // cmdAdopt revives a task from whatever survives a disconnect: an intact
 // worktree, a local or remote-only branch, a stored session id — or, for
-// tickets ovs never tracked, just a branch on origin. Fallback chain:
+// tickets gv never tracked, just a branch on origin. Fallback chain:
 // missing worktree → AddExisting; stored session id → resume with a
 // pickup-prompt fallback; no id → pickup prompt.
 func cmdAdopt(args []string) error {
@@ -940,7 +940,7 @@ func cmdAdopt(args []string) error {
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: ovs adopt <ticket> [--repo name] [--branch b] [--manual]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual]")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -955,7 +955,7 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	// Resolve repo, branch, and prior session — from state if ovs has ever
+	// Resolve repo, branch, and prior session — from state if gv has ever
 	// seen this ticket (active, done, or untracked), else cold via Linear.
 	var repoName, branch, sessionID string
 	var issue *linear.Issue
@@ -963,7 +963,7 @@ func cmdAdopt(args []string) error {
 		repoName, branch, sessionID = t.Repo, t.Branch, t.SessionID
 		issue = &linear.Issue{Identifier: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
-			return fmt.Errorf("%s already has a live window — `ovs attach %s`", id, id)
+			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
 		}
 	}
 	if *branchFlag != "" {
@@ -1058,7 +1058,7 @@ func cmdAdopt(args []string) error {
 	}
 	windowName := tmux.WindowName(branch)
 	if tmux.WindowExists(sessionName, windowName) {
-		return fmt.Errorf("window %s:%s already exists — `ovs attach %s`", sessionName, windowName, id)
+		return fmt.Errorf("window %s:%s already exists — `gv attach %s`", sessionName, windowName, id)
 	}
 	if err := tmux.CreateWindow(sessionName, windowName, wtPath); err != nil {
 		return err
@@ -1101,7 +1101,7 @@ func cmdAdopt(args []string) error {
 	if *manual {
 		how = "manual — attach to drive it"
 	}
-	fmt.Printf("✓ %s adopted (%s)\n  watch:  ovs ls\n  attach: ovs attach %s\n", id, how, id)
+	fmt.Printf("✓ %s adopted (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", id, how, id)
 	return nil
 }
 
@@ -1112,7 +1112,7 @@ func cmdDone(args []string) error {
 	force := fs.Bool("force", false, "clean up even if the PR is not merged (or none exists)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: ovs done <ticket> [--force]")
+		return fmt.Errorf("usage: gv done <ticket> [--force]")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1184,7 +1184,7 @@ func cmdUntrack(args []string) error {
 	force := fs.Bool("force", false, "with --rm: remove even dirty/unpushed worktrees")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: ovs untrack <ticket> [--rm] [--rm-remote] [--force]")
+		return fmt.Errorf("usage: gv untrack <ticket> [--rm] [--rm-remote] [--force]")
 	}
 	t, err := findTask(positionals[0])
 	if err != nil {
@@ -1398,7 +1398,7 @@ func cmdSweep(args []string) error {
 
 func cmdDoctor() error {
 	cfg, cfgErr := config.Load()
-	fmt.Println("OVERSTORY DOCTOR")
+	fmt.Println("GROVE DOCTOR")
 	if doctor.Print(doctor.Run(cfg, cfgErr)) {
 		fmt.Println("all clear 🌳")
 		return nil
@@ -1409,7 +1409,7 @@ func cmdDoctor() error {
 
 func cmdHooks(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: ovs hooks install|status")
+		return fmt.Errorf("usage: gv hooks install|status")
 	}
 	switch args[0] {
 	case "install":
@@ -1432,7 +1432,7 @@ func cmdHooks(args []string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("usage: ovs hooks install|status")
+	return fmt.Errorf("usage: gv hooks install|status")
 }
 
 // --- helpers ---
@@ -1448,7 +1448,7 @@ func findTask(idOrURL string) (*state.Task, error) {
 	}
 	t, ok := tasks[id]
 	if !ok || t.Done {
-		return nil, fmt.Errorf("no active task %s — see `ovs ls`", id)
+		return nil, fmt.Errorf("no active task %s — see `gv ls`", id)
 	}
 	return t, nil
 }

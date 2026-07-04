@@ -1,4 +1,4 @@
-// Package doctor preflights the environment ovs depends on. Exists because
+// Package doctor preflights the environment gv depends on. Exists because
 // of a real incident: the ccwork profile had zero grid plugins installed,
 // which would have spawned conventionless workers (LEARNINGS.md 2026-06-10).
 package doctor
@@ -41,7 +41,7 @@ func Run(cfg *config.Config, cfgErr error) []Check {
 	}
 
 	if cfgErr != nil {
-		add("config.yaml", false, cfgErr.Error(), "cp config.example.yaml ~/.config/overstory/config.yaml and edit")
+		add("config.yaml", false, cfgErr.Error(), "cp config.example.yaml ~/.config/grove/config.yaml and edit")
 	} else {
 		add("config.yaml", true, fmt.Sprintf("%d repo(s)", len(cfg.Repos)), "")
 
@@ -90,10 +90,10 @@ func Run(cfg *config.Config, cfgErr error) []Check {
 		"verify once: open a ccwork session, call a Linear tool", "")
 
 	if installed, err := hooks.Installed(); err == nil && len(installed) == 4 {
-		add("ovs hooks installed", true, "", "")
+		add("gv hooks installed", true, "", "")
 	} else {
-		add("ovs hooks installed", false,
-			fmt.Sprintf("%d/4 events wired", countTrue(installed)), "ovs hooks install")
+		add("gv hooks installed", false,
+			fmt.Sprintf("%d/4 events wired", countTrue(installed)), "gv hooks install")
 	}
 
 	return checks

@@ -98,12 +98,12 @@ func parsePaneList(out string) []PaneInfo {
 // Enter. SendKeys is unsafe for prose: it is single-line and tmux interprets
 // key-name lookalikes.
 func PasteText(target, text string) error {
-	load := exec.Command("tmux", "load-buffer", "-b", "ovs-relay", "-")
+	load := exec.Command("tmux", "load-buffer", "-b", "gv-relay", "-")
 	load.Stdin = strings.NewReader(text)
 	if out, err := load.CombinedOutput(); err != nil {
 		return &execError{op: "load-buffer", out: string(out), err: err}
 	}
-	if _, err := run("paste-buffer", "-d", "-b", "ovs-relay", "-t", target); err != nil {
+	if _, err := run("paste-buffer", "-d", "-b", "gv-relay", "-t", target); err != nil {
 		return err
 	}
 	_, err := run("send-keys", "-t", target, "Enter")

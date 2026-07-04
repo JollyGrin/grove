@@ -85,6 +85,127 @@ func TestReceiveIgnoresUntrackedCwd(t *testing.T) {
 	}
 }
 
+// --- installer / dual-hook coexistence (DESIGN.md §12) ---
+
+// ovsSettings mirrors a real transition-window ~/.cc-work/settings.json:
+// live ovs hooks already wired, plus an unrelated user hook that must
+// also survive untouched.
+const ovsSettings = `{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "/Users/x/go/bin/ovs hook session-start"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "/Users/x/go/bin/ovs hook stop"}]},
+      {"hooks": [{"type": "command", "command": "afplay /System/Library/Sounds/Glass.aiff"}]}
+    ]
+  },
+  "permissions": {"defaultMode": "bypassPermissions"}
+}`
+
+func TestIsGvEntry(t *testing.T) {
+	entry := func(cmd string) any {
+		return map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd}}}
+	}
+	cases := []struct {
+		name string
+		e    any
+		want bool
+	}{
+		{"gv absolute path", entry("/Users/x/go/bin/gv hook stop"), true},
+		{"grove-named binary", entry("/opt/grove/bin/grove-cli hook stop"), true},
+		{"ovs entry NEVER matches", entry("/Users/x/go/bin/ovs hook stop"), false},
+		{"overstory-named binary never matches", entry("/Users/x/go/bin/overstory hook stop"), false},
+		{"gv-ish parent dir but ovs binary", entry("/Users/x/gv-tools/ovs hook stop"), false},
+		{"unrelated command", entry("afplay /System/Library/Sounds/Glass.aiff"), false},
+		{"non-hook gv command", entry("/Users/x/go/bin/gv ls"), false},
+		{"malformed entry", "not a map", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isGvEntry(c.e); got != c.want {
+				t.Errorf("isGvEntry = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestInstallPreservesOvsEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(ovsSettings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := install(path, "/Users/x/go/bin/gv"); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotency: a second install (new binary path) must replace its own
+	// entry, not stack a duplicate — and still not touch ovs.
+	if err := install(path, "/Users/x/go/bin/gv"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(path)
+	var s struct {
+		Hooks       map[string][]any `json:"hooks"`
+		Permissions map[string]any   `json:"permissions"`
+	}
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(entries []any, substr string) int {
+		n := 0
+		for _, e := range entries {
+			b, _ := json.Marshal(e)
+			if strings.Contains(string(b), substr) {
+				n++
+			}
+		}
+		return n
+	}
+	for _, ev := range []string{"SessionStart", "Stop"} {
+		if got := count(s.Hooks[ev], "/ovs hook"); got != 1 {
+			t.Errorf("%s: ovs entries = %d, want 1 (must survive byte-identical)", ev, got)
+		}
+	}
+	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
+		if got := count(s.Hooks[ev], "/gv hook"); got != 1 {
+			t.Errorf("%s: gv entries = %d, want exactly 1 after double install", ev, got)
+		}
+	}
+	if got := count(s.Hooks["Stop"], "afplay"); got != 1 {
+		t.Error("unrelated user hook must survive")
+	}
+	if s.Permissions["defaultMode"] != "bypassPermissions" {
+		t.Error("non-hook settings keys must survive")
+	}
+
+	got, err := installed(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
+		if !got[ev] {
+			t.Errorf("installed() missing %s", ev)
+		}
+	}
+}
+
+func TestInstalledSeesOnlyGvEntries(t *testing.T) {
+	// A settings file with ONLY ovs hooks: gv must report nothing installed.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(ovsSettings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := installed(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ovs-only settings must read as not-installed for gv, got %v", got)
+	}
+}
+
 // --- ntfy push ---
 
 // seedTask registers a tracked task whose worktree is a real temp dir and

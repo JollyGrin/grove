@@ -37,10 +37,10 @@ func TestClassify(t *testing.T) {
 func TestSuggestion(t *testing.T) {
 	cases := map[Class]string{
 		Healthy:      "",
-		Merged:       "ovs done",
-		Disconnected: "ovs adopt",
-		Abandoned:    "ovs untrack --rm",
-		Drifted:      "ovs adopt (or ovs untrack)",
+		Merged:       "gv done",
+		Disconnected: "gv adopt",
+		Abandoned:    "gv untrack --rm",
+		Drifted:      "gv adopt (or gv untrack)",
 	}
 	for class, want := range cases {
 		if got := Suggestion(class); got != want {

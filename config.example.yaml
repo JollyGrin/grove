@@ -1,4 +1,4 @@
-# Overstory config — copy to ~/.config/overstory/config.yaml
+# Grove config — copy to ~/.config/grove/config.yaml
 #
 # repos.<name>:
 #   path:          main checkout (worktrees land in <parent>/.worktrees/<repo>/)
@@ -6,7 +6,7 @@
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: ccwork --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
-#   linear_labels: ticket labels that map to this repo for `ovs grab`
+#   linear_labels: ticket labels that map to this repo for `gv grab`
 
 linear:
   api_key_env: LINEAR_API_KEY
@@ -28,7 +28,7 @@ repos:
     linear_labels: [discovery]
 
 orchestrator:
-  dir: ~/.config/overstory/orchestrator
+  dir: ~/.config/grove/orchestrator
   claude: ccwork
 
 audit:
@@ -39,5 +39,5 @@ notify:
   # ntfy iOS/Android app. The topic name is the ONLY secret — use ≥16
   # random chars, or point at a self-hosted server. Fires for
   # QUESTION/BLOCKED/DONE/needs-input only; empty = off.
-  ntfy: ""                # e.g. https://ntfy.sh/ovs-<long-random-suffix>
+  ntfy: ""                # e.g. https://ntfy.sh/grove-<long-random-suffix>
   ntfy_body: full         # `title-only` keeps sentinel text off the public server

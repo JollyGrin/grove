@@ -1,6 +1,6 @@
-// Package audit reconciles ovs's tracked state against reality (worktree
+// Package audit reconciles gv's tracked state against reality (worktree
 // on disk, branches, tmux window, PR state) and classifies each task.
-// Pure read — nothing here mutates git, tmux, or the event log. ovs only
+// Pure read — nothing here mutates git, tmux, or the event log. gv only
 // audits what it created; removing untracked worktrees stays with the
 // human (dev-core:cleanup-local-state is the cross-repo remover).
 package audit
@@ -66,13 +66,13 @@ func Classify(f Facts, staleAfter time.Duration) Class {
 func Suggestion(c Class) string {
 	switch c {
 	case Merged:
-		return "ovs done"
+		return "gv done"
 	case Disconnected:
-		return "ovs adopt"
+		return "gv adopt"
 	case Abandoned:
-		return "ovs untrack --rm"
+		return "gv untrack --rm"
 	case Drifted:
-		return "ovs adopt (or ovs untrack)"
+		return "gv adopt (or gv untrack)"
 	default:
 		return ""
 	}

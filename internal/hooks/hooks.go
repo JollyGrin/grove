@@ -1,4 +1,4 @@
-// Package hooks implements the `ovs hook <event>` receivers and the
+// Package hooks implements the `gv hook <event>` receivers and the
 // settings.json merge-installer. Receivers must be fast, silent, and always
 // exit 0 — they run inside every ccwork session, including untracked ones.
 package hooks
@@ -136,8 +136,8 @@ func notify(title, body string) {
 		body = body[:120] + "…"
 	}
 	_ = exec.Command("terminal-notifier",
-		"-title", "ovs: "+title, "-message", body,
-		"-group", "overstory", "-sender", "com.apple.Terminal").Start()
+		"-title", "gv: "+title, "-message", body,
+		"-group", "grove", "-sender", "com.apple.Terminal").Start()
 }
 
 // --- ntfy push ---
@@ -167,7 +167,7 @@ func pushNtfy(title, body, priority, tags string) {
 	if err != nil {
 		return
 	}
-	req.Header.Set("Title", "ovs: "+title)
+	req.Header.Set("Title", "gv: "+title)
 	req.Header.Set("Priority", priority)
 	req.Header.Set("Tags", tags)
 	resp, err := ntfyClient.Do(req)
@@ -191,17 +191,22 @@ func settingsPath() string {
 	return filepath.Join(home, ".cc-work", "settings.json")
 }
 
-// Install merges the four ovs hooks into ~/.cc-work/settings.json without
-// clobbering existing hooks. Idempotent: an existing "ovs hook" entry for an
+// Install merges the four gv hooks into ~/.cc-work/settings.json without
+// clobbering existing hooks. Idempotent: an existing "gv hook" entry for an
 // event is replaced (binary path may have changed), others are preserved.
+// During the ovs→grove transition window both tools' hooks coexist in the
+// same file — ovs entries must never match isGvEntry (DESIGN.md §12).
 func Install() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
+	return install(settingsPath(), exe)
+}
 
-	path := settingsPath()
+// install is Install with the file path and binary path injectable (tests).
+func install(path, exe string) error {
 	settings := map[string]any{}
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &settings); err != nil {
@@ -217,7 +222,7 @@ func Install() error {
 		entries, _ := hooksVal[event].([]any)
 		var kept []any
 		for _, e := range entries {
-			if !isOvsEntry(e) {
+			if !isGvEntry(e) {
 				kept = append(kept, e)
 			}
 		}
@@ -238,9 +243,13 @@ func Install() error {
 	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
-// Installed reports which hook events currently have an ovs entry.
+// Installed reports which hook events currently have a gv entry.
 func Installed() (map[string]bool, error) {
-	raw, err := os.ReadFile(settingsPath())
+	return installed(settingsPath())
+}
+
+func installed(path string) (map[string]bool, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +262,7 @@ func Installed() (map[string]bool, error) {
 	out := map[string]bool{}
 	for event := range hookEvents {
 		for _, e := range settings.Hooks[event] {
-			if isOvsEntry(e) {
+			if isGvEntry(e) {
 				out[event] = true
 			}
 		}
@@ -261,7 +270,12 @@ func Installed() (map[string]bool, error) {
 	return out, nil
 }
 
-func isOvsEntry(e any) bool {
+// isGvEntry reports whether a settings.json hook entry is one of OURS.
+// Entries are written as "<abs-binary-path> hook <event>", so match on the
+// binary's basename — substring checks would risk claiming (and replacing)
+// live ovs entries in the shared settings file, which must survive
+// byte-identical through every `gv hooks install` (dual-hook contract).
+func isGvEntry(e any) bool {
 	m, ok := e.(map[string]any)
 	if !ok {
 		return false
@@ -272,8 +286,13 @@ func isOvsEntry(e any) bool {
 		if !ok {
 			continue
 		}
-		if cmd, _ := hm["command"].(string); strings.Contains(cmd, " hook ") &&
-			(strings.Contains(cmd, "ovs") || strings.Contains(cmd, "overstory")) {
+		cmd, _ := hm["command"].(string)
+		bin, _, found := strings.Cut(cmd, " hook ")
+		if !found {
+			continue
+		}
+		base := filepath.Base(strings.TrimSpace(bin))
+		if base == "gv" || strings.Contains(base, "grove") {
 			return true
 		}
 	}

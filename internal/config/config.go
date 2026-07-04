@@ -1,4 +1,4 @@
-// Package config loads ~/.config/overstory/config.yaml.
+// Package config loads ~/.config/grove/config.yaml.
 package config
 
 import (
@@ -71,20 +71,20 @@ func NotifySettingsFrom(path string) Notify {
 	return c.Notify
 }
 
-// Dir returns the overstory config directory.
+// Dir returns the grove config directory.
 func Dir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "overstory")
+	return filepath.Join(home, ".config", "grove")
 }
 
-// StateDir returns the overstory state directory, creating it if needed.
-// OVERSTORY_STATE_DIR overrides it — used to point E2E tests at a scratch
+// StateDir returns the grove state directory, creating it if needed.
+// GROVE_STATE_DIR overrides it — used to point E2E tests at a scratch
 // dir so they never touch live fleet state.
 func StateDir() string {
-	d := os.Getenv("OVERSTORY_STATE_DIR")
+	d := os.Getenv("GROVE_STATE_DIR")
 	if d == "" {
 		home, _ := os.UserHomeDir()
-		d = filepath.Join(home, ".local", "state", "overstory")
+		d = filepath.Join(home, ".local", "state", "grove")
 	}
 	_ = os.MkdirAll(d, 0o755)
 	return d
