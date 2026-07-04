@@ -62,7 +62,11 @@ grep -q 'registered repo "dummy"' "$SCRATCH/init.out" || fail "init did not regi
 grep -q 'kind: markdown' "$HOME/.config/grove/config.yaml" || fail "config missing markdown provider"
 
 say "gv init idempotent"
-"$GV" init | grep -q 'already registered' || fail "re-init not idempotent"
+# capture-then-grep everywhere a gv/tmux command feeds grep -q: grep exits
+# at first match and SIGPIPEs the producer's remaining output, which
+# pipefail then reports as failure (observed flake).
+"$GV" init > "$SCRATCH/init2.out"
+grep -q 'already registered' "$SCRATCH/init2.out" || fail "re-init not idempotent"
 
 say "stub worker command to echo"
 perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$HOME/.config/grove/config.yaml"
@@ -77,7 +81,8 @@ say "gv grab task-001"
 WT="$SCRATCH/repos/.worktrees/dummy"
 ls -d "$WT"/task-001-* >/dev/null || fail "worktree not created under $WT"
 WTDIR="$(ls -d "$WT"/task-001-*)"
-tmux list-windows -t "$SESSION" | grep -q task-001 || fail "tmux window missing"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows.out"
+grep -q task-001 "$SCRATCH/windows.out" || fail "tmux window missing"
 PROMPT="$GROVE_STATE_DIR/prompts/task-001.txt"
 [ -f "$PROMPT" ] || fail "kickoff prompt not written"
 grep -q 'status: in-progress' "$PROMPT" || fail "prompt missing markdown start verb"
@@ -88,7 +93,8 @@ say "dedup: second grab of an in-flight task refuses"
 ("$GV" grab task-001 2>&1 || true) | grep -q 'already tracked' || fail "dedup missing"
 
 say "gv ls"
-"$GV" ls --json --no-pr --no-cost | tee "$SCRATCH/ls.json" | grep -q '"task-001"' || fail "ls missing task"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls.json"
+grep -q '"task-001"' "$SCRATCH/ls.json" || fail "ls missing task"
 
 say "hook ownership contract: untracked cwd is a silent no-op"
 EV_LINES=$(wc -l < "$GROVE_STATE_DIR/events.jsonl")
@@ -100,12 +106,14 @@ say "hook ownership contract: tracked cwd IS captured"
 printf '{"session_id":"s-e2e-2","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: QUESTION — tabs or spaces?"}' \
   "$WTDIR" | "$GV" hook stop
 grep -q 's-e2e-2\|tabs or spaces' "$GROVE_STATE_DIR/events.jsonl" || fail "hook ignored a tracked cwd"
-"$GV" ls --json --no-pr --no-cost | grep -q 'tabs or spaces' || fail "question not folded into task state"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls2.json"
+grep -q 'tabs or spaces' "$SCRATCH/ls2.json" || fail "question not folded into task state"
 
 say "gv untrack --rm --force (degraded: no remote to verify against)"
 "$GV" untrack task-001 --rm --force | tee "$SCRATCH/untrack.out"
 [ ! -d "$WTDIR" ] || fail "worktree survived untrack --rm"
-tmux list-windows -t "$SESSION" 2>/dev/null | grep -q task-001 && fail "window survived untrack" || true
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows2.out" 2>/dev/null || true
+grep -q task-001 "$SCRATCH/windows2.out" && fail "window survived untrack" || true
 
 say "re-grab after untrack"
 "$GV" grab task-001 >/dev/null
