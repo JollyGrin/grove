@@ -1,6 +1,8 @@
 // Package tui is the grove dashboard: one screen answering "what can I
-// act on right now?" Three panels — agents, mail, review queue — with inline
-// reply, mirroring the jayminwest/overstory cockpit (see DESIGN.md).
+// act on right now?" — the AGENTS list (attach/manage launcher) over an
+// ACTIVITY feed (newest-first render of events.jsonl), with inline reply.
+// Mail/review panels were dropped per grove-cockpit-design §2/§5: their
+// signal lives in the header counts + AGENTS columns + the feed.
 package tui
 
 import (
@@ -20,22 +22,17 @@ import (
 )
 
 const (
-	panelAgents = iota
-	panelMail
-	panelReview
-	panelCount
-)
-
-const (
 	modeList = iota
 	modeDetail
 	modeConfirmDone
 )
 
 type refreshMsg struct {
-	tasks []*state.Task
-	live  map[string]string
+	tasks  []*state.Task
+	live   map[string]string
+	events []state.Event
 }
+type flashMsg string
 type prsMsg map[string]*github.PR
 type paneTailMsg string
 type actionDoneMsg struct{ err error }
@@ -45,13 +42,13 @@ type Model struct {
 	width  int
 	height int
 
-	tasks []*state.Task
-	live  map[string]string
-	prs   map[string]*github.PR
+	tasks  []*state.Task
+	live   map[string]string
+	prs    map[string]*github.PR
+	events []state.Event
 
-	focus int
-	sel   [panelCount]int
-	mode  int
+	sel  int
+	mode int
 
 	detail   *state.Task
 	paneTail string
@@ -113,7 +110,8 @@ func refreshCmd() tea.Cmd {
 				live[t.Ticket] = info.Status.String()
 			}
 		}
-		return refreshMsg{tasks: active, live: live}
+		events, _ := state.ReadEvents(config.StateDir(), 200)
+		return refreshMsg{tasks: active, live: live, events: events}
 	}
 }
 
@@ -158,6 +156,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.tasks != nil {
 			m.tasks = msg.tasks
 			m.live = msg.live
+			m.events = msg.events
 			if m.detail != nil { // keep detail pointed at fresh data
 				for _, t := range m.tasks {
 					if t.Ticket == m.detail.Ticket {
@@ -178,6 +177,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
+		return m, nil
+
+	case flashMsg:
+		m.flash = string(msg)
 		return m, nil
 
 	case actionDoneMsg:
@@ -205,10 +208,16 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "tab":
-		m.focus = (m.focus + 1) % panelCount
-	case "shift+tab":
-		m.focus = (m.focus + panelCount - 1) % panelCount
+	case "O":
+		cfg := m.cfg
+		m.flash = "spawning orchestrator chat…"
+		return m, func() tea.Msg {
+			out, err := SpawnOrchestrator(cfg)
+			if err != nil {
+				return flashMsg(err.Error())
+			}
+			return flashMsg(out)
+		}
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -341,45 +350,25 @@ var FinishTask = func(cfg *config.Config, t *state.Task, force bool) error {
 	return fmt.Errorf("done flow not wired")
 }
 
+// SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
+// there); wired at startup to avoid an import cycle. Returns a flash line.
+var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
+	return "", fmt.Errorf("orchestrator spawn not wired")
+}
+
 func (m *Model) move(delta int) {
-	rows := m.panelLen(m.focus)
+	rows := len(m.tasks)
 	if rows == 0 {
 		return
 	}
-	m.sel[m.focus] = (m.sel[m.focus] + delta + rows) % rows
-}
-
-func (m Model) panelLen(panel int) int {
-	switch panel {
-	case panelAgents:
-		return len(m.tasks)
-	case panelMail:
-		return len(m.mailRows())
-	default:
-		return len(m.reviewRows())
-	}
+	m.sel = (m.sel + delta + rows) % rows
 }
 
 func (m Model) selected() *state.Task {
-	switch m.focus {
-	case panelAgents:
-		if len(m.tasks) == 0 {
-			return nil
-		}
-		return m.tasks[min(m.sel[panelAgents], len(m.tasks)-1)]
-	case panelMail:
-		rows := m.mailRows()
-		if len(rows) == 0 {
-			return nil
-		}
-		return rows[min(m.sel[panelMail], len(rows)-1)]
-	default:
-		rows := m.reviewRows()
-		if len(rows) == 0 {
-			return nil
-		}
-		return rows[min(m.sel[panelReview], len(rows)-1)]
+	if len(m.tasks) == 0 {
+		return nil
 	}
+	return m.tasks[min(m.sel, len(m.tasks)-1)]
 }
 
 func (m Model) openPreview(t *state.Task) string {

@@ -23,7 +23,7 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.viewMail(), m.viewReview()))
+	b.WriteString(m.viewActivity())
 	b.WriteString("\n")
 	b.WriteString(m.viewFooter())
 	return b.String()
@@ -82,7 +82,7 @@ func (m Model) viewAgents() string {
 			}
 		}
 		cursor := " "
-		if m.focus == panelAgents && i == m.sel[panelAgents] {
+		if i == m.sel {
 			cursor = sSelected.Render("▸")
 		}
 		line := cursor + st.Render(statusGlyph(label)) + " " +
@@ -97,101 +97,53 @@ func (m Model) viewAgents() string {
 		rows = append(rows, truncPad(line, w))
 	}
 
-	title := sPanelTitle
-	style := sPanel
-	if m.focus == panelAgents {
-		title, style = sPanelTitleFocus, sPanelFocus
-	}
-	body := title.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
-	return style.Width(m.width - 2).Render(body)
+	body := sPanelTitleFocus.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
+	return sPanelFocus.Width(m.width - 2).Render(body)
 }
 
-func (m Model) viewMail() string {
-	w := (m.width - 4) / 2
+// viewActivity renders the newest-first swarm history — the objective
+// record of what happened, including while you were away (cockpit §3).
+func (m Model) viewActivity() string {
+	w := m.width - 4
+	items := feedItems(m.events)
+
+	// Fill the space between the agents panel and the footer.
+	avail := m.height - (len(m.tasks) + 4) - 6
+	if avail < 3 {
+		avail = 3
+	}
+	if avail > len(items) {
+		avail = len(items)
+	}
+
 	rows := []string{}
-	mail := m.mailRows()
-	if len(mail) == 0 {
-		rows = append(rows, sDim.Render(" canopy is quiet"))
+	if len(items) == 0 {
+		rows = append(rows, sDim.Render("  nothing has happened yet"))
 	}
-	for i, t := range mail {
-		glyph := statusGlyph(t.Label())
-		text := t.Question
-		if text == "" {
-			text = firstLine(t.LastMessage)
-		}
-		if text == "" {
-			text = "(no message — attach to inspect)"
-		}
-		line := fmt.Sprintf("%s %s  %s",
-			statusStyle(t.Label()).Render(glyph), t.Ticket, sQuestion.Render(text))
-		if m.focus == panelMail && i == m.sel[panelMail] {
-			line = sSelected.Render("▸") + line
-		} else {
-			line = " " + line
-		}
-		rows = append(rows, truncPad(line, w-2))
+	for _, it := range items[:avail] {
+		line := fmt.Sprintf(" %s %s  %s %s",
+			sChrome.Render(pad(age(it.Time), 7)),
+			statusStyle("").Render(it.Glyph),
+			pad(it.Ticket, 11),
+			sDim.Render(it.Text))
+		rows = append(rows, truncPad(line, w))
 	}
 
-	title := sPanelTitle
-	style := sPanel
-	if m.focus == panelMail {
-		title, style = sPanelTitleFocus, sPanelFocus
-	}
-	heading := fmt.Sprintf("MAIL (%d)", len(mail))
-	return style.Width(w).Render(title.Render(heading) + "\n" + strings.Join(rows, "\n"))
-}
-
-func (m Model) viewReview() string {
-	w := m.width - 2 - ((m.width - 4) / 2) - 2
-	rows := []string{}
-	review := m.reviewRows()
-	if len(review) == 0 {
-		rows = append(rows, sDim.Render(" nothing to review yet"))
-	}
-	for i, t := range review {
-		mark, markStyle := "·", sDim // fresh, awaiting eyes
-		if t.Human == state.HumanReviewing {
-			mark, markStyle = "◉", sDelivery
-		}
-		pr, tail := "", sBlurb.Render(doneBlurb(t))
-		if p := m.prs[t.Ticket]; p != nil {
-			pr = fmt.Sprintf("#%d ", p.Number)
-			if p.State == "MERGED" {
-				mark, markStyle = "⬢", sOK
-				tail = sOK.Render("merged — press d to clean up")
-			} else if p.PreviewURL != "" {
-				pr += sDelivery.Render("⬡ ")
-			}
-		}
-		line := fmt.Sprintf("%s %s %s%s", markStyle.Render(mark), t.Ticket, pr, tail)
-		if m.focus == panelReview && i == m.sel[panelReview] {
-			line = sSelected.Render("▸") + line
-		} else {
-			line = " " + line
-		}
-		rows = append(rows, truncPad(line, w-2))
-	}
-
-	title := sPanelTitle
-	style := sPanel
-	if m.focus == panelReview {
-		title, style = sPanelTitleFocus, sPanelFocus
-	}
-	heading := fmt.Sprintf("REVIEW QUEUE (%d)", len(review))
-	return style.Width(w).Render(title.Render(heading) + "\n" + strings.Join(rows, "\n"))
+	body := sPanelTitle.Render("ACTIVITY") + "\n" + strings.Join(rows, "\n")
+	return sPanel.Width(m.width - 2).Render(body)
 }
 
 func (m Model) viewFooter() string {
 	keys := []string{
+		sKey.Render("O") + sFoot.Render(" new chat"),
 		sKey.Render("enter") + sFoot.Render(" reply"),
 		sKey.Render("a") + sFoot.Render(" attach"),
 		sKey.Render("o") + sFoot.Render(" preview"),
 		sKey.Render("p") + sFoot.Render(" PR"),
-		sKey.Render("t") + sFoot.Render(" ticket"),
+		sKey.Render("t") + sFoot.Render(" task"),
 		sKey.Render("v") + sFoot.Render(" reviewing"),
 		sKey.Render("n") + sFoot.Render(" nudge"),
 		sKey.Render("d") + sFoot.Render(" done"),
-		sKey.Render("tab") + sFoot.Render(" panel"),
 		sKey.Render("q") + sFoot.Render(" quit"),
 	}
 	line := " " + strings.Join(keys, sDim.Render(" · "))
