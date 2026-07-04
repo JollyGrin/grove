@@ -148,7 +148,10 @@ func Load() (*Config, error) {
 		c.Orchestrator.Dir = expand(c.Orchestrator.Dir)
 	}
 	if c.Orchestrator.Claude == "" {
-		c.Orchestrator.Claude = "ccwork"
+		// Personal claude, prompt-free: the orchestrator's guardrails are
+		// CLAUDE.md-based (propose-then-dispose), not permission prompts —
+		// locked interview decision (DESIGN.md §15).
+		c.Orchestrator.Claude = "claude --dangerously-skip-permissions"
 	}
 	if c.Audit.StaleDays <= 0 {
 		c.Audit.StaleDays = 7

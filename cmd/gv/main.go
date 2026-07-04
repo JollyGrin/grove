@@ -51,7 +51,9 @@ const usage = `gv — grove
   gv done <ticket> [--force]                  verify merged → clean up everything
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
   gv sweep                                    clean up all merged tasks
-  gv ui                                       cockpit: dashboard + orchestrator chat
+  gv                                          cockpit: dashboard left, orchestrator chats right
+  gv orchestrator new                         add an orchestrator chat pane (O in the TUI)
+  gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
   gv hooks install|status                     wire ~/.cc-work/settings.json
@@ -61,7 +63,9 @@ const usage = `gv — grove
 
 func main() {
 	if len(os.Args) < 2 {
-		if err := cmdDashboard(); err != nil {
+		// Bare gv = the cockpit (build/attach/switch). The dashboard TUI
+		// alone is `gv dash` — it's what the cockpit's left pane runs.
+		if err := cmdUI(); err != nil {
 			fmt.Fprintln(os.Stderr, "gv:", err)
 			os.Exit(1)
 		}
@@ -107,8 +111,16 @@ func main() {
 		err = cmdUntrack(args)
 	case "sweep":
 		err = cmdSweep(args)
-	case "ui", "orchestrator":
+	case "ui":
 		err = cmdUI()
+	case "dash":
+		err = cmdDashboard()
+	case "orchestrator":
+		if len(args) > 0 && args[0] == "new" {
+			err = cmdOrchestratorNew()
+		} else {
+			err = cmdUI()
+		}
 	case "mobile":
 		err = cmdMobile()
 	case "doctor":
@@ -137,6 +149,7 @@ func cmdDashboard() error {
 		return err
 	}
 	tui.FinishTask = finishTask
+	tui.SpawnOrchestrator = spawnOrchestrator
 	attachTo, err := tui.Run(cfg)
 	if err != nil {
 		return err
@@ -160,35 +173,90 @@ func cmdUI() error {
 	if err != nil {
 		return err
 	}
-	dir := cfg.Orchestrator.Dir
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if !tmux.SessionExists(cockpitSession) {
+		if err := buildCockpit(cfg, cfg.Orchestrator.Dir); err != nil {
+			return err
+		}
+	}
+	return tmux.AttachSession(cockpitSession)
+}
+
+// cockpitSession is the cockpit tmux session name. Workspace-labelled
+// sessions (grove-<label>, DESIGN §6.5) arrive with the Phase 1 registry.
+const cockpitSession = "grove"
+
+// buildCockpit lays out the main-vertical cockpit: dashboard TUI as the
+// main (left) pane, one orchestrator chat stacked right (O adds more).
+// Seeds the orchestrator dir + CLAUDE.md brain on first run.
+func buildCockpit(cfg *config.Config, orchDir string) error {
+	if err := os.MkdirAll(orchDir, 0o755); err != nil {
 		return err
 	}
-	claudeMd := filepath.Join(dir, "CLAUDE.md")
+	claudeMd := filepath.Join(orchDir, "CLAUDE.md")
 	if _, err := os.Stat(claudeMd); os.IsNotExist(err) {
 		if err := os.WriteFile(claudeMd, []byte(orchestrator.ClaudeMd), 0o644); err != nil {
 			return err
 		}
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
 	}
-
-	const session = "grove"
-	if !tmux.SessionExists(session) {
-		if err := tmux.CreateSession(session, dir); err != nil {
-			return err
-		}
-		if err := tmux.SplitVerticalWindow(session, dir); err != nil {
-			return err
-		}
-		if err := tmux.SendKeys(session+".0", "gv"); err != nil {
-			return err
-		}
-		orchCmd := fmt.Sprintf("%s --continue 2>/dev/null || %s", cfg.Orchestrator.Claude, cfg.Orchestrator.Claude)
-		if err := tmux.SendKeys(session+".1", orchCmd); err != nil {
-			return err
-		}
+	if err := tmux.CreateSession(cockpitSession, orchDir); err != nil {
+		return err
 	}
-	return tmux.AttachSession(session)
+	// Absolute path, not "gv": the pane must run THIS binary even when a
+	// stale one is first on PATH (same rule as the hook installer).
+	dash := "gv dash"
+	if exe, err := os.Executable(); err == nil {
+		dash = exe + " dash"
+	}
+	if err := tmux.SendKeys(cockpitSession+".0", dash); err != nil {
+		return err
+	}
+	if _, err := tmux.SpawnPane(cockpitSession, orchDir, orchestratorCmd(cfg)); err != nil {
+		return err
+	}
+	return tmux.MainVertical(cockpitSession, 55)
+}
+
+// orchestratorCmd resumes the last orchestrator chat when one exists;
+// fresh spawns (O / orchestrator new) always start clean, so this is only
+// for the cockpit's first pane.
+func orchestratorCmd(cfg *config.Config) string {
+	return fmt.Sprintf("%s --continue 2>/dev/null || %s", cfg.Orchestrator.Claude, cfg.Orchestrator.Claude)
+}
+
+// cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
+// cockpit's right column (cockpit design §4) — the O keybind's CLI twin.
+// Builds the cockpit first if it isn't running.
+func cmdOrchestratorNew() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if _, err := spawnOrchestrator(cfg); err != nil {
+		return err
+	}
+	if !tmux.IsInsideTmux() {
+		return tmux.AttachSession(cockpitSession)
+	}
+	return nil
+}
+
+// spawnOrchestrator is also injected into the TUI as the O keybind.
+func spawnOrchestrator(cfg *config.Config) (string, error) {
+	dir := cfg.Orchestrator.Dir
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if !tmux.SessionExists(cockpitSession) {
+		if err := buildCockpit(cfg, dir); err != nil {
+			return "", err
+		}
+		return "cockpit built — gv (or gv ui) attaches", nil
+	}
+	if _, err := tmux.SpawnPane(cockpitSession, dir, cfg.Orchestrator.Claude); err != nil {
+		return "", err
+	}
+	return "✓ new orchestrator chat pane", nil
 }
 
 // cmdMobile is the phone cockpit. tmux sizes a session to its SMALLEST

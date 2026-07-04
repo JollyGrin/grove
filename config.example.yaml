@@ -39,7 +39,7 @@ repos:
 
 orchestrator:
   dir: ~/.config/grove/orchestrator
-  claude: ccwork
+  claude: claude --dangerously-skip-permissions   # default; guardrails live in the orchestrator's CLAUDE.md
 
 audit:
   stale_days: 7   # no-PR tasks with a dead/idle agent older than this classify `abandoned`
