@@ -102,6 +102,7 @@ func ensureConfig(res *Result, path string) error {
 		repos = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		appendKey(root, "repos", repos)
 	}
+	repos.Style = 0 // block style — an empty `repos: {}` seed would stay flow
 	if mapValue(repos, res.RepoName) != nil {
 		return nil // already registered — never touch an existing entry
 	}
