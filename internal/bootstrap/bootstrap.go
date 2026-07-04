@@ -126,6 +126,14 @@ func ensureConfig(res *Result, path string) error {
 	return nil
 }
 
+// ScaffoldTasks creates .grove/tasks + the sample task if absent (the
+// wizard's markdown-provider step). Returns the dir and whether it wrote.
+func ScaffoldTasks(root, created string) (string, bool, error) {
+	res := &Result{}
+	err := ensureTasksDir(res, root, created)
+	return res.TasksDir, res.WroteSample, err
+}
+
 func ensureTasksDir(res *Result, root, created string) error {
 	dir := filepath.Join(root, ".grove", "tasks")
 	res.TasksDir = dir

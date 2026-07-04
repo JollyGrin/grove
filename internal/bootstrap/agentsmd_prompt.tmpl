@@ -1,0 +1,42 @@
+You are bootstrapping agent context for the repo "{{.RepoName}}". Explore
+this repository and write {{.Target}} in the repo root — the portable
+AGENTS.md format (agents.md): plain markdown consumed by any coding agent.
+
+Ground truths already detected deterministically (trust these; correct
+them ONLY if the code clearly contradicts them):
+- stack: {{.Stack}}{{if .Shape}} · repo shape: {{.Shape}}{{end}}
+{{- if .Setup}}
+- setup: {{.Setup}}{{end}}
+{{- if .Build}}
+- build: {{.Build}}{{end}}
+{{- if .Test}}
+- test: {{.Test}}{{end}}
+{{- if .Lint}}
+- lint: {{.Lint}}{{end}}
+
+Write {{.Target}} with exactly these sections, nothing else:
+
+# {{.RepoName}}
+One factual paragraph: what this project is and does.
+
+## Layout
+The directories that matter and what lives in each (only the interesting
+ones — where the core logic, entry points, and tests are).
+
+## Build / test / lint
+The exact commands a contributor runs, one per line, verified against the
+manifests above.
+
+## Conventions
+Observable conventions only: code style, naming, test placement, commit
+style if evident from git log, error-handling patterns. No aspirations.
+
+## Gotchas
+Anything that would surprise a competent newcomer (generated files,
+implicit ordering, env vars needed, slow tests). Omit the section if you
+found none.
+
+Rules: at most ~150 lines total; every claim must be verifiable from the
+repo contents; terse and factual — no marketing language, no
+recommendations, no TODO lists. When done, end your final message with
+one line: WROTE {{.Target}}
