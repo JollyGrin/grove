@@ -366,18 +366,26 @@ func cmdGrab(args []string) error {
 
 	// Provider/repo resolution order differs per kind: linear infers the
 	// repo from ticket labels (fetch first), markdown roots task files in
-	// the repo (resolve repo first).
+	// the repo (resolve repo first). An explicit --repo resolves first
+	// either way so its per-repo provider override wins.
 	var (
 		repoName string
 		repo     *config.Repo
 		prov     provider.Provider
 		task     *provider.Task
 	)
-	if cfg.Provider.Kind == "linear" {
+	kind := cfg.Provider.Kind
+	if *repoFlag != "" {
+		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, nil); err != nil {
+			return err
+		}
+		kind = cfg.ProviderKindFor(repo)
+	}
+	if kind == "linear" {
 		if len(positionals) != 1 {
 			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
 		}
-		if prov, err = provider.FromConfig(cfg, ""); err != nil {
+		if prov, err = provider.FromConfigKind(cfg, "linear", ""); err != nil {
 			return err
 		}
 		fmt.Println("→ fetching ticket from Linear…")
@@ -388,14 +396,18 @@ func cmdGrab(args []string) error {
 		if task, err = prov.Get(id); err != nil {
 			return err
 		}
-		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, task.Labels); err != nil {
-			return err
+		if repo == nil {
+			if repoName, repo, err = cfg.ResolveRepo("", task.Labels); err != nil {
+				return err
+			}
 		}
 	} else {
-		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, nil); err != nil {
-			return err
+		if repo == nil {
+			if repoName, repo, err = cfg.ResolveRepo("", nil); err != nil {
+				return err
+			}
 		}
-		if prov, err = provider.FromConfig(cfg, repo.Path); err != nil {
+		if prov, err = provider.FromConfigKind(cfg, "markdown", repo.Path); err != nil {
 			return err
 		}
 		if len(positionals) == 0 {
@@ -1285,13 +1297,31 @@ func cmdAdopt(args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := parseAnyID(cfg, positionals[0])
-	if err != nil {
-		return err
-	}
 	tasks, err := state.Load(config.StateDir())
 	if err != nil {
 		return err
+	}
+
+	// Resolve the id against tracked state first (both id shapes are live
+	// with per-repo providers); a cold adopt normalizes by the effective
+	// provider kind (--repo's override when given, else global).
+	id := ""
+	for _, cand := range provider.IDCandidates(positionals[0]) {
+		if _, ok := tasks[cand]; ok {
+			id = cand
+			break
+		}
+	}
+	if id == "" {
+		kind := cfg.Provider.Kind
+		if *repoFlag != "" {
+			if _, r, rErr := cfg.ResolveRepo(*repoFlag, nil); rErr == nil {
+				kind = cfg.ProviderKindFor(r)
+			}
+		}
+		if id, err = parseAnyID(kind, positionals[0]); err != nil {
+			return err
+		}
 	}
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
@@ -1330,14 +1360,15 @@ func cmdAdopt(args []string) error {
 	// Fresh task fetch enriches the pickup prompt (description + new
 	// comments). Non-fatal for tracked tasks — offline adopt still works
 	// with the fields state carries.
-	prov, provErr := provider.FromConfig(cfg, repo.Path)
+	repoKind := cfg.ProviderKindFor(repo)
+	prov, provErr := provider.FromConfigKind(cfg, repoKind, repo.Path)
 	if provErr == nil {
 		if fetched, fetchErr := prov.Get(id); fetchErr == nil {
 			task = fetched
 		} else if task == nil {
-			return fmt.Errorf("%s is not tracked and the %s fetch failed: %w", id, cfg.Provider.Kind, fetchErr)
+			return fmt.Errorf("%s is not tracked and the %s fetch failed: %w", id, repoKind, fetchErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: %s fetch failed (%v) — pickup prompt uses stored task fields\n", cfg.Provider.Kind, fetchErr)
+			fmt.Fprintf(os.Stderr, "warning: %s fetch failed (%v) — pickup prompt uses stored task fields\n", repoKind, fetchErr)
 		}
 	} else if task == nil {
 		return fmt.Errorf("%s is not tracked and %v", id, provErr)
@@ -1392,7 +1423,7 @@ func cmdAdopt(args []string) error {
 	if provErr == nil {
 		verbs = prov.Verbs()
 	}
-	prompt, err := kickoff.Render(task, verbs, cfg.Provider.Kind, "", promptMode)
+	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode)
 	if err != nil {
 		return err
 	}
@@ -1819,31 +1850,27 @@ func cmdHooks(args []string) error {
 
 // --- helpers ---
 
+// findTask resolves a raw reference against tracked tasks by trying every
+// id-shape normalization — per-repo providers mean DEV-1234 and task-001
+// coexist in one fleet, so the tracked state (not the global provider
+// kind) is the arbiter.
 func findTask(idOrURL string) (*state.Task, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	id, err := parseAnyID(cfg, idOrURL)
-	if err != nil {
-		return nil, err
-	}
 	tasks, err := state.Load(config.StateDir())
 	if err != nil {
 		return nil, err
 	}
-	t, ok := tasks[id]
-	if !ok || t.Done {
-		return nil, fmt.Errorf("no active task %s — see `gv ls`", id)
+	for _, id := range provider.IDCandidates(idOrURL) {
+		if t, ok := tasks[id]; ok && !t.Done {
+			return t, nil
+		}
 	}
-	return t, nil
+	return nil, fmt.Errorf("no active task %s — see `gv ls`", idOrURL)
 }
 
-// parseAnyID normalizes a task id for the configured provider kind without
-// needing a fully-constructed provider (markdown ids are repo-independent,
-// linear ids are DEV-1234-shaped).
-func parseAnyID(cfg *config.Config, raw string) (string, error) {
-	if cfg.Provider.Kind == "linear" {
+// parseAnyID normalizes an id for a provider kind without a constructed
+// provider (markdown ids are repo-independent, linear ids DEV-1234-shaped).
+func parseAnyID(kind, raw string) (string, error) {
+	if kind == "linear" {
 		return linear.ParseIdentifier(strings.ToUpper(raw))
 	}
 	return provider.NewMarkdown("").ParseID(raw)

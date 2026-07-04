@@ -18,6 +18,7 @@ type Repo struct {
 	Setup        string   `yaml:"setup"`
 	Claude       string   `yaml:"claude"`
 	Prompt       string   `yaml:"prompt"`
+	Provider     string   `yaml:"provider"` // per-repo task backend override (markdown|linear); empty = global kind
 	LinearLabels []string `yaml:"linear_labels"`
 }
 
@@ -128,6 +129,9 @@ func Load() (*Config, error) {
 		if r == nil {
 			return nil, fmt.Errorf("repo %q: empty config", name)
 		}
+		if r.Provider != "" && r.Provider != "markdown" && r.Provider != "linear" {
+			return nil, fmt.Errorf("repo %q: provider %q (want markdown or linear)", name, r.Provider)
+		}
 		r.Path = expand(r.Path)
 		if r.Base == "" {
 			r.Base = "main"
@@ -163,6 +167,17 @@ func Load() (*Config, error) {
 		cost.Overrides(c.Cost.Pricing)
 	}
 	return &c, nil
+}
+
+// ProviderKindFor returns the effective task backend for a repo: its own
+// provider override when set, else the global kind. Lets one fleet mix
+// Linear-driven repos with markdown-driven ones until per-workspace config
+// (DESIGN §6.5) subsumes this.
+func (c *Config) ProviderKindFor(r *Repo) string {
+	if r != nil && r.Provider != "" {
+		return r.Provider
+	}
+	return c.Provider.Kind
 }
 
 // APIKey resolves the Linear API key from the configured env var.

@@ -12,8 +12,10 @@ package provider
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/linear"
 )
 
 type Comment struct {
@@ -52,10 +54,17 @@ type Provider interface {
 	Capabilities() Capabilities
 }
 
-// FromConfig builds the configured provider. repoPath roots repo-relative
-// providers (markdown); it may be empty for repo-independent ones (linear).
+// FromConfig builds the globally-configured provider. repoPath roots
+// repo-relative providers (markdown); it may be empty for repo-independent
+// ones (linear).
 func FromConfig(cfg *config.Config, repoPath string) (Provider, error) {
-	switch cfg.Provider.Kind {
+	return FromConfigKind(cfg, cfg.Provider.Kind, repoPath)
+}
+
+// FromConfigKind builds a provider of an explicit kind — the per-repo
+// override path (config.ProviderKindFor).
+func FromConfigKind(cfg *config.Config, kind, repoPath string) (Provider, error) {
+	switch kind {
 	case "markdown":
 		if repoPath == "" {
 			return nil, fmt.Errorf("markdown provider needs a repo (pass --repo)")
@@ -68,6 +77,25 @@ func FromConfig(cfg *config.Config, repoPath string) (Provider, error) {
 		}
 		return NewLinear(key), nil
 	default:
-		return nil, fmt.Errorf("unknown provider kind %q (markdown|linear)", cfg.Provider.Kind)
+		return nil, fmt.Errorf("unknown provider kind %q (markdown|linear)", kind)
 	}
+}
+
+// IDCandidates returns every normalization a raw task reference could
+// resolve to — with per-repo providers, linear (DEV-1234) and markdown
+// (task-001) id shapes are live in one fleet at once, and "task-001"
+// uppercases into a string the linear regex also matches. Callers try
+// candidates against tracked state; the first hit wins.
+func IDCandidates(raw string) []string {
+	var out []string
+	seen := map[string]bool{}
+	if id, err := linear.ParseIdentifier(strings.ToUpper(raw)); err == nil && !seen[id] {
+		seen[id] = true
+		out = append(out, id)
+	}
+	if id, err := NewMarkdown("").ParseID(raw); err == nil && !seen[id] {
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
