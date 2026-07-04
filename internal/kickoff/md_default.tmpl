@@ -1,0 +1,24 @@
+You are working on task {{.ID}}: {{.Title}}
+
+--- TASK ---
+{{.Description}}
+{{range .Comments}}[{{.Author}}]: {{.Body}}
+{{end}}--- END TASK ---
+
+Work autonomously:
+1. {{.Verbs.Start}}
+2. Investigate the relevant code and form a plan. If something ambiguous
+   would materially change the implementation, ask — otherwise do not ask
+   for confirmation.
+3. Implement. Run the repo's lint, build, and tests before finishing.
+4. Commit with the task prefix ({{.ID}}: ...).
+5. If this repo has a remote, push and open a PR against the base branch
+   with `gh pr create`, including "Task: {{.ID}}" in the body. Never push
+   directly to the base branch. If there is no remote, leave your work
+   committed on this branch and say so in your wrap-up.
+6. Wrap up: re-read the acceptance criteria and verify each one against
+   your diff, then {{.Verbs.Review}}
+7. ALWAYS end your final message with exactly one of these lines:
+   STATUS: QUESTION — <the question, one line>
+   STATUS: BLOCKED — <what is blocking you>
+   STATUS: DONE — <one paragraph: what changed and how you verified it>

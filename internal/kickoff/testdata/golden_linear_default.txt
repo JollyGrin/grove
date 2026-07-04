@@ -1,20 +1,24 @@
-You are working on Linear ticket {{.Identifier}}: {{.Title}}
-{{.URL}}
+You are working on Linear ticket DEV-1234: Persist filter state in the URL
+https://linear.app/grid/issue/DEV-1234
 
 --- TICKET ---
-{{.Description}}
-{{range .Comments}}[{{.Author}}]: {{.Body}}
-{{end}}--- END TICKET ---
+Filters reset on reload.
+
+Make them survive.
+[dean]: see screenshot
+[unknown]: second comment
+with two lines
+--- END TICKET ---
 
 Work autonomously:
-1. {{.Verbs.Start}}
+1. Move the ticket to "In Progress" using the dev-linear Linear tools.
 2. Investigate the relevant code and form a plan. If something ambiguous
    would materially change the implementation, ask — otherwise do not ask
    for confirmation.
 3. Implement. Run lint and the affected app's build before finishing.
-4. Commit with the ticket prefix ({{.Identifier}}: ...) per repo convention.
+4. Commit with the ticket prefix (DEV-1234: ...) per repo convention.
 5. Push and open a PR against main with `gh pr create`, filling the PR
-   template. Include "Closes {{.Identifier}}" in the body. Never push to
+   template. Include "Closes DEV-1234" in the body. Never push to
    main; never target deploy/* branches.
 6. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
    address CRITICAL and IMPORTANT findings, verify CI is green, move the

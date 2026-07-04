@@ -1,6 +1,9 @@
-// Package kickoff renders the worker's initial prompt from ticket fields.
-// Templates stay thin and defer to the grid skills the worker auto-loads
-// (wrapping-up-task, dev-linear) — see DESIGN.md.
+// Package kickoff renders the worker's initial prompt from task fields.
+// Templates stay thin; transition instructions come from the active
+// provider's Verbs (DESIGN.md §5.4) — the binary never transitions tasks.
+// The linear template set defers to the grid skills the worker auto-loads
+// (wrapping-up-task, dev-linear); the generic set assumes nothing beyond
+// git, gh, and the STATUS sentinel contract (core, non-negotiable).
 package kickoff
 
 import (
@@ -9,7 +12,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/JollyGrin/grove/internal/linear"
+	"github.com/JollyGrin/grove/internal/provider"
 )
 
 //go:embed default.tmpl
@@ -21,27 +24,56 @@ var manualTmpl string
 //go:embed pickup.tmpl
 var pickupTmpl string
 
+//go:embed md_default.tmpl
+var mdDefaultTmpl string
+
+//go:embed md_manual.tmpl
+var mdManualTmpl string
+
+//go:embed md_pickup.tmpl
+var mdPickupTmpl string
+
 // Mode selects which prompt a session boots with.
 type Mode int
 
 const (
 	ModeDefault Mode = iota // autonomous kickoff (grab)
-	ModeManual              // ticket context only, wait for instructions
+	ModeManual              // task context only, wait for instructions
 	ModePickup              // continue prior work on an existing branch (adopt)
 )
 
-// Render produces the kickoff prompt. templatePath overrides the embedded
-// default — for ModeDefault only: manual and pickup are lifecycle-specific
-// prompts, not repo-specific ones.
-func Render(issue *linear.Issue, templatePath string, mode Mode) (string, error) {
+// data is the template input. It embeds the provider-neutral task and keeps
+// Identifier as a legacy alias for ID so pre-existing repo prompt overrides
+// ({{.Identifier}}) keep rendering.
+type data struct {
+	*provider.Task
+	Identifier string
+	Verbs      provider.Verbs
+}
+
+// Render produces the kickoff prompt. kind selects the template set
+// ("linear" keeps the ovs-era templates; anything else gets the generic
+// set). templatePath overrides the embedded default — for ModeDefault only:
+// manual and pickup are lifecycle-specific prompts, not repo-specific ones.
+func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode) (string, error) {
+	linearSet := kind == "linear"
 	var text string
 	switch mode {
 	case ModeManual:
-		text = manualTmpl
+		text = mdManualTmpl
+		if linearSet {
+			text = manualTmpl
+		}
 	case ModePickup:
-		text = pickupTmpl
+		text = mdPickupTmpl
+		if linearSet {
+			text = pickupTmpl
+		}
 	default:
-		text = defaultTmpl
+		text = mdDefaultTmpl
+		if linearSet {
+			text = defaultTmpl
+		}
 		if templatePath != "" {
 			raw, err := os.ReadFile(templatePath)
 			if err != nil {
@@ -55,7 +87,7 @@ func Render(issue *linear.Issue, templatePath string, mode Mode) (string, error)
 		return "", err
 	}
 	var b strings.Builder
-	if err := t.Execute(&b, issue); err != nil {
+	if err := t.Execute(&b, data{Task: task, Identifier: task.ID, Verbs: verbs}); err != nil {
 		return "", err
 	}
 	return b.String(), nil

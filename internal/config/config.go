@@ -22,6 +22,12 @@ type Repo struct {
 }
 
 type Config struct {
+	Provider struct {
+		Kind     string `yaml:"kind"` // markdown (default) | linear
+		Markdown struct {
+			Dir string `yaml:"dir"` // task-file dir relative to the repo (default .grove/tasks)
+		} `yaml:"markdown"`
+	} `yaml:"provider"`
 	Linear struct {
 		APIKeyEnv string `yaml:"api_key_env"`
 		Team      string `yaml:"team"`
@@ -108,6 +114,12 @@ func Load() (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if c.Provider.Kind == "" {
+		c.Provider.Kind = "markdown"
+	}
+	if c.Provider.Markdown.Dir == "" {
+		c.Provider.Markdown.Dir = filepath.Join(".grove", "tasks")
 	}
 	if c.Linear.APIKeyEnv == "" {
 		c.Linear.APIKeyEnv = "LINEAR_API_KEY"

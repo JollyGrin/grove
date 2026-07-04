@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/audit"
+	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
@@ -27,6 +28,7 @@ import (
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/kickoff"
 	"github.com/JollyGrin/grove/internal/linear"
+	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
@@ -36,7 +38,8 @@ import (
 
 const usage = `gv — grove
 
-  gv grab <ticket> [--repo name] [--manual]   ticket → worktree → agent
+  gv init                                     register this repo + scaffold .grove/tasks/
+  gv grab [<task>] [--repo name] [--manual]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
@@ -78,6 +81,8 @@ func main() {
 
 	var err error
 	switch cmd {
+	case "init":
+		err = cmdInit()
 	case "grab":
 		err = cmdGrab(args)
 	case "ls":
@@ -239,23 +244,13 @@ func slugify(title string) string {
 func cmdGrab(args []string) error {
 	fs := flag.NewFlagSet("grab", flag.ExitOnError)
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
-	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous kickoff")
+	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
 	positionals := parseAnywhere(fs, args)
-	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
+	if len(positionals) > 1 {
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual]")
 	}
 
 	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	apiKey, err := cfg.APIKey()
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("→ fetching ticket from Linear…")
-	issue, err := linear.FetchIssue(apiKey, positionals[0])
 	if err != nil {
 		return err
 	}
@@ -264,23 +259,71 @@ func cmdGrab(args []string) error {
 	if err != nil {
 		return err
 	}
-	if t, ok := tasks[issue.Identifier]; ok && !t.Done {
-		return fmt.Errorf("%s is already tracked (worktree %s) — `gv attach %s`, `gv done %s`, or `gv adopt %s` if its window died",
-			issue.Identifier, t.Worktree, issue.Identifier, issue.Identifier, issue.Identifier)
+
+	// Provider/repo resolution order differs per kind: linear infers the
+	// repo from ticket labels (fetch first), markdown roots task files in
+	// the repo (resolve repo first).
+	var (
+		repoName string
+		repo     *config.Repo
+		prov     provider.Provider
+		task     *provider.Task
+	)
+	if cfg.Provider.Kind == "linear" {
+		if len(positionals) != 1 {
+			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
+		}
+		if prov, err = provider.FromConfig(cfg, ""); err != nil {
+			return err
+		}
+		fmt.Println("→ fetching ticket from Linear…")
+		id, err := prov.ParseID(positionals[0])
+		if err != nil {
+			return err
+		}
+		if task, err = prov.Get(id); err != nil {
+			return err
+		}
+		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, task.Labels); err != nil {
+			return err
+		}
+	} else {
+		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, nil); err != nil {
+			return err
+		}
+		if prov, err = provider.FromConfig(cfg, repo.Path); err != nil {
+			return err
+		}
+		if len(positionals) == 0 {
+			return printBacklog(prov, repoName, tasks)
+		}
+		id, err := prov.ParseID(positionals[0])
+		if err != nil {
+			return err
+		}
+		if task, err = prov.Get(id); err != nil {
+			return err
+		}
 	}
 
-	repoName, repo, err := cfg.ResolveRepo(*repoFlag, issue.Labels)
+	if t, ok := tasks[task.ID]; ok && !t.Done {
+		return fmt.Errorf("%s is already tracked (worktree %s) — `gv attach %s`, `gv done %s`, or `gv adopt %s` if its window died",
+			task.ID, t.Worktree, task.ID, task.ID, task.ID)
+	}
+
+	name := task.ID + "-" + slugify(task.Title)
+	fmt.Printf("→ %s on %s (branch %s)\n", task.ID, repoName, name)
+
+	if git.HasRemote(repo.Path, "origin") {
+		if err := git.Fetch(repo.Path, "origin", repo.Base); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: git fetch failed (%v) — branching from local %s\n", err, repo.Base)
+		}
+	}
+	baseRef, err := git.BaseRef(repo.Path, repo.Base)
 	if err != nil {
 		return err
 	}
-
-	name := issue.Identifier + "-" + slugify(issue.Title)
-	fmt.Printf("→ %s on %s (branch %s)\n", issue.Identifier, repoName, name)
-
-	if err := git.Fetch(repo.Path, "origin", repo.Base); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: git fetch failed (%v) — branching from local %s\n", err, repo.Base)
-	}
-	wt, err := worktree.Add(repo.Path, name, "origin/"+repo.Base)
+	wt, err := worktree.Add(repo.Path, name, baseRef)
 	if err != nil {
 		return err
 	}
@@ -298,13 +341,13 @@ func cmdGrab(args []string) error {
 	if *manual {
 		promptMode = kickoff.ModeManual
 	}
-	prompt, err := kickoff.Render(issue, repo.Prompt, promptMode)
+	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode)
 	if err != nil {
 		return err
 	}
 	promptDir := filepath.Join(config.StateDir(), "prompts")
 	_ = os.MkdirAll(promptDir, 0o755)
-	promptPath := filepath.Join(promptDir, issue.Identifier+".txt")
+	promptPath := filepath.Join(promptDir, task.ID+".txt")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return err
 	}
@@ -335,9 +378,9 @@ func cmdGrab(args []string) error {
 	}
 
 	if err := state.Append(config.StateDir(), state.Event{
-		Type: state.EvTaskCreated, Ticket: issue.Identifier,
+		Type: state.EvTaskCreated, Ticket: task.ID,
 		Data: map[string]string{
-			"title": issue.Title, "url": issue.URL, "repo": repoName,
+			"title": task.Title, "url": task.URL, "repo": repoName,
 			"branch": name, "worktree": wt.Path,
 			"tmux_session": sessionName, "tmux_window": windowName,
 		},
@@ -349,7 +392,75 @@ func cmdGrab(args []string) error {
 	if *manual {
 		mode = "manual — attach to drive it"
 	}
-	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", issue.Identifier, mode, issue.Identifier)
+	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", task.ID, mode, task.ID)
+	return nil
+}
+
+// printBacklog renders the provider's grabbable backlog (gv grab with no
+// args), excluding tasks grove already has in flight — the event state is
+// authoritative for those (DESIGN.md §5.2).
+func printBacklog(prov provider.Provider, repoName string, tracked map[string]*state.Task) error {
+	if !prov.Capabilities().CanList {
+		return fmt.Errorf("usage: gv grab <task-id> [--repo name] [--manual] (the %s provider cannot list)", prov.Kind())
+	}
+	backlog, err := prov.List()
+	if err != nil {
+		return err
+	}
+	var rows []*provider.Task
+	for _, task := range backlog {
+		if t, ok := tracked[task.ID]; ok && !t.Done {
+			continue // in flight — grove's live state wins over frontmatter
+		}
+		rows = append(rows, task)
+	}
+	if len(rows) == 0 {
+		fmt.Printf("no grabbable tasks for %s — add a file under the task dir (see `gv init`)\n", repoName)
+		return nil
+	}
+	fmt.Printf("grabbable tasks (%s):\n", repoName)
+	for _, task := range rows {
+		status := task.Status
+		if status == "" {
+			status = "todo"
+		}
+		fmt.Printf("  %-12s %-8s %s\n", task.ID, status, task.Title)
+	}
+	fmt.Println("\ngv grab <task-id> to start one")
+	return nil
+}
+
+// cmdInit is the P0 deterministic scaffold: register the cwd repo in
+// ~/.config/grove/config.yaml and create .grove/tasks/ with a sample task.
+// The probe/wizard/AGENTS.md bootstrap is Phase 1.
+func cmdInit() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cfgPath := filepath.Join(config.Dir(), "config.yaml")
+	res, err := bootstrap.Run(cwd, cfgPath, time.Now().Format("2006-01-02"))
+	if err != nil {
+		return err
+	}
+	if res.WroteConfig {
+		fmt.Printf("✓ registered repo %q (base %s) in %s\n", res.RepoName, res.Base, res.ConfigPath)
+	} else {
+		fmt.Printf("• repo %q already registered in %s\n", res.RepoName, res.ConfigPath)
+	}
+	if res.WroteSample {
+		fmt.Printf("✓ scaffolded %s with a sample task\n", res.TasksDir)
+	} else {
+		fmt.Printf("• task dir %s already exists\n", res.TasksDir)
+	}
+	fmt.Printf(`
+next steps:
+  1. edit %s (title, description, acceptance criteria)
+  2. gv doctor                  # preflight
+  3. gv grab                    # list grabbable tasks
+  4. gv grab task-001           # worktree + tmux + autonomous worker
+  5. gv ls                      # watch the fleet
+`, filepath.Join(res.TasksDir, "task-001.md"))
 	return nil
 }
 
@@ -946,7 +1057,7 @@ func cmdAdopt(args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := linear.ParseIdentifier(strings.ToUpper(positionals[0]))
+	id, err := parseAnyID(cfg, positionals[0])
 	if err != nil {
 		return err
 	}
@@ -956,12 +1067,12 @@ func cmdAdopt(args []string) error {
 	}
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
-	// seen this ticket (active, done, or untracked), else cold via Linear.
+	// seen this task (active, done, or untracked), else cold via provider.
 	var repoName, branch, sessionID string
-	var issue *linear.Issue
+	var task *provider.Task
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID = t.Repo, t.Branch, t.SessionID
-		issue = &linear.Issue{Identifier: t.Ticket, Title: t.Title, URL: t.URL}
+		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
 		}
@@ -970,23 +1081,15 @@ func cmdAdopt(args []string) error {
 		branch = *branchFlag
 	}
 
-	// Fresh ticket fetch enriches the pickup prompt (description + new
-	// comments). Non-fatal for tracked tasks — offline adopt still works
-	// with the fields state carries.
-	if apiKey, keyErr := cfg.APIKey(); keyErr == nil {
-		if fetched, fetchErr := linear.FetchIssue(apiKey, id); fetchErr == nil {
-			issue = fetched
-		} else if issue == nil {
-			return fmt.Errorf("%s is not tracked and the Linear fetch failed: %w", id, fetchErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: Linear fetch failed (%v) — pickup prompt uses stored ticket fields\n", fetchErr)
-		}
-	} else if issue == nil {
-		return fmt.Errorf("%s is not tracked and %v", id, keyErr)
-	}
-
+	// A repo is needed before the provider exists (markdown roots task
+	// files in the repo). From state, else --repo/label inference — cold
+	// markdown adopts can't infer from labels, so --repo or sole-repo.
 	if repoName == "" {
-		repoName, _, err = cfg.ResolveRepo(*repoFlag, issue.Labels)
+		var labels []string
+		if task != nil {
+			labels = task.Labels
+		}
+		repoName, _, err = cfg.ResolveRepo(*repoFlag, labels)
 		if err != nil {
 			return err
 		}
@@ -994,6 +1097,22 @@ func cmdAdopt(args []string) error {
 	repo, ok := cfg.Repos[repoName]
 	if !ok {
 		return fmt.Errorf("repo %q no longer in config", repoName)
+	}
+
+	// Fresh task fetch enriches the pickup prompt (description + new
+	// comments). Non-fatal for tracked tasks — offline adopt still works
+	// with the fields state carries.
+	prov, provErr := provider.FromConfig(cfg, repo.Path)
+	if provErr == nil {
+		if fetched, fetchErr := prov.Get(id); fetchErr == nil {
+			task = fetched
+		} else if task == nil {
+			return fmt.Errorf("%s is not tracked and the %s fetch failed: %w", id, cfg.Provider.Kind, fetchErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: %s fetch failed (%v) — pickup prompt uses stored task fields\n", cfg.Provider.Kind, fetchErr)
+		}
+	} else if task == nil {
+		return fmt.Errorf("%s is not tracked and %v", id, provErr)
 	}
 
 	if branch == "" {
@@ -1041,7 +1160,11 @@ func cmdAdopt(args []string) error {
 	if *manual {
 		promptMode = kickoff.ModeManual
 	}
-	prompt, err := kickoff.Render(issue, "", promptMode)
+	var verbs provider.Verbs
+	if provErr == nil {
+		verbs = prov.Verbs()
+	}
+	prompt, err := kickoff.Render(task, verbs, cfg.Provider.Kind, "", promptMode)
 	if err != nil {
 		return err
 	}
@@ -1074,7 +1197,7 @@ func cmdAdopt(args []string) error {
 	if err := state.Append(config.StateDir(), state.Event{
 		Type: state.EvTaskAdopted, Ticket: id,
 		Data: map[string]string{
-			"title": issue.Title, "url": issue.URL, "repo": repoName,
+			"title": task.Title, "url": task.URL, "repo": repoName,
 			"branch": branch, "worktree": wtPath,
 			"tmux_session": sessionName, "tmux_window": windowName,
 		},
@@ -1131,16 +1254,26 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		return fmt.Errorf("repo %q no longer in config", t.Repo)
 	}
 
-	merged, pr, err := github.Merged(repo.Path, t.Branch)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
-	}
-	if !merged && !force {
-		prState := "no PR found"
-		if pr != nil {
-			prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
+	// Degraded no-remote path (DESIGN.md §5.2): with no remote there is no
+	// PR to verify, so --force IS the human confirmation.
+	hasRemote := git.HasRemote(repo.Path, "origin")
+	if !hasRemote {
+		if !force {
+			return fmt.Errorf("%s: repo %s has no remote — grove cannot verify the work merged; confirm cleanup with --force (the local branch is deleted)", t.Ticket, t.Repo)
 		}
-		return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", t.Ticket, prState)
+		fmt.Println("→ no remote: skipping merge check (--force is the confirmation)")
+	} else {
+		merged, pr, err := github.Merged(repo.Path, t.Branch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
+		}
+		if !merged && !force {
+			prState := "no PR found"
+			if pr != nil {
+				prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
+			}
+			return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", t.Ticket, prState)
+		}
 	}
 
 	if tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
@@ -1160,15 +1293,19 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	if err := git.ForceDeleteBranch(repo.Path, t.Branch); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: local branch delete: %v\n", err)
 	}
-	if err := git.DeleteRemoteBranch(repo.Path, t.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: remote branch delete (may already be gone): %v\n", err)
+	if hasRemote {
+		if err := git.DeleteRemoteBranch(repo.Path, t.Branch); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remote branch delete (may already be gone): %v\n", err)
+		}
+		fmt.Println("→ deleted branch (local + remote)")
+	} else {
+		fmt.Println("→ deleted local branch")
 	}
-	fmt.Println("→ deleted branch (local + remote)")
 
 	if err := state.Append(config.StateDir(), state.Event{Type: state.EvTaskDone, Ticket: t.Ticket}); err != nil {
 		return err
 	}
-	fmt.Printf("✓ %s cleaned up (Linear status is yours/the stakeholder's to move)\n", t.Ticket)
+	fmt.Printf("✓ %s cleaned up (the task's terminal status in your tracker is yours to move)\n", t.Ticket)
 	return nil
 }
 
@@ -1438,7 +1575,11 @@ func cmdHooks(args []string) error {
 // --- helpers ---
 
 func findTask(idOrURL string) (*state.Task, error) {
-	id, err := linear.ParseIdentifier(strings.ToUpper(idOrURL))
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	id, err := parseAnyID(cfg, idOrURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1451,4 +1592,14 @@ func findTask(idOrURL string) (*state.Task, error) {
 		return nil, fmt.Errorf("no active task %s — see `gv ls`", id)
 	}
 	return t, nil
+}
+
+// parseAnyID normalizes a task id for the configured provider kind without
+// needing a fully-constructed provider (markdown ids are repo-independent,
+// linear ids are DEV-1234-shaped).
+func parseAnyID(cfg *config.Config, raw string) (string, error) {
+	if cfg.Provider.Kind == "linear" {
+		return linear.ParseIdentifier(strings.ToUpper(raw))
+	}
+	return provider.NewMarkdown("").ParseID(raw)
 }

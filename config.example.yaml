@@ -1,4 +1,5 @@
-# Grove config — copy to ~/.config/grove/config.yaml
+# Grove config — copy to ~/.config/grove/config.yaml (or just run `gv init`
+# inside a repo: it registers the repo and scaffolds .grove/tasks/ for you).
 #
 # repos.<name>:
 #   path:          main checkout (worktrees land in <parent>/.worktrees/<repo>/)
@@ -6,26 +7,35 @@
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: ccwork --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
-#   linear_labels: ticket labels that map to this repo for `gv grab`
+#   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
 
+# Task backend. markdown (default): one file per task in <repo>/.grove/tasks/,
+# YAML frontmatter (id/title/status/…) + markdown body — `gv grab` with no
+# args lists the grabbable backlog. linear: the Grid-era Linear client.
+provider:
+  kind: markdown
+  markdown:
+    dir: .grove/tasks     # relative to each repo
+
+# Only read when provider.kind is linear.
 linear:
   api_key_env: LINEAR_API_KEY
   team: DEV
 
 repos:
-  monorepo:
-    path: ~/git/thegrid/thegrid-private-monorepo
-    base: main
-    # worktree:setup copies env files + installs + builds, but can't rebuild
-    # gitignored graphql codegen output — copy it from the main checkout
-    # first (field-tested 2026-06-10, see LEARNINGS.md)
-    setup: bash -c 'M="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"; cp -R "$M/packages/graphql/generated" packages/graphql/ 2>/dev/null || true; pnpm worktree:setup'
-    linear_labels: [management-portal, admin-portal, directory]
-  discovery:
-    path: ~/git/thegrid/thegrid-discovery
+  myapp:
+    path: ~/git/myapp
     base: main
     setup: pnpm install
-    linear_labels: [discovery]
+  # Grid-era example (linear provider):
+  # monorepo:
+  #   path: ~/git/thegrid/thegrid-private-monorepo
+  #   base: main
+  #   # worktree:setup copies env files + installs + builds, but can't rebuild
+  #   # gitignored graphql codegen output — copy it from the main checkout
+  #   # first (field-tested 2026-06-10, see LEARNINGS.md)
+  #   setup: bash -c 'M="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"; cp -R "$M/packages/graphql/generated" packages/graphql/ 2>/dev/null || true; pnpm worktree:setup'
+  #   linear_labels: [management-portal, admin-portal, directory]
 
 orchestrator:
   dir: ~/.config/grove/orchestrator

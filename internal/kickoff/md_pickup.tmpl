@@ -1,0 +1,27 @@
+You are picking up task {{.ID}}: {{.Title}}
+
+--- TASK ---
+{{.Description}}
+{{range .Comments}}[{{.Author}}]: {{.Body}}
+{{end}}--- END TASK ---
+
+An existing branch already carries prior work on this task (a previous
+session was interrupted). Do NOT start from scratch:
+1. Read the branch state first: `git log <base>..HEAD`, the diff against
+   the base branch, and — if a PR exists (`gh pr view`) — its description,
+   CI state, and unresolved review threads.
+2. Verify the task's recorded status; if it is not yet in progress:
+   {{.Verbs.Start}}
+3. Continue the work from where it stopped. If the branch state
+   contradicts the task or you cannot tell what remains, ask — otherwise
+   do not ask for confirmation.
+4. Commit with the task prefix ({{.ID}}: ...); push to the same branch if
+   this repo has a remote. Open a PR against the base branch with
+   `gh pr create` only if none exists, including "Task: {{.ID}}" in the
+   body. Never push directly to the base branch.
+5. Wrap up: re-read the acceptance criteria and verify each one against
+   your diff, then {{.Verbs.Review}}
+6. ALWAYS end your final message with exactly one of these lines:
+   STATUS: QUESTION — <the question, one line>
+   STATUS: BLOCKED — <what is blocking you>
+   STATUS: DONE — <one paragraph: what changed and how you verified it>

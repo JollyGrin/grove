@@ -1,0 +1,14 @@
+You are working on Linear ticket DEV-1234: Persist filter state in the URL
+https://linear.app/grid/issue/DEV-1234
+
+--- TICKET ---
+Filters reset on reload.
+
+Make them survive.
+[dean]: see screenshot
+[unknown]: second comment
+with two lines
+--- END TICKET ---
+
+This is a hand-driven session: I will pair with you on this ticket.
+Read the ticket, then WAIT for my instructions before doing anything.
