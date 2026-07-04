@@ -26,12 +26,18 @@ var gridPlugins = []string{
 func GridInterim(env Env) []Connection {
 	var conns []Connection
 
-	// Universal CLAUDE.md at each repos' parent dir (grid convention),
-	// deduped per parent.
+	// Universal CLAUDE.md at each repos' parent dir (grid convention).
+	// Scoped to LINEAR-driven repos: the convention belongs to the Grid
+	// workspace; markdown side-repos sharing a parent like ~/git must not
+	// red-flag the doctor forever. Deduped per parent.
 	if env.Cfg != nil && env.CfgErr == nil {
 		seen := map[string]bool{}
 		for _, name := range repoNames(env.Cfg) {
-			parent := filepath.Dir(env.Cfg.Repos[name].Path)
+			repo := env.Cfg.Repos[name]
+			if env.Cfg.ProviderKindFor(repo) != "linear" {
+				continue
+			}
+			parent := filepath.Dir(repo.Path)
 			if seen[parent] {
 				continue
 			}
