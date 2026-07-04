@@ -90,6 +90,11 @@
 
 ## Go / CLI
 
+- **2026-07-04 · `/dev/null` IS a character device** — detecting "am I
+  interactive?" via `os.Stdin.Stat()` + `ModeCharDevice` passes for
+  `< /dev/null`, so the wizard tried to render forms headless and
+  "aborted". Use `golang.org/x/term.IsTerminal(fd)`; a non-TTY `gv init`
+  must silently become `--yes`, never hang or abort.
 - **2026-07-04 · commands typed into tmux panes resolve via PATH, not via
   the invoking binary** — the cockpit's dashboard pane ran whatever `gv`
   was first on PATH (a stale installed build), not the binary that created

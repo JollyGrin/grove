@@ -43,13 +43,24 @@ Plan: [docs/plans/2026-07-04-phase-0.md](docs/plans/2026-07-04-phase-0.md)
 
 ## Phase 1 — bootstrap (drop-in-to-any-repo)
 
-- [ ] 1a: probe (stack/shape/scope) + `AGENTS.md` bootstrap agent +
-      wizard core (detect-then-confirm, flag twins, re-runnable-as-repair)
-- [ ] 1b: connections manifest + doctor derived from it + minimal pack
-      loading (local path, slot merge)
+Plan: [docs/plans/2026-07-04-phase-1a-wizard.md](docs/plans/2026-07-04-phase-1a-wizard.md)
+(plan-reviewer approved; re-scoped 1a to absorb most of 1b — the summary
+board IS the manifest rendered).
+
+- [x] 1a+ (2026-07-04): probe (stack/shape/context, `internal/probe`) +
+      connections manifest (`internal/connections`, core kinds +
+      grid-interim tagged for pack lift) + doctor = manifest renderer
+      (✓/!/✗, fixes, --json, errors-only exit) + `gv init` wizard
+      (detect-then-confirm huh forms, flag twins, `--yes` fills-empty-only,
+      `--only <step>`, re-run = reconfigure, comment-preserving field-merge
+      writer) + AGENTS.md bootstrap agent (templated one-shot, never
+      overwrites, off under --yes) — e2e/wizard.sh covers it all
+- [ ] 1b (remainder): pack loading (local path, slot merge)
 - [ ] 1c: drift detection — TTL-cached lazy checks, failure-signal
-      degradation via hook classifier, seeded-file hash drift
+      degradation via hook classifier, seeded-file hash drift +
+      `gv sync --diff`; verb-boundary connection gating
 - [ ] Workspace registry + `gv switch` + ambient walk-up (DESIGN.md §6.5)
+      — also what scopes the cockpit/orchestrator to the invoking repo
 - [ ] Measure: is the Aider-style repo map needed at target repo sizes?
       (deferred decision, DESIGN.md OQ4)
 

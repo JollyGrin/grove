@@ -27,8 +27,11 @@ mkdir -p "$HOME" "$GROVE_STATE_DIR"
 
 REAL_HOME="$(dscl . -read /Users/"$(whoami)" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || echo "/Users/$(whoami)")"
 snapshot_live() {
+  # tasks.json is deliberately absent: it is a DERIVED view that live ovs
+  # (hooks on running sessions) rewrites concurrently — its mtime churning
+  # is not evidence grove touched anything. The append-only events.jsonl
+  # files + configs are the real canaries.
   for f in "$REAL_HOME/.local/state/overstory/events.jsonl" \
-           "$REAL_HOME/.local/state/overstory/tasks.json" \
            "$REAL_HOME/.config/overstory/config.yaml" \
            "$REAL_HOME/.local/state/grove/events.jsonl" \
            "$REAL_HOME/.config/grove/config.yaml" \
@@ -55,9 +58,9 @@ git config user.email e2e@grove.test && git config user.name "grove e2e"
 echo "# dummy" > README.md
 git add -A && git commit -qm "init"
 
-say "gv init"
-"$GV" init | tee "$SCRATCH/init.out"
-grep -q 'registered repo "dummy"' "$SCRATCH/init.out" || fail "init did not register the repo"
+say "gv init --yes"
+"$GV" init --yes > "$SCRATCH/init.out"; cat "$SCRATCH/init.out"
+grep -q 'config updated' "$SCRATCH/init.out" || fail "init did not register the repo"
 [ -f .grove/tasks/task-001.md ] || fail "sample task missing"
 grep -q 'kind: markdown' "$HOME/.config/grove/config.yaml" || fail "config missing markdown provider"
 
@@ -65,8 +68,8 @@ say "gv init idempotent"
 # capture-then-grep everywhere a gv/tmux command feeds grep -q: grep exits
 # at first match and SIGPIPEs the producer's remaining output, which
 # pipefail then reports as failure (observed flake).
-"$GV" init > "$SCRATCH/init2.out"
-grep -q 'already registered' "$SCRATCH/init2.out" || fail "re-init not idempotent"
+"$GV" init --yes > "$SCRATCH/init2.out"
+grep -q 'already up to date' "$SCRATCH/init2.out" || fail "re-init not idempotent"
 
 say "stub worker command to echo"
 perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$HOME/.config/grove/config.yaml"
