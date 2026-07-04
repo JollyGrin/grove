@@ -222,11 +222,42 @@ func buildCockpit(cfg *config.Config, orchDir string) error {
 	return tmux.MainVertical(cockpitSession, 55)
 }
 
+// orchestratorLaunch is the orchestrator claude invocation: the configured
+// command plus --add-dir for every fleet surface. The chat's cwd stays the
+// orchestrator dir (its CLAUDE.md brain must reload on every /clear, and
+// that cwd is hook-invisible) — --add-dir is what lets @-references and
+// file tools reach the actual repos and their task worktrees from there.
+func orchestratorLaunch(cfg *config.Config) string {
+	cmd := cfg.Orchestrator.Claude
+	var names []string
+	for name := range cfg.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	seen := map[string]bool{}
+	for _, name := range names {
+		r := cfg.Repos[name]
+		for _, dir := range []string{r.Path, filepath.Join(filepath.Dir(r.Path), ".worktrees", name)} {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			// claude refuses to start on a missing --add-dir; the
+			// worktrees dir only exists once something was grabbed.
+			if st, err := os.Stat(dir); err == nil && st.IsDir() {
+				cmd += fmt.Sprintf(" --add-dir '%s'", dir)
+			}
+		}
+	}
+	return cmd
+}
+
 // orchestratorCmd resumes the last orchestrator chat when one exists;
 // fresh spawns (O / orchestrator new) always start clean, so this is only
 // for the cockpit's first pane.
 func orchestratorCmd(cfg *config.Config) string {
-	return fmt.Sprintf("%s --continue 2>/dev/null || %s", cfg.Orchestrator.Claude, cfg.Orchestrator.Claude)
+	launch := orchestratorLaunch(cfg)
+	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
@@ -258,7 +289,7 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		}
 		return "cockpit built — gv (or gv ui) attaches", nil
 	}
-	if _, err := tmux.SpawnPane(cockpitSession, dir, cfg.Orchestrator.Claude); err != nil {
+	if _, err := tmux.SpawnPane(cockpitSession, dir, orchestratorLaunch(cfg)); err != nil {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
