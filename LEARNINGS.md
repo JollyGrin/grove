@@ -90,6 +90,16 @@
 
 ## Go / CLI
 
+- **2026-07-04 · commands typed into tmux panes resolve via PATH, not via
+  the invoking binary** — the cockpit's dashboard pane ran whatever `gv`
+  was first on PATH (a stale installed build), not the binary that created
+  the session. Any pane/hook command must use the absolute
+  `os.Executable()` path (`buildCockpit` now does; hooks already did).
+- **2026-07-04 · `cmd | grep -q` flakes under `set -o pipefail`** —
+  grep -q exits at its first match, the producer SIGPIPEs writing the
+  rest of its output, and pipefail reports the pipeline failed even
+  though the assertion matched. E2E assertions capture to a file first,
+  then grep.
 - **2026-07-04 · shared tmux namespaces during ovs coexistence** — worker
   sessions keep ovs's `pr-<repo>` naming (byte-comparable `internal/tmux`),
   so a repo tracked by BOTH ovs and gv lands windows in the SAME tmux

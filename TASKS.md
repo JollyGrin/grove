@@ -70,8 +70,14 @@ Plan: [docs/plans/2026-07-04-phase-0.md](docs/plans/2026-07-04-phase-0.md)
 - [ ] Generic orchestrator CLAUDE.md (de-Gridded duties text — does not
       exist yet, flagged by design review) + pack overlay rendering +
       seed-hash tracking
-- [ ] `gv ui` cockpit: main-vertical, AGENTS + ACTIVITY feed,
-      `gv orchestrator new` / `O` keybind (docs/grove-cockpit-design.md)
+- [x] **Pulled forward 2026-07-04 (Dean's first-test feedback):** cockpit
+      main-vertical (bare `gv` opens it; TUI-only = `gv dash`), MAIL/
+      REVIEW panels → ACTIVITY feed, `gv orchestrator new` / `O` keybind,
+      orchestrator default `claude --dangerously-skip-permissions`
+      (e2e/cockpit.sh smoke-tests the layout)
+- [ ] Cockpit remainder: workspace-labelled sessions (`grove-<label>`)
+      + workspace-aware `orchestrator new` (§4.6 — needs Phase 1 ambient
+      walk-up), expandable feed entries, lossless-clear drafts (§4.5)
 
 ## Phase 5 — learnings, first cut (lean)
 

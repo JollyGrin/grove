@@ -71,3 +71,7 @@ exercised for real. This is the Phase-0 acceptance harness (DESIGN.md
 | 2026-07-04 | `internal/git/grove.go` (new file) | `HasRemote` + `BaseRef` (no-remote grab fallback); upstream files untouched | phase-0 T3 |
 | 2026-07-04 | `internal/bootstrap` (new) | P0 `gv init` scaffold (register repo, `.grove/tasks/`, sample task) | phase-0 T5 |
 | 2026-07-04 | `cmd/gv/main.go` | grab/adopt/findTask/done rewired through the provider; no-arg grab lists the backlog; done no-remote degraded path (`--force` = human confirmation) | phase-0 T3/T4 |
+| 2026-07-04 | `internal/state/grove.go` (new file) | `ReadEvents` (activity-feed read side); state.go untouched | cockpit-lite |
+| 2026-07-04 | `internal/tmux/grove.go` (new file) | `MainVertical` + `SpawnPane` (cockpit layout / orchestrator-pane spawn); upstream files untouched | cockpit-lite |
+| 2026-07-04 | `internal/tui` | MAIL/REVIEW panels removed for the ACTIVITY feed (cockpit design §2/§5); single-panel selection; `O` spawn keybind via injected hook | cockpit-lite |
+| 2026-07-04 | `internal/config` · `cmd/gv/main.go` | Orchestrator default `ccwork` → `claude --dangerously-skip-permissions` (DESIGN §15 locked decision); bare `gv` = cockpit, `gv dash` = TUI-only; cockpit pane runs the binary by absolute path | cockpit-lite |
