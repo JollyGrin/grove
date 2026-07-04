@@ -1,0 +1,6 @@
+{
+  "name": "yarn-fixture",
+  "scripts": {
+    "test": "jest"
+  }
+}

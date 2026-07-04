@@ -1,0 +1,6 @@
+{
+  "name": "bun-fixture",
+  "scripts": {
+    "test": "bun:test"
+  }
+}

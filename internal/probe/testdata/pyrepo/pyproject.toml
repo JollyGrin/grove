@@ -1,0 +1,5 @@
+[project]
+name = "py-fixture"
+
+[dependency-groups]
+dev = ["pytest"]

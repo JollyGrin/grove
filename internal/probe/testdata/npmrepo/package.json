@@ -1,0 +1,7 @@
+{
+  "name": "npm-fixture",
+  "scripts": {
+    "build": "webpack",
+    "lint": "eslint src"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "pnpm-fixture",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "lint": "eslint ."
+  }
+}
