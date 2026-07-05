@@ -52,11 +52,29 @@ func (m Model) viewHeader() string {
 	return left + strings.Repeat(" ", gap) + sChrome.Render(right)
 }
 
+// ticketColWidth sizes the TICKET column (content + 1-cell gap) to the
+// longest active ticket — provider ids share long prefixes (<repo>-<n>),
+// so a fixed width truncates them into indistinguishable rows. Clamped so
+// one huge id can't push every other column off a narrow screen.
+func (m Model) ticketColWidth() int {
+	w := 10
+	for _, t := range m.tasks {
+		if n := len([]rune(t.Ticket)); n > w {
+			w = n
+		}
+	}
+	if w > 32 {
+		w = 32
+	}
+	return w + 1
+}
+
 func (m Model) viewAgents() string {
 	w := m.width - 4
+	tw := m.ticketColWidth()
 	// Cells are padded as plain text FIRST, then styled — ANSI codes inside
 	// %-Ns break fmt's width accounting (field-tested on the first render).
-	header := "   " + pad("TICKET", 11) + pad("REPO", 11) + pad("STATUS", 11) +
+	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + pad("STATUS", 11) +
 		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + "AGE"
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
@@ -90,7 +108,7 @@ func (m Model) viewAgents() string {
 			cursor = sSelected.Render("▸")
 		}
 		line := cursor + st.Render(statusGlyph(label)) + " " +
-			pad(t.Ticket, 11) +
+			pad(t.Ticket, tw) +
 			pad(trunc(t.Repo, 10), 11) +
 			st.Render(pad(label, 11)) +
 			sDim.Render(pad(m.live[t.Ticket], 8)) +
@@ -124,11 +142,12 @@ func (m Model) viewActivity() string {
 	if len(items) == 0 {
 		rows = append(rows, sDim.Render("  nothing has happened yet"))
 	}
+	tw := m.ticketColWidth()
 	for _, it := range items[:avail] {
 		line := fmt.Sprintf(" %s %s  %s %s",
 			sChrome.Render(pad(age(it.Time), 7)),
 			statusStyle("").Render(it.Glyph),
-			pad(it.Ticket, 11),
+			pad(it.Ticket, tw),
 			sDim.Render(it.Text))
 		rows = append(rows, truncPad(line, w))
 	}
