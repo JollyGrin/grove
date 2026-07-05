@@ -57,7 +57,7 @@ const usage = `gv — grove
   gv nudge <ticket> [text]                    follow-up prompt to a session
   gv attach <ticket>                          jump into the tmux window
   gv diff <ticket> [--stat]                   branch diff vs base — review without attach
-  gv adopt <ticket> [--branch b] [--manual]   revive a disconnected task / adopt a branch
+  gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
   gv done <ticket> [--force]                  verify merged → clean up everything
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
   gv sweep                                    clean up all merged tasks
@@ -1534,9 +1534,10 @@ func cmdAdopt(args []string) error {
 	repoFlag := fs.String("repo", "", "repo name from config (cold adopt: overrides label inference)")
 	branchFlag := fs.String("branch", "", "branch to adopt (default: from state, or origin/<ticket>-* inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
+	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id]")
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -1722,9 +1723,10 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, repo.Claude, promptPath)
+	claudeBin := config.WithModel(repo.Claude, *modelFlag)
+	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
 	if sessionID != "" && !*manual {
-		claudeCmd = fmt.Sprintf("%s --resume %s || %s", repo.Claude, sessionID, claudeCmd)
+		claudeCmd = fmt.Sprintf("%s --resume %s || %s", claudeBin, sessionID, claudeCmd)
 	}
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()
@@ -1740,6 +1742,9 @@ func cmdAdopt(args []string) error {
 	}
 	if *manual {
 		how = "manual — attach to drive it"
+	}
+	if *modelFlag != "" {
+		how += ", model " + *modelFlag
 	}
 	fmt.Printf("✓ %s adopted (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", id, how, id)
 	return nil
