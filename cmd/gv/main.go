@@ -765,7 +765,7 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	hookPaths := hookSettingsPaths()
+	hookPaths := hooks.SettingsPaths(initHookWorkerCommands(doc, root, name, scope))
 	in := wizard.Input{
 		Probe: p, RepoName: name, RepoPath: root, Doc: doc,
 		HooksInstalled: hooks.AllInstalled(hookPaths),
@@ -834,7 +834,7 @@ func cmdInit(args []string) error {
 	if a.InstallHooks && !in.HooksInstalled {
 		// Re-derive after Save so a worker chosen THIS run gets its
 		// profile's settings.json included.
-		done, err := hooks.Install(hookSettingsPaths())
+		done, err := hooks.Install(hooks.SettingsPaths(initHookWorkerCommands(doc, root, name, scope)))
 		for _, p := range done {
 			fmt.Printf("✓ session hooks wired into %s\n", p)
 		}
@@ -2067,6 +2067,23 @@ func hookSettingsPaths() []string {
 		return hooks.SettingsPaths(workers)
 	}
 	return hooks.SettingsPaths(nil)
+}
+
+// initHookWorkerCommands returns only the worker commands gv init is about
+// to touch — this repo (or, in parent scope, its child repos) — read from
+// the workspace's own doc. Never the global machine config or other
+// workspaces: a brand-new personal repo must default to plain claude and
+// never surface an unrelated profile's settings.json (e.g. ~/.cc-work)
+// just because some OTHER repo on the machine is configured to use it.
+func initHookWorkerCommands(doc *bootstrap.Doc, root, name, scope string) []string {
+	if scope == wizard.ScopeParent {
+		var out []string
+		for _, child := range childRepos(root) {
+			out = append(out, doc.Get("repos", filepath.Base(child), "claude"))
+		}
+		return out
+	}
+	return []string{doc.Get("repos", name, "claude")}
 }
 
 func cmdHooks(args []string) error {
