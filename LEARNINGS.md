@@ -156,3 +156,9 @@
 - **When demoting a data source, wire the replacement into the same code
   path** — ovs's preview column went blind because the cheap poll dropped
   comments while only the on-demand path kept them.
+- **2026-07-05 · a git-inited $HOME shadows parent-folder detection** —
+  `git rev-parse --show-toplevel` from ~/git/unbrewed returned /Users/grins
+  (dotfiles repo), so `gv init` made HOME the workspace. Parent-of-repos
+  detection must test the cwd ITSELF (≥2 direct child repos AND cwd is not
+  the git root) before trusting any enclosing repo root. Field-hit on
+  Dean's machine within minutes of shipping.

@@ -737,18 +737,20 @@ func cmdInit(args []string) error {
 		return err
 	}
 	// Workspace root + scope: a git repo is a repo-scope workspace
-	// (monorepo included); a non-repo dir holding >=2 child repos is a
-	// parent-scope workspace (the thegrid/unbrewed shape — plan review C-1).
+	// (monorepo included); a dir DIRECTLY holding >=2 child repos is a
+	// parent-scope workspace (the thegrid/unbrewed shape). Parent
+	// detection is checked FIRST against the cwd itself — an enclosing
+	// repo further up (a git-inited $HOME holding dotfiles is common)
+	// must never claim a parent folder nested inside it.
 	scope := wizard.ScopeRepo
+	abs, _ := filepath.Abs(cwd)
+	abs, _ = filepath.EvalSymlinks(abs)
 	root, rootErr := git.RepoRoot(cwd)
-	if rootErr != nil {
-		abs, _ := filepath.Abs(cwd)
-		abs, _ = filepath.EvalSymlinks(abs)
-		if len(childRepos(abs)) >= 2 {
-			root, scope = abs, wizard.ScopeParent
-		} else {
-			return fmt.Errorf("gv init needs a git repo (repo scope) or a folder of sibling repos (parent scope): %w", rootErr)
-		}
+	switch {
+	case len(childRepos(abs)) >= 2 && (rootErr != nil || root != abs):
+		root, scope = abs, wizard.ScopeParent
+	case rootErr != nil:
+		return fmt.Errorf("gv init needs a git repo (repo scope) or a folder of sibling repos (parent scope): %w", rootErr)
 	}
 	name := filepath.Base(root)
 	cfgPath := filepath.Join(root, ".grove", "config.yaml")
