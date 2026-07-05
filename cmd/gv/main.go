@@ -268,16 +268,15 @@ func cmdDashboard() error {
 	}
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
+	tui.AttachTask = attachTask
 	attachTo, err := tui.Run(cfg, stateDir(), wsLabel())
 	if err != nil {
 		return err
 	}
 	if attachTo != nil {
-		if !attachTo.Attached {
-			maybeInjectEditor(attachTo.TmuxSession, attachTo.TmuxWindow)
-			_ = state.Append(stateDir(), state.Event{Type: state.EvAttached, Ticket: attachTo.Ticket})
-		}
-		return tmux.AttachWindow(attachTo.TmuxSession, attachTo.TmuxWindow)
+		// Outside-tmux path only: attach replaces the process, so the
+		// TUI had to quit first. Inside tmux the TUI attaches in place.
+		return attachTask(attachTo)
 	}
 	return nil
 }
@@ -1438,6 +1437,14 @@ func cmdAttach(args []string) error {
 	if err != nil {
 		return err
 	}
+	return attachTask(t)
+}
+
+// attachTask jumps to a task's tmux window, with first-attach bookkeeping
+// (lazy editor inject + attached event). Also injected into the TUI as the
+// a keybind's inside-tmux path, where switch-client leaves the dashboard
+// running in its cockpit pane.
+func attachTask(t *state.Task) error {
 	if !t.Attached {
 		maybeInjectEditor(t.TmuxSession, t.TmuxWindow)
 		_ = state.Append(stateDir(), state.Event{Type: state.EvAttached, Ticket: t.Ticket})

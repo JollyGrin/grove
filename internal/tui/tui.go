@@ -59,8 +59,11 @@ type Model struct {
 
 	flash string
 
-	// AttachTo is consumed by main after Run returns: tmux attach replaces
-	// the process, so it can't happen inside the tea loop.
+	// AttachTo is consumed by main after Run returns — only used when gv
+	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
+	// and so can't happen inside the tea loop. Inside tmux, attach is a
+	// switch-client done live via AttachTask and the dashboard keeps
+	// running in its pane.
 	AttachTo *state.Task
 }
 
@@ -246,6 +249,19 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		if t := m.selected(); t != nil {
+			if tmux.IsInsideTmux() {
+				// switch-client moves the tmux client; this process
+				// stays alive, so the dashboard is still here when the
+				// user switches back to the cockpit.
+				task := t
+				m.flash = "→ " + t.Ticket
+				return m, func() tea.Msg {
+					if err := AttachTask(task); err != nil {
+						return flashMsg(err.Error())
+					}
+					return flashMsg("→ " + task.Ticket)
+				}
+			}
 			m.AttachTo = t
 			return m, tea.Quit
 		}
@@ -356,6 +372,14 @@ var FinishTask = func(cfg *config.Config, t *state.Task, force bool) error {
 // there); wired at startup to avoid an import cycle. Returns a flash line.
 var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
 	return "", fmt.Errorf("orchestrator spawn not wired")
+}
+
+// AttachTask is injected by cmd/gv (attach bookkeeping — editor inject,
+// attached event — lives there); wired at startup to avoid an import
+// cycle. Only called when inside tmux, where attach is a switch-client
+// and the tea loop survives it.
+var AttachTask = func(t *state.Task) error {
+	return fmt.Errorf("attach not wired")
 }
 
 func (m *Model) move(delta int) {
