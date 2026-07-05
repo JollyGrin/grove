@@ -48,3 +48,72 @@ func TestReadEventsMissingAndMalformed(t *testing.T) {
 		t.Errorf("malformed lines must be skipped: %v, %v", evs, err)
 	}
 }
+
+func TestReadTasks(t *testing.T) {
+	dir := t.TempDir()
+	for _, ticket := range []string{"t-1", "t-2"} {
+		if err := Append(dir, Event{Type: EvTaskCreated, Ticket: ticket, Data: map[string]string{
+			"title": "x", "repo": "r", "branch": "b", "worktree": "/w/" + ticket,
+			"tmux_session": "s", "tmux_window": "w",
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Load(dir); err != nil { // materialize the derived tasks.json
+		t.Fatal(err)
+	}
+	viewPath := filepath.Join(dir, "tasks.json")
+	before, err := os.Stat(viewPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := ReadTasks(dir)
+	if len(tasks) != 2 || tasks["t-1"] == nil || tasks["t-2"] == nil {
+		t.Fatalf("ReadTasks = %v, want t-1 and t-2", tasks)
+	}
+	if tasks["t-1"].Worktree != "/w/t-1" || tasks["t-1"].Agent != AgentSetup {
+		t.Errorf("task fields not parsed: %+v", tasks["t-1"])
+	}
+
+	after, err := os.Stat(viewPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Error("ReadTasks must not rewrite tasks.json (contrast with Load)")
+	}
+}
+
+func TestReadTasksMissingAndCorrupt(t *testing.T) {
+	// Missing state dir: empty map, and the dir must NOT be created —
+	// hook receivers probe every registered workspace on every turn.
+	ghost := filepath.Join(t.TempDir(), "never-created")
+	if tasks := ReadTasks(ghost); len(tasks) != 0 {
+		t.Errorf("missing dir: got %v, want empty map", tasks)
+	}
+	if _, err := os.Stat(ghost); !os.IsNotExist(err) {
+		t.Error("ReadTasks created the state dir; it must be read-only")
+	}
+
+	// Present dir, missing file: empty map, no file created.
+	dir := t.TempDir()
+	if tasks := ReadTasks(dir); len(tasks) != 0 {
+		t.Errorf("missing file: got %v, want empty map", tasks)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks.json")); !os.IsNotExist(err) {
+		t.Error("ReadTasks created tasks.json; it must be read-only")
+	}
+
+	// Corrupt view: empty map, bytes untouched.
+	if err := os.WriteFile(filepath.Join(dir, "tasks.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if tasks := ReadTasks(dir); len(tasks) != 0 {
+		t.Errorf("corrupt file: got %v, want empty map", tasks)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "tasks.json"))
+	if err != nil || string(raw) != "{not json" {
+		t.Errorf("corrupt view must be left as-is: %q, %v", raw, err)
+	}
+}

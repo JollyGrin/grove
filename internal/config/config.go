@@ -46,6 +46,13 @@ type Config struct {
 		StuckTurns int                   `yaml:"stuck_turns"` // turns with no delivery movement before a stuck flag (default 30)
 		Pricing    map[string]cost.Rates `yaml:"pricing"`     // per-model USD/MTok overrides (est. only)
 	} `yaml:"cost"`
+	// Workspace is the optional identity block a per-workspace
+	// <root>/.grove/config.yaml carries (DESIGN §6.5). Absent (zero) in
+	// the global file and for legacy no-workspace loads.
+	Workspace struct {
+		Label string `yaml:"label"`
+		Scope string `yaml:"scope"` // repo | parent
+	} `yaml:"workspace"`
 }
 
 // Notify configures phone push via ntfy. The topic URL is the only secret
@@ -105,16 +112,24 @@ func expand(p string) string {
 	return p
 }
 
-// Load reads and validates the config file.
+// Load reads and validates the global config file.
 func Load() (*Config, error) {
 	path := filepath.Join(Dir(), "config.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w (create %s — see config.example.yaml)", err, path)
 	}
+	return parse(raw, path)
+}
+
+// parse unmarshals raw config yaml, applies defaults, and validates.
+// src names the source file in error messages. LoadAt runs merged bytes
+// through here, so defaulting always happens AFTER any workspace merge —
+// meaningful zero values set in either layer survive.
+func parse(raw []byte, src string) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", src, err)
 	}
 	if c.Provider.Kind == "" {
 		c.Provider.Kind = "markdown"
