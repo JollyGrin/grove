@@ -17,6 +17,13 @@ import (
 	"github.com/JollyGrin/grove/internal/probe"
 )
 
+// Scope values mirror internal/workspace (string-typed here to avoid the
+// import until something needs more than the literal).
+const (
+	ScopeRepo   = "repo"
+	ScopeParent = "parent"
+)
+
 type StepKind int
 
 const (
@@ -39,12 +46,13 @@ type Step struct {
 }
 
 // StepIDs is the --only namespace, in run order.
-var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md"}
+var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "workspace"}
 
 // Flags are the prompt twins. Empty string / false = not provided.
 type Flags struct {
 	Yes           bool
 	Only          string
+	Label         string
 	Base          string
 	Setup         string
 	Worker        string
@@ -65,6 +73,8 @@ type Input struct {
 	Doc            *bootstrap.Doc // current global config
 	HooksInstalled bool
 	HooksPaths     []string // worker-profile settings.json files hooks would land in
+	Scope          string   // workspace scope: repo | parent
+	DetectedLabel  string   // default workspace label (root basename)
 	Flags          Flags
 }
 
@@ -94,7 +104,15 @@ func Build(in Input) ([]Step, error) {
 	// override config.Load's default posture).
 	curWorker := cur("claude")
 
+	wsStep := Step{
+		ID: "workspace", Kind: KindInput,
+		Title:    fmt.Sprintf("workspace label — the cockpit becomes grove-<label>, scope: %s", in.Scope),
+		Detected: in.DetectedLabel, Current: in.Doc.Get("workspace", "label"),
+		Value: resolve(f.Label, in.Doc.Get("workspace", "label"), in.DetectedLabel),
+	}
+
 	steps := []Step{
+		wsStep,
 		{
 			ID: "repo", Kind: KindInput,
 			Title:    fmt.Sprintf("base branch for %s (task worktrees fork from it)", in.RepoName),
@@ -147,6 +165,19 @@ func Build(in Input) ([]Step, error) {
 			Current: in.Probe.AgentContext.Kind,
 			On:      resolveAgentsMD(f, in),
 		},
+	}
+
+	// Parent scope: per-repo steps don't apply (children register as
+	// path+base entries); workspace-wide steps remain.
+	if in.Scope == ScopeParent {
+		var kept []Step
+		for _, s := range steps {
+			switch s.ID {
+			case "workspace", "provider", "ntfy", "hooks":
+				kept = append(kept, s)
+			}
+		}
+		steps = kept
 	}
 
 	if f.Only != "" {
@@ -202,14 +233,16 @@ func resolveAgentsMD(f Flags, in Input) bool {
 
 // Answers extracts the final decisions from (possibly runner-edited) steps.
 type Answers struct {
-	Base, Setup, Worker, Provider, Ntfy string
-	InstallHooks, RunAgentsMD           bool
+	Label, Base, Setup, Worker, Provider, Ntfy string
+	InstallHooks, RunAgentsMD                  bool
 }
 
 func Collect(steps []Step) Answers {
 	var a Answers
 	for _, s := range steps {
 		switch s.ID {
+		case "workspace":
+			a.Label = s.Value
 		case "repo":
 			a.Base = s.Value
 		case "setup":
@@ -242,6 +275,12 @@ func Apply(in Input, steps []Step) {
 			}
 		}
 		return false
+	}
+	if has("workspace") && a.Label != "" {
+		in.Doc.Set(a.Label, "workspace", "label")
+		if in.Scope != "" {
+			in.Doc.Set(in.Scope, "workspace", "scope")
+		}
 	}
 	if has("repo") {
 		in.Doc.SetRepoField(in.RepoName, "path", in.RepoPath)

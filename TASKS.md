@@ -59,8 +59,13 @@ board IS the manifest rendered).
 - [ ] 1c: drift detection — TTL-cached lazy checks, failure-signal
       degradation via hook classifier, seeded-file hash drift +
       `gv sync --diff`; verb-boundary connection gating
-- [ ] Workspace registry + `gv switch` + ambient walk-up (DESIGN.md §6.5)
-      — also what scopes the cockpit/orchestrator to the invoking repo
+- [x] Workspace registry + `gv switch` + ambient walk-up (2026-07-05,
+      plan docs/plans/2026-07-05-workspaces.md, two review rounds):
+      per-root `.grove/` config+state+orchestrator, yaml-merge over the
+      global config, `grove-<label>` cockpits with the label in the TUI
+      header (the visible-focus driver), read-only multi-fleet hook
+      ownership, `gv switch`/`gv workspaces`, parent-scope init,
+      e2e/workspace.sh. Legacy no-marker path preserved.
 - [ ] Measure: is the Aider-style repo map needed at target repo sizes?
       (deferred decision, DESIGN.md OQ4)
 

@@ -163,3 +163,46 @@ func TestApplyNoChangesLeavesDocClean(t *testing.T) {
 		t.Error("re-running --yes over an already-correct config must be a no-op")
 	}
 }
+
+func TestWorkspaceStepAndParentScope(t *testing.T) {
+	in := freshInput(t, Flags{Yes: true})
+	in.Scope = ScopeRepo
+	in.DetectedLabel = "demo"
+	steps, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].ID != "workspace" || steps[0].Value != "demo" {
+		t.Errorf("workspace step must lead with the detected label, got %+v", steps[0])
+	}
+
+	// Existing label in the workspace config wins over detection.
+	in2 := freshInput(t, Flags{Yes: true})
+	in2.Scope = ScopeRepo
+	in2.DetectedLabel = "demo"
+	in2.Doc = docFrom(t, "workspace:\n  label: canopy\n")
+	steps2, _ := Build(in2)
+	if steps2[0].Value != "canopy" {
+		t.Errorf("existing label must win, got %q", steps2[0].Value)
+	}
+
+	// Parent scope keeps only workspace-wide steps.
+	in3 := freshInput(t, Flags{Yes: true})
+	in3.Scope = ScopeParent
+	in3.DetectedLabel = "unbrewed"
+	steps3, _ := Build(in3)
+	var ids []string
+	for _, s := range steps3 {
+		ids = append(ids, s.ID)
+	}
+	if strings.Join(ids, " ") != "workspace provider ntfy hooks" {
+		t.Errorf("parent scope steps = %v", ids)
+	}
+
+	// Apply writes the workspace block.
+	Apply(in3, steps3)
+	if in3.Doc.Get("workspace", "label") != "unbrewed" || in3.Doc.Get("workspace", "scope") != "parent" {
+		t.Errorf("workspace block not applied: label=%q scope=%q",
+			in3.Doc.Get("workspace", "label"), in3.Doc.Get("workspace", "scope"))
+	}
+}

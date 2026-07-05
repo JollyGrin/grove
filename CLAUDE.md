@@ -18,7 +18,10 @@ update both when you ship or get surprised. Plans go in `docs/plans/`.
 
 **Resolved 2026-07-04 (Phase 0):** the P0.0 namespace rename is done —
 config `~/.config/grove/`, state `~/.local/state/grove/` (env override
-`GROVE_STATE_DIR`), `gv hook` commands, `grove`/`grove-mobile` cockpit
+`GROVE_STATE_DIR`; since 2026-07-05 a repo/parent with a `.grove/` marker
+is a WORKSPACE — its own `.grove/{config.yaml,state,orchestrator}`,
+cockpit `grove-<label>`, ambient walk-up; the global paths are the
+legacy/defaults layer), `gv hook` commands, `grove`/`grove-mobile` cockpit
 sessions. The binary is safe to run and no longer touches overstory
 state (`e2e/dummy.sh` asserts it). Two live-coexistence cautions remain:
 `gv hooks install` writes the **shared** `~/.cc-work/settings.json`

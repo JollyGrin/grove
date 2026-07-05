@@ -62,7 +62,8 @@ say "gv init --yes"
 "$GV" init --yes > "$SCRATCH/init.out"; cat "$SCRATCH/init.out"
 grep -q 'config updated' "$SCRATCH/init.out" || fail "init did not register the repo"
 [ -f .grove/tasks/task-001.md ] || fail "sample task missing"
-grep -q 'kind: markdown' "$HOME/.config/grove/config.yaml" || fail "config missing markdown provider"
+WCFG="$DUMMY/.grove/config.yaml"
+grep -q 'kind: markdown' "$WCFG" || fail "workspace config missing markdown provider"
 
 say "gv init idempotent"
 # capture-then-grep everywhere a gv/tmux command feeds grep -q: grep exits
@@ -72,8 +73,8 @@ say "gv init idempotent"
 grep -q 'already up to date' "$SCRATCH/init2.out" || fail "re-init not idempotent"
 
 say "stub worker command to echo"
-perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$HOME/.config/grove/config.yaml"
-grep -q 'claude: echo' "$HOME/.config/grove/config.yaml" || fail "claude stub not written"
+perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$WCFG"
+grep -q 'claude: echo' "$WCFG" || fail "claude stub not written"
 
 say "gv grab (no args) lists the backlog"
 "$GV" grab | tee "$SCRATCH/backlog.out"

@@ -45,6 +45,10 @@ import (
 const usage = `gv — grove
 
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
+                                              (workspace-aware: repo scope in a git repo,
+                                              parent scope in a folder of sibling repos)
+  gv switch [<label>] [--print]               cross-workspace picker with live rollups
+  gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
@@ -162,9 +166,20 @@ func hookCandidates() []hooks.Candidate {
 func main() {
 	resolveAmbient()
 	if len(os.Args) < 2 {
-		// Bare gv = the cockpit (build/attach/switch). The dashboard TUI
-		// alone is `gv dash` — it's what the cockpit's left pane runs.
-		if err := cmdUI(); err != nil {
+		// Bare gv: inside a workspace -> its cockpit; outside with a
+		// registry -> the switcher (DESIGN 6.5.3); outside with none ->
+		// the legacy global cockpit.
+		var err error
+		if ambient.ws == nil {
+			if list, _ := workspace.LoadRegistry(); len(list) > 0 {
+				err = cmdSwitch(nil)
+			} else {
+				err = cmdUI()
+			}
+		} else {
+			err = cmdUI()
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "gv:", err)
 			os.Exit(1)
 		}
@@ -212,6 +227,10 @@ func main() {
 		err = cmdSweep(args)
 	case "ui":
 		err = cmdUI()
+	case "switch":
+		err = cmdSwitch(args)
+	case "workspaces":
+		err = cmdWorkspaces(args)
 	case "dash":
 		err = cmdDashboard()
 	case "orchestrator":
@@ -268,26 +287,54 @@ func cmdDashboard() error {
 // The orchestrator cwd is untracked, so worker hooks ignore it; --continue
 // resumes the same conversation across cockpit launches.
 func cmdUI() error {
-	cfg, err := loadCfg()
+	return openCockpit(ambient.ws)
+}
+
+// openCockpit builds (if needed) and attaches the cockpit for a
+// workspace; nil = the legacy global cockpit.
+func openCockpit(ws *workspace.Workspace) error {
+	var cfg *config.Config
+	var err error
+	if ws != nil {
+		cfg, err = config.LoadAt(ws.Root)
+	} else {
+		cfg, err = config.Load()
+	}
 	if err != nil {
 		return err
 	}
-	if !tmux.SessionExists(cockpitSession) {
-		if err := buildCockpit(cfg, cfg.Orchestrator.Dir); err != nil {
+	session := cockpitSessionFor(ws)
+	if !tmux.SessionExists(session) {
+		if err := buildCockpit(ws, cfg); err != nil {
 			return err
 		}
 	}
-	return tmux.AttachSession(cockpitSession)
+	return tmux.AttachSession(session)
 }
 
-// cockpitSession is the cockpit tmux session name. Workspace-labelled
-// sessions (grove-<label>, DESIGN §6.5) arrive with the Phase 1 registry.
-const cockpitSession = "grove"
+// cockpitSessionFor: grove-<label> per workspace; legacy = grove.
+func cockpitSessionFor(ws *workspace.Workspace) string {
+	if ws != nil {
+		return "grove-" + ws.Label
+	}
+	return "grove"
+}
+
+// orchestratorDirFor: the workspace's own brain dir — its cwd walk-ups to
+// the workspace, so the orchestrator's gv calls hit THIS fleet.
+func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
+	if ws != nil {
+		return filepath.Join(ws.Root, ".grove", "orchestrator")
+	}
+	return cfg.Orchestrator.Dir
+}
 
 // buildCockpit lays out the main-vertical cockpit: dashboard TUI as the
 // main (left) pane, one orchestrator chat stacked right (O adds more).
 // Seeds the orchestrator dir + CLAUDE.md brain on first run.
-func buildCockpit(cfg *config.Config, orchDir string) error {
+func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
+	session := cockpitSessionFor(ws)
+	orchDir := orchestratorDirFor(ws, cfg)
 	if err := os.MkdirAll(orchDir, 0o755); err != nil {
 		return err
 	}
@@ -298,7 +345,7 @@ func buildCockpit(cfg *config.Config, orchDir string) error {
 		}
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
 	}
-	if err := tmux.CreateSession(cockpitSession, orchDir); err != nil {
+	if err := tmux.CreateSession(session, orchDir); err != nil {
 		return err
 	}
 	// Absolute path, not "gv": the pane must run THIS binary even when a
@@ -307,13 +354,13 @@ func buildCockpit(cfg *config.Config, orchDir string) error {
 	if exe, err := os.Executable(); err == nil {
 		dash = exe + " dash"
 	}
-	if err := tmux.SendKeys(cockpitSession+".0", dash); err != nil {
+	if err := tmux.SendKeys(session+".0", dash); err != nil {
 		return err
 	}
-	if _, err := tmux.SpawnPane(cockpitSession, orchDir, orchestratorCmd(cfg)); err != nil {
+	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg)); err != nil {
 		return err
 	}
-	return tmux.MainVertical(cockpitSession, 55)
+	return tmux.MainVertical(session, 55)
 }
 
 // orchestratorLaunch is the orchestrator claude invocation: the configured
@@ -366,24 +413,28 @@ func cmdOrchestratorNew() error {
 		return err
 	}
 	if !tmux.IsInsideTmux() {
-		return tmux.AttachSession(cockpitSession)
+		return tmux.AttachSession(cockpitSessionFor(ambient.ws))
 	}
 	return nil
 }
 
 // spawnOrchestrator is also injected into the TUI as the O keybind.
+// Ambient-scoped (cockpit design §4.6 happy path): the pane joins the
+// invoking workspace's cockpit and its gv calls hit that fleet.
 func spawnOrchestrator(cfg *config.Config) (string, error) {
-	dir := cfg.Orchestrator.Dir
+	ws := ambient.ws
+	session := cockpitSessionFor(ws)
+	dir := orchestratorDirFor(ws, cfg)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if !tmux.SessionExists(cockpitSession) {
-		if err := buildCockpit(cfg, dir); err != nil {
+	if !tmux.SessionExists(session) {
+		if err := buildCockpit(ws, cfg); err != nil {
 			return "", err
 		}
-		return "cockpit built — gv (or gv ui) attaches", nil
+		return "cockpit built — gv attaches", nil
 	}
-	if _, err := tmux.SpawnPane(cockpitSession, dir, orchestratorLaunch(cfg)); err != nil {
+	if _, err := tmux.SpawnPane(session, dir, orchestratorLaunch(cfg)); err != nil {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
@@ -664,6 +715,7 @@ func cmdInit(args []string) error {
 	fs.BoolVar(&f.AgentsMD, "agents-md", false, "generate AGENTS.md via a one-shot agent")
 	fs.BoolVar(&f.NoAgentsMD, "no-agents-md", false, "skip the AGENTS.md step")
 	fs.BoolVar(&f.ForceAgentsMD, "force-agents-md", false, "write AGENTS.md.new when AGENTS.md exists")
+	fs.StringVar(&f.Label, "label", "", "workspace label (cockpit session grove-<label>)")
 	_ = parseAnywhere(fs, args)
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		f.Yes = true // non-TTY must never hang (/dev/null IS a char device, so stat-mode checks lie)
@@ -673,12 +725,22 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	root, err := git.RepoRoot(cwd)
-	if err != nil {
-		return fmt.Errorf("gv init must run inside a git repo: %w", err)
+	// Workspace root + scope: a git repo is a repo-scope workspace
+	// (monorepo included); a non-repo dir holding >=2 child repos is a
+	// parent-scope workspace (the thegrid/unbrewed shape — plan review C-1).
+	scope := wizard.ScopeRepo
+	root, rootErr := git.RepoRoot(cwd)
+	if rootErr != nil {
+		abs, _ := filepath.Abs(cwd)
+		abs, _ = filepath.EvalSymlinks(abs)
+		if len(childRepos(abs)) >= 2 {
+			root, scope = abs, wizard.ScopeParent
+		} else {
+			return fmt.Errorf("gv init needs a git repo (repo scope) or a folder of sibling repos (parent scope): %w", rootErr)
+		}
 	}
 	name := filepath.Base(root)
-	cfgPath := filepath.Join(config.Dir(), "config.yaml")
+	cfgPath := filepath.Join(root, ".grove", "config.yaml")
 	doc, err := bootstrap.LoadDoc(cfgPath)
 	if err != nil {
 		return err
@@ -696,6 +758,8 @@ func cmdInit(args []string) error {
 		Probe: p, RepoName: name, RepoPath: root, Doc: doc,
 		HooksInstalled: hooks.AllInstalled(hookPaths),
 		HooksPaths:     hookPaths,
+		Scope:          scope,
+		DetectedLabel:  filepath.Base(root),
 		Flags:          f,
 	}
 	steps, err := wizard.Build(in)
@@ -709,18 +773,48 @@ func cmdInit(args []string) error {
 			return nil
 		}
 	}
+	a := wizard.Collect(steps)
+	if a.Label != "" {
+		if err := workspace.ValidateLabel(a.Label); err != nil {
+			return err
+		}
+	}
 	wizard.Apply(in, steps)
+	// Parent scope: each detected child repo becomes an entry (path+base;
+	// per-repo tuning is a per-child `gv init` or a hand edit).
+	if scope == wizard.ScopeParent {
+		for _, child := range childRepos(root) {
+			cname := filepath.Base(child)
+			doc.SetRepoField(cname, "path", child)
+			if doc.Get("repos", cname, "base") == "" {
+				base := "main"
+				if b, err := git.DefaultBranch(child); err == nil {
+					base = b
+				}
+				doc.SetRepoField(cname, "base", base)
+			}
+		}
+	}
 	if err := doc.Save(); err != nil {
 		return err
 	}
-	a := wizard.Collect(steps)
+	if err := seedWorkspaceScaffold(root); err != nil {
+		return err
+	}
+	if a.Label != "" {
+		ws := workspace.Workspace{Root: root, Label: a.Label, Scope: scope}
+		if err := workspace.AddToRegistry(ws); err != nil {
+			fmt.Fprintf(os.Stderr, "registry: %v\n", err)
+		}
+	}
+	resolveAmbient() // the marker now exists — the board below reflects it
 	if doc.Dirty() {
 		fmt.Printf("✓ config updated: %s\n", cfgPath)
 	} else {
 		fmt.Printf("• config already up to date: %s\n", cfgPath)
 	}
 
-	if a.Provider == "" || a.Provider == "markdown" {
+	if scope == wizard.ScopeRepo && (a.Provider == "" || a.Provider == "markdown") {
 		if dir, wrote, err := bootstrap.ScaffoldTasks(root, time.Now().Format("2006-01-02")); err == nil && wrote {
 			fmt.Printf("✓ scaffolded %s with a sample task\n", dir)
 		}
@@ -736,7 +830,7 @@ func cmdInit(args []string) error {
 			fmt.Fprintf(os.Stderr, "hooks install failed: %v\n", err)
 		}
 	}
-	if a.RunAgentsMD {
+	if a.RunAgentsMD && scope == wizard.ScopeRepo {
 		worker := doc.Get("repos", name, "claude")
 		if worker == "" {
 			worker = "claude"
@@ -2012,4 +2106,169 @@ func parseAnyID(kind, raw string) (string, error) {
 		return linear.ParseIdentifier(strings.ToUpper(raw))
 	}
 	return provider.NewMarkdown("").ParseID(raw)
+}
+
+// childRepos lists direct subdirectories that are git repos — the
+// parent-scope detection/registration input.
+func childRepos(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		child := filepath.Join(root, e.Name())
+		if st, err := os.Stat(filepath.Join(child, ".git")); err == nil && st.IsDir() {
+			out = append(out, child)
+		}
+	}
+	return out
+}
+
+// seedWorkspaceScaffold writes <root>/.grove/.gitignore so state and the
+// orchestrator brain never end up committed; the config stays committable.
+func seedWorkspaceScaffold(root string) error {
+	dir := filepath.Join(root, ".grove")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	gi := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(gi); err == nil {
+		return nil
+	}
+	return os.WriteFile(gi, []byte("state/\norchestrator/\nconfig.local.yaml\n"), 0o644)
+}
+
+// cmdSwitch is the cross-workspace jump (DESIGN §6.5.3): a picker with
+// live rollups, sorted by actionability; selecting attaches that
+// workspace's cockpit. Non-TTY never renders a picker — with a label it
+// acts, without one it prints the rollup list and exits 0.
+func cmdSwitch(args []string) error {
+	fs := flag.NewFlagSet("switch", flag.ExitOnError)
+	printOnly := fs.Bool("print", false, "print the workspace root instead of jumping")
+	positionals := parseAnywhere(fs, args)
+
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return fmt.Errorf("no workspaces registered — run `gv init` in a repo (or parent folder) first")
+	}
+	rollups := map[string]workspace.Rollup{}
+	var alive []workspace.Workspace
+	for _, ws := range list {
+		if !workspace.Alive(ws) {
+			fmt.Fprintf(os.Stderr, "! %s: root %s has no .grove/ anymore — `gv workspaces rm %s`\n", ws.Label, ws.Root, ws.Label)
+			continue
+		}
+		rollups[ws.Label] = workspace.ReadRollup(ws)
+		alive = append(alive, ws)
+	}
+	sorted := workspace.SortByActionability(alive, rollups)
+
+	pick := func(label string) *workspace.Workspace {
+		for i := range sorted {
+			if sorted[i].Label == label {
+				return &sorted[i]
+			}
+		}
+		return nil
+	}
+
+	if len(positionals) == 1 {
+		ws := pick(positionals[0])
+		if ws == nil {
+			return fmt.Errorf("unknown workspace %q — see `gv workspaces`", positionals[0])
+		}
+		if *printOnly {
+			fmt.Println(ws.Root)
+			return nil
+		}
+		return openCockpit(ws)
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		for _, ws := range sorted {
+			r := rollups[ws.Label]
+			fmt.Printf("%-16s %d working · %d waiting · %d review   %s\n", ws.Label, r.Working, r.Waiting, r.Review, ws.Root)
+		}
+		return nil
+	}
+
+	opts := make([]huh.Option[string], 0, len(sorted))
+	for _, ws := range sorted {
+		r := rollups[ws.Label]
+		opts = append(opts, huh.NewOption(
+			fmt.Sprintf("%-16s %d working · %d waiting · %d review", ws.Label, r.Working, r.Waiting, r.Review), ws.Label))
+	}
+	var chosen string
+	sel := huh.NewSelect[string]().Title("workspaces (most actionable first)").Options(opts...).Value(&chosen)
+	if err := huh.NewForm(huh.NewGroup(sel)).Run(); err != nil {
+		return nil // esc = no jump
+	}
+	if *printOnly {
+		fmt.Println(pick(chosen).Root)
+		return nil
+	}
+	return openCockpit(pick(chosen))
+}
+
+// cmdWorkspaces manages the registry directly.
+func cmdWorkspaces(args []string) error {
+	fs := flag.NewFlagSet("workspaces", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "machine-readable list")
+	positionals := parseAnywhere(fs, args)
+
+	if len(positionals) >= 1 {
+		switch positionals[0] {
+		case "add":
+			if len(positionals) != 2 {
+				return fmt.Errorf("usage: gv workspaces add <path>")
+			}
+			abs, err := filepath.Abs(positionals[1])
+			if err != nil {
+				return err
+			}
+			ws := workspace.Find(abs)
+			if ws == nil {
+				return fmt.Errorf("%s has no .grove/ — run `gv init` there first", abs)
+			}
+			if err := workspace.AddToRegistry(*ws); err != nil {
+				return err
+			}
+			fmt.Printf("✓ registered %s (%s)\n", ws.Label, ws.Root)
+			return nil
+		case "rm":
+			if len(positionals) != 2 {
+				return fmt.Errorf("usage: gv workspaces rm <label>")
+			}
+			if err := workspace.RemoveFromRegistry(positionals[1]); err != nil {
+				return err
+			}
+			fmt.Printf("✓ removed %s from the registry (files untouched)\n", positionals[1])
+			return nil
+		default:
+			return fmt.Errorf("usage: gv workspaces [--json | add <path> | rm <label>]")
+		}
+	}
+
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(list)
+	}
+	for _, ws := range list {
+		mark := " "
+		if !workspace.Alive(ws) {
+			mark = "✗"
+		}
+		fmt.Printf("%s %-16s %-7s %s\n", mark, ws.Label, ws.Scope, ws.Root)
+	}
+	return nil
 }

@@ -20,7 +20,7 @@ GV="$SCRATCH/gv"
 export HOME="$SCRATCH/home"
 export GROVE_STATE_DIR="$SCRATCH/state"
 mkdir -p "$HOME" "$GROVE_STATE_DIR"
-CFG="$HOME/.config/grove/config.yaml"
+CFG=""   # set after the fixture repo exists (workspace config)
 cleanup() { chmod -R u+w "$SCRATCH" 2>/dev/null || true; rm -rf "$SCRATCH"; }
 trap cleanup EXIT
 
@@ -32,6 +32,7 @@ printf '{"name":"webapp","scripts":{"build":"vite build","test":"vitest run","li
 touch pnpm-lock.yaml
 git add -A && git commit -qm init
 ROOT="$(git rev-parse --show-toplevel)"
+CFG="$ROOT/.grove/config.yaml"
 
 say "gv init --yes detects the stack"
 "$GV" init --yes > "$SCRATCH/init1.out"
@@ -51,6 +52,9 @@ grep -q 'already up to date' "$SCRATCH/init2.out" || fail "re-run should be a no
 say "hand-edited values survive --yes byte-identical"
 cat > "$CFG" <<EOF
 # precious comment — grove must not eat this
+workspace:
+  label: webapp
+  scope: repo
 provider:
   kind: markdown
 repos:
