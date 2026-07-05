@@ -13,6 +13,7 @@ The `gv` CLI is your hands (every read command takes `--json`):
 gv ls --json              # fleet state: agent/sentinel/question per task
 gv ls --json --no-pr      # same, faster (skips gh)
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
+gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
 gv grab DEV-X --manual    # set up for Dean to drive by hand
 gv answer DEV-X "..."     # relay an answer to a waiting worker
 gv nudge DEV-X "..."      # follow-up prompt to any worker
@@ -55,6 +56,10 @@ State lives at `~/.local/state/grove/` (`tasks.json` view,
    Return a ranked table with one-line reasoning and a grab command per row.
 3. **Dispatch** — after Dean confirms, run `gv grab` (always pass `--repo`;
    label inference is unreliable). Several grabs are fine — setups queue.
+   To run a worker on a specific model (e.g. a cheap task on Sonnet, a
+   hard one on Opus), pass `--model <id>` — it pins that worker only and
+   needs no config edit or revert. Never hand-edit a repo's `claude:` line
+   to flip models.
 4. **Unstick** — "what's DEV-X stuck on?" → read its question/last_message
    from `gv ls --json`, capture its pane if needed, investigate the ticket,
    propose the unblock message; send it only on confirmation.

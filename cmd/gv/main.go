@@ -49,7 +49,7 @@ const usage = `gv — grove
                                               parent scope in a folder of sibling repos)
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
-  gv grab [<task>] [--repo name] [--manual]   task → worktree → agent (no arg: list backlog)
+  gv grab [<task>] [--repo name] [--manual] [--model id]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
@@ -511,9 +511,10 @@ func cmdGrab(args []string) error {
 	fs := flag.NewFlagSet("grab", flag.ExitOnError)
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
+	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id]")
 	}
 
 	cfg, err := loadCfg()
@@ -545,7 +546,7 @@ func cmdGrab(args []string) error {
 	}
 	if kind == "linear" {
 		if len(positionals) != 1 {
-			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
+			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id]")
 		}
 		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
 			return err
@@ -599,6 +600,9 @@ func cmdGrab(args []string) error {
 
 	name := task.ID + "-" + slugify(task.Title)
 	fmt.Printf("→ %s on %s (branch %s)\n", task.ID, repoName, name)
+	if *modelFlag != "" {
+		fmt.Printf("→ model pinned to %s (this worker only)\n", *modelFlag)
+	}
 
 	if git.HasRemote(repo.Path, "origin") {
 		if err := git.Fetch(repo.Path, "origin", repo.Base); err != nil {
@@ -654,7 +658,8 @@ func cmdGrab(args []string) error {
 	// Pane 1: (serialized setup) && claude with the prompt as argv via
 	// command substitution — single line, no send-keys mangling, and the
 	// pane returns to a shell if claude exits.
-	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, repo.Claude, promptPath)
+	claudeBin := config.WithModel(repo.Claude, *modelFlag)
+	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)

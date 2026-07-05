@@ -315,3 +315,22 @@ func TestStateDirAt(t *testing.T) {
 		t.Errorf("StateDirAt(\"\") with GROVE_STATE_DIR = %q, want %q", got, override)
 	}
 }
+
+func TestWithModel(t *testing.T) {
+	cases := []struct {
+		name, cmd, model, want string
+	}{
+		{"empty model unchanged", "claude --dangerously-skip-permissions", "", "claude --dangerously-skip-permissions"},
+		{"whitespace model unchanged", "claude", "  ", "claude"},
+		{"injects after binary before flags", "claude --dangerously-skip-permissions", "claude-sonnet-5", "claude --model 'claude-sonnet-5' --dangerously-skip-permissions"},
+		{"bare binary", "claude", "opus", "claude --model 'opus'"},
+		{"alias passthrough", "claude --dangerously-skip-permissions", "sonnet", "claude --model 'sonnet' --dangerously-skip-permissions"},
+		{"quotes metachars", "claude", "a b", "claude --model 'a b'"},
+		{"empty cmd unchanged", "", "opus", ""},
+	}
+	for _, tc := range cases {
+		if got := WithModel(tc.cmd, tc.model); got != tc.want {
+			t.Errorf("%s: WithModel(%q, %q) = %q, want %q", tc.name, tc.cmd, tc.model, got, tc.want)
+		}
+	}
+}

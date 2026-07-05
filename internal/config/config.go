@@ -184,6 +184,35 @@ func parse(raw []byte, src string) (*Config, error) {
 	return &c, nil
 }
 
+// WithModel injects a `--model <model>` flag into a claude command string,
+// right after the executable token, so a single grab can pin a model without
+// editing (and later reverting) a repo's `claude:` line. An empty model
+// returns cmd unchanged. model is single-quoted for the shell — the command
+// is run via a tmux shell, so an unquoted alias with metachars would break it.
+func WithModel(cmd, model string) string {
+	if strings.TrimSpace(model) == "" {
+		return cmd
+	}
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return cmd
+	}
+	head, rest := cmd, ""
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		head, rest = cmd[:i], strings.TrimLeft(cmd[i:], " \t")
+	}
+	out := head + " --model " + shellQuote(model)
+	if rest != "" {
+		out += " " + rest
+	}
+	return out
+}
+
+// shellQuote single-quotes s for safe embedding in a shell command.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // ProviderKindFor returns the effective task backend for a repo: its own
 // provider override when set, else the global kind. Lets one fleet mix
 // Linear-driven repos with markdown-driven ones until per-workspace config
