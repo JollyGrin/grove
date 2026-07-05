@@ -210,7 +210,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "O":
+	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"
 		return m, func() tea.Msg {
