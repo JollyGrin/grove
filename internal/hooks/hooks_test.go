@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -73,16 +74,160 @@ func TestClassifySentinel(t *testing.T) {
 	}
 }
 
+// single wraps one state dir as the full candidate list — the pre-workspaces
+// shape every legacy-path test exercises.
+func single(dir string) []Candidate {
+	return []Candidate{{Label: "test", StateDir: dir}}
+}
+
 func TestReceiveIgnoresUntrackedCwd(t *testing.T) {
 	dir := t.TempDir()
 	payload := `{"session_id":"s1","cwd":"/nowhere/special","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — x"}`
-	if err := Receive(dir, "stop", strings.NewReader(payload)); err != nil {
+	if err := Receive(single(dir), "stop", strings.NewReader(payload)); err != nil {
 		t.Fatalf("untracked cwd must be silently ignored, got %v", err)
 	}
 	tasks, _ := state.Load(dir)
 	if len(tasks) != 0 {
 		t.Error("no events should be written for untracked cwd")
 	}
+}
+
+// seedFleet registers a tracked task in stateDir and materializes the
+// derived tasks.json (Receive scans read-only via state.ReadTasks, so the
+// view must exist up front — in a live state dir gv itself keeps it fresh).
+// Returns the realpath'd worktree for hook payloads.
+func seedFleet(t *testing.T, stateDir, ticket, wt string) string {
+	t.Helper()
+	ev := state.Event{Type: state.EvTaskCreated, Ticket: ticket, Data: map[string]string{
+		"title": "x", "repo": "r", "branch": "b-" + ticket, "worktree": wt,
+		"tmux_session": "pr-r", "tmux_window": "b",
+	}}
+	if err := state.Append(stateDir, ev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Load(stateDir); err != nil { // fold → write tasks.json
+		t.Fatal(err)
+	}
+	real, _ := filepath.EvalSymlinks(wt)
+	return real
+}
+
+// snapshot captures (bytes, mtime) of a file; a missing file reads as
+// (nil, zero) so "still absent" is assertable too.
+func snapshot(t *testing.T, path string) ([]byte, time.Time) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, time.Time{}
+		}
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data, fi.ModTime()
+}
+
+func assertUnchanged(t *testing.T, path string, wantData []byte, wantMtime time.Time) {
+	t.Helper()
+	data, mtime := snapshot(t, path)
+	if !bytes.Equal(data, wantData) {
+		t.Errorf("%s: content changed (%d bytes → %d bytes)", path, len(wantData), len(data))
+	}
+	if !mtime.Equal(wantMtime) {
+		t.Errorf("%s: mtime changed %v → %v — non-owner was written to", path, wantMtime, mtime)
+	}
+}
+
+func TestReceiveMultiFleetOwnership(t *testing.T) {
+	withNtfy(t, config.Notify{}) // never reach a real push topic
+
+	dirA, dirB, legacy := t.TempDir(), t.TempDir(), t.TempDir()
+	wtA, wtB := t.TempDir(), t.TempDir()
+	seedFleet(t, dirA, "DEV-A", wtA)
+	cwdB := seedFleet(t, dirB, "DEV-B", wtB)
+	candidates := []Candidate{
+		{Label: "a", StateDir: dirA},
+		{Label: "b", StateDir: dirB},
+		{Label: "legacy", StateDir: legacy},
+	}
+
+	aEvents := filepath.Join(dirA, "events.jsonl")
+	aTasks := filepath.Join(dirA, "tasks.json")
+	bEvents := filepath.Join(dirB, "events.jsonl")
+	bTasks := filepath.Join(dirB, "tasks.json")
+	legacyEvents := filepath.Join(legacy, "events.jsonl")
+
+	// Push A's mtimes into the past so even a byte-identical rewrite of a
+	// non-owner would be caught.
+	past := time.Now().Add(-time.Hour)
+	for _, p := range []string{aEvents, aTasks} {
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lastEvent := func(t *testing.T, path string) state.Event {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		var ev state.Event
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+
+	// 1. A Stop for B's worktree lands in B only; A stays byte- and
+	// mtime-untouched (read-only non-owner scan); legacy gains nothing.
+	aEvData, aEvMtime := snapshot(t, aEvents)
+	aTaskData, aTaskMtime := snapshot(t, aTasks)
+	if err := Receive(candidates, "stop", strings.NewReader(stopPayload(cwdB, "plain idle stop"))); err != nil {
+		t.Fatal(err)
+	}
+	if ev := lastEvent(t, bEvents); ev.Type != state.EvAgentStatus || ev.Ticket != "DEV-B" {
+		t.Errorf("B's last event = %s/%s, want agent_status/DEV-B", ev.Type, ev.Ticket)
+	}
+	assertUnchanged(t, aEvents, aEvData, aEvMtime)
+	assertUnchanged(t, aTasks, aTaskData, aTaskMtime)
+	if _, err := os.Stat(legacyEvents); !os.IsNotExist(err) {
+		t.Error("legacy fleet must gain no events.jsonl")
+	}
+
+	// 2. An unknown cwd appends nowhere across all three candidates.
+	bEvData, bEvMtime := snapshot(t, bEvents)
+	bTaskData, bTaskMtime := snapshot(t, bTasks)
+	if err := Receive(candidates, "stop", strings.NewReader(stopPayload("/nowhere/special", "plain idle stop"))); err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, aEvents, aEvData, aEvMtime)
+	assertUnchanged(t, aTasks, aTaskData, aTaskMtime)
+	assertUnchanged(t, bEvents, bEvData, bEvMtime)
+	assertUnchanged(t, bTasks, bTaskData, bTaskMtime)
+	if _, err := os.Stat(legacyEvents); !os.IsNotExist(err) {
+		t.Error("legacy fleet must gain no events.jsonl for unknown cwd")
+	}
+
+	// 3. Ordering: a cwd tracked by BOTH A and B goes to A — first match
+	// in the given candidate order wins.
+	wtShared := t.TempDir()
+	seedFleet(t, dirA, "DEV-SHARED", wtShared)
+	cwdShared := seedFleet(t, dirB, "DEV-SHARED", wtShared)
+	bEvData, bEvMtime = snapshot(t, bEvents)
+	bTaskData, bTaskMtime = snapshot(t, bTasks)
+	if err := Receive(candidates, "stop", strings.NewReader(stopPayload(cwdShared, "plain idle stop"))); err != nil {
+		t.Fatal(err)
+	}
+	if ev := lastEvent(t, aEvents); ev.Type != state.EvAgentStatus || ev.Ticket != "DEV-SHARED" {
+		t.Errorf("A's last event = %s/%s, want agent_status/DEV-SHARED (first match wins)", ev.Type, ev.Ticket)
+	}
+	assertUnchanged(t, bEvents, bEvData, bEvMtime)
+	assertUnchanged(t, bTasks, bTaskData, bTaskMtime)
 }
 
 // --- installer / dual-hook coexistence (DESIGN.md §12) ---
@@ -213,16 +358,8 @@ func TestInstalledSeesOnlyGvEntries(t *testing.T) {
 func seedTask(t *testing.T) (string, string) {
 	t.Helper()
 	stateDir := t.TempDir()
-	wt := t.TempDir()
-	ev := state.Event{Type: state.EvTaskCreated, Ticket: "DEV-77", Data: map[string]string{
-		"title": "x", "repo": "r", "branch": "b", "worktree": wt,
-		"tmux_session": "pr-r", "tmux_window": "b",
-	}}
-	if err := state.Append(stateDir, ev); err != nil {
-		t.Fatal(err)
-	}
-	real, _ := filepath.EvalSymlinks(wt)
-	return stateDir, real
+	cwd := seedFleet(t, stateDir, "DEV-77", t.TempDir())
+	return stateDir, cwd
 }
 
 func withNtfy(t *testing.T, n config.Notify) {
@@ -255,7 +392,7 @@ func TestNtfyPushQuestion(t *testing.T) {
 	withNtfy(t, config.Notify{Ntfy: srv.URL})
 
 	payload := stopPayload(cwd, "STATUS: QUESTION — Tabs or spaces?")
-	if err := Receive(stateDir, "stop", strings.NewReader(payload)); err != nil {
+	if err := Receive(single(stateDir), "stop", strings.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
 	if posts != 1 {
@@ -280,7 +417,7 @@ func TestNtfyNoPushOnIdle(t *testing.T) {
 	withNtfy(t, config.Notify{Ntfy: srv.URL})
 
 	payload := stopPayload(cwd, "finished but forgot the protocol")
-	if err := Receive(stateDir, "stop", strings.NewReader(payload)); err != nil {
+	if err := Receive(single(stateDir), "stop", strings.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
 	if posts != 0 {
@@ -299,7 +436,7 @@ func TestNtfyTitleOnly(t *testing.T) {
 	withNtfy(t, config.Notify{Ntfy: srv.URL, NtfyBody: "title-only"})
 
 	payload := stopPayload(cwd, "STATUS: QUESTION — secret details here")
-	if err := Receive(stateDir, "stop", strings.NewReader(payload)); err != nil {
+	if err := Receive(single(stateDir), "stop", strings.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
 	if gotBody != "" {
@@ -317,7 +454,7 @@ func TestNtfyTimeoutSwallowed(t *testing.T) {
 
 	start := time.Now()
 	payload := stopPayload(cwd, "STATUS: QUESTION — slow server")
-	if err := Receive(stateDir, "stop", strings.NewReader(payload)); err != nil {
+	if err := Receive(single(stateDir), "stop", strings.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {

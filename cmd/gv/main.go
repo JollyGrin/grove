@@ -34,6 +34,7 @@ import (
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
 	"github.com/JollyGrin/grove/internal/wizard"
+	"github.com/JollyGrin/grove/internal/workspace"
 	"github.com/JollyGrin/grove/internal/worktree"
 	"github.com/JollyGrin/grove/orchestrator"
 
@@ -66,7 +67,100 @@ const usage = `gv — grove
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
 
+// ambient is the workspace context resolved once at startup from cwd
+// (nearest .grove/ walk-up). Legacy — no workspace — keeps today's
+// behavior: global config + global state dir.
+var ambient struct {
+	ws       *workspace.Workspace
+	stateDir string
+}
+
+func resolveAmbient() {
+	if cwd, err := os.Getwd(); err == nil {
+		ambient.ws = workspace.Find(cwd)
+	}
+	root := ""
+	if ambient.ws != nil {
+		root = ambient.ws.Root
+	}
+	ambient.stateDir = config.StateDirAt(root)
+}
+
+// loadCfg loads the ambient workspace's merged config, or the global one
+// on the legacy path.
+func loadCfg() (*config.Config, error) {
+	if ambient.ws != nil {
+		return config.LoadAt(ambient.ws.Root)
+	}
+	return config.Load()
+}
+
+func stateDir() string { return ambient.stateDir }
+
+func wsLabel() string {
+	if ambient.ws != nil {
+		return ambient.ws.Label
+	}
+	return ""
+}
+
+// echoWorkspace prints the resolved fleet before a mutating verb acts —
+// the DESIGN §14 guard against nested-workspace surprises.
+func echoWorkspace() {
+	if ambient.ws != nil {
+		fmt.Printf("→ workspace: %s\n", ambient.ws.Label)
+	}
+}
+
+// shellQuoteRoot is the ambient workspace root as a single-quoted shell
+// argv token for the run-setup relay (” on the legacy path).
+func shellQuoteRoot() string {
+	root := ""
+	if ambient.ws != nil {
+		root = ambient.ws.Root
+	}
+	return "'" + strings.ReplaceAll(root, "'", `'\''`) + "'"
+}
+
+// allWorkerCommands unions worker commands across the legacy global
+// config AND every registered workspace — hooks coverage is machine-wide,
+// never ambient-scoped (plan review round-2: installing from unbrewed
+// must not drop the Grid profile).
+func allWorkerCommands() []string {
+	var out []string
+	if cfg, err := config.Load(); err == nil {
+		out = append(out, hooks.WorkerCommands(cfg)...)
+	}
+	list, _ := workspace.LoadRegistry()
+	for _, ws := range list {
+		if !workspace.Alive(ws) {
+			continue
+		}
+		if cfg, err := config.LoadAt(ws.Root); err == nil {
+			out = append(out, hooks.WorkerCommands(cfg)...)
+		}
+	}
+	return out
+}
+
+// hookCandidates is the receiver's ownership scan order: registered
+// workspaces sorted by label, legacy global LAST (DESIGN §12 —
+// ownership by task membership, never directory guessing).
+func hookCandidates() []hooks.Candidate {
+	var out []hooks.Candidate
+	list, _ := workspace.LoadRegistry()
+	sort.Slice(list, func(i, j int) bool { return list[i].Label < list[j].Label })
+	for _, ws := range list {
+		if !workspace.Alive(ws) {
+			continue
+		}
+		out = append(out, hooks.Candidate{Label: ws.Label, StateDir: config.StateDirAt(ws.Root)})
+	}
+	return append(out, hooks.Candidate{Label: "", StateDir: config.StateDir()})
+}
+
 func main() {
+	resolveAmbient()
 	if len(os.Args) < 2 {
 		// Bare gv = the cockpit (build/attach/switch). The dashboard TUI
 		// alone is `gv dash` — it's what the cockpit's left pane runs.
@@ -81,7 +175,7 @@ func main() {
 	// Hook receiver: always exit 0, never break a session.
 	if cmd == "hook" {
 		if len(args) == 1 {
-			if err := hooks.Receive(config.StateDir(), args[0], os.Stdin); err != nil {
+			if err := hooks.Receive(hookCandidates(), args[0], os.Stdin); err != nil {
 				fmt.Fprintln(os.Stderr, "gv hook:", err)
 			}
 		}
@@ -149,20 +243,20 @@ func main() {
 // cmdDashboard runs the TUI. Attach is handled after the tea loop exits
 // because tmux attach replaces the process (syscall.Exec).
 func cmdDashboard() error {
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
-	attachTo, err := tui.Run(cfg)
+	attachTo, err := tui.Run(cfg, stateDir(), wsLabel())
 	if err != nil {
 		return err
 	}
 	if attachTo != nil {
 		if !attachTo.Attached {
 			maybeInjectEditor(attachTo.TmuxSession, attachTo.TmuxWindow)
-			_ = state.Append(config.StateDir(), state.Event{Type: state.EvAttached, Ticket: attachTo.Ticket})
+			_ = state.Append(stateDir(), state.Event{Type: state.EvAttached, Ticket: attachTo.Ticket})
 		}
 		return tmux.AttachWindow(attachTo.TmuxSession, attachTo.TmuxWindow)
 	}
@@ -174,7 +268,7 @@ func cmdDashboard() error {
 // The orchestrator cwd is untracked, so worker hooks ignore it; --continue
 // resumes the same conversation across cockpit launches.
 func cmdUI() error {
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
@@ -264,7 +358,7 @@ func orchestratorCmd(cfg *config.Config) string {
 // cockpit's right column (cockpit design §4) — the O keybind's CLI twin.
 // Builds the cockpit first if it isn't running.
 func cmdOrchestratorNew() error {
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
@@ -346,6 +440,7 @@ func slugify(title string) string {
 }
 
 func cmdGrab(args []string) error {
+	echoWorkspace()
 	fs := flag.NewFlagSet("grab", flag.ExitOnError)
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
@@ -354,12 +449,12 @@ func cmdGrab(args []string) error {
 		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual]")
 	}
 
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
 
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
@@ -461,7 +556,7 @@ func cmdGrab(args []string) error {
 	if err != nil {
 		return err
 	}
-	promptDir := filepath.Join(config.StateDir(), "prompts")
+	promptDir := filepath.Join(stateDir(), "prompts")
 	_ = os.MkdirAll(promptDir, 0o755)
 	promptPath := filepath.Join(promptDir, task.ID+".txt")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
@@ -487,13 +582,13 @@ func cmdGrab(args []string) error {
 	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, repo.Claude, promptPath)
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
-		claudeCmd = fmt.Sprintf("%s run-setup %s && %s", exe, repoName, claudeCmd)
+		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
 	}
 	if err := tmux.SendKeys(windowTarget+".1", claudeCmd); err != nil {
 		return err
 	}
 
-	if err := state.Append(config.StateDir(), state.Event{
+	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskCreated, Ticket: task.ID,
 		Data: map[string]string{
 			"title": task.Title, "url": task.URL, "repo": repoName,
@@ -661,7 +756,7 @@ func cmdInit(args []string) error {
 
 	// The summary board: what's available, what would improve this repo.
 	fmt.Println()
-	cfg, cfgErr := config.Load()
+	cfg, cfgErr := loadCfg()
 	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr))
 	fmt.Printf("\nnext: gv grab   (list backlog) · gv grab task-001 · gv   (cockpit)\n")
 	return nil
@@ -713,10 +808,17 @@ func runWizardForms(steps []wizard.Step) error {
 // run-setup serializes per-repo setup commands behind a lockfile so three
 // simultaneous grabs don't run three pnpm installs at once.
 func cmdRunSetup(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: gv run-setup <repo>")
+	// argv: <repo> [workspace-root]. The root travels explicitly because a
+	// worktree cwd may live outside the workspace and not walk up (plan
+	// review S-3); "" = legacy globals.
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("usage: gv run-setup <repo> [workspace-root]")
 	}
-	cfg, err := config.Load()
+	root := ""
+	if len(args) == 2 {
+		root = args[1]
+	}
+	cfg, err := config.LoadAt(root)
 	if err != nil {
 		return err
 	}
@@ -728,7 +830,7 @@ func cmdRunSetup(args []string) error {
 		return nil
 	}
 
-	lockPath := filepath.Join(config.StateDir(), "setup-"+args[0]+".lock")
+	lockPath := filepath.Join(config.StateDirAt(root), "setup-"+args[0]+".lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
@@ -762,8 +864,8 @@ func cmdLs(args []string) error {
 	noCost := fs.Bool("no-cost", false, "skip transcript scanning for the COST column (faster)")
 	parseAnywhere(fs, args)
 
-	cfg, cfgErr := config.Load()
-	tasks, err := state.Load(config.StateDir())
+	cfg, cfgErr := loadCfg()
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
@@ -882,15 +984,15 @@ func cmdAudit(args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	parseAnywhere(fs, args)
 
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
-	rep := audit.Gather(cfg, tasks, config.StateDir())
+	rep := audit.Gather(cfg, tasks, stateDir())
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -958,11 +1060,11 @@ func cmdCost(args []string) error {
 	analyze := fs.Bool("analyze", false, "outcome-priced ledger with analysis flags")
 	parseAnywhere(fs, args)
 
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
@@ -1040,7 +1142,7 @@ type analyzeReport struct {
 // orchestrator reading the --json form. Pure read.
 func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) error {
 	cache := cost.NewCache()
-	steers, err := state.EventCounts(config.StateDir(), state.EvAnswered)
+	steers, err := state.EventCounts(stateDir(), state.EvAnswered)
 	if err != nil {
 		return err
 	}
@@ -1212,7 +1314,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 	if err != nil {
 		return err
 	}
-	if err := state.Append(config.StateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket}); err != nil {
+	if err := state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket}); err != nil {
 		return err
 	}
 	fmt.Printf("✓ sent to %s\n", t.Ticket)
@@ -1231,7 +1333,7 @@ func cmdAttach(args []string) error {
 	}
 	if !t.Attached {
 		maybeInjectEditor(t.TmuxSession, t.TmuxWindow)
-		_ = state.Append(config.StateDir(), state.Event{Type: state.EvAttached, Ticket: t.Ticket})
+		_ = state.Append(stateDir(), state.Event{Type: state.EvAttached, Ticket: t.Ticket})
 	}
 	return tmux.AttachWindow(t.TmuxSession, t.TmuxWindow)
 }
@@ -1258,7 +1360,7 @@ func cmdDiff(args []string) error {
 	if len(positionals) != 1 {
 		return fmt.Errorf("usage: gv diff <ticket> [--stat]")
 	}
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
@@ -1291,6 +1393,7 @@ func cmdDiff(args []string) error {
 // missing worktree → AddExisting; stored session id → resume with a
 // pickup-prompt fallback; no id → pickup prompt.
 func cmdAdopt(args []string) error {
+	echoWorkspace()
 	fs := flag.NewFlagSet("adopt", flag.ExitOnError)
 	repoFlag := fs.String("repo", "", "repo name from config (cold adopt: overrides label inference)")
 	branchFlag := fs.String("branch", "", "branch to adopt (default: from state, or origin/<ticket>-* inference)")
@@ -1299,11 +1402,11 @@ func cmdAdopt(args []string) error {
 	if len(positionals) != 1 {
 		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual]")
 	}
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
@@ -1433,7 +1536,7 @@ func cmdAdopt(args []string) error {
 	if err != nil {
 		return err
 	}
-	promptDir := filepath.Join(config.StateDir(), "prompts")
+	promptDir := filepath.Join(stateDir(), "prompts")
 	_ = os.MkdirAll(promptDir, 0o755)
 	promptPath := filepath.Join(promptDir, id+".txt")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
@@ -1459,7 +1562,7 @@ func cmdAdopt(args []string) error {
 	// Event BEFORE the pane command: FindByCwd skips Done tasks, so the
 	// revived session's SessionStart hook only matches (and captures the
 	// new session id) once the fold has flipped Done=false.
-	if err := state.Append(config.StateDir(), state.Event{
+	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskAdopted, Ticket: id,
 		Data: map[string]string{
 			"title": task.Title, "url": task.URL, "repo": repoName,
@@ -1476,7 +1579,7 @@ func cmdAdopt(args []string) error {
 	}
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()
-		claudeCmd = fmt.Sprintf("%s run-setup %s && %s", exe, repoName, claudeCmd)
+		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
 	}
 	if err := tmux.SendKeys(windowTarget+".1", claudeCmd); err != nil {
 		return err
@@ -1496,13 +1599,14 @@ func cmdAdopt(args []string) error {
 // --- done / sweep ---
 
 func cmdDone(args []string) error {
+	echoWorkspace()
 	fs := flag.NewFlagSet("done", flag.ExitOnError)
 	force := fs.Bool("force", false, "clean up even if the PR is not merged (or none exists)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
 		return fmt.Errorf("usage: gv done <ticket> [--force]")
 	}
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
@@ -1567,7 +1671,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		fmt.Println("→ deleted local branch")
 	}
 
-	if err := state.Append(config.StateDir(), state.Event{Type: state.EvTaskDone, Ticket: t.Ticket}); err != nil {
+	if err := state.Append(stateDir(), state.Event{Type: state.EvTaskDone, Ticket: t.Ticket}); err != nil {
 		return err
 	}
 	fmt.Printf("✓ %s cleaned up (the task's terminal status in your tracker is yours to move)\n", t.Ticket)
@@ -1580,6 +1684,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 // and local branch go; the remote branch survives unless --rm-remote,
 // because an abandoned branch may hold the only copy of unmerged work.
 func cmdUntrack(args []string) error {
+	echoWorkspace()
 	fs := flag.NewFlagSet("untrack", flag.ExitOnError)
 	rm := fs.Bool("rm", false, "also remove window, worktree, and local branch")
 	rmRemote := fs.Bool("rm-remote", false, "with --rm: delete the remote branch too")
@@ -1594,7 +1699,7 @@ func cmdUntrack(args []string) error {
 	}
 
 	if *rm {
-		cfg, err := config.Load()
+		cfg, err := loadCfg()
 		if err != nil {
 			return err
 		}
@@ -1603,7 +1708,7 @@ func cmdUntrack(args []string) error {
 		}
 	}
 
-	if err := state.Append(config.StateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: t.Ticket}); err != nil {
+	if err := state.Append(stateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: t.Ticket}); err != nil {
 		return err
 	}
 	if *rm {
@@ -1692,20 +1797,21 @@ type sweepItem struct {
 // untrack --rm — each per-item confirmed, never forced. Stale prompt
 // files of done tasks are pruned automatically at the end.
 func cmdSweep(args []string) error {
+	echoWorkspace()
 	fs := flag.NewFlagSet("sweep", flag.ExitOnError)
 	dryRun := fs.Bool("dry-run", false, "print what would be offered, mutate nothing")
 	asJSON := fs.Bool("json", false, "machine-readable dry-run output (implies --dry-run)")
 	parseAnywhere(fs, args)
 
-	cfg, err := config.Load()
+	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
 	}
-	rep := audit.Gather(cfg, tasks, config.StateDir())
+	rep := audit.Gather(cfg, tasks, stateDir())
 
 	var items []sweepItem
 	for _, r := range rep.Tasks {
@@ -1776,7 +1882,7 @@ func cmdSweep(args []string) error {
 			actErr = finishTask(cfg, t, false)
 		case audit.Abandoned:
 			if actErr = removeTaskArtifacts(cfg, t, false, false); actErr == nil {
-				actErr = state.Append(config.StateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: t.Ticket})
+				actErr = state.Append(stateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: t.Ticket})
 			}
 		}
 		if actErr != nil {
@@ -1788,7 +1894,7 @@ func cmdSweep(args []string) error {
 
 	pruned := 0
 	for _, name := range rep.StalePrompts {
-		if err := os.Remove(filepath.Join(config.StateDir(), "prompts", name)); err == nil {
+		if err := os.Remove(filepath.Join(stateDir(), "prompts", name)); err == nil {
 			pruned++
 		}
 	}
@@ -1810,7 +1916,7 @@ func cmdDoctor(args []string) error {
 		}
 		return fmt.Errorf("usage: gv doctor [--json]")
 	}
-	cfg, cfgErr := config.Load()
+	cfg, cfgErr := loadCfg()
 	rows := doctor.Run(cfg, cfgErr)
 	if jsonOut {
 		if err := doctor.RenderJSON(os.Stdout, rows); err != nil {
@@ -1830,11 +1936,10 @@ func cmdDoctor(args []string) error {
 // configured worker commands; a broken config still yields the default
 // profile so hooks stay installable.
 func hookSettingsPaths() []string {
-	cfg, err := config.Load()
-	if err != nil {
-		return hooks.SettingsPaths(nil)
+	if workers := allWorkerCommands(); len(workers) > 0 {
+		return hooks.SettingsPaths(workers)
 	}
-	return hooks.SettingsPaths(hooks.WorkerCommands(cfg))
+	return hooks.SettingsPaths(nil)
 }
 
 func cmdHooks(args []string) error {
@@ -1873,13 +1978,28 @@ func cmdHooks(args []string) error {
 // coexist in one fleet, so the tracked state (not the global provider
 // kind) is the arbiter.
 func findTask(idOrURL string) (*state.Task, error) {
-	tasks, err := state.Load(config.StateDir())
+	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range provider.IDCandidates(idOrURL) {
+	cands := provider.IDCandidates(idOrURL)
+	for _, id := range cands {
 		if t, ok := tasks[id]; ok && !t.Done {
 			return t, nil
+		}
+	}
+	// Mid-migration hint: the id may be tracked by another fleet (plan
+	// review I-3) — read-only scan, never acts across workspaces.
+	list, _ := workspace.LoadRegistry()
+	for _, ws := range list {
+		if !workspace.Alive(ws) {
+			continue
+		}
+		owned := state.ReadTasks(config.StateDirAt(ws.Root))
+		for _, id := range cands {
+			if t, ok := owned[id]; ok && !t.Done && ws.Label != wsLabel() {
+				return nil, fmt.Errorf("no active task %s here — it is tracked in workspace %q (cd there or `gv switch %s`)", idOrURL, ws.Label, ws.Label)
+			}
 		}
 	}
 	return nil, fmt.Errorf("no active task %s — see `gv ls`", idOrURL)

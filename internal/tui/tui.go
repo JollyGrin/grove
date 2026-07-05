@@ -38,9 +38,11 @@ type paneTailMsg string
 type actionDoneMsg struct{ err error }
 
 type Model struct {
-	cfg    *config.Config
-	width  int
-	height int
+	cfg      *config.Config
+	stateDir string
+	label    string // ambient workspace label; "" = legacy global fleet
+	width    int
+	height   int
 
 	tasks  []*state.Task
 	live   map[string]string
@@ -62,16 +64,16 @@ type Model struct {
 	AttachTo *state.Task
 }
 
-func New(cfg *config.Config) Model {
+func New(cfg *config.Config, stateDir, label string) Model {
 	in := textinput.New()
 	in.Placeholder = "type a reply — enter sends straight to the agent's pane"
 	in.Prompt = sKey.Render("❯ ")
 	in.CharLimit = 0
-	return Model{cfg: cfg, live: map[string]string{}, prs: map[string]*github.PR{}, input: in}
+	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in}
 }
 
-func Run(cfg *config.Config) (*state.Task, error) {
-	p := tea.NewProgram(New(cfg), tea.WithAltScreen())
+func Run(cfg *config.Config, stateDir, label string) (*state.Task, error) {
+	p := tea.NewProgram(New(cfg, stateDir, label), tea.WithAltScreen())
 	out, err := p.Run()
 	if err != nil {
 		return nil, err
@@ -81,22 +83,22 @@ func Run(cfg *config.Config) (*state.Task, error) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(), prsCmd(m.cfg, nil), tickEvery(time.Second), prTickEvery())
+	return tea.Batch(refreshCmd(m.stateDir), prsCmd(m.cfg, m.stateDir, nil), tickEvery(m.stateDir, time.Second), prTickEvery())
 }
 
 // --- commands ---
 
-func tickEvery(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return refreshCmd()() })
+func tickEvery(stateDir string, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return refreshCmd(stateDir)() })
 }
 
 func prTickEvery() tea.Cmd {
 	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return nil })
 }
 
-func refreshCmd() tea.Cmd {
+func refreshCmd(stateDir string) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := state.Load(config.StateDir())
+		tasks, err := state.Load(stateDir)
 		if err != nil {
 			return refreshMsg{}
 		}
@@ -110,18 +112,18 @@ func refreshCmd() tea.Cmd {
 				live[t.Ticket] = info.Status.String()
 			}
 		}
-		events, _ := state.ReadEvents(config.StateDir(), 200)
+		events, _ := state.ReadEvents(stateDir, 200)
 		return refreshMsg{tasks: active, live: live, events: events}
 	}
 }
 
-func prsCmd(cfg *config.Config, tasks []*state.Task) tea.Cmd {
+func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 	return func() tea.Msg {
 		if cfg == nil {
 			return prsMsg{}
 		}
 		if tasks == nil {
-			loaded, err := state.Load(config.StateDir())
+			loaded, err := state.Load(stateDir)
 			if err != nil {
 				return prsMsg{}
 			}
@@ -165,7 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		cmds := []tea.Cmd{tickEvery(time.Second)}
+		cmds := []tea.Cmd{tickEvery(m.stateDir, time.Second)}
 		if m.mode == modeDetail && m.detail != nil {
 			cmds = append(cmds, paneTailCmd(m.detail))
 		}
@@ -173,7 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case prsMsg:
 		m.prs = msg
-		return m, tea.Tick(30*time.Second, func(time.Time) tea.Msg { return prsCmd(m.cfg, nil)() })
+		return m, tea.Tick(30*time.Second, func(time.Time) tea.Msg { return prsCmd(m.cfg, m.stateDir, nil)() })
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
@@ -189,7 +191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ done"
 		}
-		return m, refreshCmd()
+		return m, refreshCmd(m.stateDir)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -269,7 +271,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if t.Human == state.HumanReviewing {
 				next = ""
 			}
-			_ = state.Append(config.StateDir(), state.Event{
+			_ = state.Append(m.stateDir, state.Event{
 				Type: state.EvHumanStatus, Ticket: t.Ticket,
 				Data: map[string]string{"status": next},
 			})
@@ -278,7 +280,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "reviewing " + t.Ticket
 			}
-			return m, refreshCmd()
+			return m, refreshCmd(m.stateDir)
 		}
 	case "d":
 		if t := m.selected(); t != nil {
@@ -287,7 +289,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		m.flash = "refreshing PRs…"
-		return m, prsCmd(m.cfg, m.tasks)
+		return m, prsCmd(m.cfg, m.stateDir, m.tasks)
 	}
 	return m, nil
 }
@@ -316,12 +318,12 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = err.Error()
 			return m, nil
 		}
-		_ = state.Append(config.StateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
+		_ = state.Append(m.stateDir, state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
 		m.flash = "✓ sent to " + t.Ticket
 		m.mode = modeList
 		m.detail = nil
 		m.input.Blur()
-		return m, refreshCmd()
+		return m, refreshCmd(m.stateDir)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)

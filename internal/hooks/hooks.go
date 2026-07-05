@@ -35,20 +35,40 @@ type Payload struct {
 // Matches "STATUS: QUESTION — text" with any dash flavor (—, –, -).
 var sentinelRe = regexp.MustCompile(`(?ms)^\s*STATUS:\s*(QUESTION|BLOCKED|DONE)\s*[—–-]+\s*(.+?)\s*$`)
 
+// Candidate is one fleet the receiver may attribute an event to: a
+// registered workspace (Label = workspace label) or the legacy global
+// state dir. The caller supplies candidates in ownership-scan order —
+// workspaces sorted by label, legacy last.
+type Candidate struct {
+	Label    string
+	StateDir string
+}
+
 // Receive handles one hook event from stdin. Errors are swallowed by the
 // caller (exit 0 always) — a broken hook must never break a session.
-func Receive(stateDir, event string, stdin io.Reader) error {
+//
+// Ownership is decided by task membership, not workspace resolution
+// (DESIGN.md §12): each candidate's tasks.json is checked READ-ONLY via
+// state.ReadTasks (never state.Load, which folds and rewrites the derived
+// view — this receiver fires on every live ovs turn too). The first
+// candidate whose fleet tracks the payload cwd owns the event; the append
+// goes to that fleet's state dir only. No candidate matching is the
+// ovs-coexistence no-op contract: return nil, zero writes.
+func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 	var p Payload
 	if err := json.NewDecoder(stdin).Decode(&p); err != nil {
 		return err
 	}
-	tasks, err := state.Load(stateDir)
-	if err != nil {
-		return err
+	var stateDir string
+	var task *state.Task
+	for _, c := range candidates {
+		if t := state.FindByCwd(state.ReadTasks(c.StateDir), p.Cwd); t != nil {
+			stateDir, task = c.StateDir, t
+			break
+		}
 	}
-	task := state.FindByCwd(tasks, p.Cwd)
 	if task == nil {
-		return nil // not a tracked worktree (manual session, orchestrator) — stay silent
+		return nil // no fleet tracks this cwd (manual session, orchestrator, ovs worktree) — stay silent
 	}
 
 	switch event {
