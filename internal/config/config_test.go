@@ -150,6 +150,88 @@ cost:
 	}
 }
 
+// The orchestrator section is workspace-scoped: a global claude command
+// (e.g. a work-only wrapper like ccwork) must never leak into a
+// workspace's cockpit. DESIGN §6.5 / "no personal defaults in core".
+func TestOrchestratorIsWorkspaceScoped(t *testing.T) {
+	setHome(t)
+	globalRepo := t.TempDir()
+	writeGlobal(t, `
+repos:
+  g:
+    path: `+globalRepo+`
+orchestrator:
+  claude: ccwork --dangerously-skip-permissions
+`)
+
+	// Legacy global load keeps the configured command.
+	c, err := LoadAt("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Orchestrator.Claude != "ccwork --dangerously-skip-permissions" {
+		t.Errorf("global orchestrator.claude = %q, want configured ccwork", c.Orchestrator.Claude)
+	}
+
+	// Workspace without its own orchestrator block: global is NOT
+	// inherited — the safe default applies.
+	wsRepo := t.TempDir()
+	root := newWorkspace(t, `
+workspace:
+  label: personal
+  scope: parent
+repos:
+  r:
+    path: `+wsRepo+`
+`)
+	c, err = LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Orchestrator.Claude != "claude --dangerously-skip-permissions" {
+		t.Errorf("workspace orchestrator.claude = %q, want default claude (global must not leak)", c.Orchestrator.Claude)
+	}
+
+	// Workspace with its own orchestrator block wins.
+	root2 := newWorkspace(t, `
+workspace:
+  label: other
+  scope: parent
+repos:
+  r:
+    path: `+wsRepo+`
+orchestrator:
+  claude: claude --model opus
+`)
+	c, err = LoadAt(root2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Orchestrator.Claude != "claude --model opus" {
+		t.Errorf("workspace orchestrator.claude = %q, want the workspace's own", c.Orchestrator.Claude)
+	}
+}
+
+// The per-repo worker default is plain claude — ccwork is a personal
+// work wrapper and must not be a baked-in default (DESIGN "no personal
+// defaults in core").
+func TestRepoClaudeDefault(t *testing.T) {
+	setHome(t)
+	repo := t.TempDir()
+	writeGlobal(t, `
+repos:
+  demo:
+    path: `+repo+`
+`)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Repos["demo"].Claude != "claude --dangerously-skip-permissions" {
+		t.Errorf("repo claude default = %q, want claude --dangerously-skip-permissions", c.Repos["demo"].Claude)
+	}
+}
+
 func TestLoadAtWorkspaceOnlyAndGlobalOnly(t *testing.T) {
 	setHome(t)
 	wsRepo := t.TempDir()

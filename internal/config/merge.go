@@ -37,6 +37,12 @@ func LoadAt(root string) (*Config, error) {
 	if gErr != nil && !errors.Is(gErr, fs.ErrNotExist) {
 		return nil, gErr
 	}
+	// orchestrator is workspace-scoped, like the brain dir it configures:
+	// a workspace cockpit must not inherit the global claude command
+	// (typically a machine/work-specific wrapper — ccwork on the Grid).
+	// Dropped from the global layer, not wholesale-merged, so it stays
+	// out even when the workspace sets no orchestrator block at all.
+	delete(global, "orchestrator")
 	ws, wErr := readLayer(wsPath)
 	if wErr != nil && !errors.Is(wErr, fs.ErrNotExist) {
 		return nil, wErr

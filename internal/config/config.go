@@ -152,7 +152,7 @@ func parse(raw []byte, src string) (*Config, error) {
 			r.Base = "main"
 		}
 		if r.Claude == "" {
-			r.Claude = "ccwork --dangerously-skip-permissions"
+			r.Claude = "claude --dangerously-skip-permissions"
 		}
 		if r.Prompt != "" {
 			r.Prompt = expand(r.Prompt)

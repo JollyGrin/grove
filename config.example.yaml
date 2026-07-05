@@ -5,7 +5,7 @@
 #   path:          main checkout (worktrees land in <parent>/.worktrees/<repo>/)
 #   base:          branch to fork from (default: main)
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
-#   claude:        worker command (default: ccwork --dangerously-skip-permissions)
+#   claude:        worker command (default: claude --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
 #   provider:      per-repo task backend override (markdown|linear|github; default: global kind)
 #   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
@@ -40,6 +40,9 @@ repos:
   #   setup: bash -c 'M="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"; cp -R "$M/packages/graphql/generated" packages/graphql/ 2>/dev/null || true; pnpm worktree:setup'
   #   linear_labels: [management-portal, admin-portal, directory]
 
+# Workspace-scoped: a workspace cockpit reads only its own
+# <root>/.grove/config.yaml orchestrator block (this global one is for the
+# legacy global cockpit and is never inherited by workspaces).
 orchestrator:
   dir: ~/.config/grove/orchestrator
   claude: claude --dangerously-skip-permissions   # default; guardrails live in the orchestrator's CLAUDE.md
