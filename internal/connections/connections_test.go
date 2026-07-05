@@ -494,3 +494,24 @@ func TestGridUniversalClaudeMDScopedToLinearRepos(t *testing.T) {
 		t.Errorf("markdown repo parent must NOT be checked: %v", ids)
 	}
 }
+
+// Mixed fleets get provider rows per EFFECTIVE kind (plan review I-4):
+// github repos must not get bogus markdown task-dir rows, and the linear
+// key row appears once when any repo is linear-driven.
+func TestProviderConnectionsMixedFleet(t *testing.T) {
+	cfg := testConfig() // global kind markdown; repo "demo" markdown
+	cfg.Repos["gh"] = &config.Repo{Path: "/repos/gh", Provider: "github", Claude: "claude"}
+	cfg.Repos["lin"] = &config.Repo{Path: "/repos/lin", Provider: "linear", Claude: "claude"}
+	results := EvaluateAll(happyEnv(cfg))
+
+	for _, want := range []string{"provider:markdown:demo", "provider:github:gh", "provider:linear-key"} {
+		if !hasResult(results, want) {
+			t.Errorf("missing row %s", want)
+		}
+	}
+	for _, banned := range []string{"provider:markdown:gh", "provider:markdown:lin", "provider:github:demo"} {
+		if hasResult(results, banned) {
+			t.Errorf("bogus row %s for the wrong backend", banned)
+		}
+	}
+}

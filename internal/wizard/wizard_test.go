@@ -206,3 +206,22 @@ func TestWorkspaceStepAndParentScope(t *testing.T) {
 			in3.Doc.Get("workspace", "label"), in3.Doc.Get("workspace", "scope"))
 	}
 }
+
+func TestProviderOptionsIncludeGithubForGithubRemotes(t *testing.T) {
+	in := freshInput(t, Flags{Yes: true})
+	in.Probe.RemoteHost = "github"
+	steps, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := strings.Join(step(t, steps, "provider").Options, " ")
+	if !strings.Contains(opts, "github") {
+		t.Errorf("github remote must offer the github backend: %s", opts)
+	}
+	in2 := freshInput(t, Flags{Yes: true})
+	in2.Probe.RemoteHost = "none"
+	steps2, _ := Build(in2)
+	if strings.Contains(strings.Join(step(t, steps2, "provider").Options, " "), "github") {
+		t.Error("no github remote → no github option")
+	}
+}

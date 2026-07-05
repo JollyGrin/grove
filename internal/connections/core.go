@@ -121,11 +121,46 @@ func checkConfig(e Env) Status {
 // The linear key row exists only when the linear provider is selected —
 // deliberate change from the P0 doctor (markdown users never see it),
 // logged in docs/seed-manifest.md.
+// providerConnections iterates repos by their EFFECTIVE kind (per-repo
+// overrides included — a mixed fleet must not get bogus rows for the
+// wrong backend; plan review I-4). The linear key row appears once when
+// any repo is linear-driven.
 func providerConnections(env Env) []Connection {
 	cfg := env.Cfg
-	if cfg.Provider.Kind == "linear" {
+	var conns []Connection
+	linearNeeded := false
+	for _, name := range repoNames(cfg) {
+		r := cfg.Repos[name]
+		switch cfg.ProviderKindFor(r) {
+		case "linear":
+			linearNeeded = true
+		case "github":
+			conns = append(conns, Connection{
+				ID:          "provider:github:" + name,
+				Step:        "provider",
+				Kind:        KindCLIAuth,
+				Severity:    SeverityError,
+				RequiredFor: []string{"grab", "ls"},
+				Title:       "github issues via gh in " + name,
+				Fix:         "gh auth login",
+				Check:       checkCLIAuth("gh", "auth", "status"),
+			})
+		default: // markdown
+			conns = append(conns, Connection{
+				ID:          "provider:markdown:" + name,
+				Step:        "provider",
+				Kind:        KindFile,
+				Severity:    SeverityError,
+				RequiredFor: []string{"grab", "ls"},
+				Title:       "task dir in " + name,
+				Fix:         "gv init",
+				Check:       checkFile(filepath.Join(r.Path, cfg.Provider.Markdown.Dir)),
+			})
+		}
+	}
+	if linearNeeded {
 		keyEnv := cfg.Linear.APIKeyEnv
-		return []Connection{{
+		conns = append(conns, Connection{
 			ID:          "provider:linear-key",
 			Step:        "provider",
 			Kind:        KindEnv,
@@ -134,21 +169,6 @@ func providerConnections(env Env) []Connection {
 			Title:       keyEnv + " set",
 			Fix:         "create a personal API key at linear.app/settings/api, export " + keyEnv + " in ~/.zshrc",
 			Check:       checkEnvVar(keyEnv),
-		}}
-	}
-	// markdown (default): each repo needs its task dir scaffolded.
-	var conns []Connection
-	for _, name := range repoNames(cfg) {
-		r := cfg.Repos[name]
-		conns = append(conns, Connection{
-			ID:          "provider:markdown:" + name,
-			Step:        "provider",
-			Kind:        KindFile,
-			Severity:    SeverityError,
-			RequiredFor: []string{"grab", "ls"},
-			Title:       "task dir in " + name,
-			Fix:         "gv init",
-			Check:       checkFile(filepath.Join(r.Path, cfg.Provider.Markdown.Dir)),
 		})
 	}
 	return conns

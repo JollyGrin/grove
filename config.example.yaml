@@ -7,10 +7,12 @@
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: ccwork --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
-#   provider:      per-repo task backend override (markdown|linear; default: global kind)
+#   provider:      per-repo task backend override (markdown|linear|github; default: global kind)
 #   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
 
-# Task backend. markdown (default): one file per task in <repo>/.grove/tasks/,
+# Task backend. github: the repo's GitHub issues via `gh` (ids <repo>-<n>;
+# agents transition via labels; the human's merge closes the issue).
+# markdown (default): one file per task in <repo>/.grove/tasks/,
 # YAML frontmatter (id/title/status/…) + markdown body — `gv grab` with no
 # args lists the grabbable backlog. linear: the Grid-era Linear client.
 provider:

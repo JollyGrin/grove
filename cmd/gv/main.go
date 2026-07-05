@@ -531,7 +531,7 @@ func cmdGrab(args []string) error {
 		if len(positionals) != 1 {
 			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual]")
 		}
-		if prov, err = provider.FromConfigKind(cfg, "linear", ""); err != nil {
+		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
 			return err
 		}
 		fmt.Println("→ fetching ticket from Linear…")
@@ -553,7 +553,15 @@ func cmdGrab(args []string) error {
 				return err
 			}
 		}
-		if prov, err = provider.FromConfigKind(cfg, "markdown", repo.Path); err != nil {
+		// Any repo-rooted kind (markdown, github) — the repo's effective
+		// kind decides, never a hardcoded default (plan review C-1).
+		if repo != nil {
+			kind = cfg.ProviderKindFor(repo)
+		}
+		if kind == "" {
+			kind = "markdown"
+		}
+		if prov, err = provider.FromConfigKind(cfg, kind, repoName, repo.Path); err != nil {
 			return err
 		}
 		if len(positionals) == 0 {
@@ -687,6 +695,9 @@ func printBacklog(prov provider.Provider, repoName string, tracked map[string]*s
 			status = "todo"
 		}
 		fmt.Printf("  %-12s %-8s %s\n", task.ID, status, task.Title)
+	}
+	if c, ok := prov.(interface{ ListCapped() bool }); ok && c.ListCapped() {
+		fmt.Println("  … list capped at 200 open issues — narrow on GitHub if you miss one")
 	}
 	fmt.Println("\ngv grab <task-id> to start one")
 	return nil
@@ -1517,12 +1528,25 @@ func cmdAdopt(args []string) error {
 	}
 	if id == "" {
 		kind := cfg.Provider.Kind
+		var coldRepo *config.Repo
+		coldName := ""
 		if *repoFlag != "" {
-			if _, r, rErr := cfg.ResolveRepo(*repoFlag, nil); rErr == nil {
-				kind = cfg.ProviderKindFor(r)
+			if n, r, rErr := cfg.ResolveRepo(*repoFlag, nil); rErr == nil {
+				kind, coldRepo, coldName = cfg.ProviderKindFor(r), r, n
 			}
 		}
-		if id, err = parseAnyID(kind, positionals[0]); err != nil {
+		if kind == "github" {
+			if coldRepo == nil {
+				return fmt.Errorf("github ids are repo-scoped — pass --repo to adopt %s", positionals[0])
+			}
+			p, perr := provider.FromConfigKind(cfg, "github", coldName, coldRepo.Path)
+			if perr != nil {
+				return perr
+			}
+			if id, err = p.ParseID(positionals[0]); err != nil {
+				return err
+			}
+		} else if id, err = parseAnyID(kind, positionals[0]); err != nil {
 			return err
 		}
 	}
@@ -1564,7 +1588,7 @@ func cmdAdopt(args []string) error {
 	// comments). Non-fatal for tracked tasks — offline adopt still works
 	// with the fields state carries.
 	repoKind := cfg.ProviderKindFor(repo)
-	prov, provErr := provider.FromConfigKind(cfg, repoKind, repo.Path)
+	prov, provErr := provider.FromConfigKind(cfg, repoKind, repoName, repo.Path)
 	if provErr == nil {
 		if fetched, fetchErr := prov.Get(id); fetchErr == nil {
 			task = fetched
@@ -2082,6 +2106,27 @@ func findTask(idOrURL string) (*state.Task, error) {
 			return t, nil
 		}
 	}
+	// Short github refs: `gv done 7` matches a unique tracked id ending
+	// in -7; several matches is an honest error (plan review I-2).
+	if m := shortRefRe.FindStringSubmatch(strings.TrimSpace(idOrURL)); m != nil {
+		var hits []*state.Task
+		for id, t := range tasks {
+			if !t.Done && strings.HasSuffix(id, "-"+m[1]) {
+				hits = append(hits, t)
+			}
+		}
+		if len(hits) == 1 {
+			return hits[0], nil
+		}
+		if len(hits) > 1 {
+			var ids []string
+			for _, t := range hits {
+				ids = append(ids, t.Ticket)
+			}
+			sort.Strings(ids)
+			return nil, fmt.Errorf("#%s is tracked in several repos: %s — use the full id", m[1], strings.Join(ids, ", "))
+		}
+	}
 	// Mid-migration hint: the id may be tracked by another fleet (plan
 	// review I-3) — read-only scan, never acts across workspaces.
 	list, _ := workspace.LoadRegistry()
@@ -2272,3 +2317,7 @@ func cmdWorkspaces(args []string) error {
 	}
 	return nil
 }
+
+// shortRefRe matches bare github issue refs (7, #7) for the findTask
+// numeric-suffix fallback.
+var shortRefRe = regexp.MustCompile(`^#?(\d+)$`)

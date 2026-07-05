@@ -140,7 +140,7 @@ func Build(in Input) ([]Step, error) {
 		},
 		{
 			ID: "provider", Kind: KindSelect,
-			Title:    "task backend (github-issues adapter is on the roadmap — Phase 3)",
+			Title:    "task backend",
 			Options:  providerOptions(in),
 			Detected: "markdown", Current: in.Doc.Get("provider", "kind"),
 			Value: resolve(f.Provider, in.Doc.Get("provider", "kind"), "markdown"),
@@ -193,6 +193,9 @@ func Build(in Input) ([]Step, error) {
 
 func providerOptions(in Input) []string {
 	opts := []string{"markdown"}
+	if in.Probe.RemoteHost == "github" {
+		opts = append(opts, "github")
+	}
 	if in.Probe.LinearKeySet {
 		opts = append(opts, "linear")
 	}

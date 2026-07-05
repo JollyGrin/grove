@@ -58,18 +58,24 @@ type Provider interface {
 // repo-relative providers (markdown); it may be empty for repo-independent
 // ones (linear).
 func FromConfig(cfg *config.Config, repoPath string) (Provider, error) {
-	return FromConfigKind(cfg, cfg.Provider.Kind, repoPath)
+	return FromConfigKind(cfg, cfg.Provider.Kind, filepath.Base(repoPath), repoPath)
 }
 
 // FromConfigKind builds a provider of an explicit kind — the per-repo
-// override path (config.ProviderKindFor).
-func FromConfigKind(cfg *config.Config, kind, repoPath string) (Provider, error) {
+// override path (config.ProviderKindFor). repoName keys github's
+// fleet-unique ids; markdown/linear ignore it.
+func FromConfigKind(cfg *config.Config, kind, repoName, repoPath string) (Provider, error) {
 	switch kind {
 	case "markdown":
 		if repoPath == "" {
 			return nil, fmt.Errorf("markdown provider needs a repo (pass --repo)")
 		}
 		return NewMarkdownAt(filepath.Join(repoPath, cfg.Provider.Markdown.Dir), cfg.Provider.Markdown.Dir), nil
+	case "github":
+		if repoPath == "" {
+			return nil, fmt.Errorf("github provider needs a repo (pass --repo)")
+		}
+		return NewGitHub(repoPath, repoName), nil
 	case "linear":
 		key, err := cfg.APIKey()
 		if err != nil {
@@ -77,7 +83,7 @@ func FromConfigKind(cfg *config.Config, kind, repoPath string) (Provider, error)
 		}
 		return NewLinear(key), nil
 	default:
-		return nil, fmt.Errorf("unknown provider kind %q (markdown|linear)", kind)
+		return nil, fmt.Errorf("unknown provider kind %q (markdown|linear|github)", kind)
 	}
 }
 

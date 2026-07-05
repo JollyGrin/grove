@@ -95,7 +95,7 @@ func TestProviderKindForOverride(t *testing.T) {
 	if got := cfg.ProviderKindFor(nil); got != "linear" {
 		t.Errorf("nil repo falls back to global, got %s", got)
 	}
-	p, err := FromConfigKind(cfg, "markdown", repoB)
+	p, err := FromConfigKind(cfg, "markdown", "side", repoB)
 	if err != nil || p.Kind() != "markdown" {
 		t.Errorf("FromConfigKind override: %v %v", p, err)
 	}

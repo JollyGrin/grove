@@ -77,8 +77,12 @@ board IS the manifest rendered).
 
 ## Phase 3 — second provider (seam stress test)
 
-- [ ] `github-issues` adapter via `gh` (decide transitions: labels vs
-      Projects v2 — deferred to here on purpose)
+- [x] `github-issues` adapter via `gh` (2026-07-05, pulled forward for
+      unbrewed — plan docs/plans/2026-07-05-github-issues.md, two review
+      rounds). OQ3 resolved → labels; ids `<repo>-<n>` fleet-unique;
+      short refs (`gv done 7`) via numeric-suffix arbitration; list cap
+      surfaced; e2e/github.sh with a stub gh. The seam held: zero
+      changes to the linear/markdown providers.
 
 ## Phase 4 — relay + brain + cockpit (generic ovs parity)
 

@@ -24,7 +24,7 @@ type Repo struct {
 
 type Config struct {
 	Provider struct {
-		Kind     string `yaml:"kind"` // markdown (default) | linear
+		Kind     string `yaml:"kind"` // markdown (default) | linear | github
 		Markdown struct {
 			Dir string `yaml:"dir"` // task-file dir relative to the repo (default .grove/tasks)
 		} `yaml:"markdown"`
@@ -144,8 +144,8 @@ func parse(raw []byte, src string) (*Config, error) {
 		if r == nil {
 			return nil, fmt.Errorf("repo %q: empty config", name)
 		}
-		if r.Provider != "" && r.Provider != "markdown" && r.Provider != "linear" {
-			return nil, fmt.Errorf("repo %q: provider %q (want markdown or linear)", name, r.Provider)
+		if r.Provider != "" && r.Provider != "markdown" && r.Provider != "linear" && r.Provider != "github" {
+			return nil, fmt.Errorf("repo %q: provider %q (want markdown, linear, or github)", name, r.Provider)
 		}
 		r.Path = expand(r.Path)
 		if r.Base == "" {
