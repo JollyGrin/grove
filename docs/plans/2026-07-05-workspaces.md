@@ -34,8 +34,10 @@ header label (review S-4).
   deep-merges field-wise — a workspace sets `team: DEV`, inherits
   `api_key_env` from global. Table tests pin exactly these cases.
 - **Legacy fallback:** outside any workspace, behavior is byte-for-byte
-  today's (global config, global state). `GROVE_STATE_DIR` still
-  overrides all state resolution.
+  today's (global config, global state) **until the registry is
+  non-empty** — from then, bare `gv` outside a workspace opens the
+  switcher (DESIGN §6.5.3), while every other verb keeps the legacy
+  path. `GROVE_STATE_DIR` still overrides all state resolution.
 - **Hook ownership (§12 I-6, review I-1):** the receiver scans
   candidates — registered workspaces in sorted-label order, legacy
   global LAST — using a **read-only** tasks.json membership check (new
@@ -92,7 +94,11 @@ cost/hooks-cmd/run-setup/doctor/init), `internal/hooks` untouched here.
 registered workspaces read-only and hints `tracked in workspace <X> —
 gv switch <X>` (review I-3); `run-setup` gets the resolved state dir
 passed explicitly via argv (its cwd is a worktree that may not walk up —
-review S-3).
+review S-3). **Exemptions (review round-2): `init` establishes the
+workspace rather than resolving one (Task 6 owns it), and
+`hooks install`/doctor's profile derivation UNIONS worker commands
+across legacy global + every registered workspace's config — hooks
+coverage is machine-wide, never ambient-scoped (round-2 residual 1).**
 
 **Verify:** build + full unit suite; e2e legacy leg (Task 8) pins the
 no-workspace path.
