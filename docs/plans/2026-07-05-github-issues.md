@@ -70,9 +70,9 @@ adopt cold-path canonicalization via the resolved provider).
   comments,state` → provider.Task (comments mapped author/body; labels
   by name; closed issues still fetch — adopt needs them).
 - `List()`: `gh issue list --state open --json number,title,labels
-  --limit 100` → Tasks sorted by number; Info line notes the 100 cap.
-- `List()` limit 200; the provider reports when the fetch filled the
-  cap (returned alongside the tasks) and printBacklog surfaces it.
+  --limit 200` → Tasks sorted by number; the provider reports when the
+  fetch filled the cap (returned alongside the tasks) and printBacklog
+  surfaces it.
 - `gh` runner injectable (func field) for table tests — no network, no
   real gh in unit tests. Timeout 15s.
 
