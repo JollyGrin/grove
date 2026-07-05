@@ -356,7 +356,11 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SendKeys(session+".0", dash); err != nil {
 		return err
 	}
-	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg)); err != nil {
+	root := ""
+	if ws != nil {
+		root = ws.Root
+	}
+	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
 		return err
 	}
 	return tmux.MainVertical(session, 55)
@@ -367,8 +371,17 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 // orchestrator dir (its CLAUDE.md brain must reload on every /clear, and
 // that cwd is hook-invisible) — --add-dir is what lets @-references and
 // file tools reach the actual repos and their task worktrees from there.
-func orchestratorLaunch(cfg *config.Config) string {
+// root is the workspace root (empty for the legacy global cockpit): every
+// repo and its .worktrees live under a single root, so one --add-dir there
+// covers the whole fleet — a parent-scope workspace with a dozen child
+// repos would otherwise produce an unreadable, ever-growing flag list.
+// Without a root (legacy multi-repo fleet, repos scattered anywhere) fall
+// back to one --add-dir per repo + worktrees dir.
+func orchestratorLaunch(cfg *config.Config, root string) string {
 	cmd := cfg.Orchestrator.Claude
+	if root != "" {
+		return cmd + fmt.Sprintf(" --add-dir '%s'", root)
+	}
 	var names []string
 	for name := range cfg.Repos {
 		names = append(names, name)
@@ -395,8 +408,8 @@ func orchestratorLaunch(cfg *config.Config) string {
 // orchestratorCmd resumes the last orchestrator chat when one exists;
 // fresh spawns (O / orchestrator new) always start clean, so this is only
 // for the cockpit's first pane.
-func orchestratorCmd(cfg *config.Config) string {
-	launch := orchestratorLaunch(cfg)
+func orchestratorCmd(cfg *config.Config, root string) string {
+	launch := orchestratorLaunch(cfg, root)
 	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
@@ -433,7 +446,11 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		}
 		return "cockpit built — gv attaches", nil
 	}
-	if _, err := tmux.SpawnPane(session, dir, orchestratorLaunch(cfg)); err != nil {
+	root := ""
+	if ws != nil {
+		root = ws.Root
+	}
+	if _, err := tmux.SpawnPane(session, dir, orchestratorLaunch(cfg, root)); err != nil {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
