@@ -128,7 +128,7 @@ func refreshCmd(stateDir string) tea.Cmd {
 		// sample lands in resource.jsonl (its own capped file, never folded by
 		// state.Load), giving the trajectory into a jetsam crash.
 		mem, _ := resource.Read()
-		workers := resource.LiveWorkers(active)
+		workers := resource.LiveWorkers()
 		_ = resource.Log(stateDir, resource.Sample{
 			Avail: mem.AvailBytes, Total: mem.TotalBytes,
 			Workers: workers, Kind: resource.KindSample,

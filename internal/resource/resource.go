@@ -11,7 +11,10 @@
 // test anywhere; the raw counter read is the only darwin-specific piece.
 package resource
 
-import "github.com/JollyGrin/grove/internal/state"
+import (
+	"bytes"
+	"os/exec"
+)
 
 // Mem is a single memory reading. AvailBytes is *reclaimable* memory — free
 // plus the eviction-without-swap pages (speculative/purgeable/file-backed) —
@@ -81,13 +84,27 @@ func (m Mem) Level() Level {
 	}
 }
 
-// LiveWorkers counts agents currently holding a tmux window and consuming RAM —
-// setup or working. Idle/waiting/blocked/dead agents aren't actively spending,
-// so they don't count toward spawn pressure. Callers pass state.Active(tasks).
-func LiveWorkers(tasks []*state.Task) int {
+// workerComm is the process name every Claude Code session runs under (the
+// argv0 that `ps`/`pgrep` report — NOT the kernel's kp_proc.p_comm, which
+// reads "node" for these and can't be told apart from unrelated node tooling).
+const workerComm = "claude"
+
+// LiveWorkers counts Claude worker processes machine-wide — every `claude`
+// across all tmux sessions, ovs, and orchestrator chats, which is the number
+// that predicts jetsam, not the handful grove itself spawned. It shells out to
+// `pgrep -x claude`; the cockpit already runs tmux per tick (detect.DetectLive),
+// so one more short-lived exec per second is negligible. A read error (pgrep
+// missing, or no match → exit 1) yields 0 — the gauge degrades, never lies.
+func LiveWorkers() int {
+	out, _ := exec.Command("pgrep", "-x", workerComm).Output()
+	return countPIDs(out)
+}
+
+// countPIDs counts the non-empty lines of pgrep output — the testable seam.
+func countPIDs(out []byte) int {
 	n := 0
-	for _, t := range tasks {
-		if t.Agent == state.AgentSetup || t.Agent == state.AgentWorking {
+	for _, line := range bytes.Split(out, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) > 0 {
 			n++
 		}
 	}

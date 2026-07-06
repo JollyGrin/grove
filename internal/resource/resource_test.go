@@ -63,21 +63,22 @@ func TestLevel(t *testing.T) {
 	}
 }
 
-func TestLiveWorkers(t *testing.T) {
-	tasks := []*state.Task{
-		{Agent: state.AgentSetup},
-		{Agent: state.AgentWorking},
-		{Agent: state.AgentWorking},
-		{Agent: state.AgentIdle},
-		{Agent: state.AgentWaiting},
-		{Agent: state.AgentBlocked},
-		{Agent: state.AgentDead},
+func TestCountPIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want int
+	}{
+		{"three pids", "1322\n20265\n28647\n", 3},
+		{"no trailing newline", "1322\n20265", 2},
+		{"empty (pgrep no match)", "", 0},
+		{"only newlines", "\n\n", 0},
+		{"blank lines ignored", "1322\n\n28647\n", 2},
 	}
-	if got := LiveWorkers(tasks); got != 3 {
-		t.Errorf("LiveWorkers = %d, want 3 (setup + 2 working)", got)
-	}
-	if got := LiveWorkers(nil); got != 0 {
-		t.Errorf("LiveWorkers(nil) = %d, want 0", got)
+	for _, c := range cases {
+		if got := countPIDs([]byte(c.out)); got != c.want {
+			t.Errorf("%s: countPIDs = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 

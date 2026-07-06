@@ -458,13 +458,9 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 	// Breadcrumb before the spawn — a new orchestrator chat is a spawn that
 	// can trip the same memory cliff as a grab (grove-3). Best-effort.
 	if mem, err := resource.Read(); err == nil {
-		workers := 0
-		if tasks, err := state.Load(stateDir()); err == nil {
-			workers = resource.LiveWorkers(state.Active(tasks))
-		}
 		_ = resource.Log(stateDir(), resource.Sample{
 			Avail: mem.AvailBytes, Total: mem.TotalBytes,
-			Workers: workers, Kind: resource.KindOrchestrator,
+			Workers: resource.LiveWorkers(), Kind: resource.KindOrchestrator,
 		})
 	}
 
@@ -702,7 +698,7 @@ func cmdGrab(args []string) error {
 	if mem, err := resource.Read(); err == nil {
 		_ = resource.Log(stateDir(), resource.Sample{
 			Avail: mem.AvailBytes, Total: mem.TotalBytes,
-			Workers: resource.LiveWorkers(state.Active(tasks)),
+			Workers: resource.LiveWorkers(),
 			Kind:    resource.KindGrab, Ticket: task.ID,
 		})
 	}
