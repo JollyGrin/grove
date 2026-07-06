@@ -1,0 +1,1001 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>grove — feed it tickets, harvest PRs</title>
+<meta name="description" content="Grove turns each ticket into an autonomous Claude Code worker — its own git worktree, its own tmux window, its own PR. You write tickets and say yes." />
+<meta property="og:title" content="grove — feed it tickets, harvest PRs" />
+<meta property="og:description" content="A repo-agnostic orchestrator for autonomous Claude Code sessions. Drop it into your projects folder, hook it into your tasks, feed it tickets." />
+<meta property="og:type" content="website" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet" />
+
+<style>
+/* ───────────────────────── tokens ───────────────────────── */
+:root {
+  --bg:            #0a0f0b;
+  --bg-deep:       #070b08;
+  --surface:       #101812;
+  --surface-alt:   #0d130e;
+  --border:        #1c2a1e;
+  --border-bright: #2c4030;
+  --text:          #d6e2d6;
+  --text-dim:      #8fa392;
+  --text-dimmer:   #5c6f5e;
+  --green:         #7fbf7f;
+  --green-bright:  #a8e6a3;
+  --green-deep:    #4a7c59;
+  --amber:         #e0b458;
+  --red:           #d98b7c;
+  --ink:           #eef4ea;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --serif: "Fraunces", Georgia, serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection { background: var(--green-deep); color: var(--ink); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--green-deep); }
+
+a { color: inherit; }
+
+/* grain overlay */
+body::after {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+
+/* ───────────────────────── shared ───────────────────────── */
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+.wrap-narrow { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+
+h1, h2, h3.serif {
+  font-family: var(--serif);
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.act-label {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 18px;
+}
+.act-label::before {
+  content: ""; display: block;
+  width: 28px; height: 1px; background: var(--green-deep);
+}
+
+h2 {
+  font-size: clamp(1.9rem, 3.6vw, 2.7rem);
+  line-height: 1.15;
+  margin-bottom: 14px;
+}
+h2 em { font-style: italic; color: var(--green-bright); }
+
+.lede { color: var(--text-dim); max-width: 620px; }
+.lede code, p code {
+  color: var(--green-bright);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 0.88em;
+}
+
+section { padding: 96px 0; position: relative; }
+
+/* terminal chrome */
+.term {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px -24px rgba(0,0,0,0.7), 0 0 0 1px rgba(168,230,163,0.03);
+}
+.term-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.term-bar .dot { width: 11px; height: 11px; border-radius: 50%; }
+.dot-r { background: #4a3530; } .dot-y { background: #4a4230; } .dot-g { background: #2e4a34; }
+.term-bar .term-title { margin-left: 8px; font-size: 11.5px; color: var(--text-dimmer); }
+.term-body {
+  padding: 22px 24px;
+  font-size: 13.5px;
+  line-height: 1.85;
+  overflow-x: auto;
+  white-space: pre;
+}
+.term-body .p  { color: var(--green); }        /* prompt $ */
+.term-body .c  { color: var(--text-dimmer); }  /* comment */
+.term-body .g  { color: var(--green-bright); }
+.term-body .a  { color: var(--amber); }
+.term-body .r  { color: var(--red); }
+.term-body .d  { color: var(--text-dim); }
+.term-body .dd { color: var(--text-dimmer); }
+.term-body .b  { color: var(--border-bright); }
+
+/* scroll reveal */
+.rv { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2,.6,.2,1), transform .7s cubic-bezier(.2,.6,.2,1); }
+.rv.on { opacity: 1; transform: none; }
+
+/* ───────────────────────── nav ───────────────────────── */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner {
+  max-width: 1060px; margin: 0 auto; padding: 15px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.brand { display: flex; align-items: baseline; gap: 8px; text-decoration: none; font-weight: 700; font-size: 17px; }
+.brand .tree { font-size: 15px; }
+.brand .name { color: var(--green-bright); }
+.nav-links { display: flex; align-items: center; gap: 26px; font-size: 13px; }
+.nav-links a { color: var(--text-dim); text-decoration: none; transition: color .2s; }
+.nav-links a:hover { color: var(--green-bright); }
+.nav-links a.gh {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-bright); border-radius: 8px;
+  padding: 7px 14px; color: var(--text);
+  transition: border-color .2s, color .2s, background .2s;
+}
+.nav-links a.gh:hover { border-color: var(--green-deep); background: var(--surface); }
+.nav-links svg { width: 15px; height: 15px; fill: currentColor; }
+
+/* ───────────────────────── hero ───────────────────────── */
+.hero {
+  padding: 168px 0 110px;
+  position: relative;
+}
+
+/* background root system */
+.hero-roots {
+  position: absolute; inset: 0; z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.hero-roots svg { position: absolute; left: 50%; top: 0; transform: translateX(-50%); min-width: 1400px; height: 100%; }
+.hero-roots path {
+  fill: none;
+  stroke: var(--border-bright);
+  stroke-width: 1.2;
+  opacity: 0.5;
+  stroke-dasharray: 1600;
+  stroke-dashoffset: 1600;
+  animation: rootdraw 4.5s cubic-bezier(.3,.4,.2,1) forwards;
+}
+.hero-roots path:nth-child(2) { animation-delay: .4s; }
+.hero-roots path:nth-child(3) { animation-delay: .8s; }
+.hero-roots path:nth-child(4) { animation-delay: 1.1s; }
+.hero-roots path:nth-child(5) { animation-delay: 1.5s; }
+@keyframes rootdraw { to { stroke-dashoffset: 0; } }
+
+.hero-glow {
+  position: absolute; left: 50%; top: -160px; transform: translateX(-50%);
+  width: 900px; height: 520px;
+  background: radial-gradient(ellipse at center, rgba(127,191,127,0.09), transparent 65%);
+  pointer-events: none;
+}
+
+.hero-inner { position: relative; z-index: 2; text-align: center; }
+
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 9px;
+  border: 1px solid var(--border-bright);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 11.5px; color: var(--text-dim);
+  margin-bottom: 34px;
+}
+.hero-badge .pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(127,191,127,0.5);
+  animation: pulse 2.4s infinite;
+}
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(127,191,127,0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(127,191,127,0); }
+  100% { box-shadow: 0 0 0 0 rgba(127,191,127,0); }
+}
+
+.hero h1 {
+  font-size: clamp(2.7rem, 7vw, 4.8rem);
+  line-height: 1.04;
+  margin-bottom: 26px;
+}
+.hero h1 em { font-style: italic; color: var(--green-bright); }
+.hero h1 .row2 { display: block; }
+
+.hero .sub {
+  color: var(--text-dim);
+  max-width: 640px;
+  margin: 0 auto 40px;
+  font-size: 15.5px;
+}
+
+.cta-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-bottom: 72px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 13px 26px;
+  border-radius: 10px;
+  font-family: var(--mono); font-size: 14px; font-weight: 500;
+  text-decoration: none;
+  transition: transform .15s, background .2s, border-color .2s, box-shadow .2s;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: var(--green-deep); color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--green-deep));
+  box-shadow: 0 8px 28px -10px rgba(74,124,89,0.55);
+}
+.btn-primary:hover { background: color-mix(in srgb, var(--green-deep) 80%, var(--green)); }
+.btn-ghost {
+  border: 1px solid var(--border-bright); color: var(--text-dim);
+}
+.btn-ghost:hover { border-color: var(--green-deep); color: var(--text); }
+
+/* hero terminal animation */
+.hero-term { max-width: 640px; margin: 0 auto; text-align: left; position: relative; }
+.hero-term .term-body { min-height: 278px; }
+
+.ht-line { display: block; }
+.ht-hide { opacity: 0; animation: appear .01s forwards; }
+@keyframes appear { to { opacity: 1; } }
+
+/* typed commands */
+.typed {
+  display: inline-block; vertical-align: bottom;
+  overflow: hidden; white-space: nowrap;
+  width: 0;
+  animation: typing .7s steps(12) forwards;
+}
+.typed-ls   { animation-delay: .5s;  animation-duration: .35s; }
+.typed-init { animation-delay: 2.1s; animation-duration: .8s; }
+@keyframes typing { from { width: 0; } to { width: var(--ch); } }
+
+.ht-repos  { animation-delay: 1.2s; }
+.ht-seed   { animation-delay: 3.3s; }
+.ht-done   { animation-delay: 5.5s; }
+
+/* growing roots (branch lines) */
+.ht-branch {
+  display: block;
+  overflow: hidden; white-space: nowrap;
+  max-width: 0;
+  animation: grow .55s cubic-bezier(.25,.6,.3,1) forwards;
+}
+@keyframes grow { from { max-width: 0; } to { max-width: 100%; } }
+.ht-b1 { animation-delay: 4.0s; }
+.ht-b2 { animation-delay: 4.6s; }
+
+.ht-branch .repo { color: var(--text); transition: color .3s; }
+.ht-branch .ok { color: var(--green-bright); }
+
+.replay {
+  position: absolute; right: 14px; top: 10px;
+  background: none; border: none;
+  color: var(--text-dimmer);
+  font-family: var(--mono); font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+  transition: color .2s, background .2s;
+}
+.replay:hover { color: var(--green-bright); background: var(--surface); }
+
+/* ───────────────────────── acts ───────────────────────── */
+.act { border-top: 1px solid var(--border); }
+
+/* Act I — three beats */
+.beats { display: grid; gap: 20px; margin-top: 48px; }
+.beat {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 32px;
+  align-items: start;
+  padding: 30px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color .3s;
+}
+.beat:hover { border-color: var(--border-bright); }
+.beat-num {
+  font-family: var(--serif); font-style: italic;
+  font-size: 15px; color: var(--green);
+  margin-bottom: 8px;
+}
+.beat h3 { font-family: var(--serif); font-size: 21px; color: var(--ink); margin-bottom: 8px; }
+.beat p { font-size: 13.5px; color: var(--text-dim); }
+.beat .mini-term {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  font-size: 12.8px; line-height: 1.9;
+  overflow-x: auto; white-space: pre;
+}
+
+/* Act II — pipeline */
+.pipeline { margin-top: 48px; }
+.pipe-cmd {
+  font-size: 15px; margin-bottom: 6px;
+}
+.pipe-steps { list-style: none; }
+.pipe-steps li {
+  display: grid;
+  grid-template-columns: 26px 170px 1fr;
+  gap: 14px;
+  align-items: baseline;
+  padding: 13px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 13.5px;
+}
+.pipe-steps li:last-child { border-bottom: none; }
+.pipe-steps .tick { color: var(--border-bright); }
+.pipe-steps .what { color: var(--green-bright); }
+.pipe-steps .how  { color: var(--text-dim); }
+.pipe-steps .how code { font-size: 0.9em; }
+
+/* Act III — review split */
+.review-split {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+  margin-top: 48px;
+  align-items: stretch;
+}
+.chat-card, .ticket-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-alt);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.card-head {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11.5px; color: var(--text-dimmer);
+  display: flex; align-items: center; gap: 8px;
+}
+.card-head .ic { color: var(--green); }
+.chat-card .msgs { padding: 22px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+.msg { max-width: 92%; font-size: 13px; line-height: 1.65; }
+.msg .who { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-dimmer); margin-bottom: 5px; }
+.msg.you { align-self: flex-end; text-align: left; }
+.msg.you .bubble {
+  background: color-mix(in srgb, var(--green-deep) 32%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--green-deep) 55%, var(--border));
+  border-radius: 12px 12px 3px 12px;
+  padding: 12px 16px;
+}
+.msg.orch .bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px 12px 12px 3px;
+  padding: 12px 16px;
+  color: var(--text-dim);
+}
+.msg .bubble em { color: var(--green-bright); font-style: normal; }
+
+.ticket-card .t-body { padding: 22px; flex: 1; }
+.t-id { font-size: 11.5px; color: var(--text-dimmer); margin-bottom: 4px; }
+.t-title { font-size: 14.5px; color: var(--text); font-weight: 500; margin-bottom: 16px; }
+.t-comment {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-deep);
+  padding: 14px 16px;
+  font-size: 12.5px;
+}
+.t-comment .t-author { color: var(--green); margin-bottom: 8px; }
+.t-comment .t-author .bot { color: var(--text-dimmer); }
+.shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+.shot {
+  aspect-ratio: 16/10;
+  border-radius: 6px;
+  border: 1px solid var(--border-bright);
+  position: relative;
+  overflow: hidden;
+}
+.shot .lbl {
+  position: absolute; left: 8px; bottom: 6px;
+  font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.shot-before { background:
+  linear-gradient(160deg, #16201a 0%, #101812 100%); }
+.shot-before::before {
+  content: ""; position: absolute; inset: 12px 12px 40%;
+  border: 1px dashed var(--border-bright); border-radius: 4px; opacity: .7;
+}
+.shot-after { background:
+  linear-gradient(160deg, #16241c 0%, #0f1a13 100%); }
+.shot-after::before {
+  content: ""; position: absolute; inset: 12px 12px 40%;
+  border: 1px solid var(--green-deep); border-radius: 4px;
+  background: rgba(127,191,127,0.07);
+}
+.shot-after::after {
+  content: "✓"; position: absolute; right: 10px; top: 8px;
+  color: var(--green-bright); font-size: 13px;
+}
+.t-comment .t-note { color: var(--text-dim); }
+.t-status { margin-top: 14px; font-size: 12px; color: var(--text-dimmer); }
+.t-status .pill {
+  display: inline-block;
+  border: 1px solid var(--green-deep);
+  color: var(--green-bright);
+  border-radius: 999px; padding: 2px 11px;
+  font-size: 11px;
+}
+
+.review-note { margin-top: 26px; color: var(--text-dim); font-size: 13.5px; max-width: 700px; }
+.review-note strong { color: var(--green-bright); font-weight: 500; }
+
+/* Act IV — the rhythm */
+.rhythm-term { margin-top: 48px; }
+.rhythm-term .term-body { font-size: 13px; }
+.rules { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 26px; }
+.rule {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-alt);
+  padding: 22px;
+}
+.rule .k {
+  font-family: var(--serif); font-style: italic;
+  color: var(--green-bright); font-size: 17px;
+  margin-bottom: 8px; display: block;
+}
+.rule p { font-size: 12.8px; color: var(--text-dim); }
+.punchline {
+  margin-top: 40px;
+  text-align: center;
+  font-family: var(--serif); font-style: italic;
+  font-size: clamp(1.3rem, 2.6vw, 1.7rem);
+  color: var(--ink);
+}
+.punchline .hl { color: var(--green-bright); }
+
+/* ───────────────────────── features ───────────────────────── */
+.features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+.feat {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-alt);
+  padding: 26px;
+  transition: border-color .3s, transform .3s;
+}
+.feat:hover { border-color: var(--green-deep); transform: translateY(-3px); }
+.feat .glyph {
+  width: 38px; height: 38px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--green-deep) 22%, transparent);
+  color: var(--green-bright);
+  font-size: 16px; font-weight: 700;
+  margin-bottom: 16px;
+}
+.feat h3 { font-size: 14.5px; color: var(--ink); font-weight: 500; margin-bottom: 7px; }
+.feat p { font-size: 12.8px; color: var(--text-dim); }
+.feat p .w { color: var(--amber); }
+.feat p .gg { color: var(--green-bright); }
+
+/* ───────────────────────── install ───────────────────────── */
+.install-note {
+  display: flex; gap: 12px; align-items: baseline;
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  background: color-mix(in srgb, var(--amber) 6%, var(--surface-alt));
+  border-radius: 10px;
+  padding: 14px 18px;
+  font-size: 12.8px; color: var(--text-dim);
+  margin: 26px 0 40px;
+}
+.install-note .sig { color: var(--amber); }
+
+.install-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 22px; margin-top: 44px; align-items: start; }
+.prereqs { display: grid; gap: 12px; }
+.prereq {
+  display: flex; align-items: baseline; gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  padding: 14px 18px;
+}
+.prereq .star { color: var(--green); }
+.prereq .pname { font-size: 13.5px; color: var(--text); }
+.prereq .pwhy { font-size: 11.5px; color: var(--text-dimmer); }
+
+/* ───────────────────────── lineage / footer ───────────────────────── */
+.lineage {
+  border-top: 1px solid var(--border);
+  padding: 72px 0;
+  text-align: center;
+}
+.lineage p {
+  font-family: var(--serif); font-style: italic;
+  font-size: 16.5px; color: var(--text-dim);
+  max-width: 560px; margin: 0 auto;
+}
+.lineage a { color: var(--green-bright); text-decoration: none; border-bottom: 1px solid var(--green-deep); }
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 44px 0;
+}
+.foot-inner {
+  max-width: 1060px; margin: 0 auto; padding: 0 24px;
+  display: flex; flex-wrap: wrap; gap: 16px;
+  align-items: center; justify-content: space-between;
+  font-size: 13px; color: var(--text-dimmer);
+}
+.foot-inner a { color: var(--text-dim); text-decoration: none; transition: color .2s; }
+.foot-inner a:hover { color: var(--green-bright); }
+.foot-links { display: flex; gap: 18px; }
+
+/* ───────────────────────── responsive ───────────────────────── */
+@media (max-width: 860px) {
+  section { padding: 68px 0; }
+  .hero { padding: 140px 0 80px; }
+  .beat { grid-template-columns: 1fr; gap: 18px; }
+  .review-split { grid-template-columns: 1fr; }
+  .rules { grid-template-columns: 1fr; }
+  .features-grid { grid-template-columns: 1fr 1fr; }
+  .install-grid { grid-template-columns: 1fr; }
+  .pipe-steps li { grid-template-columns: 22px 1fr; }
+  .pipe-steps .how { grid-column: 2; }
+  .nav-links a:not(.gh) { display: none; }
+}
+@media (max-width: 560px) {
+  .features-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ NAV ═══════════════ -->
+<nav>
+  <div class="nav-inner">
+    <a class="brand" href="#">
+      <span class="tree">🌳</span><span class="name">grove</span>
+    </a>
+    <div class="nav-links">
+      <a href="#story">Story</a>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a class="gh" href="https://github.com/JollyGrin/grove" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<header class="hero">
+  <div class="hero-roots" aria-hidden="true">
+    <svg viewBox="0 0 1400 700" preserveAspectRatio="xMidYMin slice">
+      <path d="M700,80 C700,220 560,260 430,340 C310,415 280,520 240,660" />
+      <path d="M700,80 C700,240 640,320 610,430 C585,520 600,600 570,700" />
+      <path d="M700,80 C702,230 770,300 820,400 C870,500 860,590 890,690" />
+      <path d="M700,80 C705,200 850,250 970,330 C1080,405 1110,520 1150,650" />
+      <path d="M700,80 C698,180 520,200 400,240 C270,285 200,360 130,420" />
+    </svg>
+  </div>
+  <div class="hero-glow" aria-hidden="true"></div>
+
+  <div class="wrap hero-inner">
+    <div class="hero-badge">
+      <span class="pulse"></span>
+      autonomous Claude Code fleets, one command away
+    </div>
+
+    <h1>
+      Feed it <em>tickets.</em>
+      <span class="row2">Harvest <em>PRs.</em></span>
+    </h1>
+
+    <p class="sub">
+      Grove turns each ticket into an autonomous Claude&nbsp;Code worker —
+      its own git worktree, its own tmux window, its own pull request.
+      You write tickets and say yes. The grove does the rest.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#install">Install grove <span>→</span></a>
+      <a class="btn btn-ghost" href="#story">Read the story ↓</a>
+    </div>
+
+    <!-- animated terminal: gv init takes root -->
+    <div class="hero-term term" id="heroTerm">
+      <div class="term-bar">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="term-title">~/projects/shopfront — one product, two repos</span>
+        <button class="replay" id="replayBtn" title="replay">↺ replay</button>
+      </div>
+      <div class="term-body" id="heroAnim"><span class="ht-line"><span class="p">~/projects/shopfront $</span> <span class="typed typed-ls" style="--ch:2ch">ls</span></span><span class="ht-line ht-hide ht-repos"><span class="d">webapp/   api/</span></span><span class="ht-line ht-hide ht-repos"><span class="dd"># a frontend and its backend. independent repos,</span></span><span class="ht-line ht-hide ht-repos"><span class="dd"># one shared folder. not a monorepo.</span></span><span class="ht-line ht-hide ht-repos">&nbsp;</span><span class="ht-line"><span class="p">~/projects/shopfront $</span> <span class="typed typed-init" style="--ch:7ch">gv init</span></span><span class="ht-line ht-hide ht-seed"><span class="g">🌱 taking root…</span></span><span class="ht-branch ht-b1"><span class="b">   ├─────</span> <span class="repo ok">webapp/</span>  <span class="g">✓</span> <span class="dd">pnpm · main</span></span><span class="ht-branch ht-b2"><span class="b">   └─────</span> <span class="repo ok">api/</span>     <span class="g">✓</span> <span class="dd">go · main</span></span><span class="ht-line ht-hide ht-done">&nbsp;</span><span class="ht-line ht-hide ht-done"><span class="d">workspace rooted</span> <span class="dd">·</span> <span class="g">2 repos</span> <span class="dd">·</span> <span class="d">gv doctor</span> <span class="g">✓ green</span></span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════ ACT I ═══════════════ -->
+<section class="act" id="story">
+  <div class="wrap">
+    <div class="rv">
+      <span class="act-label">Act I</span>
+      <h2>It gets <em>comfortable.</em></h2>
+      <p class="lede">Plant grove in a <em style="color: var(--green-bright);">project</em> — the folder
+      that keeps a product's repos together: a frontend here, its backend there.
+      It doesn't ask you to restructure anything — it walks in, looks around, and settles in.</p>
+    </div>
+
+    <div class="beats">
+      <div class="beat rv">
+        <div>
+          <div class="beat-num">i.</div>
+          <h3>Spread out</h3>
+          <p><code>gv init</code> probes every repo in the project: the stack, the base
+          branch, the setup command a fresh worktree needs. One grove per project —
+          and run <code>gv</code> anywhere else, it simply asks which project you mean.</p>
+        </div>
+        <div class="mini-term"><span class="p">$</span> gv init
+<span class="dd">scanning ~/projects/shopfront …</span>
+<span class="g">✓</span> <span class="d">webapp</span>      <span class="dd">pnpm workspace, base: main</span>
+<span class="g">✓</span> <span class="d">api</span>         <span class="dd">go module, base: main</span></div>
+      </div>
+
+      <div class="beat rv">
+        <div>
+          <div class="beat-num">ii.</div>
+          <h3>Wire itself up</h3>
+          <p>The connections board fills in — tmux, GitHub, Claude, hooks.
+          And <code>gv doctor</code> notices the moment any of it drifts,
+          so “it worked last week” never becomes a mystery.</p>
+        </div>
+        <div class="mini-term"><span class="p">$</span> gv doctor
+<span class="g">✓</span> <span class="d">tmux</span>     <span class="dd">3.4</span>       <span class="g">✓</span> <span class="d">gh</span> <span class="dd">authed</span>
+<span class="g">✓</span> <span class="d">claude</span>   <span class="dd">on PATH</span>   <span class="g">✓</span> <span class="d">hooks</span> <span class="dd">installed</span>
+<span class="a">○</span> <span class="d">linear</span>   <span class="dd">no API key — want one? →</span></div>
+      </div>
+
+      <div class="beat rv">
+        <div>
+          <div class="beat-num">iii.</div>
+          <h3>Hook into your tasks</h3>
+          <p>Point it at wherever your tickets already live — Linear, GitHub Issues,
+          or plain markdown files in the repo. Grove <em>reads</em> tickets;
+          it never closes them. That's your job, and it stays your job.</p>
+        </div>
+        <div class="mini-term"><span class="dd"># .grove/config.yaml</span>
+<span class="g">provider</span>:
+  <span class="a">kind</span>: linear        <span class="dd"># or github, or markdown</span>
+<span class="g">linear</span>:
+  <span class="a">team</span>: DEV</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ ACT II ═══════════════ -->
+<section class="act">
+  <div class="wrap">
+    <div class="rv">
+      <span class="act-label">Act II</span>
+      <h2>Feed it a <em>ticket.</em></h2>
+      <p class="lede">One command. Grove cuts a fresh worktree, opens a tmux window,
+      and launches a worker with a kickoff prompt built from the ticket itself.</p>
+    </div>
+
+    <div class="pipeline term rv">
+      <div class="term-bar">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="term-title">one ticket → one worker → one PR</span>
+      </div>
+      <div class="term-body" style="white-space: normal;">
+        <div class="pipe-cmd"><span class="p">$</span> <span class="g">gv grab</span> DEV-123 <span class="d">--repo webapp</span></div>
+        <ul class="pipe-steps">
+          <li class="rv"><span class="tick">├─</span> <span class="what">worktree cut</span> <span class="how"><code>~/git/.worktrees/webapp/DEV-123</code> — isolated, disposable, yours to inspect</span></li>
+          <li class="rv"><span class="tick">├─</span> <span class="what">tmux window up</span> <span class="how">the worker lives here — attach anytime with <code>gv attach DEV-123</code></span></li>
+          <li class="rv"><span class="tick">├─</span> <span class="what">kickoff prompt</span> <span class="how">built from the ticket: title, description, comments, acceptance criteria</span></li>
+          <li class="rv"><span class="tick">└─</span> <span class="what">PR opened</span> <span class="how">“Closes DEV-123” · CI running · <code>STATUS: DONE</code> on your dashboard</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="review-note rv">The worker investigates, implements, commits, pushes, reviews its own
+    work, and reports back with a one-line status: <strong>DONE</strong>, <strong>QUESTION</strong>,
+    or <strong>BLOCKED</strong>. Questions land on your dashboard <strong>with a drafted answer
+    already waiting</strong> — most of the time, unblocking a worker is just saying yes.</p>
+  </div>
+</section>
+
+<!-- ═══════════════ ACT III ═══════════════ -->
+<section class="act">
+  <div class="wrap">
+    <div class="rv">
+      <span class="act-label">Act III</span>
+      <h2>Teach it how <em>you</em> like to review.</h2>
+      <p class="lede">Workers run inside a worktree of your repo — so your
+      <code>.claude/</code> skills, agents, and CLAUDE.md come free. Tell grove your
+      review taste once, and every worker honors it, fleet-wide.</p>
+    </div>
+
+    <div class="review-split">
+      <div class="chat-card rv">
+        <div class="card-head"><span class="ic">❯</span> orchestrator chat</div>
+        <div class="msgs">
+          <div class="msg you">
+            <div class="who">you</div>
+            <div class="bubble">For webapp tickets, have workers use the browser-control
+            skill: screenshot the change and post it to the ticket before opening the PR.</div>
+          </div>
+          <div class="msg orch">
+            <div class="who">orchestrator</div>
+            <div class="bubble">Added to the webapp kickoff template. Every webapp worker will now
+            <em>run the app, capture before/after screenshots, and attach them to the ticket</em>
+            as its last step before the PR. Want the same for mobile?</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ticket-card rv">
+        <div class="card-head"><span class="ic">◈</span> DEV-123 · Linear</div>
+        <div class="t-body">
+          <div class="t-id">DEV-123 · webapp</div>
+          <div class="t-title">Empty cart state shows broken illustration</div>
+          <div class="t-comment">
+            <div class="t-author">worker/DEV-123 <span class="bot">· bot · 2 min ago</span></div>
+            <div class="shots">
+              <div class="shot shot-before"><span class="lbl">before</span></div>
+              <div class="shot shot-after"><span class="lbl">after</span></div>
+            </div>
+            <div class="t-note">📸 before/after attached — PR #98 ready for review.</div>
+          </div>
+          <div class="t-status">status: <span class="pill">In Review</span> &nbsp;← workers move tickets <em>here</em>, never to Done</div>
+        </div>
+      </div>
+    </div>
+
+    <p class="review-note rv">Review from the couch. The screenshot is on the ticket, the diff is
+    a <code>gv diff DEV-123</code> away, and merging stays a human's decision — grove
+    <strong>never</strong> touches a ticket's terminal state.</p>
+  </div>
+</section>
+
+<!-- ═══════════════ ACT IV ═══════════════ -->
+<section class="act">
+  <div class="wrap">
+    <div class="rv">
+      <span class="act-label">Act IV</span>
+      <h2>The <em>rhythm.</em></h2>
+      <p class="lede">The practice that makes parallel work feel effortless:
+      chats are disposable, state is durable. Here's a real morning.</p>
+    </div>
+
+    <div class="rhythm-term term rv">
+      <div class="term-bar">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="term-title">a tuesday, condensed</span>
+      </div>
+      <div class="term-body"><span class="dd">09:04</span>  <span class="g">O</span>  <span class="d">new chat:</span> “find me 3 easy tickets”
+       <span class="dd">→ ranked table, one grab command per row →</span> <span class="d">“grab all 3”</span>
+<span class="dd">09:11</span>  <span class="r">✕</span>  <span class="d">chat closed.</span> <span class="dd">workers don't need you watching.</span>
+
+       <span class="b">──── three workers grinding in parallel ────</span>
+
+<span class="dd">11:30</span>  <span class="g">O</span>  <span class="d">new chat:</span> “anything need me?”
+       <span class="dd">→</span> <span class="d">DEV-121</span> <span class="g">✓ PR ready</span> <span class="dd">· CI green, review queued</span>
+       <span class="dd">→</span> <span class="d">DEV-122</span> <span class="a">? question</span> <span class="dd">— asks about the API shape</span>
+         <span class="dd">(answer drafted — you just say</span> <span class="g">yes</span><span class="dd">)</span>
+       <span class="dd">→</span> <span class="d">DEV-123</span> <span class="d">◌ CI running</span> <span class="dd">· nothing to do yet</span>
+<span class="dd">11:34</span>  <span class="r">✕</span>  <span class="d">closed again. lunch.</span></div>
+    </div>
+
+    <div class="rules">
+      <div class="rule rv">
+        <span class="k">One chat per investigation.</span>
+        <p>Parallel threads never share a scrollback. Triage in one chat, unblock in
+        another, cost report in a third — each stays sharp.</p>
+      </div>
+      <div class="rule rv">
+        <span class="k">Close it when the worker spawns.</span>
+        <p>The chat was scaffolding; the worker is the building. Once it's dispatched,
+        the chat has nothing left to hold for you.</p>
+      </div>
+      <div class="rule rv">
+        <span class="k">Open a fresh one to catch up.</span>
+        <p>Fleet state lives in <code>.grove/</code>, not in chat history. A brand-new
+        orchestrator re-derives everything from <code>gv ls</code> in one command.</p>
+      </div>
+    </div>
+
+    <p class="punchline rv">Parallelizing is cheap because <span class="hl">forgetting is impossible.</span></p>
+  </div>
+</section>
+
+<!-- ═══════════════ FEATURES ═══════════════ -->
+<section class="act" id="features">
+  <div class="wrap">
+    <div class="rv">
+      <span class="act-label">For the scanners</span>
+      <h2>Everything in the <em>toolshed.</em></h2>
+    </div>
+
+    <div class="features-grid">
+      <div class="feat rv">
+        <div class="glyph">◧</div>
+        <h3>Cockpit dashboard</h3>
+        <p>One tmux session: live fleet table on the left, orchestrator chats stacked
+        on the right. One glance answers <span class="gg">“who needs me?”</span></p>
+      </div>
+      <div class="feat rv">
+        <div class="glyph">≡</div>
+        <h3>Backend-agnostic tasks</h3>
+        <p>Local markdown by default; Linear and GitHub Issues as adapters. Grove reads
+        tickets, agents transition them, <span class="gg">humans finish them</span>.</p>
+      </div>
+      <div class="feat rv">
+        <div class="glyph">⇅</div>
+        <h3>Model routing</h3>
+        <p>Rote work goes to small models, hard reasoning to frontier ones — and failed
+        gates <span class="gg">escalate upward</span>, never silently down.</p>
+      </div>
+      <div class="feat rv">
+        <div class="glyph">⛨</div>
+        <h3>Guardrails, not vibes</h3>
+        <p>Never closes tickets. Never deletes worktrees it didn't create.
+        <span class="w">Propose, then dispose</span> — irreversible actions wait for your yes.</p>
+      </div>
+      <div class="feat rv">
+        <div class="glyph">⌕</div>
+        <h3>Audit &amp; sweep</h3>
+        <p>Cross-checks every task against reality: merged, drifted, abandoned,
+        disconnected. Orphans get <span class="gg">reported</span> — removal is your call.</p>
+      </div>
+      <div class="feat rv">
+        <div class="glyph">Σ</div>
+        <h3>Cost ledger</h3>
+        <p>Per-ticket token estimates joined to PR outcomes. See which ticket shapes
+        burn tokens and what a <span class="gg">merged PR actually costs</span>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ INSTALL ═══════════════ -->
+<section class="act" id="install">
+  <div class="wrap-narrow">
+    <div class="rv">
+      <span class="act-label">Plant your own</span>
+      <h2>Install<em>.</em></h2>
+    </div>
+
+    <div class="install-note rv">
+      <span class="sig">⚠</span>
+      <span><strong style="color: var(--amber); font-weight: 500;">Private beta.</strong>
+      The repo is private while grove finishes its parity gate. Homebrew tap and prebuilt
+      binaries land with the public release — for now, access is by invitation.</span>
+    </div>
+
+    <div class="term rv">
+      <div class="term-bar">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="term-title">from source (Go 1.24+)</span>
+      </div>
+      <div class="term-body"><span class="p">$</span> <span class="g">git</span> clone https://github.com/JollyGrin/grove <span class="d">&amp;&amp;</span> <span class="g">cd</span> grove
+<span class="p">$</span> <span class="g">go</span> install ./cmd/gv                <span class="dd"># builds ~/go/bin/gv</span>
+<span class="p">$</span> <span class="g">gv</span> doctor                          <span class="dd"># preflight: tmux, gh, claude</span>
+<span class="p">$</span> <span class="g">cd</span> ~/projects/your-app <span class="d">&amp;&amp;</span> <span class="g">gv</span> init  <span class="dd"># 🌱 take root</span>
+<span class="p">$</span> <span class="g">gv</span>                                 <span class="dd"># open the cockpit</span></div>
+    </div>
+
+    <div class="install-grid">
+      <div class="rv">
+        <h3 class="serif" style="font-size: 19px; margin-bottom: 16px;">Daily loop</h3>
+        <div class="term">
+          <div class="term-body" style="font-size: 12.8px;"><span class="p">$</span> <span class="g">gv</span>                       <span class="dd"># cockpit: dashboard + orchestrator</span>
+<span class="p">$</span> <span class="g">gv</span> grab DEV-123 --repo webapp
+<span class="p">$</span> <span class="g">gv</span> ls                    <span class="dd"># fleet table</span>
+<span class="p">$</span> <span class="g">gv</span> attach DEV-123        <span class="dd"># jump into a worker</span>
+<span class="p">$</span> <span class="g">gv</span> answer DEV-123 <span class="a">"yes"</span>  <span class="dd"># unblock a question</span>
+<span class="p">$</span> <span class="g">gv</span> diff DEV-123          <span class="dd"># review without attaching</span>
+<span class="p">$</span> <span class="g">gv</span> done DEV-123          <span class="dd"># verify merged → clean up</span></div>
+        </div>
+      </div>
+      <div class="rv">
+        <h3 class="serif" style="font-size: 19px; margin-bottom: 16px;">You'll need</h3>
+        <div class="prereqs">
+          <div class="prereq"><span class="star">✳</span><div><div class="pname">tmux</div><div class="pwhy">cockpit + every worker live here</div></div></div>
+          <div class="prereq"><span class="star">✳</span><div><div class="pname">gh</div><div class="pwhy">PR &amp; CI state — merges checked via GitHub, never git ancestry</div></div></div>
+          <div class="prereq"><span class="star">✳</span><div><div class="pname">claude</div><div class="pwhy">Claude Code CLI, logged in</div></div></div>
+          <div class="prereq"><span class="star">✳</span><div><div class="pname">Go 1.24+</div><div class="pwhy">to build from source</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ LINEAGE ═══════════════ -->
+<div class="lineage rv">
+  <p>Grove is the open-source successor to
+  <a href="https://github.com/JollyGrin/overstory-tui" target="_blank" rel="noopener">overstory</a> —
+  field-tested on a real team's ticket flow, every guardrail earned the hard way.</p>
+</div>
+
+<!-- ═══════════════ FOOTER ═══════════════ -->
+<footer>
+  <div class="foot-inner">
+    <div>
+      <span style="color: var(--green);">🌳</span>
+      <span style="color: var(--green-bright); font-weight: 700;">grove</span>
+      — grown and tended by <a href="https://github.com/JollyGrin" target="_blank" rel="noopener">JollyGrin</a>
+    </div>
+    <div class="foot-links">
+      <a href="https://github.com/JollyGrin/grove" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/JollyGrin/grove/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/JollyGrin/parkranger" target="_blank" rel="noopener">parkranger ↗</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// scroll reveals
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target); }
+  }
+}, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.rv').forEach(el => io.observe(el));
+
+// hero animation replay — clone the animated node to restart all CSS animations
+const replayBtn = document.getElementById('replayBtn');
+replayBtn.addEventListener('click', () => {
+  const anim = document.getElementById('heroAnim');
+  const clone = anim.cloneNode(true);
+  anim.replaceWith(clone);
+});
+</script>
+
+</body>
+</html>
