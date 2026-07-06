@@ -15,6 +15,15 @@ type feedItem struct {
 	Text   string
 }
 
+// orchCloseReason defaults the activity label when an older event carried
+// no reason.
+func orchCloseReason(r string) string {
+	if r == "" {
+		return "dispatched"
+	}
+	return r
+}
+
 // feedItems maps raw events (oldest-first) to curated feed rows,
 // newest-first. Poll noise (plain idle stops, session starts) is excluded;
 // the allowlist is grabbed · adopted · question · blocked · reports done ·
@@ -32,6 +41,13 @@ func feedItems(events []state.Event) []feedItem {
 			it = feedItem{Glyph: "⬢", Text: "done — cleaned up"}
 		case state.EvTaskUntracked:
 			it = feedItem{Glyph: "○", Text: "untracked"}
+		case state.EvOrchestratorClosed:
+			// Ticket rides in Data (Event.Ticket is empty by design); pull it
+			// into the row so the feed still attributes the dispatch.
+			it = feedItem{Glyph: "⊙", Text: "orchestrator dismissed — " + orchCloseReason(ev.Data["reason"])}
+			it.Time, it.Ticket = ev.Time, ev.Data["ticket"]
+			out = append(out, it)
+			continue
 		case state.EvAnswered:
 			it = feedItem{Glyph: "↩", Text: "answered"}
 		case state.EvNotification:

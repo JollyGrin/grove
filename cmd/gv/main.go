@@ -63,6 +63,7 @@ const usage = `gv — grove
   gv sweep                                    clean up all merged tasks
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new                         add an orchestrator chat pane (O in the TUI)
+  gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
@@ -234,9 +235,12 @@ func main() {
 	case "dash":
 		err = cmdDashboard()
 	case "orchestrator":
-		if len(args) > 0 && args[0] == "new" {
+		switch {
+		case len(args) > 0 && args[0] == "new":
 			err = cmdOrchestratorNew()
-		} else {
+		case len(args) > 0 && args[0] == "close":
+			err = cmdOrchestratorClose(args[1:])
+		default:
 			err = cmdUI()
 		}
 	case "mobile":
@@ -454,6 +458,42 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
+}
+
+// cmdOrchestratorClose dismisses the calling orchestrator's own cockpit
+// pane — the CLI half of the fire-and-forget dispatch flow (orchestrator
+// CLAUDE.md). It logs an activity event FIRST (durable before the pane, and
+// its process, are killed), then kills $TMUX_PANE. Guarded in tmux.ClosePane
+// so it can only ever close a grove cockpit pane, never the dashboard.
+func cmdOrchestratorClose(args []string) error {
+	fs := flag.NewFlagSet("orchestrator close", flag.ExitOnError)
+	ticket := fs.String("ticket", "", "ticket this dispatch handled (for the activity feed)")
+	reason := fs.String("reason", "dispatched", "why the chat closed (activity feed label)")
+	_ = fs.Parse(args)
+
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" {
+		return fmt.Errorf("no $TMUX_PANE — `gv orchestrator close` runs from inside a cockpit pane")
+	}
+	// Validate BEFORE logging: a guard rejection must not leave a
+	// "dismissed" activity row for a pane that never closed.
+	if err := tmux.PaneClosable(pane); err != nil {
+		return err
+	}
+	// Log before the kill: kill-pane takes down this very process, so a
+	// post-kill append would never land. Ticket rides in Data (not the
+	// Event.Ticket field) so fold leaves the derived task view untouched.
+	data := map[string]string{"reason": *reason}
+	if *ticket != "" {
+		data["ticket"] = *ticket
+	}
+	if err := state.Append(stateDir(), state.Event{
+		Type: state.EvOrchestratorClosed,
+		Data: data,
+	}); err != nil {
+		return err
+	}
+	return tmux.ClosePane(pane)
 }
 
 // cmdMobile is the phone cockpit. tmux sizes a session to its SMALLEST

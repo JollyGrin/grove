@@ -5,6 +5,7 @@ package tmux
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -46,4 +47,54 @@ func SpawnPane(session, dir, cmd string) (string, error) {
 		return "", err
 	}
 	return paneID, nil
+}
+
+// closablePane is the pure guard for self-close: a pane may only be killed
+// when it lives in a grove cockpit session (grove / grove-<label>) and is
+// not pane 0 — pane 0 is the dashboard, and the cockpit's whole point is
+// that it survives. Keeps a mis-wired orchestrator from euthanizing the
+// dashboard or a pane in some unrelated tmux session.
+func closablePane(session string, index int) error {
+	if session != "grove" && !strings.HasPrefix(session, "grove-") {
+		return fmt.Errorf("pane is in session %q, not a grove cockpit — refusing to close", session)
+	}
+	if index == 0 {
+		return fmt.Errorf("pane 0 is the dashboard — refusing to close it")
+	}
+	return nil
+}
+
+// PaneClosable reports whether pane (e.g. "%23") is a cockpit orchestrator
+// pane safe to kill — queries its session/index and runs closablePane.
+// Callers check this BEFORE any irreversible side effect (e.g. logging the
+// dismissal) so a guard rejection never leaves a half-done record.
+func PaneClosable(pane string) error {
+	if strings.TrimSpace(pane) == "" {
+		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
+	}
+	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}")
+	if err != nil {
+		return err
+	}
+	parts := strings.SplitN(strings.TrimSpace(info), "\t", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("unexpected pane info %q", info)
+	}
+	index, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("parse pane index %q: %w", parts[1], err)
+	}
+	return closablePane(parts[0], index)
+}
+
+// ClosePane kills a cockpit orchestrator pane by id after re-checking
+// PaneClosable. The caller passes its own $TMUX_PANE, so this is how a
+// fire-and-forget orchestrator dismisses itself: killing the pane also
+// takes down the claude process running in it.
+func ClosePane(pane string) error {
+	if err := PaneClosable(pane); err != nil {
+		return err
+	}
+	_, err := run("kill-pane", "-t", pane)
+	return err
 }

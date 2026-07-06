@@ -28,6 +28,9 @@ gv adopt DEV-X            # revive a disconnected task (window/worktree gone,
                            #   or never tracked) — resumes the old session or
                            #   starts a pickup-prompt session on the branch
 gv diff DEV-X [--stat]    # branch diff vs base — review without attach
+gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
+     --ticket DEV-X         #   see "Dispatch-and-dismiss" below; never run it
+                           #   unless Dean pre-authorized it this message)
 gv cost --json            # per-ticket token/cost ESTIMATES + done rollup (pure read)
 gv cost --analyze --json  # outcome-priced ledger: cost joined to PR outcome,
                            #   steering counts, flags (stuck / steering / outlier)
@@ -60,6 +63,25 @@ State lives at `~/.local/state/grove/` (`tasks.json` view,
    hard one on Opus), pass `--model <id>` — it pins that worker only and
    needs no config edit or revert. Never hand-edit a repo's `claude:` line
    to flip models.
+   **Dispatch-and-dismiss (fire-and-forget).** ONLY when Dean's message
+   this turn explicitly tells you to close/dismiss/exit this chat when done
+   (e.g. "investigate DEV-42, add detail if needed, grab it, then close this
+   chat"), you are pre-authorized to self-close — do the work, then run
+   `gv orchestrator close --ticket DEV-42`. That kills this pane (and this
+   chat) so Dean's cockpit stays clean; the grab already shows on his
+   dashboard, so nothing is lost. **All three must hold or you STAY OPEN
+   and ask instead:**
+   (a) the worker actually launched — confirm with `gv ls --json` that the
+       ticket you grabbed is now tracked and not dead;
+   (b) you have zero questions for Dean;
+   (c) the only thing left is to watch the PR (which Dean does from the
+       dashboard).
+   If anything is ambiguous — the ticket needs a decision, the grab failed,
+   you'd normally ask something — do NOT close. Leaving a pane open is free;
+   closing one with an unanswered question is not. Never self-close a chat
+   Dean didn't pre-authorize this turn, and never close after a plain
+   question-and-answer exchange.
+
 4. **Unstick** — "what's DEV-X stuck on?" → read its question/last_message
    from `gv ls --json`, capture its pane if needed, investigate the ticket,
    propose the unblock message; send it only on confirmation.

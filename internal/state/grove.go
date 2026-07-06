@@ -9,6 +9,13 @@ import (
 	"path/filepath"
 )
 
+// EvOrchestratorClosed records a fire-and-forget orchestrator chat
+// dismissing its own pane after a clean dispatch. Activity-feed only: it
+// carries an empty Event.Ticket (the dispatched ticket rides in Data so the
+// derived task view is never touched), so fold ignores it for free — no
+// change to the byte-comparable state.go.
+const EvOrchestratorClosed = "orchestrator_closed"
+
 // ReadTasks is the read-only counterpart of Load: it parses the derived
 // tasks.json view without folding events, creating directories, or
 // rewriting anything. Hook receivers call this once per candidate
