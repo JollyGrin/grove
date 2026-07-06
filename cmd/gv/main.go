@@ -30,6 +30,7 @@ import (
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
+	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
@@ -454,6 +455,19 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 	if ws != nil {
 		root = ws.Root
 	}
+	// Breadcrumb before the spawn — a new orchestrator chat is a spawn that
+	// can trip the same memory cliff as a grab (grove-3). Best-effort.
+	if mem, err := resource.Read(); err == nil {
+		workers := 0
+		if tasks, err := state.Load(stateDir()); err == nil {
+			workers = resource.LiveWorkers(state.Active(tasks))
+		}
+		_ = resource.Log(stateDir(), resource.Sample{
+			Avail: mem.AvailBytes, Total: mem.TotalBytes,
+			Workers: workers, Kind: resource.KindOrchestrator,
+		})
+	}
+
 	if _, err := tmux.SpawnPane(session, dir, orchestratorLaunch(cfg, root)); err != nil {
 		return "", err
 	}
@@ -680,6 +694,17 @@ func cmdGrab(args []string) error {
 	promptPath := filepath.Join(promptDir, task.ID+".txt")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return err
+	}
+
+	// Resource breadcrumb at the tipping moment: capture pressure just before
+	// this spawn so a jetsam kill (which takes the whole tmux server, not this
+	// log file) stays recoverable after the fact (grove-3). Best-effort.
+	if mem, err := resource.Read(); err == nil {
+		_ = resource.Log(stateDir(), resource.Sample{
+			Avail: mem.AvailBytes, Total: mem.TotalBytes,
+			Workers: resource.LiveWorkers(state.Active(tasks)),
+			Kind:    resource.KindGrab, Ticket: task.ID,
+		})
 	}
 
 	sessionName := tmux.SessionName(repoName)

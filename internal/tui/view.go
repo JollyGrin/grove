@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -41,7 +42,7 @@ func (m Model) viewHeader() string {
 		scope = "· " + m.label
 	}
 	left := sTitle.Render(" ❉ GROVE ") + sChrome.Render(scope)
-	right := fmt.Sprintf("%s working · %s mail · %s review ",
+	right := m.memGauge() + fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
 		sDelivery.Render(fmt.Sprint(review)))
@@ -50,6 +51,25 @@ func (m Model) viewHeader() string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + sChrome.Render(right)
+}
+
+// memGauge renders `avail GB · N workers`, color-coded against the memory
+// floor (green ok · amber drain-before-grabbing · red near the cliff). Empty
+// when the read is unusable (non-darwin / failed sysctl) so the header simply
+// omits it. Prefixed with a trailing separator to sit ahead of the counts.
+func (m Model) memGauge() string {
+	if !m.mem.OK() {
+		return ""
+	}
+	st := sWorking // green
+	switch m.mem.Level() {
+	case resource.Amber:
+		st = sWaiting
+	case resource.Red:
+		st = sBlocked
+	}
+	return st.Render(fmt.Sprintf("%.1fG", m.mem.AvailGB())) +
+		sChrome.Render(fmt.Sprintf(" avail · %dw   ", m.workers))
 }
 
 // ticketColWidth sizes the TICKET column (content + 1-cell gap) to the

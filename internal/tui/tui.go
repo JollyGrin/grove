@@ -17,6 +17,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 )
@@ -28,9 +29,11 @@ const (
 )
 
 type refreshMsg struct {
-	tasks  []*state.Task
-	live   map[string]string
-	events []state.Event
+	tasks   []*state.Task
+	live    map[string]string
+	events  []state.Event
+	mem     resource.Mem
+	workers int
 }
 type flashMsg string
 type prsMsg map[string]*github.PR
@@ -48,6 +51,9 @@ type Model struct {
 	live   map[string]string
 	prs    map[string]*github.PR
 	events []state.Event
+
+	mem     resource.Mem // last memory reading (gauge)
+	workers int          // live worker count at that reading
 
 	sel  int
 	mode int
@@ -116,7 +122,19 @@ func refreshCmd(stateDir string) tea.Cmd {
 			}
 		}
 		events, _ := state.ReadEvents(stateDir, 200)
-		return refreshMsg{tasks: active, live: live, events: events}
+
+		// Piggyback the resource gauge on the existing 1s tick — no new poll
+		// loop or goroutine (grove-3). The read is a handful of sysctls; the
+		// sample lands in resource.jsonl (its own capped file, never folded by
+		// state.Load), giving the trajectory into a jetsam crash.
+		mem, _ := resource.Read()
+		workers := resource.LiveWorkers(active)
+		_ = resource.Log(stateDir, resource.Sample{
+			Avail: mem.AvailBytes, Total: mem.TotalBytes,
+			Workers: workers, Kind: resource.KindSample,
+		})
+
+		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers}
 	}
 }
 
@@ -158,6 +176,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case refreshMsg:
+		// Gauge refreshes every tick — even at zero active tasks, where
+		// msg.tasks is nil and the block below is skipped. A failed read is a
+		// zero Mem (OK()==false) and simply hides the gauge.
+		m.mem = msg.mem
+		m.workers = msg.workers
 		if msg.tasks != nil {
 			m.tasks = msg.tasks
 			m.live = msg.live
