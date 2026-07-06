@@ -8,12 +8,12 @@
 > **Update 2026-07-04: Phase 0 shipped** — P0.0 rename done (binary safe
 > to run), TaskProvider seam + markdown provider + `gv init` + E2E green
 > (`e2e/dummy.sh`). The do-not-run trap below is historical; CLAUDE.md and
-> TASKS.md carry the current state. Next: Dean's live test → Phase 1 plan.
+> TASKS.md carry the current state. Next: the operator's live test → Phase 1 plan.
 
 ## What this repo is
 
 Grove is the generalized, OSS-ready successor to `overstory-tui` (`ovs`) —
-Dean's working Go CLI that turns Linear tickets into autonomous Claude Code
+The operator's working Go CLI that turns Linear tickets into autonomous Claude Code
 sessions (worktree + tmux + kickoff → PR) for The Grid. Overstory was the
 solo trial run; grove is the version that drops into **any** repo or
 parent-of-repos, wizards itself into readiness, and — configured with the
@@ -64,7 +64,7 @@ Everything below is DONE:
    (plan-reviewer) before executing — the design corpus is deliberately
    what/why; the plan is yours to write.
 4. **Never edit `~/git/thegrid/overstory-tui`.** It is frozen and is
-   Dean's daily driver. It is also your reference: when a copied package
+   the operator's daily driver. It is also your reference: when a copied package
    confuses you, diff against upstream and read its DESIGN.md/LEARNINGS.md.
 
 ## Traps we already know about (don't rediscover)

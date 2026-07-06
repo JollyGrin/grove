@@ -2,7 +2,7 @@
 
 > Status: plan-reviewer approved (round 1 REVISE fixes + round 2 --yes
 > precedence fix applied)> → execute.
-> Driver (Dean, 2026-07-04, after first live test): "the wizard is hidden —
+> Driver (the operator, 2026-07-04, after first live test): "the wizard is hidden —
 > I should know what's available and how to further improve repo
 > accessibility" + "does gv analyze stuff in a templated way to build its
 > own brain?" Design basis: DESIGN.md §6 (init/probe/agent-written memory)
@@ -11,10 +11,10 @@
 ## Re-scoping note (plan-review I-1)
 
 This plan is **1a plus most of 1b**: DESIGN §13 put the connections
-manifest + doctor derivation in 1b, but Dean's driver — a summary board of
+manifest + doctor derivation in 1b, but the operator's driver — a summary board of
 "what's available and what would improve this repo" — *is* the manifest
 rendered, so building the wizard without it would fake the exact feature
-he asked for. Pulled forward deliberately: manifest (core kinds) + doctor
+the operator asked for. Pulled forward deliberately: manifest (core kinds) + doctor
 rewrite. **Still 1b (remainder):** pack loading + slot merge. **Still 1c:**
 TTL caches, failure-signal degradation, `mcp-auth` probing, and
 **seeded-file drift** (dropped from this plan per review S-2 — detection
@@ -36,7 +36,7 @@ updated in Task 7 to reflect this split.
   what fixes "orchestrator knows nothing about unbrewed"), packs, all of
   1c above.
 
-## Open questions (resolved here, flagged for Dean)
+## Open questions (resolved here, flagged for the operator)
 
 - **OQ-wizard-fixes:** the wizard *runs* safe mechanical fixes itself
   (write config, install hooks, scaffold task dir) and **prints** anything
@@ -216,7 +216,7 @@ wizard step that offers it — review S-4).
 
 | Risk | Mitigation |
 |---|---|
-| Wizard clobbers Dean's live hand-edited config | Task 4 field-merge writer, table-tested; only confirmed diffs written; e2e/wizard.sh asserts survival byte-comparable except confirmed fields |
+| Wizard clobbers the operator's live hand-edited config | Task 4 field-merge writer, table-tested; only confirmed diffs written; e2e/wizard.sh asserts survival byte-comparable except confirmed fields |
 | Doctor rewrite silently drops/changes a check | Task 3 before→after row map; doctor_test asserts the row set; 3 deliberate changes logged in seed-manifest |
 | `--yes`/CI auto-spawns a paid LLM agent | agents-md default OFF under `--yes`/non-TTY; explicit `--agents-md` only |
 | Headless bootstrap agent blocks on write permission | One-shot run appends skip-permissions itself (consent = the explicit step confirm / flag), independent of worker posture |

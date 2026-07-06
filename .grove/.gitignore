@@ -1,3 +1,4 @@
 state/
 orchestrator/
+config.yaml
 config.local.yaml

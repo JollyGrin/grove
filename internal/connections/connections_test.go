@@ -479,7 +479,7 @@ func TestGridUniversalClaudeMDScopedToLinearRepos(t *testing.T) {
 	cfg.Provider.Kind = "markdown"
 	cfg.Repos = map[string]*config.Repo{
 		"side": {Path: "/home/x/side"},
-		"grid": {Path: "/home/x/thegrid/mono", Provider: "linear"},
+		"grid": {Path: "/home/x/acme/mono", Provider: "linear"},
 	}
 	env := Env{Cfg: cfg, Stat: func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }}
 	var ids []string
@@ -487,7 +487,7 @@ func TestGridUniversalClaudeMDScopedToLinearRepos(t *testing.T) {
 		ids = append(ids, c.ID)
 	}
 	joined := strings.Join(ids, " ")
-	if !strings.Contains(joined, "grid:universal-claude-md:/home/x/thegrid") {
+	if !strings.Contains(joined, "grid:universal-claude-md:/home/x/acme") {
 		t.Errorf("linear repo parent must be checked: %v", ids)
 	}
 	if strings.Contains(joined, "/home/x/side") || strings.Contains(joined, "universal-claude-md:/home/x ") {

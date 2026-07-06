@@ -2,7 +2,7 @@
 
 > Status: revised per plan-reviewer round 1 (REVISE — all findings
 > applied) → confirm → execute.
-> Driver (Dean, three times now): "I `gv` from inside a repo but there's
+> Driver (the operator, three times now): "I `gv` from inside a repo but there's
 > no marker anywhere that it's focusing on that repo — just generic
 > grove everywhere, so I have no idea I'm *in* the project I'm working
 > on." Design basis: DESIGN.md §6.5/§10/§12, grove-cockpit-design §4.6.
@@ -182,9 +182,9 @@ when ambient is missing.
 ## Task 9 — docs + migration + gate
 
 TASKS.md, seed-manifest rows, CLAUDE.md state-layout note, LEARNINGS.
-Migration notes for Dean: drain or finish in-flight legacy tasks from
+Migration notes for the operator: drain or finish in-flight legacy tasks from
 a non-workspace cwd; `gv init` at `~/git/thegrid` (parent) and — after
-his sibling-restructure decision — `~/git/unbrewed`; global config
+the operator's sibling-restructure decision — `~/git/unbrewed`; global config
 keeps user-level defaults (linear key env, notify).
 **Gate:** `go build ./... && go vet ./... && go test ./...` bare,
 `gofmt -l .` empty, four e2e suites bare exit 0.
@@ -202,4 +202,4 @@ keeps user-level defaults (linear key env, notify).
 | Mid-migration split-brain on daily verbs | findTask miss names the owning workspace + `gv switch` hint; migration notes say drain legacy first (review I-3) |
 | Label collides with reserved sessions | Registry rejects `grove`/`mobile` + non-tmux-safe labels (review S-1) |
 | Registry corruption | flock; rare human-initiated writes; last-writer-wins accepted (§6.5.1) |
-| Dean's live Grid flow breaks | Legacy fallback byte-identical outside workspaces; his global config untouched until he inits roots |
+| the operator's live Grid flow breaks | Legacy fallback byte-identical outside workspaces; their global config untouched until they init roots |

@@ -9,7 +9,7 @@
 
 ## Now
 
-- [ ] **Dean: first live test** — `gv init` + `gv grab` a real task in a
+- [ ] **Operator: first live test** — `gv init` + `gv grab` a real task in a
       real repo with a real Claude worker (Phase 0 shipped 2026-07-04).
       Then `gv hooks install` for live status capture (verified to
       preserve ovs entries; deliberately not run overnight —
@@ -38,7 +38,7 @@ Plan: [docs/plans/2026-07-04-phase-0.md](docs/plans/2026-07-04-phase-0.md)
       worker = `echo`) — also covers hooks, untrack, re-grab, audit
 - [x] Dual-hook coexistence smoke test (scratch env over a copy of the
       real settings.json: ovs entries byte-identical, gv added once,
-      `gv hook` no-ops on a live ovs worktree cwd). Live install = Dean's
+      `gv hook` no-ops on a live ovs worktree cwd). Live install = the operator's
       morning step.
 
 ## Phase 1 — bootstrap (drop-in-to-any-repo)
@@ -90,7 +90,7 @@ board IS the manifest rendered).
 - [ ] Generic orchestrator CLAUDE.md (de-Gridded duties text — does not
       exist yet, flagged by design review) + pack overlay rendering +
       seed-hash tracking
-- [x] **Pulled forward 2026-07-04 (Dean's first-test feedback):** cockpit
+- [x] **Pulled forward 2026-07-04 (the operator's first-test feedback):** cockpit
       main-vertical (bare `gv` opens it; TUI-only = `gv dash`), MAIL/
       REVIEW panels → ACTIVITY feed, `gv orchestrator new` / `O` keybind,
       orchestrator default `claude --dangerously-skip-permissions`

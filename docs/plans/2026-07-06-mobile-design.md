@@ -1,7 +1,7 @@
 # Mobile cockpit design — `gv mobile` v2
 
 **Status:** design-reviewed 2026-07-06 (all blocker/major findings resolved below)
-**Decision (Dean, 2026-07-06):** the current `gv mobile` is unused — this
+**Decision (the operator, 2026-07-06):** the current `gv mobile` is unused — this
 is a full replacement, no back-compat constraints on the old behavior.
 **Goal:** manage grove swarms from a phone (Termius over Tailscale) —
 navigate repos/workspaces, browse backlogs, grab tickets, answer agent
@@ -10,7 +10,7 @@ typed character expensive.
 
 ## The environment we're designing for
 
-Dean's flow today: Tailscale on the phone → Termius (full SSH client) →
+The operator's flow today: Tailscale on the phone → Termius (full SSH client) →
 `tmux a` into desk sessions. Verified constraints of that stack:
 
 1. **Width.** Portrait phone ≈ 45–55 columns. The dashboard's agents

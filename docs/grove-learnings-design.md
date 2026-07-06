@@ -5,7 +5,7 @@
 > [grove-connections-design.md](grove-connections-design.md) (the wizard /
 > connection-detection side — the two meet at the *pack* concept).
 >
-> **The ask (Dean, 2026-07-03):** grove should grow with people and projects
+> **The ask (the operator, 2026-07-03):** grove should grow with people and projects
 > as they use it — documenting learnings unique to each project, shared
 > amongst worktrees of the same project, and generalized learnings saved
 > globally. Investigate how others have attempted to make LLM memory better
@@ -21,7 +21,7 @@
   disciplined entry format (date · context · fact · what it changed) and an
   update rule in `CLAUDE.md` ("update when you get surprised").
 - **Orchestrator duty 7** — the cost-analysis duty already ends in *"suggested
-  edits to LEARNINGS.md … go to Dean as drafts — he approves before anything
+  edits to LEARNINGS.md … go to the operator as drafts — they approve before anything
   is written. One insight per proposal, with the ledger rows that support it."*
   That is a propose-only Reflector/Curator in embryo.
 - **`events.jsonl`** — an append-only event substrate that a learnings inbox
@@ -32,7 +32,7 @@
   index loaded per session.
 
 What's missing is exactly what the ask names: **layers** (repo vs workspace vs
-global), a **capture → curate → promote pipeline** that doesn't depend on Dean
+global), a **capture → curate → promote pipeline** that doesn't depend on the operator
 hand-editing a file, and **hygiene** (rot detection, budgets) so the system
 compounds instead of decaying.
 
@@ -176,7 +176,7 @@ edge-invalidation, adapted to markdown).
 
 ### 3.3 Selection & injection — deterministic retrieval (no wasted tokens)
 
-**The scaling problem (Dean, 2026-07-03):** most learnings are irrelevant to
+**The scaling problem (the operator, 2026-07-03):** most learnings are irrelevant to
 most tasks. As the corpus grows, injecting whole indexes stops being
 acceptable — grove needs to *deterministically* grab the right learnings per
 task without an LLM call and without embeddings.
@@ -232,7 +232,7 @@ files):
 
 1. **Worker self-trigger** — the kickoff template defines *when* a worker
    should emit a learning, not just *that it may*. The trigger criteria
-   (Dean's framing: things that happened **redundantly** or **outside
+   (the operator's framing: things that happened **redundantly** or **outside
    expectations** — prevent the next agent falling in the same hole):
    - a failure that took more than one attempt to diagnose (you hit the
      wall twice — someone else will too)
@@ -363,7 +363,7 @@ disciplined, and it itself evolves propose-only.
   in chat, tomorrow they accumulate.
 - **`ovs` trial — declined (2026-07-03 interview).** The L1 staging layer +
   `LEARNING:` sentinel would have been small enough to field-test in ovs
-  first, but Dean chose to keep the freeze guarantee strict: **learnings
+  first, but the operator chose to keep the freeze guarantee strict: **learnings
   ship in grove only** (Phase 4+), accepting that the newest design gets its
   first field data there.
 

@@ -13,12 +13,12 @@ func TestEncodePath(t *testing.T) {
 		want  string
 	}{
 		{
-			"/Users/grins/git/thegrid/.trees/dev-1301",
-			"-Users-grins-git-thegrid--trees-dev-1301",
+			"/Users/dev/git/acme/.trees/dev-1301",
+			"-Users-dev-git-acme--trees-dev-1301",
 		},
 		{
-			"/Users/grins/git/myrepo",
-			"-Users-grins-git-myrepo",
+			"/Users/dev/git/myrepo",
+			"-Users-dev-git-myrepo",
 		},
 		{
 			"/home/user/.config/test",
@@ -37,10 +37,10 @@ func TestEncodePath(t *testing.T) {
 }
 
 func TestProjectDir(t *testing.T) {
-	dir := ProjectDir("/Users/grins/git/thegrid/.trees/dev-1301")
+	dir := ProjectDir("/Users/dev/git/acme/.trees/dev-1301")
 	home, _ := os.UserHomeDir()
 	// ovs divergence: sessions run under CLAUDE_CONFIG_DIR=~/.cc-work
-	want := filepath.Join(home, ".cc-work", "projects", "-Users-grins-git-thegrid--trees-dev-1301")
+	want := filepath.Join(home, ".cc-work", "projects", "-Users-dev-git-acme--trees-dev-1301")
 	if dir != want {
 		t.Errorf("ProjectDir = %q, want %q", dir, want)
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 // A fire-and-forget dismissal must surface as one ACTIVITY row, attributed
-// to the ticket it dispatched — the durable trail Dean sees after the pane
+// to the ticket it dispatched — the durable trail the operator sees after the pane
 // is gone.
 func TestFeedRendersOrchestratorClosed(t *testing.T) {
 	events := []state.Event{

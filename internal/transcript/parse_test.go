@@ -76,12 +76,12 @@ func TestPathsMatch(t *testing.T) {
 
 func TestParseJSONLMeta(t *testing.T) {
 	dir := t.TempDir()
-	worktreePath := "/Users/grins/git/thegrid/.trees/dev-1301"
+	worktreePath := "/Users/dev/git/acme/.trees/dev-1301"
 
 	// Real Claude JSONL format: message is {role, content}
-	content := `{"type":"system","cwd":"/Users/grins/git/thegrid/.trees/dev-1301","gitBranch":"dev-1301","content":"init"}
-{"type":"user","cwd":"/Users/grins/git/thegrid/.trees/dev-1301","message":{"role":"user","content":"Fix the tooltip positioning bug"}}
-{"type":"assistant","cwd":"/Users/grins/git/thegrid/.trees/dev-1301","message":{"role":"assistant","content":"I'll help fix that."}}
+	content := `{"type":"system","cwd":"/Users/dev/git/acme/.trees/dev-1301","gitBranch":"dev-1301","content":"init"}
+{"type":"user","cwd":"/Users/dev/git/acme/.trees/dev-1301","message":{"role":"user","content":"Fix the tooltip positioning bug"}}
+{"type":"assistant","cwd":"/Users/dev/git/acme/.trees/dev-1301","message":{"role":"assistant","content":"I'll help fix that."}}
 `
 	path := filepath.Join(dir, "abc123.jsonl")
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -111,15 +111,15 @@ func TestParseJSONLMeta(t *testing.T) {
 
 func TestParseJSONLMeta_WrongCWD(t *testing.T) {
 	dir := t.TempDir()
-	content := `{"type":"system","cwd":"/Users/grins/git/thegrid","content":"init"}
-{"type":"user","cwd":"/Users/grins/git/thegrid","message":{"role":"user","content":"something"}}
+	content := `{"type":"system","cwd":"/Users/dev/git/acme","content":"init"}
+{"type":"user","cwd":"/Users/dev/git/acme","message":{"role":"user","content":"something"}}
 `
 	path := filepath.Join(dir, "wrong.jsonl")
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	meta, err := parseJSONLMeta(path, "/Users/grins/git/thegrid/.trees/dev-1301")
+	meta, err := parseJSONLMeta(path, "/Users/dev/git/acme/.trees/dev-1301")
 	if err != nil {
 		t.Fatal(err)
 	}

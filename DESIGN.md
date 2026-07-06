@@ -27,7 +27,7 @@
 |---|---|---|
 | 1 | **New repo, adapter core.** Extract a generic core behind a `TaskProvider` interface. `ovs` stays frozen and untouched until Grove is proven; Grid later becomes one config on top. | Zero risk to the daily Grid tool. Everything Grid-specific is pushed behind an interface or into config. |
 | 2 | **Claude-native routing, pluggable later.** Ship an abstract `Router` with a `ClaudeTiers` implementation (Opus/Sonnet/Haiku); design the seam for OpenRouter/RouteLLM but don't build it. | The smarter-swarm layer is real on day one but stays inside the clean Claude Code hook/skill world. |
-| 3 | **OSS-ready now.** No Grid/Dean/personal assumptions in the core. First-run wizard, zero-assumption bootstrap, portable `AGENTS.md` context. | A stranger can clone, run `gv init`, and reach a first task without editing Go. |
+| 3 | **OSS-ready now.** No Grid or personal assumptions in the core. First-run wizard, zero-assumption bootstrap, portable `AGENTS.md` context. | A stranger can clone, run `gv init`, and reach a first task without editing Go. |
 
 ---
 
@@ -151,8 +151,8 @@ re-homing a handful of surfaces behind interfaces or config.
 | `internal/config` | Linear team + repo map | **Generalized:** `providers`, `routing`, `bootstrap`, `repos` sections. |
 | `internal/doctor` | Checks Grid workspace marketplace, dev-linear MCP, universal CLAUDE.md symlink | **Split:** generic checks (gh, tmux, hooks, provider auth) stay in `doctor`; Grid-plugin checks become a *pack* contribution, not core. |
 | `internal/kickoff` templates | Defer to Grid `dev-core` skills, Linear transitions | **Generalized:** default template defers to whatever skills/`AGENTS.md` the repo has; transition verbs come from the active provider. |
-| `orchestrator/CLAUDE.md` | Grid duties, dev-linear MCP, team rules | **Generalized brain** + a Grid overlay that Dean keeps privately. |
-| Grid workspace wiring (marketplace, MCP, symlink) | Baked into doctor/onboarding | **Out of core entirely.** Lives in Dean's private Grid config that layers on Grove. |
+| `orchestrator/CLAUDE.md` | Grid duties, dev-linear MCP, team rules | **Generalized brain** + a Grid overlay that the operator keeps privately. |
+| Grid workspace wiring (marketplace, MCP, symlink) | Baked into doctor/onboarding | **Out of core entirely.** Lives in the operator's private Grid config that layers on Grove. |
 
 **Net:** Grove's core is `ovs` minus `internal/linear`'s hard-coding minus the
 Grid doctor checks minus the Grid kickoff/orchestrator text, plus two new
@@ -340,7 +340,7 @@ A wizard that detects, then asks-once-and-records:
 The generalized preflight: `gh` authed, tmux present, hooks installed, provider
 auth valid, `AGENTS.md` present, worker command resolvable. **Grid-specific
 checks (workspace marketplace, dev-linear MCP, universal CLAUDE.md symlink)
-become a pluggable "pack" check, not core** — Dean's private Grid overlay
+become a pluggable "pack" check, not core** — the operator's private Grid overlay
 registers them; a stranger never sees them.
 
 ---
@@ -572,7 +572,7 @@ What "a stranger can use it" concretely requires:
   permissions` is never silently defaulted for users without a safety-guard
   layer (Grid safety comes from the dev-safety plugin, which a no-pack OSS
   user lacks) — see grove-connections-design §6.4 for the full rule.
-- **Grid becomes a private overlay, not a fork.** Dean's Grid setup =
+- **Grid becomes a private overlay, not a fork.** the operator's Grid setup =
   a `config.yaml` (linear provider, repo map) + a private orchestrator
   `CLAUDE.md` overlay + a doctor "pack" plugin registering the workspace
   checks. None of it lives in the public core.
@@ -674,7 +674,7 @@ is `ovs` with "ticket"→"task" and provider-driven columns.
 ## 12. Relationship to `ovs` — succession, with a freeze guarantee
 
 *(Sharpened 2026-07-03: overstory was the solo trial run; Grove is the
-successor Dean shares with the team. Retirement of `ovs` is the plan, not an
+successor the operator shares with the team. Retirement of `ovs` is the plan, not an
 option — but only after the parity gate.)*
 
 - **`ovs` is not touched.** Grove is a new repo. `ovs` keeps running Grid work
@@ -686,7 +686,7 @@ option — but only after the parity gate.)*
   declarations + worker-env spec. When the parity acceptance test
   (grove-connections-design §8) passes — including the capability-surface
   audit of everything the ccwork profile carries today — **grove takes over
-  Dean's daily Grid work and `ovs` retires.** Until then, both coexist and
+  the operator's daily Grid work and `ovs` retires.** Until then, both coexist and
   `ovs` stays the daily driver.
 - **Team adoption follows retirement:** teammates onboard via released
   binary + `gv init` + the Grid pack pin (grove-connections-design §6.5)

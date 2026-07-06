@@ -1,6 +1,6 @@
 # Grove doc-corpus readiness review — are we ready to start the repo?
 
-> **Status: review, 2026-07-03.** Answers Dean's three questions: (1) are
+> **Status: review, 2026-07-03.** Answers the operator's three questions: (1) are
 > these docs sufficient for creating the new repo from scratch, taking the
 > best from overstory? (2) do they cover the acceptance criteria — grove
 > drop-in anywhere, wizard to master-orchestrator, full Grid familiarity
@@ -13,7 +13,7 @@
 | Doc | Covers | State |
 |---|---|---|
 | [grove-spec.md](../DESIGN.md) | Founding spec: 3 locked decisions, architecture, `TaskProvider`, workspaces/switcher, routing, swarm shape, OSS-readiness, state/config, command surface, phasing, FMA, decision log | Mature; OQ2 + OQ6 now resolved |
-| [grove-cockpit-design.md](grove-cockpit-design.md) | UX layer: AGENTS+ACTIVITY left pane, stacked orchestrators, spawn plumbing, mail/review panel removal | Mature draft; Dean's answers to §10 sit inline, not yet promoted to decisions |
+| [grove-cockpit-design.md](grove-cockpit-design.md) | UX layer: AGENTS+ACTIVITY left pane, stacked orchestrators, spawn plumbing, mail/review panel removal | Mature draft; the operator's answers to §10 sit inline, not yet promoted to decisions |
 | [grove-connections-design.md](grove-connections-design.md) | Wizard, doctor, drift/reconnect, connections manifest, pack system, Grid parity mapping + acceptance test, team sharing | New (2026-07-03) |
 | [grove-learnings-design.md](grove-learnings-design.md) | Layered memory: 6 scopes, deterministic activation-filtered retrieval, capture triggers + skill, curation, promotion, lint, prior-art research | New (2026-07-03) |
 | ovs itself (`DESIGN.md`, `LEARNINGS.md`, `TASKS.md`, source) | The reference implementation — ~90% of grove's plumbing, field-tested | The living proof; not going anywhere |
@@ -78,7 +78,7 @@ without re-deriving anything. Nothing else in the corpus blocks starting.
 
 ## 2. Q2 — acceptance-criteria coverage map
 
-Dean's criteria, mapped to where each is designed:
+the operator's criteria, mapped to where each is designed:
 
 | Criterion | Covered by | Confidence |
 |---|---|---|
@@ -118,7 +118,7 @@ backport candidate carved out (learnings-design §4).
 1. **Coexistence + migration mechanics** (the only *operational* gap).
    During the trial window both `ovs hook` and `gv hook` will fire on the
    same worker sessions (harmless — each exits silently for untracked cwds —
-   but should be stated and smoke-tested), and Dean's live fleet state
+   but should be stated and smoke-tested), and the operator's live fleet state
    (`~/.local/state/overstory/`) never migrates: the cutover rule should be
    *drain in ovs, start new grabs in grove; `gv adopt` is the escape hatch
    for anything long-lived*. → one short section in the Phase-0 plan; not
@@ -141,7 +141,7 @@ backport candidate carved out (learnings-design §4).
    setup) — yet mandating it adds first-run friction. → recommend: wizard
    offers "dedicated worker profile (recommended) / share main profile,"
    default dedicated; record as a spec decision.
-5. **Cockpit doc housekeeping.** Dean's answers live inline in §10 (pane
+5. **Cockpit doc housekeeping.** the operator's answers live inline in §10 (pane
    titles: yes; drop popovers; persist proposals: yes; bare `ovs` opens
    cockpit: yes; >4 orchestrators eat the left column; activity feed must
    survive re-attach; want per-chat state indicators — that last one is a

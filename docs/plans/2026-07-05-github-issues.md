@@ -2,7 +2,7 @@
 
 > Status: revised per plan-reviewer round 1 (REVISE — all findings
 > applied) → confirm → execute.
-> Driver (Dean): unbrewed's real flow is GitHub-native — public tickets +
+> Driver (the operator): unbrewed's real flow is GitHub-native — public tickets +
 > requests on `JollyGrin/unbrewed-p2p` issues, detailed private tickets on
 > `JollyGrin/unbrewed-engine` (pro-server) issues; markdown tasks retire.
 > Design basis: DESIGN.md §5.3 (native `gh` adapter, the seam stress
@@ -119,12 +119,12 @@ errors when #7 is tracked in both repos; `gv done` refuses unmerged
 appears when the stub serves a full page. **Gate:** bare
 `go build/vet/test`, gofmt clean, all five e2e suites exit 0.
 
-## Task 4 — unbrewed cutover (Dean's machine, after merge) [no-TDD: runbook]
+## Task 4 — unbrewed cutover (the operator's machine, after merge) [no-TDD: runbook]
 
 `gv init` at `~/git/unbrewed` (parent, label `unbrewed`, provider
 github); set both children `claude: claude --dangerously-skip-
 permissions`; **delete the children's `.grove/` dirs** (sample tasks
-only — Dean sanctioned; also removes their implicit-workspace markers so
+only — the operator sanctioned; also removes their implicit-workspace markers so
 the parent is the unambiguous nearest root); remove the two unbrewed
 entries from the global config (backup first — grid entries stay);
 verify: `gv` inside either repo shows `GROVE · unbrewed`; `gv grab

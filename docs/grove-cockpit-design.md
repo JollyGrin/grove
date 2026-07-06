@@ -1,6 +1,6 @@
 # Cockpit redesign — activity feed + parallel orchestrators (draft, from real usage)
 
-> **Status: design draft / ideation.** Written from Dean's field feedback +
+> **Status: design draft / ideation.** Written from the operator's field feedback +
 > a screenshot of the live cockpit + the parallel-orchestrator workflow.
 > Companion to [grove-spec.md](../DESIGN.md).
 >
@@ -8,9 +8,9 @@
 > applying to both `ovs` and Grove, but `ovs` is now strictly frozen
 > (spec §12) — **these features ship in Grove** (spec §13 Phase 4); the
 > §7 phasing below reads as Grove work. Any `ovs` backport would be a
-> deliberate exception Dean triggers, not the plan.
+> deliberate exception the operator triggers, not the plan.
 >
-> **Scope guardrail (Dean's rule):** keep the split-pane cockpit — `ovs` TUI on
+> **Scope guardrail (the operator's rule):** keep the split-pane cockpit — `ovs` TUI on
 > the **left**, real ccwork orchestrator chat(s) on the **right**. **Never
 > render into or touch a chat pane.** This redesign changes the **bottom of the
 > left pane** (activity feed) and adds a **spawn action** for parallel
@@ -24,7 +24,7 @@
 - **~90%:** in the **orchestrator chat** (right).
 - **~10%:** glance at the list to **attach** to a worker's window.
 - **~rarely:** MAIL / REVIEW panels.
-- **Workflow:** Dean **parallelizes** — several orchestrator chats at once, one
+- **Workflow:** the operator **parallelizes** — several orchestrator chats at once, one
   per task/context — by manually `ctrl-b "`-splitting the chat pane and running
   `claude --dangerously-skip-permissions`.
 
@@ -49,7 +49,7 @@ _main_ pane (left), chats tile down the right. Mail + review panels are gone.
 │  ○ DEV-1259 stalled? #951 ✓   ⬡up 18d         │   │ > find 3 easy tickets   │
 ├ ACTIVITY (swarm actions · newest first) ──────┤   │ …                       │
 │  6m  DEV-4790 ✓ done · grabbed → worktree up  │   ├ CHAT · orch-3 ──────────┤
-│  2d  DEV-4759 PR #985 opened · CI green       │   │ > draft Soorya reply    │
+│  2d  DEV-4759 PR #985 opened · CI green       │   │ > draft reviewer reply  │
 │  2d  DEV-4772 nudged (PR #998 fixes)          │   │ …                       │
 │  18d DEV-1259 ⚠ stalled                       │   │                         │
 └────────────────────────────────────────────────┘   └─────────────────────────┘
@@ -167,7 +167,7 @@ invoked it from_ rather than always spawning into the current window:
    uses (grove-spec §6.5.2). Call it **W**.
 2. **Is a cockpit session already running for W** (`grove-<W.label>` / `ovs`)?
    - **Yes → auto-join.** Spawn the new orchestrator **into that session's right
-     column**, scoped to W's state/config. This is Dean's happy path: _invoked
+     column**, scoped to W's state/config. This is the operator's happy path: _invoked
      from a repo that already has active sessions → go straight to that
      context._ (Pressing `O` from inside a cockpit is always this case — you're
      already in W.)

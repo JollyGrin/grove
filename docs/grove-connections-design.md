@@ -11,7 +11,7 @@
 > mechanics). Sibling of [grove-learnings-design.md](grove-learnings-design.md)
 > — the two meet at the *pack* concept (§6 here; L5 there).
 >
-> **The ask (Dean, 2026-07-03):** the wizard should run when grove does not
+> **The ask (the operator, 2026-07-03):** the wizard should run when grove does not
 > detect connections for a repo. Configured with the Linear provider + the
 > Grid skills/MCP, grove must behave **exactly** like the customized
 > overstory does today — the Grid stops being hard-coded and becomes the
@@ -30,7 +30,7 @@ as pack/config data** and the Grid pack expresses it.
 |---|---|---|---|
 | 1 | Kickoff templates | `internal/kickoff/{default,manual,pickup}.tmpl` | Linear ticket framing · "move to In Progress / In Review via dev-linear MCP" · `wrapping-up-task` skill + `pr-reviewer` agent invocation · never target `deploy/*` · ticket-prefix commits · STATUS sentinel (generic) |
 | 2 | Doctor checks | `internal/doctor/doctor.go` | 4 Grid plugins present in `~/.cc-work` · universal CLAUDE.md symlink at the repos' parent · `LINEAR_API_KEY` env · `ccwork` alias resolvable via `zsh -ic whence` · dev-linear MCP auth (manual reminder) · terminal-notifier (macOS) |
-| 3 | Orchestrator brain | `orchestrator/CLAUDE.md` | 7 duties (fleet summary, triage, dispatch, unstick, ticket sharpening, cleanup, cost analysis) · team guardrails (propose-only, never-Done, never Linear comments, never edit code) · Linear MCP + team `DEV` · Dean by name |
+| 3 | Orchestrator brain | `orchestrator/CLAUDE.md` | 7 duties (fleet summary, triage, dispatch, unstick, ticket sharpening, cleanup, cost analysis) · team guardrails (propose-only, never-Done, never Linear comments, never edit code) · Linear MCP + team `DEV` · the operator referenced directly |
 | 4 | Config defaults | `internal/config/config.go` | `linear:` section baked into the struct · worker default `ccwork --dangerously-skip-permissions` · `linear_labels` repo inference |
 | 5 | Manual onboarding | `ONBOARDING.md` §4 | Create `~/.cc-work` profile + `ccwork` alias · register workspace marketplace · install 4 dev plugins · symlink universal CLAUDE.md · one-time dev-linear MCP OAuth ("open a session, call a Linear tool once") |
 | 6 | Provider | `internal/linear/` | The GraphQL client itself (grove-spec §5.3 already moves this behind `TaskProvider`) |
@@ -394,7 +394,7 @@ it forever and a teammate's missing plugin is a reconnect prompt, not a
 conventionless worker (the incident that created `ovs doctor`).
 
 **Parity is the whole capability surface, not just worker conventions.**
-What makes Dean's setup feel effortless is everything the ccwork profile
+What makes the operator's setup feel effortless is everything the ccwork profile
 carries: the Linear MCP (backlog exploration, transitions, *comment posting
 under the confirmation guardrails*), the grid-search MCP (Grid data
 queries), slite (team docs), the diagnostics skills
@@ -402,14 +402,14 @@ queries), slite (team docs), the diagnostics skills
 guards. The Grid pack must therefore declare the **complete plugin/MCP
 inventory** of today's working ccwork profile — the parity audit in §8.0
 enumerates it from the live machine rather than from memory, so nothing
-Dean actually relies on is silently missing from the declaration. The
+The operator actually relies on is silently missing from the declaration. The
 orchestrator session runs under the same profile, so its capability surface
 (Linear MCP triage, diagnostics on request) comes from the same
 declaration.
 
 ### 6.5 Sharing with the team
 
-Grove's succession goal (Dean, 2026-07-03): overstory was the solo trial
+Grove's succession goal (the operator, 2026-07-03): overstory was the solo trial
 run; grove is the version teammates adopt. The onboarding story a pack
 enables:
 
@@ -457,7 +457,7 @@ connection declaration, so the doctor checks it.
 
 ## 8. Parity acceptance test
 
-The bar (Dean, 2026-07-03): *"I can use grove instead of overstory, and it
+The bar (the operator, 2026-07-03): *"I can use grove instead of overstory, and it
 still has full use of the grid linear for project management needs, comment
 posting, grid skills, grid mcp, and other tools I use for grid diagnostics
 across the system — recreating this exact familiarity without it being
@@ -469,7 +469,7 @@ zero manual file edits** beyond running the wizard:
 
 0. **Capability-surface audit first**: enumerate the live ccwork profile
    (installed plugins, marketplaces, MCP servers + auth state, skills) and
-   the live orchestrator's toolset on Dean's machine; the Grid pack
+   the live orchestrator's toolset on the operator's machine; the Grid pack
    declaration must cover 100% of it. This is done by inspection of the
    working machine, not from memory — the audit *is* the pack's first
    draft.
