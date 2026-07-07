@@ -161,9 +161,19 @@ func NewCache() *Cache { return &Cache{byFile: map[fileKey][]transcript.UsageEnt
 // ForTask aggregates every session + subagent transcript for a worktree
 // (cwd-scan discovery — grab/adopt/resume sessions all share the path).
 func (c *Cache) ForTask(worktreePath string) (Totals, error) {
-	files, err := transcript.SessionFiles(worktreePath)
+	all, err := c.UsageForTask(worktreePath)
 	if err != nil {
 		return Totals{CostKnown: true}, err
+	}
+	return Total(all), nil
+}
+
+// UsageForTask returns the deduped usage entries behind ForTask — the
+// timestamped form the spend chart buckets.
+func (c *Cache) UsageForTask(worktreePath string) ([]transcript.UsageEntry, error) {
+	files, err := transcript.SessionFiles(worktreePath)
+	if err != nil {
+		return nil, err
 	}
 	var all []transcript.UsageEntry
 	for _, path := range files {
@@ -173,7 +183,7 @@ func (c *Cache) ForTask(worktreePath string) (Totals, error) {
 		}
 		all = append(all, entries...)
 	}
-	return Total(Dedup(all)), nil
+	return Dedup(all), nil
 }
 
 func (c *Cache) entriesFor(path string) ([]transcript.UsageEntry, error) {

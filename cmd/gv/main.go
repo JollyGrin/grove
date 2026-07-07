@@ -27,6 +27,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/kickoff"
+	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
@@ -54,6 +55,7 @@ const usage = `gv — grove
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
+  gv cost --ledger | --record on|off          recorded spend history · persistence toggle
   gv answer <ticket> [text]                   reply to a waiting agent
   gv nudge <ticket> [text]                    follow-up prompt to a session
   gv attach <ticket>                          jump into the tmux window
@@ -1247,7 +1249,23 @@ func cmdCost(args []string) error {
 	fs := flag.NewFlagSet("cost", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	analyze := fs.Bool("analyze", false, "outcome-priced ledger with analysis flags")
+	record := fs.String("record", "", "turn the persistent spend ledger on|off (also toggleable from the cockpit costs page)")
+	showLedger := fs.Bool("ledger", false, "print the recorded spend history (latest snapshot per ticket)")
 	parseAnywhere(fs, args)
+
+	if *record != "" {
+		if *record != "on" && *record != "off" {
+			return fmt.Errorf("--record wants on or off, got %q", *record)
+		}
+		if err := ledger.SetRecording(stateDir(), *record == "on"); err != nil {
+			return err
+		}
+		fmt.Printf("✓ spend recording %s (ledger: %s)\n", *record, ledger.Path(stateDir()))
+		return nil
+	}
+	if *showLedger {
+		return costLedger(*asJSON)
+	}
 
 	cfg, err := loadCfg()
 	if err != nil {
@@ -1303,6 +1321,41 @@ func cmdCost(args []string) error {
 	}
 	fmt.Printf("\ndone tasks: %d · est $%.2f total · %d turns  (estimates, not billing)\n",
 		doneCount, doneUSD, doneTurns)
+	return nil
+}
+
+// costLedger prints the recorded history — reads the ledger alone, so it
+// works after transcripts are pruned and worktrees removed (the e2e proof
+// of the durability contract).
+func costLedger(asJSON bool) error {
+	rows, err := ledger.Read(stateDir())
+	if err != nil {
+		return err
+	}
+	latest := ledger.Latest(rows)
+	var out []ledger.Row
+	for _, r := range latest {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	if len(out) == 0 {
+		fmt.Printf("ledger empty — enable with `gv cost --record on` (file: %s)\n", ledger.Path(stateDir()))
+		return nil
+	}
+	fmt.Printf("%-11s %-11s %-8s %-6s %-9s %-24s %s\n",
+		"TICKET", "REPO", "EST $", "TURNS", "OUTCOME", "WHEN", "TITLE")
+	for _, r := range out {
+		fmt.Printf("%-11s %-11s $%-7.2f %-6d %-9s %-24s %s\n",
+			r.Ticket, r.Repo, r.USD, r.Turns, r.Outcome,
+			r.Time.Local().Format("2006-01-02 15:04"), r.Title)
+	}
+	fmt.Println("\n(estimates, not billing — snapshots recorded locally by grove)")
 	return nil
 }
 
@@ -1841,6 +1894,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	// Degraded no-remote path (DESIGN.md §5.2): with no remote there is no
 	// PR to verify, so --force IS the human confirmation.
 	hasRemote := git.HasRemote(repo.Path, "origin")
+	outcome := "none"
 	if !hasRemote {
 		if !force {
 			return fmt.Errorf("%s: repo %s has no remote — grove cannot verify the work merged; confirm cleanup with --force (the local branch is deleted)", t.Ticket, t.Repo)
@@ -1851,12 +1905,36 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
 		}
+		if pr != nil {
+			outcome = ledger.Outcome(pr.State)
+		}
 		if !merged && !force {
 			prState := "no PR found"
 			if pr != nil {
 				prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
 			}
 			return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", t.Ticket, prState)
+		}
+	}
+
+	// Final ledger row BEFORE teardown: this snapshot is what keeps the
+	// ticket's cost history alive after Claude Code prunes the transcripts
+	// and the worktree is gone. Best-effort — a ledger hiccup must never
+	// block cleanup.
+	if ledger.Enabled(stateDir(), cfg.Cost.Record) {
+		tot, _ := cost.NewCache().ForTask(t.Worktree)
+		row := ledger.Row{
+			Time: time.Now(), Ticket: t.Ticket, Title: t.Title,
+			Desc: ledger.Snip(provider.BestEffortDescription(cfg, t.Repo, t.Ticket), 200),
+			Repo: t.Repo, Branch: t.Branch, Outcome: outcome,
+			Input: tot.Input, Output: tot.Output,
+			CacheCreate: tot.CacheCreate5m + tot.CacheCreate1h,
+			CacheRead:   tot.CacheRead, Turns: tot.Turns, USD: tot.USD,
+		}
+		if err := ledger.Append(stateDir(), row); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: spend ledger append: %v\n", err)
+		} else {
+			fmt.Printf("→ ledger: final snapshot recorded (est $%.2f, %s)\n", tot.USD, outcome)
 		}
 	}
 

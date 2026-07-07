@@ -95,6 +95,13 @@ board IS the manifest rendered).
       REVIEW panels → ACTIVITY feed, `gv orchestrator new` / `O` keybind,
       orchestrator default `claude --dangerously-skip-permissions`
       (e2e/cockpit.sh smoke-tests the layout)
+- [x] **grove-8 (2026-07-07):** cockpit costs page (`$`/`c`, esc back) +
+      persistent local spend ledger (`<state>/ledger.csv`, O_APPEND+flock;
+      toggle in `<state>/cost-recording`, config `cost.record` seeds the
+      default; `gv done` writes the final row so history survives
+      transcript pruning) + ledger-only history section + hourly/daily/
+      weekly spend bars (`internal/ledger`, `cost.Points/Buckets/Bar`,
+      `gv cost --ledger|--record on|off`; e2e/dummy.sh proves durability)
 - [ ] Cockpit remainder: workspace-labelled sessions (`grove-<label>`)
       + workspace-aware `orchestrator new` (§4.6 — needs Phase 1 ambient
       walk-up), expandable feed entries, lossless-clear drafts (§4.5)

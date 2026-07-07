@@ -18,6 +18,9 @@ func (m Model) View() string {
 	if m.mode == modeDetail {
 		return m.viewDetail()
 	}
+	if m.mode == modeCosts {
+		return m.viewCosts()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
@@ -187,6 +190,7 @@ func (m Model) viewFooter() string {
 		sKey.Render("v") + sFoot.Render(" reviewing"),
 		sKey.Render("n") + sFoot.Render(" nudge"),
 		sKey.Render("d") + sFoot.Render(" done"),
+		sKey.Render("$") + sFoot.Render(" costs"),
 		sKey.Render("q") + sFoot.Render(" quit"),
 	}
 	line := " " + strings.Join(keys, sDim.Render(" · "))

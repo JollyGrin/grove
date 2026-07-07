@@ -57,3 +57,13 @@ notify:
   # QUESTION/BLOCKED/DONE/needs-input only; empty = off.
   ntfy: ""                # e.g. https://ntfy.sh/grove-<long-random-suffix>
   ntfy_body: full         # `title-only` keeps sentinel text off the public server
+
+cost:
+  # stuck_turns: 30      # turns with no delivery movement before a stuck flag
+  # pricing:             # per-model USD/MTok overrides (estimates only)
+  #   claude-sonnet-5: {input: 3, output: 15}
+  # Persistent spend ledger (<state>/ledger.csv): record snapshots so cost
+  # history survives Claude Code transcript pruning (~30 days) and worktree
+  # removal. This is only the DEFAULT — the cockpit costs page ($ key, then
+  # r) toggles at runtime, persisted in <state>/cost-recording, which wins.
+  record: false

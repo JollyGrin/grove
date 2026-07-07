@@ -45,6 +45,7 @@ type Config struct {
 	Cost   struct {
 		StuckTurns int                   `yaml:"stuck_turns"` // turns with no delivery movement before a stuck flag (default 30)
 		Pricing    map[string]cost.Rates `yaml:"pricing"`     // per-model USD/MTok overrides (est. only)
+		Record     bool                  `yaml:"record"`      // default for the spend ledger; the runtime toggle persists in <state>/cost-recording and wins
 	} `yaml:"cost"`
 	// Workspace is the optional identity block a per-workspace
 	// <root>/.grove/config.yaml carries (DESIGN §6.5). Absent (zero) in
