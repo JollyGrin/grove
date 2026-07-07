@@ -92,13 +92,17 @@ func (m Model) ticketColWidth() int {
 	return w + 1
 }
 
+// ageColW fixes the AGE column so the trailing TASK-title hint aligns across
+// rows; the widest age ("23h59m") is 6 cells, so 7 leaves a one-cell gap.
+const ageColW = 7
+
 func (m Model) viewAgents() string {
 	w := m.width - 4
 	tw := m.ticketColWidth()
 	// Cells are padded as plain text FIRST, then styled — ANSI codes inside
 	// %-Ns break fmt's width accounting (field-tested on the first render).
 	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + pad("STATUS", 11) +
-		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + "AGE"
+		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + pad("AGE", ageColW) + "TASK"
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
 	if len(m.tasks) == 0 {
@@ -138,7 +142,13 @@ func (m Model) viewAgents() string {
 			sDelivery.Render(pad(pr, 8)) +
 			ciStyle.Render(pad(ci, 4)) +
 			sDelivery.Render(pad(preview, 9)) +
-			sChrome.Render(age(t.Created))
+			sChrome.Render(pad(age(t.Created), ageColW))
+		// Dimmed task-title hint in the leftover width — additive, never a
+		// formal column. Omit entirely on narrow panes rather than cramp.
+		consumed := 3 + tw + 11 + 11 + 8 + 8 + 4 + 9 + ageColW
+		if remaining := w - consumed; remaining >= 6 && t.Title != "" {
+			line += sChrome.Render(trunc(t.Title, remaining))
+		}
 		rows = append(rows, truncPad(line, w))
 	}
 
