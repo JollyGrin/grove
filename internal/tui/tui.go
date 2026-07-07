@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/resource"
@@ -26,6 +27,7 @@ const (
 	modeList = iota
 	modeDetail
 	modeConfirmDone
+	modeCosts
 )
 
 type refreshMsg struct {
@@ -63,6 +65,10 @@ type Model struct {
 	input    textinput.Model
 	nudging  bool // detail input sends a nudge instead of an answer
 
+	costs      costsMsg        // costs page data (grove-8)
+	bucketUnit cost.BucketUnit // chart granularity toggle
+	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
+
 	flash string
 
 	// AttachTo is consumed by main after Run returns — only used when gv
@@ -78,7 +84,7 @@ func New(cfg *config.Config, stateDir, label string) Model {
 	in.Placeholder = "type a reply — enter sends straight to the agent's pane"
 	in.Prompt = sKey.Render("❯ ")
 	in.CharLimit = 0
-	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in}
+	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache()}
 }
 
 func Run(cfg *config.Config, stateDir, label string) (*state.Task, error) {
@@ -197,7 +203,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeDetail && m.detail != nil {
 			cmds = append(cmds, paneTailCmd(m.detail))
 		}
+		if m.mode == modeCosts {
+			// Live refresh, no snapshot: the parse cache makes this cheap,
+			// and only page-open/toggle-on append ledger rows.
+			cmds = append(cmds, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, false))
+		}
 		return m, tea.Batch(cmds...)
+
+	case costsMsg:
+		m.costs = msg
+		return m, nil
 
 	case prsMsg:
 		m.prs = msg
@@ -231,6 +246,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeConfirmDone {
 		return m.handleConfirmKey(k)
+	}
+	if m.mode == modeCosts {
+		return m.handleCostsKey(k)
 	}
 
 	switch k.String() {
@@ -329,6 +347,13 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.flash = "refreshing PRs…"
 		return m, prsCmd(m.cfg, m.stateDir, m.tasks)
+	case "$", "c":
+		m.mode = modeCosts
+		m.flash = ""
+		// snapshot=true: an open records one ledger row per active ticket
+		// (when recording is on) — the cheap periodic point between grabs
+		// and the final gv done row.
+		return m, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, true)
 	}
 	return m, nil
 }

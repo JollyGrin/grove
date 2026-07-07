@@ -127,10 +127,41 @@ say "gv done refuses without --force (no remote = no merge proof)"
 if "$GV" done task-001 >"$SCRATCH/done1.out" 2>&1; then fail "done should have refused"; fi
 grep -q 'no remote' "$SCRATCH/done1.out" || fail "done refusal must explain the no-remote degradation"
 
+say "spend ledger: enable recording (persists in the state dir)"
+"$GV" cost --record on > "$SCRATCH/record.out"
+grep -q 'recording on' "$SCRATCH/record.out" || fail "cost --record on failed"
+grep -q '^on$' "$GROVE_STATE_DIR/cost-recording" || fail "recording toggle not persisted"
+
+say "spend ledger: plant a fake transcript so done has cost to snapshot"
+# grove stores the worktree symlink-resolved (/tmp → /private/tmp on
+# macOS); the transcript project-dir encoding starts from that real path.
+WTDIR2="$(cd "$(ls -d "$WT"/task-001-*)" && pwd -P)"
+ENC="$(printf '%s' "$WTDIR2" | tr '/.' '--')"
+PROJ="$HOME/.cc-work/projects/$ENC"
+mkdir -p "$PROJ"
+printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}' \
+  > "$PROJ/e2e-session.jsonl"
+
 say "gv done --force cleans up"
 "$GV" done task-001 --force | tee "$SCRATCH/done2.out"
 grep -q 'cleaned up' "$SCRATCH/done2.out" || fail "done --force failed"
 ls -d "$WT"/task-001-* 2>/dev/null && fail "worktree survived done" || true
+grep -q 'ledger: final snapshot recorded' "$SCRATCH/done2.out" || fail "done did not record a ledger row"
+
+say "spend ledger: final row exists with title + description + outcome"
+LEDGER="$GROVE_STATE_DIR/ledger.csv"
+[ -f "$LEDGER" ] || fail "ledger.csv missing from the state dir"
+grep -q 'task-001' "$LEDGER" || fail "ledger row missing ticket id"
+grep -q 'Replace me' "$LEDGER" || fail "ledger row missing ticket title"
+grep -q 'Describe the change' "$LEDGER" || fail "ledger row missing description snippet"
+grep -q ',none,' "$LEDGER" || fail "ledger row missing PR outcome (no remote → none)"
+
+say "spend ledger: history survives transcript + worktree deletion"
+rm -rf "$HOME/.cc-work/projects"
+"$GV" cost --ledger > "$SCRATCH/ledger.out"
+grep -q 'task-001' "$SCRATCH/ledger.out" || fail "history lost after transcript deletion"
+grep -q 'Replace me' "$SCRATCH/ledger.out" || fail "history lost the title after transcript deletion"
+grep -q '0.03' "$SCRATCH/ledger.out" || fail "history lost the cost estimate (2k out tokens ≈ \$0.03)"
 
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null

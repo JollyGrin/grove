@@ -87,6 +87,25 @@ func FromConfigKind(cfg *config.Config, kind, repoName, repoPath string) (Provid
 	}
 }
 
+// BestEffortDescription fetches a ticket's body via its repo's provider
+// for the spend ledger's description field — "" on any failure, never an
+// error: a missing description must not block recording a snapshot.
+func BestEffortDescription(cfg *config.Config, repoName, ticket string) string {
+	r, ok := cfg.Repos[repoName]
+	if !ok {
+		return ""
+	}
+	p, err := FromConfigKind(cfg, cfg.ProviderKindFor(r), repoName, r.Path)
+	if err != nil {
+		return ""
+	}
+	t, err := p.Get(ticket)
+	if err != nil || t == nil {
+		return ""
+	}
+	return t.Description
+}
+
 // IDCandidates returns every normalization a raw task reference could
 // resolve to — with per-repo providers, linear (DEV-1234) and markdown
 // (task-001) id shapes are live in one fleet at once, and "task-001"
