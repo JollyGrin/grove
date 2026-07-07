@@ -17,6 +17,10 @@ GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
 export HOME="$SCRATCH/home"
+# $TMUX beats TMUX_TMPDIR — without the unset, a run from inside a tmux
+# pane puts every tmux call (incl. cleanup's kill-server) on the REAL
+# server. See LEARNINGS.md (2026-07-07 grove-7 crash).
+unset TMUX TMUX_PANE
 export TMUX_TMPDIR="$SCRATCH/tmux"
 mkdir -p "$HOME" "$TMUX_TMPDIR" "$SCRATCH/bin"
 unset GROVE_STATE_DIR || true

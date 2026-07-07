@@ -58,6 +58,17 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-07 · `$TMUX` beats `TMUX_TMPDIR`** — tmux resolves its socket
+  as `-S`/`-L` > `$TMUX` > `TMUX_TMPDIR`, so every isolated-tmux-server
+  script **must `unset TMUX` first** (or `env -u TMUX` each call), or when
+  run from inside a worker pane the "isolation" is a silent no-op: sessions
+  land on the REAL server, gv's attach takes the inside-tmux
+  `switch-client` path and yanks the operator's terminal, and a cleanup
+  `tmux kill-server` kills every session and worker on the machine (the
+  grove-7 crash, 2026-07-07). `tapes/run.sh` now also snapshots the real
+  server's session list before/after as a canary. Never run bare
+  `kill-server` in any script; scope it with `env -u TMUX` + the scratch
+  `TMUX_TMPDIR`.
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Never use it for prose — relay replies via
   `load-buffer` + `paste-buffer` + a separate `send-keys Enter`. If a

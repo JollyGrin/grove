@@ -17,6 +17,11 @@ GV="$SCRATCH/gv"
 
 export HOME="$SCRATCH/home"
 export GROVE_STATE_DIR="$SCRATCH/state"
+# $TMUX beats TMUX_TMPDIR in tmux's socket resolution — launched from
+# inside a tmux pane, TMUX_TMPDIR alone is a silent no-op and every tmux
+# call (including cleanup's kill-server) hits the REAL server. Unset first.
+# (Root cause of the 2026-07-07 grove-7 crash; see LEARNINGS.md.)
+unset TMUX TMUX_PANE
 export TMUX_TMPDIR="$SCRATCH/tmux"   # isolated tmux server — never the user's
 mkdir -p "$HOME/.config/grove" "$GROVE_STATE_DIR" "$TMUX_TMPDIR" "$SCRATCH/repo"
 
