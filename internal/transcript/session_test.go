@@ -37,10 +37,23 @@ func TestEncodePath(t *testing.T) {
 }
 
 func TestProjectDir(t *testing.T) {
+	// Default: grove workers run under the default Claude Code config dir
+	// (~/.claude), not a separate work-subscription profile.
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "")
 	dir := ProjectDir("/Users/dev/git/acme/.trees/dev-1301")
 	home, _ := os.UserHomeDir()
-	// ovs divergence: sessions run under CLAUDE_CONFIG_DIR=~/.cc-work
-	want := filepath.Join(home, ".cc-work", "projects", "-Users-dev-git-acme--trees-dev-1301")
+	want := filepath.Join(home, ".claude", "projects", "-Users-dev-git-acme--trees-dev-1301")
+	if dir != want {
+		t.Errorf("ProjectDir = %q, want %q", dir, want)
+	}
+}
+
+func TestProjectDir_ConfigDirOverride(t *testing.T) {
+	// GV_CLAUDE_CONFIG_DIR takes precedence over the ~/.claude default — how
+	// ovs-style repos and the e2e harness point discovery elsewhere.
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "/custom/cc")
+	dir := ProjectDir("/Users/dev/git/acme/.trees/dev-1301")
+	want := filepath.Join("/custom/cc", "projects", "-Users-dev-git-acme--trees-dev-1301")
 	if dir != want {
 		t.Errorf("ProjectDir = %q, want %q", dir, want)
 	}
