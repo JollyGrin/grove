@@ -1310,13 +1310,13 @@ func cmdCost(args []string) error {
 	if len(rows) == 0 {
 		fmt.Println("no active tasks with transcripts")
 	} else {
-		fmt.Printf("%-11s %-11s %-8s %-6s %-8s %-8s %-7s\n",
-			"TICKET", "REPO", "EST $", "TURNS", "IN", "OUT", "CACHE%")
+		fmt.Printf("%-11s %-11s %-8s %-6s %-8s %-8s %-7s %s\n",
+			"TICKET", "REPO", "EST $", "TURNS", "IN", "OUT", "CACHE%", "MODELS")
 		for _, r := range rows {
-			fmt.Printf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s\n",
+			fmt.Printf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s %s\n",
 				r.Ticket, r.Repo, fmtUSD(&r.Cost), r.Cost.Turns,
 				fmtTok(r.Cost.Input), fmtTok(r.Cost.Output),
-				fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()))
+				fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()), r.Cost.Mix())
 		}
 	}
 	fmt.Printf("\ndone tasks: %d · est $%.2f total · %d turns  (estimates, not billing)\n",
@@ -1930,6 +1930,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 			Input: tot.Input, Output: tot.Output,
 			CacheCreate: tot.CacheCreate5m + tot.CacheCreate1h,
 			CacheRead:   tot.CacheRead, Turns: tot.Turns, USD: tot.USD,
+			Models: tot.Mix(),
 		}
 		if err := ledger.Append(stateDir(), row); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: spend ledger append: %v\n", err)

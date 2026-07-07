@@ -139,8 +139,12 @@ WTDIR2="$(cd "$(ls -d "$WT"/task-001-*)" && pwd -P)"
 ENC="$(printf '%s' "$WTDIR2" | tr '/.' '--')"
 PROJ="$HOME/.cc-work/projects/$ENC"
 mkdir -p "$PROJ"
-printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}' \
-  > "$PROJ/e2e-session.jsonl"
+# Two models so the per-task model breakdown (grove-14) has a mix to show.
+# The tiny haiku entry keeps the total under $0.035 (still rounds to $0.03).
+{
+  printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+} > "$PROJ/e2e-session.jsonl"
 
 say "gv done --force cleans up"
 "$GV" done task-001 --force | tee "$SCRATCH/done2.out"
@@ -155,6 +159,8 @@ grep -q 'task-001' "$LEDGER" || fail "ledger row missing ticket id"
 grep -q 'Replace me' "$LEDGER" || fail "ledger row missing ticket title"
 grep -q 'Describe the change' "$LEDGER" || fail "ledger row missing description snippet"
 grep -q ',none,' "$LEDGER" || fail "ledger row missing PR outcome (no remote → none)"
+grep -q 'sonnet' "$LEDGER" || fail "ledger row missing per-model mix (grove-14 models column)"
+grep -q 'haiku' "$LEDGER" || fail "ledger row missing the second model in the mix"
 
 say "spend ledger: history survives transcript + worktree deletion"
 rm -rf "$HOME/.cc-work/projects"

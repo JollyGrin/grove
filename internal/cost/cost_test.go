@@ -69,6 +69,75 @@ func TestTotalUnknownModel(t *testing.T) {
 	}
 }
 
+func TestTotalPerModelSubtotals(t *testing.T) {
+	// Two models in one ticket: opus (dominant) + haiku. Subtotals must be
+	// kept per model, dominant-by-USD first, and sum back to the grand total.
+	entries := []transcript.UsageEntry{
+		fe("m1", "r1", "claude-opus-4-8", 1_000_000, 0, 0, 0, 0), // $5
+		fe("m2", "r2", "claude-haiku-4-5", 100_000, 0, 0, 0, 0),  // $0.1
+	}
+	tot := Total(entries)
+	if len(tot.Models) != 2 {
+		t.Fatalf("want 2 model subtotals, got %d (%+v)", len(tot.Models), tot.Models)
+	}
+	if tot.Models[0].Model != "claude-opus-4-8" {
+		t.Errorf("dominant model first: got %q", tot.Models[0].Model)
+	}
+	if math.Abs(tot.Models[0].USD-5.0) > 1e-9 || math.Abs(tot.Models[1].USD-0.1) > 1e-9 {
+		t.Errorf("per-model USD wrong: %+v", tot.Models)
+	}
+	if tot.Models[0].Tokens != 1_000_000 || tot.Models[1].Tokens != 100_000 {
+		t.Errorf("per-model tokens wrong: %+v", tot.Models)
+	}
+	var sum float64
+	for _, m := range tot.Models {
+		sum += m.USD
+	}
+	if math.Abs(sum-tot.USD) > 1e-9 {
+		t.Errorf("subtotals %v don't sum to grand total %v", sum, tot.USD)
+	}
+	if got := tot.Mix(); got != "opus 98% · haiku 2%" {
+		t.Errorf("Mix() = %q, want %q", got, "opus 98% · haiku 2%")
+	}
+}
+
+func TestMixFallsBackToTokensWhenCostUnknown(t *testing.T) {
+	// An unpriced model marks cost unknown; the mix must still split by
+	// tokens so the unknown model never silently reads as 0%.
+	entries := []transcript.UsageEntry{
+		fe("m1", "r1", "claude-future-9", 750_000, 0, 0, 0, 0),
+		fe("m2", "r2", "claude-haiku-4-5", 250_000, 0, 0, 0, 0),
+	}
+	tot := Total(entries)
+	if tot.CostKnown {
+		t.Fatal("unknown model should mark cost unknown")
+	}
+	if got := tot.Mix(); got != "future 75% · haiku 25%" {
+		t.Errorf("Mix() = %q, want token-share %q", got, "future 75% · haiku 25%")
+	}
+}
+
+func TestMixEmptyWhenNoModels(t *testing.T) {
+	if got := (Totals{}).Mix(); got != "" {
+		t.Errorf("Mix() with no models = %q, want empty", got)
+	}
+}
+
+func TestShortModel(t *testing.T) {
+	cases := map[string]string{
+		"claude-fable-5":            "fable",
+		"claude-opus-4-8":           "opus",
+		"claude-haiku-4-5-20251001": "haiku",
+		"claude-sonnet-5":           "sonnet",
+		"gpt-4o":                    "gpt-4o", // non-claude id passes through
+	}
+	for in, want := range cases {
+		if got := ShortModel(in); got != want {
+			t.Errorf("ShortModel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRateLookupNormalizesDatedIDs(t *testing.T) {
 	if _, ok := rateFor("claude-haiku-4-5-20251001"); !ok {
 		t.Error("dated snapshot id should resolve via suffix normalization")
