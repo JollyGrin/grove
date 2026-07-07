@@ -5,8 +5,11 @@
 package cost
 
 import (
+	"fmt"
 	"os"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/JollyGrin/grove/internal/transcript"
@@ -71,14 +74,26 @@ func rateFor(model string) (Rates, bool) {
 
 // Totals is the aggregate for one ticket (all sessions + subagents).
 type Totals struct {
-	Input         int     `json:"input_tokens"`
-	Output        int     `json:"output_tokens"`
-	CacheCreate5m int     `json:"cache_create_5m_tokens"`
-	CacheCreate1h int     `json:"cache_create_1h_tokens"`
-	CacheRead     int     `json:"cache_read_tokens"`
-	Turns         int     `json:"turns"`
-	USD           float64 `json:"est_usd"`
-	CostKnown     bool    `json:"cost_known"` // false when any entry's model has no pricing
+	Input         int          `json:"input_tokens"`
+	Output        int          `json:"output_tokens"`
+	CacheCreate5m int          `json:"cache_create_5m_tokens"`
+	CacheCreate1h int          `json:"cache_create_1h_tokens"`
+	CacheRead     int          `json:"cache_read_tokens"`
+	Turns         int          `json:"turns"`
+	USD           float64      `json:"est_usd"`
+	CostKnown     bool         `json:"cost_known"` // false when any entry's model has no pricing
+	Models        []ModelUsage `json:"models,omitempty"`
+}
+
+// ModelUsage is the token/dollar subtotal for one model within a ticket —
+// the routing-verification signal: which models a ticket actually burned.
+// Full model IDs are kept (not shortened) so the breakdown stays precise;
+// Mix does the human-facing shortening.
+type ModelUsage struct {
+	Model     string  `json:"model"`
+	Tokens    int     `json:"tokens"`     // input + output + all cache tokens
+	USD       float64 `json:"est_usd"`    // 0 when CostKnown is false
+	CostKnown bool    `json:"cost_known"` // false when this model has no pricing
 }
 
 // CacheReadShare is the fraction of all input-side tokens served from
@@ -89,6 +104,55 @@ func (t Totals) CacheReadShare() float64 {
 		return 0
 	}
 	return float64(t.CacheRead) / float64(denom)
+}
+
+// Mix renders a compact per-model share, dominant model first, e.g.
+// "fable 92% · haiku 8%". Share is by USD when the ticket's dollars are
+// known (routing is about spend); it falls back to tokens when any model
+// is unpriced, so an unknown model never silently reads as free. Returns
+// "" when there is nothing to split. Estimates, not billing.
+func (t Totals) Mix() string {
+	if len(t.Models) == 0 {
+		return ""
+	}
+	byUSD := t.CostKnown && t.USD > 0
+	var denom float64
+	for _, m := range t.Models {
+		if byUSD {
+			denom += m.USD
+		} else {
+			denom += float64(m.Tokens)
+		}
+	}
+	if denom <= 0 {
+		return ""
+	}
+	var parts []string
+	for _, m := range t.Models {
+		var share float64
+		if byUSD {
+			share = m.USD / denom
+		} else {
+			share = float64(m.Tokens) / denom
+		}
+		parts = append(parts, fmt.Sprintf("%s %.0f%%", ShortModel(m.Model), 100*share))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// ShortModel is the human-facing family label for a model id:
+// "claude-fable-5" → "fable", "claude-opus-4-8" → "opus",
+// "claude-haiku-4-5-20251001" → "haiku". Ids that don't fit the
+// claude-<family>-… shape pass through unchanged (never guess).
+func ShortModel(model string) string {
+	rest, ok := strings.CutPrefix(model, "claude-")
+	if !ok {
+		return model
+	}
+	if i := strings.IndexByte(rest, '-'); i >= 0 {
+		return rest[:i]
+	}
+	return rest
 }
 
 // Dedup collapses duplicate billing entries by (MessageID, RequestID) —
@@ -115,6 +179,24 @@ func Dedup(entries []transcript.UsageEntry) []transcript.UsageEntry {
 // figure unknown — never zero-and-confident.
 func Total(entries []transcript.UsageEntry) Totals {
 	tot := Totals{CostKnown: true}
+	// Per-model accumulation runs alongside the grand total — the data is
+	// already in each entry's Model, so don't aggregate it away.
+	type acc struct {
+		tokens    int
+		usd       float64
+		costKnown bool
+	}
+	byModel := map[string]*acc{}
+	var order []string
+	get := func(model string) *acc {
+		a, ok := byModel[model]
+		if !ok {
+			a = &acc{costKnown: true}
+			byModel[model] = a
+			order = append(order, model)
+		}
+		return a
+	}
 	for _, e := range entries {
 		tot.Turns++
 		tot.Input += e.Input
@@ -122,21 +204,48 @@ func Total(entries []transcript.UsageEntry) Totals {
 		tot.CacheCreate5m += e.CacheCreate5m
 		tot.CacheCreate1h += e.CacheCreate1h
 		tot.CacheRead += e.CacheRead
+		m := get(e.Model)
+		m.tokens += e.Input + e.Output + e.CacheCreate5m + e.CacheCreate1h + e.CacheRead
 		if e.CostUSD != nil {
 			tot.USD += *e.CostUSD
+			m.usd += *e.CostUSD
 			continue
 		}
 		r, ok := rateFor(e.Model)
 		if !ok {
 			tot.CostKnown = false
+			m.costKnown = false
 			continue
 		}
-		tot.USD += (r.Input*float64(e.Input) +
+		usd := (r.Input*float64(e.Input) +
 			r.Output*float64(e.Output) +
 			r.CacheWrite5m*float64(e.CacheCreate5m) +
 			r.CacheWrite1h*float64(e.CacheCreate1h) +
 			r.CacheRead*float64(e.CacheRead)) / 1e6
+		tot.USD += usd
+		m.usd += usd
 	}
+	for _, model := range order {
+		a := byModel[model]
+		tot.Models = append(tot.Models, ModelUsage{
+			Model: model, Tokens: a.tokens, USD: a.usd, CostKnown: a.costKnown,
+		})
+	}
+	// Biggest share first so mix strings read "dominant model first". Order
+	// by the same basis Mix uses: USD when the ticket's dollars are known,
+	// tokens otherwise (an unpriced model has USD 0 and must not sink below
+	// a small priced one).
+	byUSD := tot.CostKnown && tot.USD > 0
+	sort.Slice(tot.Models, func(i, j int) bool {
+		a, b := tot.Models[i], tot.Models[j]
+		if byUSD && a.USD != b.USD {
+			return a.USD > b.USD
+		}
+		if a.Tokens != b.Tokens {
+			return a.Tokens > b.Tokens
+		}
+		return a.Model < b.Model
+	})
 	return tot
 }
 

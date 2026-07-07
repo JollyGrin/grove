@@ -48,6 +48,48 @@ func TestAppendReadRoundtrip(t *testing.T) {
 	}
 }
 
+func TestModelsRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	r := row("task-mix", time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC), 3.0)
+	r.Models = "fable 92% · haiku 8%"
+	if err := Append(dir, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Models != r.Models {
+		t.Fatalf("models roundtrip = %+v, want %q", got, r.Models)
+	}
+}
+
+// Pre-grove-14 rows have 13 columns (no trailing `models`). The tolerant
+// reader must still read them, with an empty Models field — never drop the
+// history as malformed.
+func TestReadTolerates13ColumnRows(t *testing.T) {
+	dir := t.TempDir()
+	legacy := "time,ticket,title,desc,repo,branch,outcome,input,output,cache_create,cache_read,turns,est_usd\n" +
+		"2026-07-01T00:00:00Z,task-old,Old title,old desc,dummy,old-branch,merged,100,200,300,400,5,1.2500\n"
+	if err := os.WriteFile(Path(dir), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("legacy rows = %d, want 1 (old shape dropped?)", len(got))
+	}
+	g := got[0]
+	if g.Ticket != "task-old" || g.Title != "Old title" || g.USD != 1.25 || g.Turns != 5 {
+		t.Errorf("legacy row mis-parsed: %+v", g)
+	}
+	if g.Models != "" {
+		t.Errorf("legacy row Models should be empty, got %q", g.Models)
+	}
+}
+
 func TestAppendWritesHeaderOnce(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Now()
