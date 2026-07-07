@@ -123,6 +123,64 @@ func TestMixEmptyWhenNoModels(t *testing.T) {
 	}
 }
 
+func TestMixCompact(t *testing.T) {
+	// Compact form: uppercase family initial + rounded percent, joined by "-".
+	// Same USD-vs-token share basis as Mix — construct Totals directly to pin
+	// each case's basis (CostKnown + USD decide USD-vs-token).
+	cases := []struct {
+		name string
+		tot  Totals
+		want string
+	}{
+		{
+			name: "two models by USD",
+			tot: Totals{CostKnown: true, USD: 5.0, Models: []ModelUsage{
+				{Model: "claude-opus-4-8", USD: 4.9},
+				{Model: "claude-haiku-4-5", USD: 0.1},
+			}},
+			want: "O98-H2",
+		},
+		{
+			name: "three models by USD",
+			tot: Totals{CostKnown: true, USD: 100, Models: []ModelUsage{
+				{Model: "claude-opus-4-8", USD: 94},
+				{Model: "claude-sonnet-5", USD: 3},
+				{Model: "claude-haiku-4-5", USD: 3},
+			}},
+			want: "O94-S3-H3",
+		},
+		{
+			name: "single model",
+			tot: Totals{CostKnown: true, USD: 5.0, Models: []ModelUsage{
+				{Model: "claude-fable-5", USD: 5.0},
+			}},
+			want: "F100",
+		},
+		{
+			name: "empty",
+			tot:  Totals{},
+			want: "",
+		},
+		{
+			// Unpriced model marks cost unknown → shares fall back to tokens so
+			// the unknown model never reads as 0%.
+			name: "token-share fallback",
+			tot: Totals{CostKnown: false, Models: []ModelUsage{
+				{Model: "claude-future-9", Tokens: 750_000},
+				{Model: "claude-haiku-4-5", Tokens: 250_000},
+			}},
+			want: "F75-H25",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.tot.MixCompact(); got != tc.want {
+				t.Errorf("MixCompact() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestShortModel(t *testing.T) {
 	cases := map[string]string{
 		"claude-fable-5":            "fable",
