@@ -69,11 +69,12 @@ board IS the manifest rendered).
 - [ ] Measure: is the Aider-style repo map needed at target repo sizes?
       (deferred decision, DESIGN.md OQ4)
 
-## Phase 2 — routing (the smarter swarm)
+## Phase 2 — routing (the smarter swarm) — deferred 2026-07-08
 
-- [ ] `Router` interface + `ClaudeTiers`; pre-dispatch classifier;
-      `--tier` override; TIER column
-- [ ] Escalate-on-failed-gate cascade; measure against the cost ledger
+Unbuilt and moved to Parked. Routing/tiering likely isn't worth it for a solo
+operator; the cost ledger these tasks would measure against already shipped in
+grove-8, so this can be revisited when fleet size makes tier routing pay off.
+See Parked / someday.
 
 ## Phase 3 — second provider (seam stress test)
 
@@ -129,5 +130,8 @@ board IS the manifest rendered).
 - Revisit-before-public: trust gate (accepted Critical, connections §9
   row 1) + worker-autonomy core safety guard (connections §6.4)
 - Shared fleet visibility across teammates (explicitly out of v1)
+- Router/tiers + escalate-on-failed-gate cascade (was Phase 2, deferred
+  2026-07-08 — unbuilt; the cost ledger it would measure against shipped in
+  grove-8, but there's no case for tier routing at solo scale yet)
 - Learned router classifier (needs ledger history; likely never for solo)
 - Public learnings commons (scope creep — parked)
