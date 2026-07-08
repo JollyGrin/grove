@@ -51,7 +51,7 @@ const usage = `gv — grove
                                               parent scope in a folder of sibling repos)
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
-  gv grab [<task>] [--repo name] [--manual] [--model id]   task → worktree → agent (no arg: list backlog)
+  gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
@@ -66,7 +66,8 @@ const usage = `gv — grove
   gv sweep                                    clean up all merged tasks
   gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
-  gv orchestrator new                         add an orchestrator chat pane (O in the TUI)
+  gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI);
+                                              --profile opens it on a model profile instead of Claude
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
@@ -243,7 +244,7 @@ func main() {
 	case "orchestrator":
 		switch {
 		case len(args) > 0 && args[0] == "new":
-			err = cmdOrchestratorNew()
+			err = cmdOrchestratorNew(args[1:])
 		case len(args) > 0 && args[0] == "close":
 			err = cmdOrchestratorClose(args[1:])
 		default:
@@ -498,15 +499,34 @@ func orchestratorCmd(cfg *config.Config, root string) string {
 	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
+// orchestratorCmdProfile is orchestratorCmd's profile-wrapped twin
+// (grove-36 T4 / design §3.1): each `--continue`-or-fresh limb gets its
+// own full env wrap. exec replaces the shell process, so the two limbs
+// can't share one wrap — without this, a `--continue` failure would fall
+// through the `||` into a bare, unwrapped relaunch on the operator's own
+// Claude sub instead of the profile's backend.
+func orchestratorCmdProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
+	launch := orchestratorLaunch(cfg, root)
+	secrets := config.SecretsPath()
+	resumeLimb := config.WrapProfile(launch+" --continue 2>/dev/null", p, secrets)
+	freshLimb := config.WrapProfile(launch, p, secrets)
+	return fmt.Sprintf("%s || %s", resumeLimb, freshLimb)
+}
+
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
 // cockpit's right column (cockpit design §4) — the O keybind's CLI twin.
-// Builds the cockpit first if it isn't running.
-func cmdOrchestratorNew() error {
+// Builds the cockpit first if it isn't running. --profile (grove-36) opens
+// the new pane on a model profile instead of the operator's own Claude sub.
+func cmdOrchestratorNew(args []string) error {
+	fs := flag.NewFlagSet("orchestrator new", flag.ExitOnError)
+	profileFlag := fs.String("profile", "", "open this orchestrator on a model profile (e.g. openrouter-glm) instead of Claude")
+	_ = fs.Parse(args)
+
 	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	if _, err := spawnOrchestrator(cfg); err != nil {
+	if _, err := spawnOrchestratorProfile(cfg, *profileFlag); err != nil {
 		return err
 	}
 	if !tmux.IsInsideTmux() {
@@ -548,6 +568,50 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
+}
+
+// spawnOrchestratorProfile is spawnOrchestrator's profile-aware twin
+// (grove-36 T4): an empty/unknown-as-"anthropic" profileName falls back to
+// spawnOrchestrator unchanged (today's exact behavior). Otherwise the new
+// pane's launch — both the `--continue` and fresh limbs — runs wrapped in
+// the profile's backend (orchestratorCmdProfile), never the operator's own
+// Claude sub.
+func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
+	_, p, err := cfg.ResolveProfile(profileName, nil)
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		return spawnOrchestrator(cfg)
+	}
+	ws := ambient.ws
+	session := cockpitSessionFor(ws)
+	dir := orchestratorDirFor(ws, cfg)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if !tmux.SessionExists(session) {
+		// Build the (unprofiled) cockpit first — 0/the default pane stays
+		// Anthropic — then fall through to add the profiled pane below.
+		if err := buildCockpit(ws, cfg); err != nil {
+			return "", err
+		}
+	}
+	root := ""
+	if ws != nil {
+		root = ws.Root
+	}
+	if mem, err := resource.Read(); err == nil {
+		_ = resource.Log(stateDir(), resource.Sample{
+			Avail: mem.AvailBytes, Total: mem.TotalBytes,
+			Workers: resource.LiveWorkers(), Kind: resource.KindOrchestrator,
+		})
+	}
+
+	if _, err := tmux.SpawnPane(session, dir, orchestratorCmdProfile(cfg, root, p)); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✓ new orchestrator chat pane (%s)", profileName), nil
 }
 
 // cmdOrchestratorClose dismisses the calling orchestrator's own cockpit
@@ -642,9 +706,10 @@ func cmdGrab(args []string) error {
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
+	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name]")
 	}
 
 	cfg, err := loadCfg()
@@ -676,7 +741,7 @@ func cmdGrab(args []string) error {
 	}
 	if kind == "linear" {
 		if len(positionals) != 1 {
-			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id]")
+			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name]")
 		}
 		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
 			return err
@@ -728,10 +793,18 @@ func cmdGrab(args []string) error {
 			task.ID, t.Worktree, task.ID, task.ID, task.ID)
 	}
 
+	profileName, profile, err := cfg.ResolveProfile(*profileFlag, repo)
+	if err != nil {
+		return err
+	}
+
 	name := task.ID + "-" + slugify(task.Title)
 	fmt.Printf("→ %s on %s (branch %s)\n", task.ID, repoName, name)
 	if *modelFlag != "" {
 		fmt.Printf("→ model pinned to %s (this worker only)\n", *modelFlag)
+	}
+	if profileName != "" {
+		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
 	}
 
 	if git.HasRemote(repo.Path, "origin") {
@@ -811,6 +884,11 @@ func cmdGrab(args []string) error {
 	// pane returns to a shell if claude exits.
 	claudeBin := config.WithModel(repo.Claude, *modelFlag)
 	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
+	// Profile wrap applies to the composed claude+prompt command only —
+	// never to repo.Claude itself (hooks resolve the worker's config dir
+	// from the stored r.Claude, hooks.go:246-274) and never to the setup
+	// prefix added just below.
+	claudeCmd = config.WrapProfile(claudeCmd, profile, config.SecretsPath())
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)

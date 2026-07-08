@@ -334,3 +334,114 @@ func TestWithModel(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapProfileNilPassthrough(t *testing.T) {
+	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/x.txt)"`
+	if got := WrapProfile(cmd, nil, "/secrets/.env"); got != cmd {
+		t.Errorf("WrapProfile(nil profile) = %q, want unchanged %q", got, cmd)
+	}
+}
+
+func TestWrapProfileOrdering(t *testing.T) {
+	// WithModel must apply BEFORE the wrap: --model lands on the claude
+	// token, not on `.`/`env` from the wrap's own prefix.
+	modeled := WithModel("claude --dangerously-skip-permissions", "opus")
+	p := &ModelProfile{
+		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+	}
+	got := WrapProfile(modeled, p, "/home/x/.config/grove/.env")
+	if !strings.Contains(got, "exec "+modeled) {
+		t.Errorf("wrap does not exec the already-modeled command intact:\n%s", got)
+	}
+}
+
+func TestWrapProfileQuotingAndShape(t *testing.T) {
+	p := &ModelProfile{
+		BaseURL:      "https://openrouter.ai/api",
+		AuthTokenEnv: "OPENROUTER_API_KEY",
+		Opus:         "z-ai/glm-5.2",
+		Sonnet:       "z-ai/glm-5.2",
+		Haiku:        "z-ai/glm-4.5-air",
+	}
+	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/prompt.txt)"`
+	got := WrapProfile(cmd, p, "/home/x/.config/grove/.env")
+
+	if !strings.HasPrefix(got, "( . '/home/x/.config/grove/.env' && export") {
+		t.Errorf("does not self-source secrets file first: %s", got)
+	}
+	if !strings.Contains(got, "ANTHROPIC_BASE_URL='https://openrouter.ai/api'") {
+		t.Errorf("base_url not shell-quoted: %s", got)
+	}
+	if !strings.Contains(got, `ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY"`) {
+		t.Errorf("auth token must stay a bare $NAME, never expanded: %s", got)
+	}
+	if strings.Contains(got, os.Getenv("OPENROUTER_API_KEY")) && os.Getenv("OPENROUTER_API_KEY") != "" {
+		t.Errorf("token value leaked into the command string: %s", got)
+	}
+	if !strings.Contains(got, "ANTHROPIC_MODEL='z-ai/glm-5.2'") {
+		t.Errorf("default (sonnet) slot slug missing/wrong: %s", got)
+	}
+	if !strings.Contains(got, "&& exec claude --dangerously-skip-permissions") {
+		t.Errorf("must use export ... ; exec, never env NAME=$VAR: %s", got)
+	}
+	if !strings.HasSuffix(got, ")") {
+		t.Errorf("wrap must be a single parenthesized subshell: %s", got)
+	}
+}
+
+func TestWrapProfileMetacharInBaseURL(t *testing.T) {
+	p := &ModelProfile{BaseURL: "https://example.com/a'b", AuthTokenEnv: "X", Sonnet: "m"}
+	got := WrapProfile("claude", p, "/s/.env")
+	if !strings.Contains(got, shellQuote("https://example.com/a'b")) {
+		t.Errorf("base_url metachar not safely quoted: %s", got)
+	}
+}
+
+func TestWrapProfileSlotSelection(t *testing.T) {
+	p := &ModelProfile{
+		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+	}
+	cases := []struct {
+		name, model, wantSlug string
+	}{
+		{"no model flag defaults to sonnet", "", "z-ai/glm-5.2"},
+		{"opus flag maps to opus slug", "opus", "z-ai/glm-5.2"},
+		{"haiku flag maps to haiku slug", "haiku", "z-ai/glm-4.5-air"},
+		{"sonnet flag maps to sonnet slug", "sonnet", "z-ai/glm-5.2"},
+	}
+	for _, tc := range cases {
+		modeled := WithModel("claude", tc.model)
+		got := WrapProfile(modeled, p, "/s/.env")
+		if !strings.Contains(got, "ANTHROPIC_MODEL="+shellQuote(tc.wantSlug)) {
+			t.Errorf("%s: got %q, want ANTHROPIC_MODEL=%s", tc.name, got, shellQuote(tc.wantSlug))
+		}
+	}
+}
+
+func TestResolveProfile(t *testing.T) {
+	c := &Config{ModelProfiles: map[string]*ModelProfile{
+		"openrouter-glm": {BaseURL: "https://openrouter.ai/api"},
+	}}
+	repo := &Repo{ModelProfile: "openrouter-glm"}
+
+	if name, p, err := c.ResolveProfile("", nil); err != nil || name != "" || p != nil {
+		t.Errorf("no explicit, no repo: got (%q, %v, %v), want (\"\", nil, nil)", name, p, err)
+	}
+	if name, p, err := c.ResolveProfile("", &Repo{}); err != nil || name != "" || p != nil {
+		t.Errorf("no explicit, repo without default: got (%q, %v, %v), want (\"\", nil, nil)", name, p, err)
+	}
+	if name, p, err := c.ResolveProfile("", repo); err != nil || name != "openrouter-glm" || p == nil {
+		t.Errorf("repo default should apply: got (%q, %v, %v)", name, p, err)
+	}
+	if name, p, err := c.ResolveProfile("anthropic", repo); err != nil || name != "" || p != nil {
+		t.Errorf("explicit anthropic overrides repo default to no-wrap: got (%q, %v, %v)", name, p, err)
+	}
+	if name, p, err := c.ResolveProfile("openrouter-glm", nil); err != nil || name != "openrouter-glm" || p == nil {
+		t.Errorf("explicit wins with no repo: got (%q, %v, %v)", name, p, err)
+	}
+	if _, _, err := c.ResolveProfile("nope", nil); err == nil {
+		t.Error("unknown profile should error")
+	}
+}
