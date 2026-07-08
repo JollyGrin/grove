@@ -17,7 +17,7 @@ import (
 // pad/trunc do plain rune-cell math and a double-width glyph desyncs every
 // column after it (the battle-scar in viewAgents). Trap #2.
 func TestNewGlyphsAreSingleCell(t *testing.T) {
-	glyphs := []string{"◉", "●", "◎", "✦", "⬢", "☼", "☁", "⛆"}
+	glyphs := []string{"●", "✦", "⬢", "☼", "☁", "⛆"}
 	for _, g := range glyphs {
 		if w := lipgloss.Width(g); w != 1 {
 			t.Errorf("glyph %q width = %d, want 1", g, w)
@@ -25,14 +25,30 @@ func TestNewGlyphsAreSingleCell(t *testing.T) {
 	}
 }
 
-func TestBreathFrameCycles(t *testing.T) {
-	// A 4-beat breath: frame at tick t equals frame at tick t+4, and the four
-	// frames are the expected slow cycle.
-	want := []string{"◉", "●", "◎", "●"}
-	for tick := uint64(0); tick < 12; tick++ {
-		if got := breathFrame(tick); got != want[tick%4] {
-			t.Errorf("breathFrame(%d) = %q, want %q", tick, got, want[tick%4])
+func TestBreathPingPongs(t *testing.T) {
+	// grove-24: the breath is now a COLOR ramp on a stable ●, not a shape swap.
+	// The working glyph must never change shape.
+	if statusGlyph("working") != "●" {
+		t.Fatalf("working glyph = %q, want ●", statusGlyph("working"))
+	}
+	// One step per tick, ping-ponged dim→bright→dim with no hard seam. For a
+	// 5-shade ramp the period is 8 ticks: 0,1,2,3,4,3,2,1 then repeat.
+	want := []int{0, 1, 2, 3, 4, 3, 2, 1}
+	for tick := uint64(0); tick < 16; tick++ {
+		if got := breathPhase(tick); got != want[tick%8] {
+			t.Errorf("breathPhase(%d) = %d, want %d", tick, got, want[tick%8])
 		}
+	}
+	// Adjacent phases differ by at most one shade — the brightness change is
+	// barely perceptible frame-to-frame (no jump, including across the seam).
+	for tick := uint64(0); tick < 16; tick++ {
+		if d := breathPhase(tick+1) - breathPhase(tick); d < -1 || d > 1 {
+			t.Errorf("breath jumped %d shades between tick %d and %d", d, tick, tick+1)
+		}
+	}
+	// Every shade has a precomputed style (built once, no per-frame alloc).
+	if len(breathStyles) != len(breathShades) {
+		t.Errorf("breathStyles has %d entries, want %d", len(breathStyles), len(breathShades))
 	}
 }
 
@@ -52,10 +68,11 @@ func TestVerbForDeterministicAndSlow(t *testing.T) {
 	if verbFor("grove-18", 24) == base {
 		t.Error("verb did not advance after an 8-tick window")
 	}
-	// Every verb, once truncated to the 8-cell LIVE column, fits.
+	// grove-24: the verb now lives in the prominent 11-cell STATUS column and
+	// must fit there WITHOUT truncation (no trailing …).
 	for _, v := range groveVerbs {
-		if w := lipgloss.Width(pad(v, 8)); w != 8 {
-			t.Errorf("verb %q padded to LIVE column = width %d, want 8", v, w)
+		if w := lipgloss.Width(v); w > 11 {
+			t.Errorf("verb %q is %d cells, too wide for the 11-cell STATUS column", v, w)
 		}
 	}
 }
@@ -196,11 +213,17 @@ func TestOffIsStatic(t *testing.T) {
 
 	// The static substance is present, the flourish is absent.
 	if !strings.Contains(r0, "working") {
-		t.Error("off LIVE column should show the literal 'working'")
+		t.Error("off STATUS column should show the literal 'working'")
 	}
-	for _, leak := range []string{"◉", "◎", "✦", "☼", "☁", "⛆", "photosynthesizing", "dew on the leaves"} {
+	for _, leak := range []string{"◉", "◎", "✦", "☼", "☁", "⛆", "dew on the leaves"} {
 		if strings.Contains(r0, leak) {
 			t.Errorf("off render leaked flourish %q", leak)
+		}
+	}
+	// No grove verb may replace the literal status at off.
+	for _, v := range groveVerbs {
+		if strings.Contains(r0, v) {
+			t.Errorf("off render leaked grove verb %q", v)
 		}
 	}
 
@@ -213,12 +236,15 @@ func TestOffIsStatic(t *testing.T) {
 	if rf == r0 {
 		t.Error("full render is identical to off — flourish is not rendering")
 	}
-	for _, want := range []string{"◉" /*breath tick0*/, "☼" /*weather*/, "✦" /*sparkle*/} {
+	// The breath is a color-only change on ● (untestable via plain-text
+	// Contains — colors are stripped without a TTY), so it's covered by
+	// TestBreathPingPongs; here we assert the content-bearing flourishes.
+	for _, want := range []string{"☼" /*weather*/, "✦" /*sparkle*/} {
 		if !strings.Contains(rf, want) {
 			t.Errorf("full render missing expected flourish %q", want)
 		}
 	}
-	// A2: the working verb replaces the literal in the LIVE column.
+	// A2: the working verb replaces the literal in the prominent STATUS column.
 	if !strings.Contains(rf, verbFor("grove-18", 0)) {
 		t.Errorf("full render should show grove verb %q", verbFor("grove-18", 0))
 	}

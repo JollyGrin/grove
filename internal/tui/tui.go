@@ -37,6 +37,14 @@ type refreshMsg struct {
 	mem     resource.Mem
 	workers int
 }
+
+// tickMsg is the single cockpit beat (grove-24): one per second, re-armed
+// ONLY by its own handler. It advances the animation clock AND kicks a data
+// refresh. Keeping it the sole re-armer fixes the old multiplication bug
+// (refreshMsg re-armed the timer, so every ad-hoc refresh spawned another
+// loop) without adding a timer — the RAM constraint. Ad-hoc refreshCmd calls
+// now produce only a data-applying refreshMsg, never touching the clock.
+type tickMsg struct{}
 type flashMsg string
 type prsMsg map[string]*github.PR
 type paneTailMsg string
@@ -74,10 +82,11 @@ type Model struct {
 
 	flash string
 
-	// Cockpit joy (grove-22). fx is the effects level; tick is the animation
-	// clock (incremented per refreshMsg — the existing 1s loop, no new timer);
-	// celebrations maps ticket → shimmer ticks remaining for a just-merged PR,
-	// capped and decremented each tick.
+	// Cockpit joy (grove-22, grove-24). fx is the effects level; tick is the
+	// animation clock — advanced once per 1s tickMsg on the single refresh
+	// timer, NOT per refreshMsg, so ad-hoc refreshes (answers, reviews, dones)
+	// can't accelerate the breath. celebrations maps ticket → shimmer ticks
+	// remaining for a just-merged PR, capped and decremented on that same beat.
 	fx           fxLevel
 	tick         uint64
 	celebrations map[string]int
@@ -113,13 +122,16 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, error) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.stateDir), prsCmd(m.cfg, m.stateDir, nil), tickEvery(m.stateDir, time.Second), prTickEvery())
+	return tea.Batch(refreshCmd(m.stateDir), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery())
 }
 
 // --- commands ---
 
-func tickEvery(stateDir string, d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return refreshCmd(stateDir)() })
+// tickEvery arms the single cockpit beat. It carries no data — the handler
+// fans out to refreshCmd — so it re-arms itself (via tickMsg) without the
+// old per-refreshMsg re-arm that let the loops multiply (grove-24).
+func tickEvery(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 func prTickEvery() tea.Cmd {
@@ -196,12 +208,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 
-	case refreshMsg:
-		// The refresh loop IS the animation clock — one tick per second, no new
-		// timer (grove-22). Celebrations decay on the same beat.
+	case tickMsg:
+		// The single cockpit beat (grove-24): advance the animation clock,
+		// decay celebrations, then kick a data refresh AND re-arm ONLY this
+		// timer. Because nothing else re-arms it, ad-hoc refreshes can't
+		// multiply the loop or speed the breath. No new timer — this replaces
+		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		// Gauge refreshes every tick — even at zero active tasks, where
+		return m, tea.Batch(refreshCmd(m.stateDir), tickEvery(time.Second))
+
+	case refreshMsg:
+		// Data only — the clock lives on tickMsg now (grove-24). This handler
+		// runs both on the beat and on ad-hoc refreshes (answers, reviews,
+		// dones); it must never re-arm a timer or touch m.tick.
+		// Gauge refreshes every time — even at zero active tasks, where
 		// msg.tasks is nil and the block below is skipped. A failed read is a
 		// zero Mem (OK()==false) and simply hides the gauge.
 		m.mem = msg.mem
@@ -218,7 +239,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		cmds := []tea.Cmd{tickEvery(m.stateDir, time.Second)}
+		var cmds []tea.Cmd
 		if m.mode == modeDetail && m.detail != nil {
 			cmds = append(cmds, paneTailCmd(m.detail))
 		}
