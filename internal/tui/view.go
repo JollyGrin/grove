@@ -44,7 +44,7 @@ func (m Model) viewHeader() string {
 	if m.label != "" {
 		scope = "· " + m.label
 	}
-	left := sTitle.Render(" ❉ GROVE ") + sChrome.Render(scope)
+	left := sTitle.Render(" ⁂ GROVE ") + sChrome.Render(scope)
 	right := m.memGauge() + fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
