@@ -112,8 +112,36 @@ func (t Totals) CacheReadShare() float64 {
 // is unpriced, so an unknown model never silently reads as free. Returns
 // "" when there is nothing to split. Estimates, not billing.
 func (t Totals) Mix() string {
+	parts := t.mixParts(func(short string, pct float64) string {
+		return fmt.Sprintf("%s %.0f%%", short, pct)
+	})
+	return strings.Join(parts, " · ")
+}
+
+// MixCompact renders the same per-model shares as Mix in a space-tight form
+// for narrow table columns: uppercase family initial + rounded percent,
+// joined by "-", e.g. "fable 98% · opus 2%" → "F98-O2", "opus 100%" → "O100".
+// Same USD-vs-token share basis and ordering as Mix — only the rendering
+// differs. Returns "" when there is nothing to split. This is the display-
+// only form; Mix stays the verbose, unambiguous one for JSON and the ledger.
+func (t Totals) MixCompact() string {
+	parts := t.mixParts(func(short string, pct float64) string {
+		initial := short
+		if r := []rune(short); len(r) > 0 {
+			initial = strings.ToUpper(string(r[0]))
+		}
+		return fmt.Sprintf("%s%.0f", initial, pct)
+	})
+	return strings.Join(parts, "-")
+}
+
+// mixParts computes each model's rounded percent share (dominant first, same
+// basis as Total's ordering) and formats it with render. Shared by Mix and
+// MixCompact so both stay in lockstep on the USD-vs-token fallback. Returns
+// nil when there is nothing to split.
+func (t Totals) mixParts(render func(short string, pct float64) string) []string {
 	if len(t.Models) == 0 {
-		return ""
+		return nil
 	}
 	byUSD := t.CostKnown && t.USD > 0
 	var denom float64
@@ -125,7 +153,7 @@ func (t Totals) Mix() string {
 		}
 	}
 	if denom <= 0 {
-		return ""
+		return nil
 	}
 	var parts []string
 	for _, m := range t.Models {
@@ -135,9 +163,9 @@ func (t Totals) Mix() string {
 		} else {
 			share = float64(m.Tokens) / denom
 		}
-		parts = append(parts, fmt.Sprintf("%s %.0f%%", ShortModel(m.Model), 100*share))
+		parts = append(parts, render(ShortModel(m.Model), 100*share))
 	}
-	return strings.Join(parts, " · ")
+	return parts
 }
 
 // ShortModel is the human-facing family label for a model id:
