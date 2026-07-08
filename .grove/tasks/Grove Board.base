@@ -1,0 +1,20 @@
+filters:
+  and:
+    - note.status
+views:
+  - type: kanban
+    name: Grove Board
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - priority
+      - labels
+    cardTitleProperty: note.title
+    boardColumns:
+      - backlog
+      - todo
+      - in-progress
+      - review
+      - done

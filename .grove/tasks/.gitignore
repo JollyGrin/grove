@@ -1,0 +1,3 @@
+# Obsidian machine-local state (plugins, caches, workspace layout).
+# The tickets (*.md) and the board (*.base) are the queue — those get committed.
+.obsidian/
