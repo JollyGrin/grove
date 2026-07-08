@@ -122,7 +122,7 @@ func (m Model) viewCosts() string {
 	var sections []string
 
 	// Active tickets, live from transcripts.
-	rows := []string{sHeaderCol.Render(truncPad("   "+pad("TICKET", m.ticketColWidth())+pad("EST $", 9)+pad("TURNS", 7)+pad("IN", 9)+pad("OUT", 9)+pad("CACHE%", 8)+pad("MODELS", 10)+"TITLE", w))}
+	rows := []string{sHeaderCol.Render(truncPad("   "+pad("TICKET", m.ticketColWidth())+pad("EST $", 9)+pad("TURNS", 7)+pad("IN", 9)+pad("OUT", 9)+pad("CACHE%", 8)+pad("MODELS", 12)+"TITLE", w))}
 	if len(m.costs.rows) == 0 {
 		rows = append(rows, sDim.Render("  no active tickets with transcripts"))
 	}
@@ -133,7 +133,7 @@ func (m Model) viewCosts() string {
 			pad(fmtTokens(r.tot.Input), 9) +
 			pad(fmtTokens(r.tot.Output), 9) +
 			pad(fmt.Sprintf("%.0f%%", 100*r.tot.CacheReadShare()), 8) +
-			sDelivery.Render(pad(r.tot.MixCompact(), 10)) +
+			sDelivery.Render(pad(r.tot.MixCompact(), 12)) +
 			sChrome.Render(r.title)
 		rows = append(rows, truncPad(line, w))
 	}
