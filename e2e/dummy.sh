@@ -137,7 +137,7 @@ say "spend ledger: plant a fake transcript so done has cost to snapshot"
 # macOS); the transcript project-dir encoding starts from that real path.
 WTDIR2="$(cd "$(ls -d "$WT"/task-001-*)" && pwd -P)"
 ENC="$(printf '%s' "$WTDIR2" | tr '/.' '--')"
-PROJ="$HOME/.cc-work/projects/$ENC"
+PROJ="$HOME/.claude/projects/$ENC"
 mkdir -p "$PROJ"
 # Two models so the per-task model breakdown (grove-14) has a mix to show.
 # The tiny haiku entry keeps the total under $0.035 (still rounds to $0.03).
@@ -163,7 +163,7 @@ grep -q 'sonnet' "$LEDGER" || fail "ledger row missing per-model mix (grove-14 m
 grep -q 'haiku' "$LEDGER" || fail "ledger row missing the second model in the mix"
 
 say "spend ledger: history survives transcript + worktree deletion"
-rm -rf "$HOME/.cc-work/projects"
+rm -rf "$HOME/.claude/projects"
 "$GV" cost --ledger > "$SCRATCH/ledger.out"
 grep -q 'task-001' "$SCRATCH/ledger.out" || fail "history lost after transcript deletion"
 grep -q 'Replace me' "$SCRATCH/ledger.out" || fail "history lost the title after transcript deletion"

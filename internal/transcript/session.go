@@ -27,8 +27,9 @@ func EncodePath(absPath string) string {
 }
 
 // ProjectDir returns the <config-dir>/projects/<encoded> directory for a
-// worktree path. Overstory sessions run under CLAUDE_CONFIG_DIR=~/.cc-work
-// (divergence from parkranger, which reads ~/.claude).
+// worktree path. Grove workers run under the default Claude Code config dir
+// (~/.claude); GV_CLAUDE_CONFIG_DIR overrides it for ovs-style repos whose
+// workers run under a different profile and for the e2e harness.
 func ProjectDir(worktreePath string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -36,7 +37,7 @@ func ProjectDir(worktreePath string) string {
 	}
 	configDir := os.Getenv("GV_CLAUDE_CONFIG_DIR")
 	if configDir == "" {
-		configDir = filepath.Join(home, ".cc-work")
+		configDir = filepath.Join(home, ".claude")
 	}
 	encoded := EncodePath(worktreePath)
 	return filepath.Join(configDir, "projects", encoded)

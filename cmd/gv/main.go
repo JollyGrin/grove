@@ -70,7 +70,7 @@ const usage = `gv — grove
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
-  gv hooks install|status                     wire ~/.cc-work/settings.json
+  gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
