@@ -40,7 +40,10 @@ type refreshMsg struct {
 type flashMsg string
 type prsMsg map[string]*github.PR
 type paneTailMsg string
-type actionDoneMsg struct{ err error }
+type actionDoneMsg struct {
+	err    error
+	ticket string // for the J2 done ritual (grove-22)
+}
 
 type Model struct {
 	cfg      *config.Config
@@ -71,6 +74,14 @@ type Model struct {
 
 	flash string
 
+	// Cockpit joy (grove-22). fx is the effects level; tick is the animation
+	// clock (incremented per refreshMsg — the existing 1s loop, no new timer);
+	// celebrations maps ticket → shimmer ticks remaining for a just-merged PR,
+	// capped and decremented each tick.
+	fx           fxLevel
+	tick         uint64
+	celebrations map[string]int
+
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
 	// and so can't happen inside the tea loop. Inside tmux, attach is a
@@ -84,7 +95,11 @@ func New(cfg *config.Config, stateDir, label string) Model {
 	in.Placeholder = "type a reply — enter sends straight to the agent's pane"
 	in.Prompt = sKey.Render("❯ ")
 	in.CharLimit = 0
-	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache()}
+	fx := fxFull
+	if cfg != nil {
+		fx = parseFx(cfg.Cockpit.Effects)
+	}
+	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
 }
 
 func Run(cfg *config.Config, stateDir, label string) (*state.Task, error) {
@@ -182,6 +197,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case refreshMsg:
+		// The refresh loop IS the animation clock — one tick per second, no new
+		// timer (grove-22). Celebrations decay on the same beat.
+		m.tick++
+		decayCelebrations(m.celebrations)
 		// Gauge refreshes every tick — even at zero active tasks, where
 		// msg.tasks is nil and the block below is skipped. A failed read is a
 		// zero Mem (OK()==false) and simply hides the gauge.
@@ -215,6 +234,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case prsMsg:
+		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
+		// short shimmer + footer flash. Detected by diffing old vs new — no new
+		// I/O. Gated to fxFull; the celebrations map is capped so a burst of
+		// merges can't grow it without bound.
+		if m.fx >= fxFull {
+			for ticket, pr := range msg {
+				if pr == nil || pr.State != "MERGED" {
+					continue
+				}
+				if old := m.prs[ticket]; old != nil && old.State == "MERGED" {
+					continue // already merged last poll — not fresh
+				}
+				if len(m.celebrations) >= maxCelebrations {
+					break
+				}
+				m.celebrations[ticket] = celebrationTicks
+				m.flash = "⬢ " + ticket + " merged — the canopy grows"
+			}
+		}
 		m.prs = msg
 		return m, tea.Tick(30*time.Second, func(time.Time) tea.Msg { return prsCmd(m.cfg, m.stateDir, nil)() })
 
@@ -229,6 +267,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		if msg.err != nil {
 			m.flash = msg.err.Error()
+		} else if m.fx >= fxFull && msg.ticket != "" {
+			// J2 done ritual. The just-shipped tree isn't in m.events yet (its
+			// refresh is still in flight), so count the loaded EvTaskDone and
+			// add this one — precision doesn't matter (design J2).
+			m.flash = fmt.Sprintf("✓ %s shipped — tree #%d this season", msg.ticket, countDone(m.events)+1)
 		} else {
 			m.flash = "✓ done"
 		}
@@ -254,6 +297,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
+		m.fx = cycleFx(m.fx)
+		m.flash = "effects: " + fxLabel(m.fx)
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"
@@ -402,7 +448,7 @@ func (m Model) handleConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.detail = nil
 		m.flash = "cleaning up " + t.Ticket + "…"
-		return m, func() tea.Msg { return actionDoneMsg{err: FinishTask(cfg, t, false)} }
+		return m, func() tea.Msg { return actionDoneMsg{err: FinishTask(cfg, t, false), ticket: t.Ticket} }
 	default:
 		m.mode = modeList
 		m.detail = nil

@@ -71,7 +71,13 @@ func (m Model) memGauge() string {
 	case resource.Red:
 		st = sBlocked
 	}
-	return st.Render(fmt.Sprintf("%.1fG", m.mem.AvailGB())) +
+	// A3 weather gauge: prefix the reading with a sky keyed to the memory
+	// level (grove-22) — clear / clouds / storm, in the same level color.
+	prefix := ""
+	if m.fx >= fxCalm {
+		prefix = st.Render(weatherGlyph(m.mem.Level()) + " ")
+	}
+	return prefix + st.Render(fmt.Sprintf("%.1fG", m.mem.AvailGB())) +
 		sChrome.Render(fmt.Sprintf(" avail · %dw   ", m.workers))
 }
 
@@ -106,7 +112,11 @@ func (m Model) viewAgents() string {
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
 	if len(m.tasks) == 0 {
-		rows = append(rows, sDim.Render("  no active tasks — gv grab <ticket> plants one"))
+		empty := "  no active tasks — gv grab <ticket> plants one"
+		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
+			empty = emptyAgentsLine(nowHour())
+		}
+		rows = append(rows, sDim.Render(empty))
 	}
 	for i, t := range m.tasks {
 		label := t.Label()
@@ -116,7 +126,13 @@ func (m Model) viewAgents() string {
 		if p := m.prs[t.Ticket]; p != nil {
 			pr = fmt.Sprintf("#%d", p.Number)
 			if p.State == "MERGED" {
-				pr += "⬢"
+				// J1 merge sparkle: shimmer the ⬢ for a few ticks after the PR
+				// flips MERGED (grove-22). No spaces — the column is 8 cells.
+				if _, ok := m.celebrations[t.Ticket]; ok && m.fx >= fxFull {
+					pr += "✦⬢✦"
+				} else {
+					pr += "⬢"
+				}
 			}
 			switch p.CI {
 			case "pass":
@@ -134,11 +150,24 @@ func (m Model) viewAgents() string {
 		if i == m.sel {
 			cursor = sSelected.Render("▸")
 		}
-		line := cursor + st.Render(statusGlyph(label)) + " " +
+		// A1 the grove breathes: the working glyph cycles a slow breath on the
+		// tick (grove-22). A2 grove verbs: the LIVE "working" becomes a rotating
+		// gerund. Both ambient — gated at fxCalm, static glyph/word at off.
+		glyph := statusGlyph(label)
+		live := m.live[t.Ticket]
+		if m.fx >= fxCalm {
+			if label == "working" {
+				glyph = breathFrame(m.tick)
+			}
+			if live == "working" {
+				live = verbFor(t.Ticket, m.tick)
+			}
+		}
+		line := cursor + st.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
 			pad(trunc(t.Repo, 10), 11) +
 			st.Render(pad(label, 11)) +
-			sDim.Render(pad(m.live[t.Ticket], 8)) +
+			sDim.Render(pad(live, 8)) +
 			sDelivery.Render(pad(pr, 8)) +
 			ciStyle.Render(pad(ci, 4)) +
 			sDelivery.Render(pad(preview, 9)) +
@@ -173,7 +202,11 @@ func (m Model) viewActivity() string {
 
 	rows := []string{}
 	if len(items) == 0 {
-		rows = append(rows, sDim.Render("  nothing has happened yet"))
+		empty := "  nothing has happened yet"
+		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
+			empty = emptyActivityLine(nowHour())
+		}
+		rows = append(rows, sDim.Render(empty))
 	}
 	tw := m.ticketColWidth()
 	for _, it := range items[:avail] {
@@ -201,6 +234,7 @@ func (m Model) viewFooter() string {
 		sKey.Render("n") + sFoot.Render(" nudge"),
 		sKey.Render("d") + sFoot.Render(" done"),
 		sKey.Render("$") + sFoot.Render(" costs"),
+		sKey.Render("*") + sFoot.Render(" effects"),
 		sKey.Render("q") + sFoot.Render(" quit"),
 	}
 	line := " " + strings.Join(keys, sDim.Render(" · "))
