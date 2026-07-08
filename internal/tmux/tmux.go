@@ -163,8 +163,15 @@ func WindowExists(session, window string) bool {
 }
 
 // CreateWindow creates a new named window in the given session.
+//
+// The -d flag keeps the new window detached so creating it does not pull an
+// attached client off its current window. Since grove-29 a workspace's cockpit
+// and its workers share one grove-<label> session (window 0 = cockpit, 1+ =
+// workers), so without -d a `gv grab` would yank the operator off the cockpit
+// onto the freshly-spawned worker. The deliberate AttachWindow path stays the
+// way to intentionally jump to a worker.
 func CreateWindow(session, name, workDir string) error {
-	_, err := run("new-window", "-t", session, "-n", name, "-c", workDir)
+	_, err := run("new-window", "-d", "-t", session, "-n", name, "-c", workDir)
 	return err
 }
 
