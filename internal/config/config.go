@@ -54,6 +54,13 @@ type Config struct {
 		Label string `yaml:"label"`
 		Scope string `yaml:"scope"` // repo | parent
 	} `yaml:"workspace"`
+	// Cockpit tunes the dashboard's presentation (grove-22). Effects is the
+	// joy knob: full (default) | calm (ambient only) | off (today's exact
+	// render). Empty/unknown resolves to full in the TUI — a typo never
+	// breaks the cockpit, so parse() deliberately leaves it untouched.
+	Cockpit struct {
+		Effects string `yaml:"effects"`
+	} `yaml:"cockpit"`
 }
 
 // Notify configures phone push via ntfy. The topic URL is the only secret

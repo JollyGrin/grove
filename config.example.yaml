@@ -67,3 +67,14 @@ cost:
   # removal. This is only the DEFAULT — the cockpit costs page ($ key, then
   # r) toggles at runtime, persisted in <state>/cost-recording, which wins.
   record: false
+
+# Cockpit presentation (grove-22).
+cockpit:
+  # Joy knob for the dashboard TUI:
+  #   full  (default) — calm ambient life (breathing agents, grove verbs,
+  #                      weather gauge, time-of-day empty states) + one-shot
+  #                      merge/done celebrations.
+  #   calm            — ambient only, no celebrations.
+  #   off             — today's exact render, no flourish.
+  # Cycle at runtime with the `*` key (not persisted). Unknown value = full.
+  # effects: full
