@@ -41,6 +41,13 @@ func feedItems(events []state.Event) []feedItem {
 			it = feedItem{Glyph: "⬢", Text: "done — cleaned up"}
 		case state.EvTaskUntracked:
 			it = feedItem{Glyph: "○", Text: "untracked"}
+		case state.EvWorkspaceParked:
+			// Workspace-level, ticket-less (grove-33): render it as a standalone
+			// feed row so a reopened cockpit shows why the fleet went quiet.
+			it = feedItem{Glyph: "⏸", Text: "workspace parked — session killed, state saved"}
+			it.Time = ev.Time
+			out = append(out, it)
+			continue
 		case state.EvOrchestratorClosed:
 			// Ticket rides in Data (Event.Ticket is empty by design); pull it
 			// into the row so the feed still attributes the dispatch.

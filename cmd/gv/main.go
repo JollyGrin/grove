@@ -64,6 +64,7 @@ const usage = `gv — grove
   gv done <ticket> [--force]                  verify merged → clean up everything
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
   gv sweep                                    clean up all merged tasks
+  gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new                         add an orchestrator chat pane (O in the TUI)
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
@@ -229,6 +230,8 @@ func main() {
 		err = cmdUntrack(args)
 	case "sweep":
 		err = cmdSweep(args)
+	case "park", "close":
+		err = cmdPark(args)
 	case "ui":
 		err = cmdUI()
 	case "switch":
@@ -276,6 +279,7 @@ func cmdDashboard() error {
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
 	tui.AttachTask = attachTask
+	tui.CloseWorkspace = closeWorkspace
 	attachTo, err := tui.Run(cfg, stateDir(), wsLabel())
 	if err != nil {
 		return err
@@ -324,9 +328,46 @@ func openCockpit(ws *workspace.Workspace) error {
 // cockpitSessionFor: grove-<label> per workspace; legacy = grove.
 func cockpitSessionFor(ws *workspace.Workspace) string {
 	if ws != nil {
-		return "grove-" + ws.Label
+		return cockpitSessionForLabel(ws.Label)
 	}
 	return "grove"
+}
+
+// cockpitSessionForLabel is the label-string form of cockpitSessionFor, for
+// callers that carry only the label (the TUI, `gv park`).
+func cockpitSessionForLabel(label string) string {
+	if label == "" {
+		return "grove"
+	}
+	return "grove-" + label
+}
+
+// closeWorkspace parks a workspace (grove-33): it logs the durable
+// EvWorkspaceParked BEFORE killing the shared grove-<label> session, so the
+// record survives — kill-session takes down the cockpit, the orchestrator,
+// and every worker in one stroke, freeing their memory. Nothing is deleted
+// and no task terminal state is touched: bare `gv` rebuilds the cockpit and
+// `gv adopt <ticket>` revives a worker. Injected into the TUI as
+// tui.CloseWorkspace.
+func closeWorkspace(stateDir, label string) error {
+	if err := state.Append(stateDir, state.Event{Type: state.EvWorkspaceParked}); err != nil {
+		return err
+	}
+	return tmux.KillSession(cockpitSessionForLabel(label))
+}
+
+// cmdPark is the CLI twin of the cockpit X hotkey (grove-33): park the
+// ambient workspace. Run from outside the cockpit (or via orchestrator
+// dispatch); run from inside the session it kills, the print may not land
+// because the pane dies with the session — the parked event is durable
+// either way.
+func cmdPark(args []string) error {
+	session := cockpitSessionForLabel(wsLabel())
+	if !tmux.SessionExists(session) {
+		return fmt.Errorf("%s is not running — nothing to park", session)
+	}
+	fmt.Printf("⏸ parking %s — state saved; resume with gv (then gv adopt <ticket>)\n", session)
+	return closeWorkspace(stateDir(), wsLabel())
 }
 
 // cockpitTitleFor: the outer terminal-tab title for a cockpit — the

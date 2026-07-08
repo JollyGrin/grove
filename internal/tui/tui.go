@@ -27,6 +27,7 @@ const (
 	modeList = iota
 	modeDetail
 	modeConfirmDone
+	modeConfirmClose
 	modeCosts
 )
 
@@ -313,6 +314,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeConfirmDone {
 		return m.handleConfirmKey(k)
 	}
+	if m.mode == modeConfirmClose {
+		return m.handleCloseKey(k)
+	}
 	if m.mode == modeCosts {
 		return m.handleCostsKey(k)
 	}
@@ -413,6 +417,8 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail = t
 			m.mode = modeConfirmDone
 		}
+	case "X": // park the whole workspace (grove-33) — workspace-level, no row needed
+		m.mode = modeConfirmClose
 	case "r":
 		m.flash = "refreshing PRs…"
 		return m, prsCmd(m.cfg, m.stateDir, m.tasks)
@@ -479,10 +485,50 @@ func (m Model) handleConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleCloseKey mirrors handleConfirmKey for the park-workspace modal
+// (grove-33): y kills the shared grove-<label> session — freeing every
+// worker, the orchestrator, and this very dashboard — after the parked
+// event is durably logged; any other key backs out. There is no per-task
+// selection: parking is workspace-level.
+func (m Model) handleCloseKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if k.String() == "y" {
+		stateDir, label := m.stateDir, m.label
+		m.flash = "parking " + m.sessionName() + "…"
+		return m, func() tea.Msg {
+			// CloseWorkspace logs the parked event then kills the session,
+			// which takes down this process — so on success nothing below
+			// runs. A returned error means the kill never happened; surface it.
+			if err := CloseWorkspace(stateDir, label); err != nil {
+				return flashMsg(err.Error())
+			}
+			return nil
+		}
+	}
+	m.mode = modeList
+	return m, nil
+}
+
+// sessionName is the workspace's shared tmux session (grove-<label>, or the
+// legacy global "grove"); the model carries label so it needn't ask cmd/gv.
+func (m Model) sessionName() string {
+	if m.label == "" {
+		return "grove"
+	}
+	return "grove-" + m.label
+}
+
 // FinishTask is injected by cmd/gv (the done flow lives there); wired at
 // startup to avoid an import cycle.
 var FinishTask = func(cfg *config.Config, t *state.Task, force bool) error {
 	return fmt.Errorf("done flow not wired")
+}
+
+// CloseWorkspace is injected by cmd/gv (the park flow — parked event then
+// tmux.KillSession — lives there); wired at startup to avoid an import
+// cycle. It logs the durable EvWorkspaceParked BEFORE the kill so the
+// record survives the session death.
+var CloseWorkspace = func(stateDir, label string) error {
+	return fmt.Errorf("park flow not wired")
 }
 
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
