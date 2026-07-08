@@ -2,6 +2,24 @@ package tmux
 
 import "testing"
 
+func TestWorkerWindow(t *testing.T) {
+	cases := []struct {
+		name      string
+		repoShort string
+		ticket    string
+		want      string
+	}{
+		{"plain", "p2p", "154-undo-button", "p2p · 154-undo-button"},
+		{"sanitizes dots", "pro.server", "39-x", "pro-server · 39-x"},
+		{"sanitizes colons", "a:b", "1:2", "a-b · 1-2"},
+	}
+	for _, tc := range cases {
+		if got := WorkerWindow(tc.repoShort, tc.ticket); got != tc.want {
+			t.Errorf("%s: WorkerWindow(%q, %q) = %q, want %q", tc.name, tc.repoShort, tc.ticket, got, tc.want)
+		}
+	}
+}
+
 func TestClosablePane(t *testing.T) {
 	cases := []struct {
 		name    string

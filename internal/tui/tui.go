@@ -147,7 +147,9 @@ func refreshCmd(stateDir string) tea.Cmd {
 		active := state.Active(tasks)
 		live := map[string]string{}
 		for _, t := range active {
-			info := detect.DetectLive(t.TmuxSession, t.TmuxWindow)
+			// Resolve the current window name — a P3 status glyph is a display
+			// suffix on the stable base, and the detect probe matches exactly.
+			info := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
 			if !info.Exists {
 				live[t.Ticket] = "gone"
 			} else {

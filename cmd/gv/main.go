@@ -310,7 +310,10 @@ func openCockpit(ws *workspace.Workspace) error {
 		return err
 	}
 	session := cockpitSessionFor(ws)
-	if !tmux.SessionExists(session) {
+	// Not just "does the session exist" — grab may have created it as a
+	// reserved placeholder (window 0 = cockpit hint) before the cockpit was
+	// ever opened. Build (upgrade the placeholder in place) until it's ready.
+	if !tmux.CockpitReady(session) {
 		if err := buildCockpit(ws, cfg); err != nil {
 			return err
 		}
@@ -361,7 +364,24 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 		}
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
 	}
-	if err := tmux.CreateSession(session, orchDir); err != nil {
+	root := ""
+	if ws != nil {
+		root = ws.Root
+	}
+	// Ensure the session + reserved cockpit window exist — grab may have
+	// created them as a placeholder before the cockpit was ever opened. This
+	// then upgrades window 0 (the placeholder hint) into the real dash +
+	// orchestrator layout, in place, so the cockpit is always `Ctrl-b w`
+	// window 0. Root at the workspace root (orchDir lives under it and is
+	// created just above).
+	if err := tmux.EnsureWorkspaceSession(session, workspaceRoot(ws, orchDir)); err != nil {
+		return err
+	}
+	cockpitWin := session + ":cockpit"
+	// Worker windows may have been created after the placeholder — focus the
+	// cockpit window so the pane ops below and main-vertical target it, not a
+	// worker.
+	if err := tmux.SelectWindow(cockpitWin); err != nil {
 		return err
 	}
 	// Name the outer terminal tab after the workspace so several cockpits
@@ -376,17 +396,18 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if exe, err := os.Executable(); err == nil {
 		dash = exe + " dash"
 	}
-	if err := tmux.SendKeys(session+".0", dash); err != nil {
+	if err := tmux.SendKeys(cockpitWin+".0", dash); err != nil {
 		return err
-	}
-	root := ""
-	if ws != nil {
-		root = ws.Root
 	}
 	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
 		return err
 	}
-	return tmux.MainVertical(session, 55)
+	if err := tmux.MainVertical(session, 55); err != nil {
+		return err
+	}
+	// Mark the cockpit built so a later `gv` (openCockpit) attaches instead
+	// of rebuilding over a live layout.
+	return tmux.MarkCockpitReady(session)
 }
 
 // orchestratorLaunch is the orchestrator claude invocation: the configured
@@ -721,15 +742,25 @@ func cmdGrab(args []string) error {
 		})
 	}
 
-	sessionName := tmux.SessionName(repoName)
-	if _, err := tmux.EnsureSession(repoName, repo.Path); err != nil {
+	// Collapse into the workspace's single session (grove-<label>, or the
+	// global grove for an un-workspaced repo); window 0 stays the reserved
+	// cockpit, worker windows land alongside it — one legible `Ctrl-b w`
+	// node per workspace.
+	ws := workspace.Find(repo.Path)
+	sessionName := cockpitSessionFor(ws)
+	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	windowName := tmux.WindowName(name)
+	windowName := tmux.WorkerWindow(repoShort(repoName, ws), name)
 	if err := tmux.CreateWindow(sessionName, windowName, wt.Path); err != nil {
 		return err
 	}
 	windowTarget := sessionName + ":" + windowName
+	// Pin the ticket name: a worker window's name is the ticket, never
+	// whatever the claude pane's foreground process reports.
+	if err := tmux.DisableAutoRename(windowTarget); err != nil {
+		return err
+	}
 	if err := tmux.SplitVerticalWindow(windowTarget, wt.Path); err != nil {
 		return err
 	}
@@ -764,6 +795,29 @@ func cmdGrab(args []string) error {
 	}
 	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", task.ID, mode, task.ID)
 	return nil
+}
+
+// repoShort strips a redundant workspace-label prefix from a repo name so a
+// worker window reads "p2p · …" inside the grove-unbrewed session rather than
+// "unbrewed-p2p · …". Falls back to the bare repo name when no workspace is
+// resolvable or the prefix doesn't apply.
+func repoShort(repoName string, ws *workspace.Workspace) string {
+	if ws != nil {
+		if p := ws.Label + "-"; strings.HasPrefix(repoName, p) && len(repoName) > len(p) {
+			return repoName[len(p):]
+		}
+	}
+	return repoName
+}
+
+// workspaceRoot is the cwd to root a workspace session at: the workspace
+// root when resolvable, else the repo path (un-workspaced/global grove).
+// Both always exist, so tmux new-session -c never fails.
+func workspaceRoot(ws *workspace.Workspace, repoPath string) string {
+	if ws != nil {
+		return ws.Root
+	}
+	return repoPath
 }
 
 // printBacklog renders the provider's grabbable backlog (gv grab with no
@@ -1092,7 +1146,10 @@ func cmdLs(args []string) error {
 	costCache := cost.NewCache()
 	rows := make([]lsRow, 0, len(active))
 	for _, t := range active {
-		live := detect.DetectLive(t.TmuxSession, t.TmuxWindow)
+		// Resolve the current window name (a P3 status glyph is a display
+		// suffix on the stable base) so the byte-comparable detect probe's
+		// exact name match still finds a live worker.
+		live := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
 		liveStr := "gone"
 		if live.Exists {
 			liveStr = live.Status.String()
@@ -1720,7 +1777,7 @@ func cmdAdopt(args []string) error {
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID = t.Repo, t.Branch, t.SessionID
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
-		if !t.Done && tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
 		}
 	}
@@ -1823,11 +1880,12 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	sessionName := tmux.SessionName(repoName)
-	if _, err := tmux.EnsureSession(repoName, repo.Path); err != nil {
+	ws := workspace.Find(repo.Path)
+	sessionName := cockpitSessionFor(ws)
+	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	windowName := tmux.WindowName(branch)
+	windowName := tmux.WorkerWindow(repoShort(repoName, ws), branch)
 	if tmux.WindowExists(sessionName, windowName) {
 		return fmt.Errorf("window %s:%s already exists — `gv attach %s`", sessionName, windowName, id)
 	}
@@ -1835,6 +1893,9 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 	windowTarget := sessionName + ":" + windowName
+	if err := tmux.DisableAutoRename(windowTarget); err != nil {
+		return err
+	}
 	if err := tmux.SplitVerticalWindow(windowTarget, wtPath); err != nil {
 		return err
 	}
@@ -1955,7 +2016,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		}
 	}
 
-	if tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+	if tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}
@@ -2062,7 +2123,7 @@ func removeTaskArtifacts(cfg *config.Config, t *state.Task, rmRemote, force bool
 		}
 	}
 
-	if tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+	if tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}
