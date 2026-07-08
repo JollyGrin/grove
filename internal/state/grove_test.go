@@ -68,6 +68,79 @@ func TestReadEventsMissingAndMalformed(t *testing.T) {
 	}
 }
 
+func TestParkedTickets(t *testing.T) {
+	mk := func(evs ...Event) []Event { return evs }
+
+	t.Run("park marks every active task", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvTaskCreated, Ticket: "b"},
+			Event{Type: EvWorkspaceParked},
+		))
+		if !got["a"] || !got["b"] {
+			t.Errorf("both tasks should be parked, got %v", got)
+		}
+	})
+
+	t.Run("adopt after park clears just that ticket", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvTaskCreated, Ticket: "b"},
+			Event{Type: EvWorkspaceParked},
+			Event{Type: EvTaskAdopted, Ticket: "a"},
+		))
+		if got["a"] {
+			t.Errorf("adopted ticket a should not be parked, got %v", got)
+		}
+		if !got["b"] {
+			t.Errorf("un-adopted ticket b should stay parked, got %v", got)
+		}
+	})
+
+	t.Run("session start after park clears the mark", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvWorkspaceParked},
+			Event{Type: EvSessionStarted, Ticket: "a"},
+		))
+		if got["a"] {
+			t.Errorf("revived ticket should not be parked, got %v", got)
+		}
+	})
+
+	t.Run("task created after park is not parked", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvWorkspaceParked},
+			Event{Type: EvTaskCreated, Ticket: "b"},
+		))
+		if got["b"] {
+			t.Errorf("task grabbed after park should not be parked, got %v", got)
+		}
+	})
+
+	t.Run("done task drops out of the parked set", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvWorkspaceParked},
+			Event{Type: EvTaskDone, Ticket: "a"},
+		))
+		if got["a"] {
+			t.Errorf("done ticket must not remain parked, got %v", got)
+		}
+	})
+
+	t.Run("no park event means nothing parked", func(t *testing.T) {
+		got := ParkedTickets(mk(
+			Event{Type: EvTaskCreated, Ticket: "a"},
+			Event{Type: EvSessionStarted, Ticket: "a"},
+		))
+		if got["a"] {
+			t.Errorf("no park event: got %v, want none parked", got)
+		}
+	})
+}
+
 func TestReadTasks(t *testing.T) {
 	dir := t.TempDir()
 	for _, ticket := range []string{"t-1", "t-2"} {

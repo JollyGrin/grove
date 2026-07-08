@@ -35,13 +35,17 @@ type Facts struct {
 	PRKnown        bool          `json:"pr_known"` // false = lookup failed; never enough to call abandoned
 	PRState        string        `json:"pr_state"` // OPEN | MERGED | CLOSED | "" (none)
 	Agent          string        `json:"agent"`
-	Age            time.Duration `json:"-"` // since the task's last update
+	Parked         bool          `json:"parked"` // workspace parked (grove-33) — resumable, never abandoned
+	Age            time.Duration `json:"-"`      // since the task's last update
 }
 
 // Classify maps facts to a class. Precedence: merged > drifted >
 // abandoned > disconnected > healthy. Abandoned requires a definitive
 // answer — a CLOSED PR, or provably no PR plus a dead/idle agent past
-// staleAfter; a failed PR lookup degrades to disconnected/healthy.
+// staleAfter; a failed PR lookup degrades to disconnected/healthy. A
+// parked task (grove-33) is deliberately resumable: its dead window and
+// staleness never make it Abandoned, so it drops to Disconnected ("gv
+// adopt") and is never offered for untrack --rm.
 func Classify(f Facts, staleAfter time.Duration) Class {
 	if f.PRKnown && f.PRState == "MERGED" {
 		return Merged
@@ -53,7 +57,7 @@ func Classify(f Facts, staleAfter time.Duration) Class {
 		return Abandoned
 	}
 	agentGone := f.Agent == state.AgentDead || f.Agent == state.AgentIdle
-	if f.PRKnown && f.PRState == "" && agentGone && f.Age > staleAfter {
+	if f.PRKnown && f.PRState == "" && agentGone && f.Age > staleAfter && !f.Parked {
 		return Abandoned
 	}
 	if !f.WindowAlive {

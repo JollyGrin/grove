@@ -233,6 +233,7 @@ func (m Model) viewFooter() string {
 		sKey.Render("v") + sFoot.Render(" reviewing"),
 		sKey.Render("n") + sFoot.Render(" nudge"),
 		sKey.Render("d") + sFoot.Render(" done"),
+		sKey.Render("X") + sFoot.Render(" park"),
 		sKey.Render("$") + sFoot.Render(" costs"),
 		sKey.Render("*") + sFoot.Render(" effects"),
 		sKey.Render("q") + sFoot.Render(" quit"),
@@ -243,6 +244,15 @@ func (m Model) viewFooter() string {
 	}
 	if m.mode == modeConfirmDone && m.detail != nil {
 		line = " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
+			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+	}
+	if m.mode == modeConfirmClose {
+		// Spell out exactly what park does: which session dies, that N
+		// workers + orchestrator + this cockpit stop, that state is saved,
+		// and how to bring it back (grove-33).
+		prompt := fmt.Sprintf("park %s? stops %d worker(s) + orchestrator + cockpit · state saved on disk · resume: gv, then gv adopt <ticket> ",
+			m.sessionName(), len(m.tasks))
+		line = " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 	}
 	return line

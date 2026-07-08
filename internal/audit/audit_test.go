@@ -23,6 +23,8 @@ func TestClassify(t *testing.T) {
 		{"closed pr with live window still abandoned", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "CLOSED", Agent: state.AgentIdle}, Abandoned},
 		{"no pr + dead + stale is abandoned", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentDead, Age: 10 * 24 * time.Hour}, Abandoned},
 		{"no pr + dead + fresh is disconnected", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentDead, Age: 2 * 24 * time.Hour}, Disconnected},
+		{"parked + no pr + idle + stale is NOT abandoned, just disconnected", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentIdle, Age: 30 * 24 * time.Hour, Parked: true}, Disconnected},
+		{"parked with a closed pr is still abandoned (parking doesn't rescue a closed PR)", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "CLOSED", Agent: state.AgentIdle, Parked: true}, Abandoned},
 		{"no pr + working + stale is healthy (agent alive)", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "", Agent: state.AgentWorking, Age: 10 * 24 * time.Hour}, Healthy},
 		{"missing worktree is drifted regardless of window", Facts{WorktreeExists: false, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentWorking}, Drifted},
 		{"missing worktree with merged pr is still merged (done now handles it)", Facts{WorktreeExists: false, WindowAlive: false, PRKnown: true, PRState: "MERGED", Agent: state.AgentDead}, Merged},

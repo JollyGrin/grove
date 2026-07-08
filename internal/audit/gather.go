@@ -55,13 +55,18 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 	active := state.Active(tasks)
 	costCache := cost.NewCache()
 
+	// Derive parked-ness once from the log (grove-33). Read-only map, safe
+	// for the concurrent auditTask reads below.
+	events, _ := state.ReadEvents(stateDir, 0)
+	parked := state.ParkedTickets(events)
+
 	rows := make([]TaskResult, len(active))
 	var wg sync.WaitGroup
 	for i, t := range active {
 		wg.Add(1)
 		go func(i int, t *state.Task) {
 			defer wg.Done()
-			rows[i] = auditTask(cfg, t, staleAfter, costCache)
+			rows[i] = auditTask(cfg, t, staleAfter, costCache, parked[t.Ticket])
 		}(i, t)
 	}
 	wg.Wait()
@@ -75,10 +80,11 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 	return rep
 }
 
-func auditTask(cfg *config.Config, t *state.Task, staleAfter time.Duration, costCache *cost.Cache) TaskResult {
+func auditTask(cfg *config.Config, t *state.Task, staleAfter time.Duration, costCache *cost.Cache, parked bool) TaskResult {
 	f := Facts{
 		HasSessionID: t.SessionID != "",
 		Agent:        t.Agent,
+		Parked:       parked,
 		Age:          time.Since(t.Updated),
 	}
 	if _, err := os.Stat(t.Worktree); err == nil {

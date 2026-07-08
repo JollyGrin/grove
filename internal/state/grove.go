@@ -16,6 +16,43 @@ import (
 // change to the byte-comparable state.go.
 const EvOrchestratorClosed = "orchestrator_closed"
 
+// EvWorkspaceParked records the operator parking a workspace: the shared
+// grove-<label> tmux session (cockpit + orchestrator + every worker) is
+// killed to free memory, with all state left on disk so bare `gv` +
+// `gv adopt` resume it. Like EvOrchestratorClosed it is a workspace-level,
+// ticket-less event that fold ignores — so state.go stays byte-comparable
+// with ovs. The parked-ness of individual tasks is derived from the log by
+// ParkedTickets, not stored on Task.
+const EvWorkspaceParked = "workspace_parked"
+
+// ParkedTickets derives, from the whole event log (oldest-first), the set of
+// tickets that are currently parked: a workspace_parked event marks every
+// then-active task, and any later revival of that ticket — a session start,
+// an adopt, or a fresh grab reusing the id — clears the mark. A task leaving
+// Active() (done / untracked) drops out entirely. Read-only; audit uses it
+// so a parked task is never mistaken for abandoned.
+func ParkedTickets(events []Event) map[string]bool {
+	parked := map[string]bool{}
+	known := map[string]bool{} // active (non-done) tickets seen so far
+	for _, ev := range events {
+		switch ev.Type {
+		case EvWorkspaceParked:
+			for tk := range known {
+				parked[tk] = true
+			}
+		case EvTaskCreated, EvTaskAdopted, EvSessionStarted:
+			if ev.Ticket != "" {
+				known[ev.Ticket] = true
+				parked[ev.Ticket] = false
+			}
+		case EvTaskDone, EvTaskUntracked:
+			delete(known, ev.Ticket)
+			delete(parked, ev.Ticket)
+		}
+	}
+	return parked
+}
+
 // ReadTasks is the read-only counterpart of Load: it parses the derived
 // tasks.json view without folding events, creating directories, or
 // rewriting anything. Hook receivers call this once per candidate

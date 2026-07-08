@@ -116,6 +116,30 @@ grep -q 's-e2e-2\|tabs or spaces' "$GROVE_STATE_DIR/events.jsonl" || fail "hook 
 "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls2.json"
 grep -q 'tabs or spaces' "$SCRATCH/ls2.json" || fail "question not folded into task state"
 
+say "gv park kills the session and logs a durable parked event (grove-33)"
+tmux has-session -t "$SESSION" 2>/dev/null || fail "session should be live before park"
+EV_BEFORE_PARK=$(wc -l < "$GROVE_STATE_DIR/events.jsonl")
+"$GV" park | tee "$SCRATCH/park.out"
+tmux has-session -t "$SESSION" 2>/dev/null && fail "park did not kill the session" || true
+grep -q '"type":"workspace_parked"' "$GROVE_STATE_DIR/events.jsonl" || fail "park did not append workspace_parked"
+[ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -gt "$EV_BEFORE_PARK" ] || fail "park appended no event"
+
+say "audit sees the parked task and never calls it abandoned"
+"$GV" audit --json > "$SCRATCH/audit-parked.json"
+grep -q '"parked": *true' "$SCRATCH/audit-parked.json" || fail "audit facts do not reflect the parked marker"
+grep -q '"class": *"abandoned"' "$SCRATCH/audit-parked.json" && fail "a parked task must never be abandoned" || true
+
+say "gv park refuses when nothing is running"
+("$GV" park 2>&1 || true) | grep -q 'not running' || fail "park should refuse with no live session"
+
+say "gv adopt revives the parked worker and clears the marker"
+"$GV" adopt task-001 | tee "$SCRATCH/adopt.out"
+tmux has-session -t "$SESSION" 2>/dev/null || fail "adopt did not rebuild the session"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-adopt.out"
+grep -q task-001 "$SCRATCH/windows-adopt.out" || fail "adopt did not recreate the worker window"
+"$GV" audit --json > "$SCRATCH/audit-adopted.json"
+grep -q '"parked": *true' "$SCRATCH/audit-adopted.json" && fail "adopt did not clear the parked marker" || true
+
 say "gv untrack --rm --force (degraded: no remote to verify against)"
 "$GV" untrack task-001 --rm --force | tee "$SCRATCH/untrack.out"
 [ ! -d "$WTDIR" ] || fail "worktree survived untrack --rm"
