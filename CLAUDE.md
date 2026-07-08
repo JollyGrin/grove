@@ -23,11 +23,15 @@ is a WORKSPACE — its own `.grove/{config.yaml,state,orchestrator}`,
 cockpit `grove-<label>`, ambient walk-up; the global paths are the
 legacy/defaults layer), `gv hook` commands, `grove`/`grove-mobile` cockpit
 sessions. The binary is safe to run and no longer touches overstory
-state (`e2e/dummy.sh` asserts it). Two live-coexistence cautions remain:
+state (`e2e/dummy.sh` asserts it). One live-coexistence caution remains:
 `gv hooks install` writes the **shared** `~/.cc-work/settings.json`
-(tested to preserve ovs entries — but treat it with respect), and
-worker tmux sessions still use ovs's `pr-<repo>` naming, so a repo
-tracked by BOTH tools shares one session (windows differ per branch).
+(tested to preserve ovs entries — but treat it with respect).
+
+Since grove-29 (P2) a workspace's cockpit **and** its workers share one
+`grove-<label>` session (window 0 = cockpit, 1+ = workers); the old
+`pr-<repo>` worker sessions and their vestigial `dashboard` shell are
+retired, so the ovs `pr-<repo>` coexistence constraint is gone — the
+operator now runs grove exclusively.
 
 ## Build / test
 

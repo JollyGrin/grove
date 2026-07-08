@@ -43,7 +43,10 @@ snapshot_live() {
 LIVE_BEFORE="$(snapshot_live)"
 
 DUMMY="$SCRATCH/repos/dummy"
-SESSION="pr-dummy"
+# grove-29 P2: a workspace's cockpit + workers collapse into one
+# grove-<label> session (was the per-repo pr-<repo>). The dummy repo is its
+# own workspace, label = its dir base ("dummy").
+SESSION="grove-dummy"
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
