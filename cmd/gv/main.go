@@ -1146,7 +1146,10 @@ func cmdLs(args []string) error {
 	costCache := cost.NewCache()
 	rows := make([]lsRow, 0, len(active))
 	for _, t := range active {
-		live := detect.DetectLive(t.TmuxSession, t.TmuxWindow)
+		// Resolve the current window name (a P3 status glyph is a display
+		// suffix on the stable base) so the byte-comparable detect probe's
+		// exact name match still finds a live worker.
+		live := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
 		liveStr := "gone"
 		if live.Exists {
 			liveStr = live.Status.String()
@@ -1774,7 +1777,7 @@ func cmdAdopt(args []string) error {
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID = t.Repo, t.Branch, t.SessionID
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
-		if !t.Done && tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
 		}
 	}
@@ -2013,7 +2016,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		}
 	}
 
-	if tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+	if tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}
@@ -2120,7 +2123,7 @@ func removeTaskArtifacts(cfg *config.Config, t *state.Task, rmRemote, force bool
 		}
 	}
 
-	if tmux.WindowExists(t.TmuxSession, t.TmuxWindow) {
+	if tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}

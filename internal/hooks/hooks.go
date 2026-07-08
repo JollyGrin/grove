@@ -18,6 +18,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/tmux"
 )
 
 // Payload is the hook stdin JSON. Verified live 2026-06-10 (LEARNINGS.md):
@@ -73,6 +74,7 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	switch event {
 	case "session-start":
+		glyphWorker(task, state.Glyph(state.AgentWorking, ""))
 		return state.Append(stateDir, state.Event{
 			Type: state.EvSessionStarted, Ticket: task.Ticket,
 			Data: map[string]string{"session_id": p.SessionID},
@@ -80,6 +82,7 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	case "stop":
 		status, sentinel, question, message := classify(p.LastAssistantMessage)
+		glyphWorker(task, state.Glyph(status, sentinel))
 		if err := state.Append(stateDir, state.Event{
 			Type: state.EvAgentStatus, Ticket: task.Ticket,
 			Data: map[string]string{
@@ -107,6 +110,7 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		return nil
 
 	case "notification":
+		glyphWorker(task, state.Glyph(state.AgentWaiting, ""))
 		_ = state.Append(stateDir, state.Event{
 			Type: state.EvNotification, Ticket: task.Ticket,
 			Data: map[string]string{"message": p.Message},
@@ -116,11 +120,22 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		return nil
 
 	case "session-end":
+		glyphWorker(task, state.Glyph(state.AgentDead, ""))
 		return state.Append(stateDir, state.Event{
 			Type: state.EvSessionEnded, Ticket: task.Ticket,
 		})
 	}
 	return fmt.Errorf("unknown hook event %q", event)
+}
+
+// glyphWorker pushes the worker's live status glyph into its tmux window
+// name so `Ctrl-b w` reads as a fleet board (grove-29 P3). Event-driven off
+// this existing hook path — no new goroutine, poll, or cache (the cockpit-ram
+// guardrail) — and best-effort silent: a rename failure (window gone, tmux
+// down) must never break a hook. The task's stored tmux_window is used as the
+// stable base and is never rewritten; the glyph is a display-only suffix.
+func glyphWorker(task *state.Task, glyph string) {
+	_ = tmux.RenameWorker(task.TmuxSession, task.TmuxWindow, glyph)
 }
 
 // classify maps the final assistant message to agent state via the STATUS

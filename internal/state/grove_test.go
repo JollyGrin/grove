@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestGlyph(t *testing.T) {
+	cases := []struct {
+		agent, sentinel, want string
+	}{
+		{AgentWaiting, "question", "⏸"},
+		{AgentBlocked, "blocked", "⏸"},
+		{AgentDead, "", "✗"},
+		{AgentIdle, "done", "✔"},
+		{AgentIdle, "none", "✗"},
+		{AgentWorking, "", "●"},
+		{AgentSetup, "", "●"},
+	}
+	for _, tc := range cases {
+		if got := Glyph(tc.agent, tc.sentinel); got != tc.want {
+			t.Errorf("Glyph(%q, %q) = %q, want %q", tc.agent, tc.sentinel, got, tc.want)
+		}
+	}
+}
+
 func TestReadEvents(t *testing.T) {
 	dir := t.TempDir()
 	for _, ticket := range []string{"t-1", "t-2", "t-3"} {

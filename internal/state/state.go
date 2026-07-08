@@ -246,6 +246,29 @@ func (t *Task) Label() string {
 	}
 }
 
+// Glyph is the one-rune live-status marker pushed into a worker's tmux
+// window name so `Ctrl-b w` reads as a fleet board (grove-29 P3). It mirrors
+// Label's actionability buckets:
+//
+//	⏸ needs you   waiting on a question / plan approval
+//	✔ done        agent reports done (PR likely following)
+//	✗ stalled     dead/crashed, or idle with no STATUS sentinel
+//	● live        setup or actively working
+func Glyph(agent, sentinel string) string {
+	switch {
+	case agent == AgentWaiting || agent == AgentBlocked:
+		return "⏸"
+	case agent == AgentDead:
+		return "✗"
+	case agent == AgentIdle && sentinel == "done":
+		return "✔"
+	case agent == AgentIdle:
+		return "✗"
+	default: // setup, working
+		return "●"
+	}
+}
+
 // SortRank orders by actionability: things needing a human float up.
 func (t *Task) SortRank() int {
 	switch t.Agent {

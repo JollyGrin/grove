@@ -122,6 +122,47 @@ func CockpitReady(session string) bool {
 	return err == nil && strings.TrimSpace(out) == "ready"
 }
 
+// RenameWorker pushes a live status glyph into a worker window's name so
+// `Ctrl-b w` reads as a board (grove-29 P3): the window becomes
+// "<base> <glyph>". base is the task's stored tmux_window — which is NEVER
+// rewritten, so it stays a clean, stable resolution key; the glyph is only a
+// display suffix. Targeting session:base prefix-matches the current (possibly
+// already-glyphed) window, so re-glyphing on the next transition just works.
+func RenameWorker(session, base, glyph string) error {
+	if base == "" || glyph == "" {
+		return nil
+	}
+	_, err := run("rename-window", "-t", session+":"+base, base+" "+glyph)
+	return err
+}
+
+// WindowLive reports whether a worker window exists, tolerating a status
+// glyph suffix that exact name-comparison (tmux.WindowExists) would miss:
+// it targets session:base, which tmux prefix-matches to the glyphed window.
+func WindowLive(session, base string) bool {
+	_, err := run("list-panes", "-t", session+":"+base)
+	return err == nil
+}
+
+// ResolveWindowName maps a stored base window name to the window's CURRENT
+// full name (base, or "base <glyph>" once P3 has glyphed it). Callers that
+// must hand an EXACT window name to a name-comparing helper (the byte-
+// comparable detect probes) resolve first so the glyph never hides a live
+// worker. Falls back to base when the session/window can't be listed.
+func ResolveWindowName(session, base string) string {
+	out, err := run("list-windows", "-t", session, "-F", "#{window_name}")
+	if err != nil {
+		return base
+	}
+	for _, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		if name == base || strings.HasPrefix(name, base+" ") {
+			return name
+		}
+	}
+	return base
+}
+
 // WorkerWindow builds a worker window's display name: "<repo-short> · <ticket>".
 // The middle dot groups a workspace's repos visually in `Ctrl-b w`. tmux
 // forbids "." and ":" in the parts (they collide with pane/window target
