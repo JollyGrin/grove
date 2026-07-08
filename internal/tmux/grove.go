@@ -26,6 +26,19 @@ func MainVertical(session string, widthPercent int) error {
 	return err
 }
 
+// SetTitle drives the outer terminal-tab title for the session: enables
+// title updates and pins the string to title. It's a session option
+// (no -g), so worker windows and unrelated tmux sessions keep their own
+// titles. A bare label is safe as the string — no tmux format expansion
+// we depend on.
+func SetTitle(session, title string) error {
+	if _, err := run("set-option", "-t", session, "set-titles", "on"); err != nil {
+		return err
+	}
+	_, err := run("set-option", "-t", session, "set-titles-string", title)
+	return err
+}
+
 // SpawnPane opens a fresh shell pane in the session's first window rooted
 // at dir, re-tiles main-vertical, types cmd into it, and focuses it.
 // The command is typed (SendKeys) rather than passed to split-window so

@@ -326,6 +326,16 @@ func cockpitSessionFor(ws *workspace.Workspace) string {
 	return "grove"
 }
 
+// cockpitTitleFor: the outer terminal-tab title for a cockpit — the
+// workspace label (e.g. "unbrewed"), or "grove" for the legacy global
+// cockpit. Mirrors cockpitSessionFor's ws==nil fallback.
+func cockpitTitleFor(ws *workspace.Workspace) string {
+	if ws != nil {
+		return ws.Label
+	}
+	return "grove"
+}
+
 // orchestratorDirFor: the workspace's own brain dir — its cwd walk-ups to
 // the workspace, so the orchestrator's gv calls hit THIS fleet.
 func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
@@ -352,6 +362,12 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
 	}
 	if err := tmux.CreateSession(session, orchDir); err != nil {
+		return err
+	}
+	// Name the outer terminal tab after the workspace so several cockpits
+	// in separate tabs are tellable apart. Session-scoped: won't leak into
+	// worker windows or unrelated tmux sessions.
+	if err := tmux.SetTitle(session, cockpitTitleFor(ws)); err != nil {
 		return err
 	}
 	// Absolute path, not "gv": the pane must run THIS binary even when a
