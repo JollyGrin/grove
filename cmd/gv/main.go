@@ -103,6 +103,24 @@ func loadCfg() (*config.Config, error) {
 	return config.Load()
 }
 
+// applyClaudeConfigDir points this process's transcript reader at the
+// workspace's own Claude config dir (thegrid → ~/.cc-work) so an ad-hoc
+// `gv cost`/`gv ls`/`gv dash` run from a plain shell finds worker
+// transcripts that don't live under ~/.claude. Display-only: it sets the
+// GV_CLAUDE_CONFIG_DIR reader knob and has no path to the worker-spawn
+// command. An externally-set value wins (explicit override, and idempotent
+// with the cockpit's dash-pane prefix), and it never touches the
+// `claude:`/subscription path (see config.ClaudeConfigDir).
+func applyClaudeConfigDir(cfg *config.Config) {
+	if cfg == nil || cfg.ClaudeConfigDir == "" {
+		return
+	}
+	if os.Getenv("GV_CLAUDE_CONFIG_DIR") != "" {
+		return
+	}
+	os.Setenv("GV_CLAUDE_CONFIG_DIR", cfg.ClaudeConfigDir)
+}
+
 func stateDir() string { return ambient.stateDir }
 
 func wsLabel() string {
@@ -273,6 +291,7 @@ func cmdDashboard() error {
 	if err != nil {
 		return err
 	}
+	applyClaudeConfigDir(cfg)
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
 	tui.AttachTask = attachTask
@@ -375,6 +394,15 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	dash := "gv dash"
 	if exe, err := os.Executable(); err == nil {
 		dash = exe + " dash"
+	}
+	// A workspace whose workers run under a non-default Claude config dir
+	// (thegrid → ~/.cc-work via ccwork) keeps its transcripts there, not in
+	// ~/.claude. Point the dash pane's cost reader at it. This is the
+	// display-only GV_CLAUDE_CONFIG_DIR knob — it never touches the
+	// worker-spawn/`claude:` subscription path (see config.ClaudeConfigDir).
+	if cfg.ClaudeConfigDir != "" {
+		q := "'" + strings.ReplaceAll(cfg.ClaudeConfigDir, "'", `'\''`) + "'"
+		dash = "GV_CLAUDE_CONFIG_DIR=" + q + " " + dash
 	}
 	if err := tmux.SendKeys(session+".0", dash); err != nil {
 		return err
@@ -1072,6 +1100,7 @@ func cmdLs(args []string) error {
 	parseAnywhere(fs, args)
 
 	cfg, cfgErr := loadCfg()
+	applyClaudeConfigDir(cfg)
 	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err
@@ -1287,6 +1316,7 @@ func cmdCost(args []string) error {
 	if err != nil {
 		return err
 	}
+	applyClaudeConfigDir(cfg)
 	tasks, err := state.Load(stateDir())
 	if err != nil {
 		return err

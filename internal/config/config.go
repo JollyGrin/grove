@@ -54,6 +54,19 @@ type Config struct {
 		Label string `yaml:"label"`
 		Scope string `yaml:"scope"` // repo | parent
 	} `yaml:"workspace"`
+	// ClaudeConfigDir points grove's transcript reader at a workspace whose
+	// workers run under a non-default Claude config dir (e.g. ~/.cc-work for
+	// the ccwork-driven Grid workspace), so cost display finds their
+	// transcripts instead of scanning an empty ~/.claude.
+	//
+	// COST-READER ONLY. It feeds GV_CLAUDE_CONFIG_DIR → transcript.ProjectDir
+	// and MUST NEVER be wired into the worker-spawn / `claude:` path: the
+	// work/personal subscription boundary is governed SOLELY by the claude
+	// command. A wrong value here can only mis-display cost, never move a
+	// subscription. Set it only in a workspace's own .grove/config.yaml;
+	// merge.go drops it from the global layer so it can't leak to another
+	// workspace. ~ expands to home.
+	ClaudeConfigDir string `yaml:"claude_config_dir"`
 	// Cockpit tunes the dashboard's presentation (grove-22). Effects is the
 	// joy knob: full (default) | calm (ambient only) | off (today's exact
 	// render). Empty/unknown resolves to full in the TUI — a typo never
@@ -188,6 +201,9 @@ func parse(raw []byte, src string) (*Config, error) {
 	}
 	if len(c.Cost.Pricing) > 0 {
 		cost.Overrides(c.Cost.Pricing)
+	}
+	if c.ClaudeConfigDir != "" {
+		c.ClaudeConfigDir = expand(c.ClaudeConfigDir)
 	}
 	return &c, nil
 }

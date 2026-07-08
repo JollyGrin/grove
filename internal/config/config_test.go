@@ -212,6 +212,59 @@ orchestrator:
 	}
 }
 
+// claude_config_dir is a display-only, per-workspace cost-reader knob: it
+// must resolve from the workspace layer (with ~ expanded), and — like the
+// orchestrator command — must NEVER be inherited from the global layer, so
+// a hobby workspace can't be pointed at the work profile's transcripts.
+func TestClaudeConfigDirIsWorkspaceScoped(t *testing.T) {
+	home := setHome(t)
+	globalRepo := t.TempDir()
+	// A stray value in the global layer must not propagate to any workspace.
+	writeGlobal(t, `
+repos:
+  g:
+    path: `+globalRepo+`
+claude_config_dir: ~/.cc-work
+`)
+
+	// Workspace that sets its own knob: it wins and ~ expands to home.
+	wsRepo := t.TempDir()
+	root := newWorkspace(t, `
+workspace:
+  label: thegrid
+  scope: parent
+repos:
+  r:
+    path: `+wsRepo+`
+claude_config_dir: ~/.cc-work
+`)
+	c, err := LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".cc-work"); c.ClaudeConfigDir != want {
+		t.Errorf("workspace claude_config_dir = %q, want expanded %q", c.ClaudeConfigDir, want)
+	}
+
+	// Workspace WITHOUT its own knob: the global value must not leak in.
+	bareRepo := t.TempDir()
+	root2 := newWorkspace(t, `
+workspace:
+  label: hobby
+  scope: repo
+repos:
+  r:
+    path: `+bareRepo+`
+`)
+	c, err = LoadAt(root2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ClaudeConfigDir != "" {
+		t.Errorf("hobby workspace claude_config_dir = %q, want empty (global must not leak)", c.ClaudeConfigDir)
+	}
+}
+
 // The per-repo worker default is plain claude — ccwork is a personal
 // work wrapper and must not be a baked-in default (DESIGN "no personal
 // defaults in core").

@@ -43,6 +43,13 @@ func LoadAt(root string) (*Config, error) {
 	// Dropped from the global layer, not wholesale-merged, so it stays
 	// out even when the workspace sets no orchestrator block at all.
 	delete(global, "orchestrator")
+	// claude_config_dir gets the identical drop-from-global discipline:
+	// it points the cost reader at a workspace's own Claude config dir
+	// (e.g. ~/.cc-work), so a stray value in the global layer must never
+	// reach a hobby workspace and make it scan the work profile's
+	// transcripts. Belt-and-suspenders — it is set only in thegrid's
+	// own .grove/config.yaml.
+	delete(global, "claude_config_dir")
 	ws, wErr := readLayer(wsPath)
 	if wErr != nil && !errors.Is(wErr, fs.ErrNotExist) {
 		return nil, wErr
