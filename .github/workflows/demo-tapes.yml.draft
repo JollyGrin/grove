@@ -1,0 +1,74 @@
+# DRAFT — NOT ENABLED. Rename to demo-tapes.yml only after review (Dean's
+# call; grove-7 ships this as a proposal). See
+# docs/plans/2026-07-07-vhs-pr-demos-spike.md for the full analysis.
+#
+# What it does: on PRs that touch cockpit-visible surfaces, re-record the
+# demo tapes headlessly (vhs-action) and post/refresh ONE sticky PR comment
+# embedding the GIFs. Images are pushed to a dedicated bot-managed branch
+# in this repo (comment-pr-with-images's default mode) — no gists, no
+# second repo, and the images branch never merges anywhere.
+#
+# Costs & risks (report §CI draft):
+#   - macOS runners are 10× Linux minutes; this runs on ubuntu-latest.
+#     gv + tmux + the fixture are all Linux-clean (nothing Darwin-only is
+#     on camera; the memory gauge simply doesn't render, which is FINE).
+#   - vhs Wait+Screen timeouts are generous (60s) — worst case a hung tape
+#     costs ~3 runner-minutes before failing.
+#   - The workflow must NEVER gate merges: continue-on-error at the job
+#     level; a broken recording is a missing demo, not a red PR.
+
+name: demo-tapes
+on:
+  pull_request:
+    paths:
+      - "internal/tui/**"
+      - "internal/tmux/**"
+      - "cmd/gv/**"
+      - "tapes/**"
+
+permissions:
+  contents: write        # push GIFs to the images branch
+  pull-requests: write   # post the sticky comment
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # demos are evidence, never a merge gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      # Same trick as tapes/run.sh: pre-build gv into the tape scratch so
+      # the recorded shell's `source tapes/lib/env.sh` is instant — a cold
+      # module cache inside the recording would eat the Wait+Screen budget.
+      - name: Pre-build gv into the tape scratch
+        run: |
+          echo "GROVE_TAPE_SCRATCH=$RUNNER_TEMP/grove-tape" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/grove-tape"
+          go build -o "$RUNNER_TEMP/grove-tape/gv" ./cmd/gv
+
+      # vhs-action installs vhs + ttyd + ffmpeg and runs the tape.
+      # One step per tape keeps failures attributable.
+      - name: Record cockpit-question
+        uses: charmbracelet/vhs-action@v2
+        with:
+          path: tapes/cockpit-question.tape
+
+      - name: Record spike-cockpit
+        uses: charmbracelet/vhs-action@v2
+        with:
+          path: tapes/spike-cockpit.tape
+
+      # Push GIFs to the bot-managed images branch and (re)post one sticky
+      # comment on the PR embedding them. Default mode: same-repo branch.
+      - name: Comment PR with recordings
+        uses: opengisch/comment-pr-with-images@main
+        with:
+          images: tapes/out/cockpit-question.gif tapes/out/spike-cockpit.gif
+          github-token: ${{ secrets.GITHUB_TOKEN }}
