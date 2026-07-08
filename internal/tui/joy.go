@@ -9,6 +9,8 @@ package tui
 import (
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
 )
@@ -54,24 +56,58 @@ func cycleFx(fx fxLevel) fxLevel {
 	return (fx + 2) % 3
 }
 
-// --- A1: the grove breathes ---
+// --- A1: the grove breathes (grove-24: color, not shape) ---
+//
+// The working dot holds ONE stable ● — only its green LIGHTNESS ramps, a
+// barely-perceptible dim→bright→dim. The old ◉/●/◎ shape-swap read as flicker
+// (an arcade); a same-hue brightness pulse reads as breathing (a forest).
 
-// breathFrames is a slow 4-beat breath, not a spinner: at 1 frame/second the
-// working glyph inhales and exhales over 4s. Every frame is width-1.
-var breathFrames = [...]string{"◉", "●", "◎", "●"}
+// breathShades is the up-ramp of near-identical greens, dim → full canopy
+// (#87c95f). Same hue; only lightness moves. The breath ping-pongs across it.
+var breathShades = []lipgloss.Color{
+	"#649646", "#6da34c", "#76b053", "#7ebc59", "#87c95f",
+}
 
-func breathFrame(tick uint64) string {
-	return breathFrames[tick%uint64(len(breathFrames))]
+// breathStyles precomputes one foreground style per shade ONCE, at package
+// load — the render loop indexes this table and allocates nothing per frame
+// (the RAM constraint: no per-frame allocation, palette built as a table).
+var breathStyles = func() []lipgloss.Style {
+	ss := make([]lipgloss.Style, len(breathShades))
+	for i, c := range breathShades {
+		ss[i] = lipgloss.NewStyle().Foreground(c)
+	}
+	return ss
+}()
+
+// breathPhase maps the animation tick to a shade index, ping-ponged so the
+// brightness eases dim→bright→dim with no hard jump at the seam. One step per
+// tick; a full inhale+exhale spans 2*(len-1) ticks (~8s at the 1s beat).
+func breathPhase(tick uint64) int {
+	n := len(breathShades)
+	period := 2*n - 2
+	p := int(tick % uint64(period))
+	if p >= n {
+		p = period - p // mirror the down-ramp
+	}
+	return p
+}
+
+// breathStyle is the working dot's green shade at this tick. The caller gates
+// on fx and keeps the glyph a static ● at every level; only the color moves.
+func breathStyle(tick uint64) lipgloss.Style {
+	return breathStyles[breathPhase(tick)]
 }
 
 // --- A2: grove verbs ---
 
-// groveVerbs replaces the static "working" in the LIVE column with a rotating
-// gerund — the forest dialect of Claude Code's spinner verbs. Each entry must
-// stay short enough to read once truncated to the 8-cell LIVE column.
+// groveVerbs rotates through the prominent green AGENT-status column in place
+// of the static "working" (grove-24: moved here from the dim LIVE column — the
+// eye lands on the green status, and the reliable agent state, not the often-
+// empty transcript LIVE string, triggers it). Each gerund is short enough to
+// read in the 11-cell STATUS column without truncation.
 var groveVerbs = [...]string{
-	"photosynthesizing", "grafting", "pruning", "pollinating",
-	"rooting", "mulching", "leafing", "budding",
+	"growing", "sprouting", "grafting", "pruning",
+	"rooting", "budding", "leafing", "flowering",
 }
 
 // verbFor is deterministic per agent: hash(ticket) fixes the starting verb so

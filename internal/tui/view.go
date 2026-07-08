@@ -150,23 +150,23 @@ func (m Model) viewAgents() string {
 		if i == m.sel {
 			cursor = sSelected.Render("▸")
 		}
-		// A1 the grove breathes: the working glyph cycles a slow breath on the
-		// tick (grove-22). A2 grove verbs: the LIVE "working" becomes a rotating
-		// gerund. Both ambient — gated at fxCalm, static glyph/word at off.
+		// A1 the grove breathes: the working ● holds its shape and its green
+		// gently ramps on the tick (grove-24). A2 grove verbs: the prominent
+		// green "working" status rotates through forest gerunds. Both ambient
+		// (fxCalm+) and keyed to the reliable agent status; at off the glyph is
+		// a static ● and the status the literal "working".
 		glyph := statusGlyph(label)
-		live := m.live[t.Ticket]
-		if m.fx >= fxCalm {
-			if label == "working" {
-				glyph = breathFrame(m.tick)
-			}
-			if live == "working" {
-				live = verbFor(t.Ticket, m.tick)
-			}
+		glyphStyle := st
+		statusText := label
+		if m.fx >= fxCalm && label == "working" {
+			glyphStyle = breathStyle(m.tick)
+			statusText = verbFor(t.Ticket, m.tick)
 		}
-		line := cursor + st.Render(glyph) + " " +
+		live := m.live[t.Ticket]
+		line := cursor + glyphStyle.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
 			pad(trunc(t.Repo, 10), 11) +
-			st.Render(pad(label, 11)) +
+			st.Render(pad(statusText, 11)) +
 			sDim.Render(pad(live, 8)) +
 			sDelivery.Render(pad(pr, 8)) +
 			ciStyle.Render(pad(ci, 4)) +
