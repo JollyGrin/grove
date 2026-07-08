@@ -364,6 +364,12 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.CreateSession(session, orchDir); err != nil {
 		return err
 	}
+	// Window 0 is the cockpit — name it so `Ctrl-b w` reads "0: cockpit"
+	// and pin the name (automatic-rename off) so the orchestrator claude
+	// pane's version-string title can never clobber it (the 2.1.204 leak).
+	if err := tmux.NameWindow(session, "cockpit"); err != nil {
+		return err
+	}
 	// Name the outer terminal tab after the workspace so several cockpits
 	// in separate tabs are tellable apart. Session-scoped: won't leak into
 	// worker windows or unrelated tmux sessions.
@@ -725,11 +731,17 @@ func cmdGrab(args []string) error {
 	if _, err := tmux.EnsureSession(repoName, repo.Path); err != nil {
 		return err
 	}
-	windowName := tmux.WindowName(name)
+	ws := workspace.Find(repo.Path)
+	windowName := tmux.WorkerWindow(repoShort(repoName, ws), name)
 	if err := tmux.CreateWindow(sessionName, windowName, wt.Path); err != nil {
 		return err
 	}
 	windowTarget := sessionName + ":" + windowName
+	// Pin the ticket name: a worker window's name is the ticket, never
+	// whatever the claude pane's foreground process reports.
+	if err := tmux.DisableAutoRename(windowTarget); err != nil {
+		return err
+	}
 	if err := tmux.SplitVerticalWindow(windowTarget, wt.Path); err != nil {
 		return err
 	}
@@ -764,6 +776,19 @@ func cmdGrab(args []string) error {
 	}
 	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", task.ID, mode, task.ID)
 	return nil
+}
+
+// repoShort strips a redundant workspace-label prefix from a repo name so a
+// worker window reads "p2p · …" inside the grove-unbrewed session rather than
+// "unbrewed-p2p · …". Falls back to the bare repo name when no workspace is
+// resolvable or the prefix doesn't apply.
+func repoShort(repoName string, ws *workspace.Workspace) string {
+	if ws != nil {
+		if p := ws.Label + "-"; strings.HasPrefix(repoName, p) && len(repoName) > len(p) {
+			return repoName[len(p):]
+		}
+	}
+	return repoName
 }
 
 // printBacklog renders the provider's grabbable backlog (gv grab with no
@@ -1827,7 +1852,8 @@ func cmdAdopt(args []string) error {
 	if _, err := tmux.EnsureSession(repoName, repo.Path); err != nil {
 		return err
 	}
-	windowName := tmux.WindowName(branch)
+	ws := workspace.Find(repo.Path)
+	windowName := tmux.WorkerWindow(repoShort(repoName, ws), branch)
 	if tmux.WindowExists(sessionName, windowName) {
 		return fmt.Errorf("window %s:%s already exists — `gv attach %s`", sessionName, windowName, id)
 	}
@@ -1835,6 +1861,9 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 	windowTarget := sessionName + ":" + windowName
+	if err := tmux.DisableAutoRename(windowTarget); err != nil {
+		return err
+	}
 	if err := tmux.SplitVerticalWindow(windowTarget, wtPath); err != nil {
 		return err
 	}

@@ -62,6 +62,36 @@ func SpawnPane(session, dir, cmd string) (string, error) {
 	return paneID, nil
 }
 
+// WorkerWindow builds a worker window's display name: "<repo-short> · <ticket>".
+// The middle dot groups a workspace's repos visually in `Ctrl-b w`. tmux
+// forbids "." and ":" in the parts (they collide with pane/window target
+// syntax), so they're sanitized to "-"; the "·" and spaces are safe inside a
+// single target argument (verified against tmux target resolution).
+func WorkerWindow(repoShort, ticket string) string {
+	r := strings.NewReplacer(".", "-", ":", "-")
+	return r.Replace(repoShort) + " · " + r.Replace(ticket)
+}
+
+// NameWindow renames a window and pins the name by disabling
+// automatic-rename, so a pane's foreground process (e.g. Claude Code sets
+// its title to its bare version string, "2.1.204") can never clobber it.
+// Scoped to the one window via its target — never a global option, so no
+// window outside the given target is affected.
+func NameWindow(target, name string) error {
+	if _, err := run("rename-window", "-t", target, name); err != nil {
+		return err
+	}
+	return DisableAutoRename(target)
+}
+
+// DisableAutoRename turns automatic-rename off for a single window (by
+// target). Use when the name was already set at creation (new-window -n) and
+// only the auto-rename latch needs disarming.
+func DisableAutoRename(target string) error {
+	_, err := run("set-window-option", "-t", target, "automatic-rename", "off")
+	return err
+}
+
 // closablePane is the pure guard for self-close: a pane may only be killed
 // when it lives in a grove cockpit session (grove / grove-<label>) and is
 // not pane 0 — pane 0 is the dashboard, and the cockpit's whole point is
