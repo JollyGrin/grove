@@ -619,7 +619,7 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	// distinguishable from the default Anthropic pane it shares the window
 	// with. Cosmetic — never fail the spawn over it, and never rename the
 	// cockpit window itself (cockpit-detection keys off its literal name).
-	if err := tmux.SetPaneTitle(paneID, resolvedName); err != nil {
+	if err := tmux.SetPaneProfile(paneID, resolvedName); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not tag orchestrator pane with profile %q: %v\n", resolvedName, err)
 	}
 	if err := tmux.ShowPaneBorders(session + ":cockpit"); err != nil {

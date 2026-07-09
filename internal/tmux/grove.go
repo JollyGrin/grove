@@ -190,27 +190,40 @@ func WorkerWindowProfile(repoShort, ticket, profile string) string {
 	return base + " · " + r.Replace(profile)
 }
 
-// SetPaneTitle pins a pane's title (select-pane -T). Used to tag a profiled
-// orchestrator pane with its model-profile name so it's distinguishable from
-// the default (Anthropic) pane sharing the cockpit window. The title only
+// SetPaneProfile tags a pane with its model-profile name in a pane USER
+// OPTION (@grove_profile), so a profiled orchestrator pane is distinguishable
+// from the default (Anthropic) pane sharing the cockpit window. Unlike a pane
+// title, a user option cannot be touched by the pane's foreground program —
+// Claude Code sets the terminal title via OSC on boot, which would clobber a
+// select-pane -T tag; @grove_profile survives (grove-36 T1). The tag only
 // becomes visible once ShowPaneBorders has turned the window's pane-border
-// status line on.
-func SetPaneTitle(pane, title string) error {
-	_, err := run("select-pane", "-t", pane, "-T", title)
+// status line on. An empty profile clears the option.
+func SetPaneProfile(pane, profile string) error {
+	if profile == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_profile")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_profile", profile)
 	return err
 }
 
-// ShowPaneBorders turns on a top pane-border status line showing each pane's
-// index and title, scoped to ONE window via its target (e.g. session:cockpit)
-// — never a global/session-wide option, so worker windows keep their
-// borderless look. Pairs with SetPaneTitle to surface a profiled
-// orchestrator pane's backend. Two set-window-option calls, matching the
-// DisableAutoRename per-window scoping pattern.
+// paneBorderFormat renders each pane's index plus, when the pane carries a
+// @grove_profile user option (SetPaneProfile), a "⚡ <profile>" tag; otherwise
+// it falls back to whatever title the pane's foreground program set. So a
+// profiled pane shows its backend permanently while unprofiled panes keep
+// Claude Code's own titles — the no-profile path is visually unchanged.
+const paneBorderFormat = "#{pane_index}: #{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}"
+
+// ShowPaneBorders turns on a top pane-border status line, scoped to ONE window
+// via its target (e.g. session:cockpit) — never a global/session-wide option,
+// so worker windows keep their borderless look. Pairs with SetPaneProfile to
+// surface a profiled orchestrator pane's backend. Two set-window-option calls,
+// matching the DisableAutoRename per-window scoping pattern.
 func ShowPaneBorders(windowTarget string) error {
 	if _, err := run("set-window-option", "-t", windowTarget, "pane-border-status", "top"); err != nil {
 		return err
 	}
-	_, err := run("set-window-option", "-t", windowTarget, "pane-border-format", "#{pane_index}: #{pane_title}")
+	_, err := run("set-window-option", "-t", windowTarget, "pane-border-format", paneBorderFormat)
 	return err
 }
 

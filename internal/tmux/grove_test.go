@@ -1,6 +1,9 @@
 package tmux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestWorkerWindow(t *testing.T) {
 	cases := []struct {
@@ -43,6 +46,23 @@ func TestWorkerWindowProfile(t *testing.T) {
 			if base := WorkerWindow(tc.repoShort, tc.ticket); got != base {
 				t.Errorf("%s: no-profile name %q diverged from WorkerWindow %q", tc.name, got, base)
 			}
+		}
+	}
+}
+
+func TestPaneBorderFormat(t *testing.T) {
+	// The profiled pane's tag must live in the @grove_profile user option —
+	// the OSC-title-proof carrier (grove-36 T1) — and fall back to the pane
+	// title when the option is unset so unprofiled panes are visually
+	// unchanged. Guard the exact expansion so a refactor can't silently drop
+	// the fallback (which would blank every unprofiled pane's border).
+	want := "#{pane_index}: #{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}"
+	if paneBorderFormat != want {
+		t.Errorf("paneBorderFormat = %q, want %q", paneBorderFormat, want)
+	}
+	for _, needle := range []string{"@grove_profile", "#{pane_title}", "#{pane_index}"} {
+		if !strings.Contains(paneBorderFormat, needle) {
+			t.Errorf("paneBorderFormat %q missing %q", paneBorderFormat, needle)
 		}
 	}
 }
