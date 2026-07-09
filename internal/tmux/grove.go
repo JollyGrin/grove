@@ -173,6 +173,47 @@ func WorkerWindow(repoShort, ticket string) string {
 	return r.Replace(repoShort) + " · " + r.Replace(ticket)
 }
 
+// WorkerWindowProfile is WorkerWindow with an active model profile appended
+// as a third "·"-joined segment ("<repo> · <ticket> · <profile>"), so a
+// profiled worker (grove-36) reads at a glance in `Ctrl-b w` / `gv ls`
+// instead of hiding behind Claude Code's unreliable /status. An empty
+// profile returns exactly WorkerWindow(repoShort, ticket) — byte-identical to
+// the no-profile window name, the load-bearing invariant the feature promises.
+// The profile is sanitized like the other parts (tmux forbids "." and ":" in
+// a window name).
+func WorkerWindowProfile(repoShort, ticket, profile string) string {
+	base := WorkerWindow(repoShort, ticket)
+	if profile == "" {
+		return base
+	}
+	r := strings.NewReplacer(".", "-", ":", "-")
+	return base + " · " + r.Replace(profile)
+}
+
+// SetPaneTitle pins a pane's title (select-pane -T). Used to tag a profiled
+// orchestrator pane with its model-profile name so it's distinguishable from
+// the default (Anthropic) pane sharing the cockpit window. The title only
+// becomes visible once ShowPaneBorders has turned the window's pane-border
+// status line on.
+func SetPaneTitle(pane, title string) error {
+	_, err := run("select-pane", "-t", pane, "-T", title)
+	return err
+}
+
+// ShowPaneBorders turns on a top pane-border status line showing each pane's
+// index and title, scoped to ONE window via its target (e.g. session:cockpit)
+// — never a global/session-wide option, so worker windows keep their
+// borderless look. Pairs with SetPaneTitle to surface a profiled
+// orchestrator pane's backend. Two set-window-option calls, matching the
+// DisableAutoRename per-window scoping pattern.
+func ShowPaneBorders(windowTarget string) error {
+	if _, err := run("set-window-option", "-t", windowTarget, "pane-border-status", "top"); err != nil {
+		return err
+	}
+	_, err := run("set-window-option", "-t", windowTarget, "pane-border-format", "#{pane_index}: #{pane_title}")
+	return err
+}
+
 // DisableAutoRename turns automatic-rename off for a single window (by
 // target), so a pane's foreground process (e.g. Claude Code sets its title
 // to its bare version string, "2.1.204") can never clobber the name set at

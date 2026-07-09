@@ -526,9 +526,11 @@ func cmdOrchestratorNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := spawnOrchestratorProfile(cfg, *profileFlag); err != nil {
+	msg, err := spawnOrchestratorProfile(cfg, *profileFlag)
+	if err != nil {
 		return err
 	}
+	fmt.Println(msg)
 	if !tmux.IsInsideTmux() {
 		return tmux.AttachSession(cockpitSessionFor(ambient.ws))
 	}
@@ -577,7 +579,7 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 // the profile's backend (orchestratorCmdProfile), never the operator's own
 // Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
-	_, p, err := cfg.ResolveProfile(profileName, nil)
+	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
 		return "", err
 	}
@@ -608,10 +610,22 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 		})
 	}
 
-	if _, err := tmux.SpawnPane(session, dir, orchestratorCmdProfile(cfg, root, p)); err != nil {
+	paneID, err := tmux.SpawnPane(session, dir, orchestratorCmdProfile(cfg, root, p))
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("✓ new orchestrator chat pane (%s)", profileName), nil
+	// Best-effort visual tag: label the new pane with its profile and turn on
+	// the cockpit window's pane borders so a profiled orchestrator is
+	// distinguishable from the default Anthropic pane it shares the window
+	// with. Cosmetic — never fail the spawn over it, and never rename the
+	// cockpit window itself (cockpit-detection keys off its literal name).
+	if err := tmux.SetPaneTitle(paneID, resolvedName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not tag orchestrator pane with profile %q: %v\n", resolvedName, err)
+	}
+	if err := tmux.ShowPaneBorders(session + ":cockpit"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not show cockpit pane borders: %v\n", err)
+	}
+	return fmt.Sprintf("✓ new orchestrator chat pane (%s)", resolvedName), nil
 }
 
 // cmdOrchestratorClose dismisses the calling orchestrator's own cockpit
@@ -865,7 +879,9 @@ func cmdGrab(args []string) error {
 	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	windowName := tmux.WorkerWindow(repoShort(repoName, ws), name)
+	// Tag the window with the active profile so a profiled worker reads at a
+	// glance in `Ctrl-b w` / `gv ls`; the no-profile name stays byte-identical.
+	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 	if err := tmux.CreateWindow(sessionName, windowName, wt.Path); err != nil {
 		return err
 	}
