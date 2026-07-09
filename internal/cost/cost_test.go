@@ -196,12 +196,36 @@ func TestShortModel(t *testing.T) {
 	}
 }
 
-func TestRateLookupNormalizesDatedIDs(t *testing.T) {
-	if _, ok := rateFor("claude-haiku-4-5-20251001"); !ok {
-		t.Error("dated snapshot id should resolve via suffix normalization")
+func TestRateForPrefixMatch(t *testing.T) {
+	// Configure an OpenRouter key the way config `cost.pricing` would, so the
+	// dated-slug case (transcript records z-ai/glm-5.2-20260616, config keys
+	// z-ai/glm-5.2) resolves. Overrides mutates the package table; the keys
+	// are distinctive enough not to collide with other tests.
+	Overrides(map[string]Rates{
+		"z-ai/glm-5.2":     derive(0.6, 2.2),
+		"z-ai/glm-4.5-air": derive(0.2, 1.1),
+	})
+	cases := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{"exact anthropic", "claude-opus-4-8", true},
+		{"dated anthropic snapshot", "claude-haiku-4-5-20251001", true},
+		{"exact openrouter key", "z-ai/glm-5.2", true},
+		{"dated openrouter slug", "z-ai/glm-5.2-20260616", true},
+		{"version bump is not a prefix match", "z-ai/glm-5.20", false},
+		{"unknown model", "some/unlisted-model", false},
 	}
-	if _, ok := rateFor("claude-opus-4-8"); !ok {
-		t.Error("bare alias should resolve")
+	for _, tc := range cases {
+		if _, ok := rateFor(tc.model); ok != tc.want {
+			t.Errorf("%s: rateFor(%q) ok = %v, want %v", tc.name, tc.model, ok, tc.want)
+		}
+	}
+	// Longest-wins: a dated 4.8 opus keeps the $5/$25 rate, never sliding onto
+	// the bare claude-opus-4 ($15/$75) key that is also a prefix.
+	if r, _ := rateFor("claude-opus-4-8-20260101"); r.Input != 5 {
+		t.Errorf("dated opus 4.8 Input = %v, want 5 (longest-prefix must beat claude-opus-4)", r.Input)
 	}
 }
 
