@@ -66,7 +66,7 @@ const usage = `gv — grove
   gv sweep                                    clean up all merged tasks
   gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
-  gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI);
+  gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI; ) for a profiled one);
                                               --profile opens it on a model profile instead of Claude
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
@@ -279,6 +279,7 @@ func cmdDashboard() error {
 	}
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
+	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.AttachTask = attachTask
 	tui.CloseWorkspace = closeWorkspace
 	attachTo, err := tui.Run(cfg, stateDir(), wsLabel())

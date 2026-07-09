@@ -52,8 +52,12 @@ type Config struct {
 	Repos         map[string]*Repo         `yaml:"repos"`
 	ModelProfiles map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
 	Orchestrator  struct {
-		Dir    string `yaml:"dir"`
-		Claude string `yaml:"claude"`
+		Dir string `yaml:"dir"`
+		// DefaultProfile is the model profile the cockpit's `)` hotkey opens
+		// an orchestrator on (grove-41). Empty = no configured default; `)`
+		// then falls back to the lone model_profiles entry, or shows a hint.
+		DefaultProfile string `yaml:"default_profile"`
+		Claude         string `yaml:"claude"`
 	} `yaml:"orchestrator"`
 	Audit struct {
 		StaleDays int `yaml:"stale_days"` // no-PR + dead/idle tasks older than this classify abandoned (default 7)
@@ -389,6 +393,27 @@ func (c *Config) ResolveProfile(explicit string, r *Repo) (string, *ModelProfile
 		return "", nil, fmt.Errorf("unknown model profile %q (configured: %s)", name, strings.Join(c.profileNames(), ", "))
 	}
 	return name, p, nil
+}
+
+// ResolveDefaultProfile picks the model profile the cockpit's `)` hotkey
+// opens an orchestrator on (grove-41), by three rules in order:
+//  1. orchestrator.default_profile when set,
+//  2. else the sole model_profiles entry when exactly one is configured,
+//  3. else none — ok is false and the caller shows a one-line hint instead
+//     of guessing between zero or several profiles.
+//
+// It does not validate that a named default exists in model_profiles; the
+// spawn path's ResolveProfile surfaces an unknown-profile error downstream.
+func (c *Config) ResolveDefaultProfile() (name string, ok bool) {
+	if c.Orchestrator.DefaultProfile != "" {
+		return c.Orchestrator.DefaultProfile, true
+	}
+	if len(c.ModelProfiles) == 1 {
+		for n := range c.ModelProfiles {
+			return n, true
+		}
+	}
+	return "", false
 }
 
 func (c *Config) profileNames() []string {

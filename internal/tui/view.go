@@ -225,6 +225,7 @@ func (m Model) viewActivity() string {
 func (m Model) viewFooter() string {
 	keys := []string{
 		sKey.Render("O") + sFoot.Render(" new chat"),
+		sKey.Render(")") + sFoot.Render(" profiled chat"),
 		sKey.Render("enter") + sFoot.Render(" reply"),
 		sKey.Render("a") + sFoot.Render(" attach"),
 		sKey.Render("o") + sFoot.Render(" preview"),
