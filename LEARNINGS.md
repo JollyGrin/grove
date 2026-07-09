@@ -178,6 +178,10 @@
   `gv adopt --manual` is the guaranteed-fresh escape hatch — it skips the
   resume limb — then a `gv nudge` with the work order restores autonomy.
   Used to reset grove-36 onto a fresh Opus session mid-ticket.
+- **2026-07-09 · prompt caching survives OpenRouter→Z.AI** — Claude Code's
+  ~50k fixed prefix cached at 99.3% on the second GLM request (turn cost
+  $0.065 → $0.014). Long profiled sessions are cheap; the floor cost is
+  per-session, not per-turn. (Verified in the OpenRouter activity view.)
 - **2026-07-09 · OpenRouter returns dated model slugs** — the API answers
   with `z-ai/glm-5.2-20260616` while humans configure `z-ai/glm-5.2`;
   any lookup keyed on the configured slug (cost pricing) needs

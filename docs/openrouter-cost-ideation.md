@@ -13,6 +13,11 @@ of ANY Claude Code turn on any backend; the Claude sub just never itemizes
 it. Cheap sessions depend entirely on prompt caching re-reading that
 prefix at a fraction of full price on every subsequent turn.
 
+> **VERIFIED 2026-07-09, same day:** second request in the pane showed
+> **Cached 49,792 (99.3%), prompt 344, cost $0.0137** — caching passes
+> through OpenRouter→Z.AI intact. The cost track below is closed; ideas
+> 1/2/5 are moot at current scale, ideas 3/4 remain worth a look someday.
+
 ## The load-bearing unknown (verify first, ~$0.10)
 
 **Does the cache warm on GLM via OpenRouter?** Send 2–3 messages in one
