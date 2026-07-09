@@ -38,7 +38,10 @@ operator now runs grove exclusively.
 - `go build ./... && go vet ./... && go test ./...` must be green;
   `gofmt -l .` empty.
 - `go install ./cmd/gv` refreshes `~/go/bin/gv` in place (hooks reference
-  the absolute path, so no re-install of hooks after rebuilds).
+  the absolute path, so no re-install of hooks after rebuilds) — but only
+  from main. For operator testing of an unmerged branch, the default is a
+  throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`, hand over that
+  path — the installed gv and live sessions stay untouched.
 - `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
   scratch everything (the dummy-data pattern) — run it before merging
   anything that touches the task lifecycle.

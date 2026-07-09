@@ -171,6 +171,15 @@
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-07-09 · throwaway builds for operator testing** — when a change
+  needs the operator's manual verification before merge, build the branch
+  to a scratch path (`go build -o /tmp/gv-<ticket> ./cmd/gv`) and hand
+  over that command — never `go install` from an unmerged branch. The
+  installed `~/go/bin/gv` keeps running live sessions and hooks (hooks
+  reference its absolute path); a temp binary tests the exact change,
+  interrupts nothing, and is thrown away if it doesn't work. Used to
+  verify grove-36's pane tagging live before merge. This is the DEFAULT
+  handoff for "try it yourself" testing.
 - **2026-07-09 · state never forgets a session id** — the events fold
   clears nothing on `untrack` (it only sets `Done`), so `gv adopt` of a
   previously-tracked task always `--resume`s the stored conversation.
