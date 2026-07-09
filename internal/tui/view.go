@@ -21,6 +21,9 @@ func (m Model) View() string {
 	if m.mode == modeCosts {
 		return m.viewCosts()
 	}
+	if m.mode == modeProfilePick {
+		return m.viewProfilePick()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
@@ -298,6 +301,52 @@ func (m Model) viewDetail() string {
 
 	body := sPanelFocus.Width(m.width - 2).Render(strings.Join(sections, "\n"))
 	return m.viewHeader() + "\n" + body
+}
+
+// viewProfilePick renders the modeProfilePick overlay (grove-45): the sorted
+// candidate profile names, each with its `opus` model as a one-line hint, and
+// a cursor. Shown only for ≥2 profiles with no default, so `)` needn't guess.
+func (m Model) viewProfilePick() string {
+	w := m.width - 4
+
+	// Widest name → aligned model-hint column.
+	nameW := 8
+	for _, n := range m.pickProfiles {
+		if l := len([]rune(n)); l > nameW {
+			nameW = l
+		}
+	}
+
+	rows := []string{sHeaderCol.Render(truncPad("   "+pad("PROFILE", nameW+2)+"OPUS MODEL", w))}
+	for i, n := range m.pickProfiles {
+		opus := "—"
+		if p := m.cfg.ModelProfiles[n]; p != nil && p.Opus != "" {
+			opus = p.Opus
+		}
+		cursor := " "
+		nameCell := pad(n, nameW+2)
+		if i == m.pickSel {
+			cursor = sSelected.Render("▸")
+			nameCell = sSelected.Render(nameCell)
+		}
+		line := cursor + " " + nameCell + sChrome.Render(opus)
+		rows = append(rows, truncPad(line, w))
+	}
+
+	body := sPanelTitleFocus.Render("PICK A PROFILE") +
+		sChrome.Render("  (no default set — ≥2 profiles configured)") +
+		"\n" + strings.Join(rows, "\n")
+	panel := sPanelFocus.Width(m.width - 2).Render(body)
+
+	foot := " " + strings.Join([]string{
+		sKey.Render("j/k") + sFoot.Render(" move"),
+		sKey.Render("enter") + sFoot.Render(" spawn"),
+		sKey.Render("esc") + sFoot.Render(" cancel"),
+	}, sDim.Render(" · "))
+	if m.flash != "" {
+		foot += "   " + sChrome.Render(m.flash)
+	}
+	return m.viewHeader() + "\n" + panel + "\n" + foot
 }
 
 // --- text helpers ---

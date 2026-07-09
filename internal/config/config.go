@@ -395,25 +395,44 @@ func (c *Config) ResolveProfile(explicit string, r *Repo) (string, *ModelProfile
 	return name, p, nil
 }
 
-// ResolveDefaultProfile picks the model profile the cockpit's `)` hotkey
-// opens an orchestrator on (grove-41), by three rules in order:
-//  1. orchestrator.default_profile when set,
-//  2. else the sole model_profiles entry when exactly one is configured,
-//  3. else none — ok is false and the caller shows a one-line hint instead
-//     of guessing between zero or several profiles.
+// ProfileAction is what the cockpit's `)` hotkey should do given the current
+// model_profiles config — see ResolveOrchestratorProfile.
+type ProfileAction int
+
+const (
+	// ProfileHint: zero profiles configured. The caller flashes a one-line
+	// hint; there is nothing to spawn or pick.
+	ProfileHint ProfileAction = iota
+	// ProfileSpawn: a single profile is resolved (a workspace default, or the
+	// sole configured profile). The caller spawns it immediately; name holds it.
+	ProfileSpawn
+	// ProfilePick: two or more profiles and no default. The caller opens a
+	// picker over candidates (sorted profile names).
+	ProfilePick
+)
+
+// ResolveOrchestratorProfile decides what the `)` hotkey does (grove-41,
+// grove-45), by four rules in order:
+//  1. orchestrator.default_profile set → ProfileSpawn on that name,
+//  2. else zero profiles → ProfileHint (caller shows a one-line hint),
+//  3. else exactly one profile → ProfileSpawn on that lone profile,
+//  4. else (≥2 profiles, no default) → ProfilePick over the sorted names.
 //
 // It does not validate that a named default exists in model_profiles; the
 // spawn path's ResolveProfile surfaces an unknown-profile error downstream.
-func (c *Config) ResolveDefaultProfile() (name string, ok bool) {
+func (c *Config) ResolveOrchestratorProfile() (name string, candidates []string, action ProfileAction) {
 	if c.Orchestrator.DefaultProfile != "" {
-		return c.Orchestrator.DefaultProfile, true
+		return c.Orchestrator.DefaultProfile, nil, ProfileSpawn
 	}
-	if len(c.ModelProfiles) == 1 {
+	switch len(c.ModelProfiles) {
+	case 0:
+		return "", nil, ProfileHint
+	case 1:
 		for n := range c.ModelProfiles {
-			return n, true
+			return n, nil, ProfileSpawn
 		}
 	}
-	return "", false
+	return "", c.profileNames(), ProfilePick
 }
 
 func (c *Config) profileNames() []string {

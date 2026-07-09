@@ -446,37 +446,41 @@ func TestResolveProfile(t *testing.T) {
 	}
 }
 
-func TestResolveDefaultProfile(t *testing.T) {
-	// Rule 3: zero profiles, no default → not resolvable.
-	if name, ok := (&Config{}).ResolveDefaultProfile(); ok || name != "" {
-		t.Errorf("zero profiles: got (%q, %v), want (\"\", false)", name, ok)
+func TestResolveOrchestratorProfile(t *testing.T) {
+	// Rule 2: zero profiles, no default → hint, nothing to spawn or pick.
+	if name, cands, act := (&Config{}).ResolveOrchestratorProfile(); act != ProfileHint || name != "" || cands != nil {
+		t.Errorf("zero profiles: got (%q, %v, %d), want (\"\", nil, ProfileHint)", name, cands, act)
 	}
 
-	// Rule 2: exactly one profile, no default → that lone profile.
+	// Rule 3: exactly one profile, no default → spawn that lone profile.
 	one := &Config{ModelProfiles: map[string]*ModelProfile{
 		"openrouter-glm": {BaseURL: "https://openrouter.ai/api"},
 	}}
-	if name, ok := one.ResolveDefaultProfile(); !ok || name != "openrouter-glm" {
-		t.Errorf("single profile: got (%q, %v), want (\"openrouter-glm\", true)", name, ok)
+	if name, cands, act := one.ResolveOrchestratorProfile(); act != ProfileSpawn || name != "openrouter-glm" || cands != nil {
+		t.Errorf("single profile: got (%q, %v, %d), want (\"openrouter-glm\", nil, ProfileSpawn)", name, cands, act)
 	}
 
-	// Rule 3: several profiles, no default → don't guess.
+	// Rule 4: several profiles, no default → pick over the sorted names.
 	several := &Config{ModelProfiles: map[string]*ModelProfile{
-		"openrouter-glm": {}, "openrouter-kimi": {},
+		"openrouter-kimi": {}, "openrouter-glm": {},
 	}}
-	if name, ok := several.ResolveDefaultProfile(); ok || name != "" {
-		t.Errorf("several profiles, no default: got (%q, %v), want (\"\", false)", name, ok)
+	name, cands, act := several.ResolveOrchestratorProfile()
+	if act != ProfilePick || name != "" {
+		t.Errorf("several profiles, no default: got (%q, _, %d), want (\"\", _, ProfilePick)", name, act)
+	}
+	if want := []string{"openrouter-glm", "openrouter-kimi"}; !reflect.DeepEqual(cands, want) {
+		t.Errorf("several profiles candidates: got %v, want %v (sorted)", cands, want)
 	}
 
 	// Rule 1: explicit default wins even when several profiles exist.
 	several.Orchestrator.DefaultProfile = "openrouter-kimi"
-	if name, ok := several.ResolveDefaultProfile(); !ok || name != "openrouter-kimi" {
-		t.Errorf("explicit default: got (%q, %v), want (\"openrouter-kimi\", true)", name, ok)
+	if name, cands, act := several.ResolveOrchestratorProfile(); act != ProfileSpawn || name != "openrouter-kimi" || cands != nil {
+		t.Errorf("explicit default: got (%q, %v, %d), want (\"openrouter-kimi\", nil, ProfileSpawn)", name, cands, act)
 	}
 
 	// Rule 1 precedence: default wins over the lone-profile shortcut too.
 	one.Orchestrator.DefaultProfile = "openrouter-glm"
-	if name, ok := one.ResolveDefaultProfile(); !ok || name != "openrouter-glm" {
-		t.Errorf("default over single: got (%q, %v), want (\"openrouter-glm\", true)", name, ok)
+	if name, _, act := one.ResolveOrchestratorProfile(); act != ProfileSpawn || name != "openrouter-glm" {
+		t.Errorf("default over single: got (%q, _, %d), want (\"openrouter-glm\", _, ProfileSpawn)", name, act)
 	}
 }
