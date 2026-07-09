@@ -500,18 +500,15 @@ func orchestratorCmd(cfg *config.Config, root string) string {
 	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
-// orchestratorCmdProfile is orchestratorCmd's profile-wrapped twin
-// (grove-36 T4 / design §3.1): each `--continue`-or-fresh limb gets its
-// own full env wrap. exec replaces the shell process, so the two limbs
-// can't share one wrap — without this, a `--continue` failure would fall
-// through the `||` into a bare, unwrapped relaunch on the operator's own
-// Claude sub instead of the profile's backend.
-func orchestratorCmdProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
-	launch := orchestratorLaunch(cfg, root)
-	secrets := config.SecretsPath()
-	resumeLimb := config.WrapProfile(launch+" --continue 2>/dev/null", p, secrets)
-	freshLimb := config.WrapProfile(launch, p, secrets)
-	return fmt.Sprintf("%s || %s", resumeLimb, freshLimb)
+// orchestratorLaunchProfile is orchestratorLaunch wrapped in a profile's
+// backend env — the FRESH profiled spawn command. No `--continue` limb:
+// fresh spawns () / orchestrator new --profile) always start clean, exactly
+// like the unprofiled spawnOrchestrator (grove-43 — the --continue twin made
+// every profiled spawn resume the previous conversation). Resume-on-spawn
+// exists only for the cockpit's first pane (orchestratorCmd), which is
+// always the default Anthropic orchestrator and never profiled.
+func orchestratorLaunchProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
+	return config.WrapProfile(orchestratorLaunch(cfg, root), p, config.SecretsPath())
 }
 
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
@@ -576,9 +573,8 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 // spawnOrchestratorProfile is spawnOrchestrator's profile-aware twin
 // (grove-36 T4): an empty/unknown-as-"anthropic" profileName falls back to
 // spawnOrchestrator unchanged (today's exact behavior). Otherwise the new
-// pane's launch — both the `--continue` and fresh limbs — runs wrapped in
-// the profile's backend (orchestratorCmdProfile), never the operator's own
-// Claude sub.
+// pane's fresh launch runs wrapped in the profile's backend
+// (orchestratorLaunchProfile), never the operator's own Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
 	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
@@ -623,7 +619,7 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	if err := os.MkdirAll(paneDir, 0o755); err != nil {
 		return "", err
 	}
-	paneID, err := tmux.SpawnPane(session, paneDir, orchestratorCmdProfile(cfg, root, p))
+	paneID, err := tmux.SpawnPane(session, paneDir, orchestratorLaunchProfile(cfg, root, p))
 	if err != nil {
 		return "", err
 	}
@@ -2120,7 +2116,7 @@ func cmdAdopt(args []string) error {
 	// replaces the shell, so a single wrap around `resume || fresh` would make
 	// the `|| fresh` fallback unreachable and, on a resume failure, silently
 	// drop to the operator's own Claude sub — the exact provider switch this
-	// ticket kills (grove-36 T3; mirrors orchestratorCmdProfile). Wrap the
+	// ticket kills (grove-36 T3). Wrap the
 	// composed claude+prompt command only, never repo.Claude itself (hooks
 	// resolve the worker's config dir from the stored r.Claude) nor the setup
 	// prefix added below. profile == nil leaves every limb byte-identical.
