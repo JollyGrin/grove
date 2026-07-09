@@ -65,6 +65,17 @@ stand out as "context thrash."
    analysis in `gv cost --analyze` is the signal; a per-profile "expected
    $/ticket" note in LEARNINGS.md may be all that's needed.
 
+## Future pickup (logged 2026-07-09, not investigated)
+
+- **Are orchestrator panes in `gv cost` at all?** Cost is computed
+  per-ticket from worker transcripts; orchestrator chats (default dir and
+  the new per-profile `.grove/orchestrator/<profile>/` dirs) may be
+  invisible to it. Each pane open carries the ~$0.065 uncached floor +
+  its conversation. Worth answering when touching the cost page: do
+  orchestrator sessions get counted anywhere, and should the cost
+  analysis show a per-session "open floor" line so operators understand
+  the fixed overhead? Do not build until the question is confirmed real.
+
 ## Non-ideas (documented so nobody chases them)
 
 - Trimming Claude Code's own system prompt — not ours to change.
