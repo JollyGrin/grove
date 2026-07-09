@@ -16,6 +16,23 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-07-09 · Claude Code clobbers tmux pane titles on boot** — it sets
+  the terminal title via OSC ("✳ Claude Code" / its version string), so a
+  `select-pane -T` tag survives only until boot. Durable per-pane tagging
+  must live in a tmux pane **user option** (`set-option -p @grove_profile`),
+  which foreground programs can't touch, rendered via a conditional
+  `pane-border-format` (`#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}`).
+  Field-hit: grove-36's first pane-title tag vanished the moment claude
+  booted. Bonus verified the same day: Claude Code v2.1.205's statusline
+  shows the real `ANTHROPIC_MODEL` slug (`z-ai/glm-5.2`), so in-app model
+  visibility is real once the env override is set — only the model-class
+  display name ("Sonnet 5") lies.
+- **2026-07-09 · `--continue` chains key on cwd** — running a profiled
+  orchestrator in a per-profile subdir (`.grove/orchestrator/<profile>/`)
+  gives each backend its own conversation chain, and CLAUDE.md still
+  applies (memory loads recurse up ancestor dirs). Without this, a fresh
+  GLM pane `--continue`d the newest *Claude*-created conversation at ~100%
+  context — wrong model resuming the wrong brain.
 - **2026-07-02 · resume durability** — `claude --resume <id>` still works
   ≥6 days after the tmux window died, provided the transcript dir
   survives; the resumed session fires **SessionStart with the SAME
@@ -153,6 +170,19 @@
   ESTIMATES of relative effort, never billing.
 
 ## Field notes (ovs, kept for judgment)
+
+- **2026-07-09 · state never forgets a session id** — the events fold
+  clears nothing on `untrack` (it only sets `Done`), so `gv adopt` of a
+  previously-tracked task always `--resume`s the stored conversation.
+  When the old conversation is the problem (corrupted/bloated context),
+  `gv adopt --manual` is the guaranteed-fresh escape hatch — it skips the
+  resume limb — then a `gv nudge` with the work order restores autonomy.
+  Used to reset grove-36 onto a fresh Opus session mid-ticket.
+- **2026-07-09 · OpenRouter returns dated model slugs** — the API answers
+  with `z-ai/glm-5.2-20260616` while humans configure `z-ai/glm-5.2`;
+  any lookup keyed on the configured slug (cost pricing) needs
+  exact-match-then-prefix-match at a `-` boundary or it silently reports
+  unknown.
 
 - **The full loop is proven** (2026-06-10, DEV-4556): grab → worktree +
   setup → autonomous work → PR + CI green + previews + self-review →

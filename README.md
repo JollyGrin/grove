@@ -10,6 +10,9 @@ PR** — with a single inbox answering *"what can I act on right now?"*
   humans finish them — grove never mutates a tracker's terminal state.
 - **Right-sized models**: routes rote work to small models, reasoning to
   frontier ones, and escalates on failed gates — erring upward when unsure.
+- **Any Anthropic-compatible backend**: named model profiles run workers
+  *and* orchestrators on OpenRouter (or any compatible endpoint) per
+  dispatch — mix a GLM orchestrator with Claude workers or vice versa.
 - **Self-configuring**: `gv init` detects the stack, wires connections
   (auth, hooks, worker environment), and notices when one goes missing.
 - **Compounding**: a layered, human-gated learnings system so grove grows
@@ -21,13 +24,47 @@ orchestrator field-tested on The Grid's real ticket flow. Team-specific
 setups (like the Grid's) become **packs** — versioned overlays of
 conventions, checks, and prompts — instead of hardcoding.
 
-## Status: pre-Phase-0 scaffold (2026-07-03)
+## Status: live daily driver (2026-07-09)
 
-The design corpus is complete and reviewed; the Go tree is a verbatim seed
-from overstory (builds green, tests pass) awaiting generalization.
+The namespace split from overstory is done (P0.0, 2026-07-04) — the binary
+is safe to run and is the operator's daily driver. See [TASKS.md](TASKS.md)
+for the phase board and [CLAUDE.md](CLAUDE.md) for the one remaining
+coexistence caution (`gv hooks install` writes a shared settings file).
 
-> ⚠️ **Do not run the binary yet** — the seeded code still points at
-> overstory's live config/state namespaces. See [CLAUDE.md](CLAUDE.md).
+## Model profiles (OpenRouter etc.)
+
+A **model profile** names an Anthropic-API-compatible backend — endpoint,
+credential env var, and which slug fills each Claude model class:
+
+```yaml
+# .grove/config.yaml (or ~/.config/grove/config.yaml)
+model_profiles:
+  openrouter-glm:
+    base_url: https://openrouter.ai/api
+    auth_token_env: OPENROUTER_API_KEY   # key itself lives in ~/.config/grove/.env
+    opus: z-ai/glm-5.2
+    sonnet: z-ai/glm-5.2
+    haiku: z-ai/glm-4.5-air
+cost:
+  pricing:
+    z-ai/glm-5.2: {input: 0.42, output: 1.32}   # $/Mtok; dated API slugs prefix-match
+```
+
+```sh
+gv grab grove-42 --repo grove --profile openrouter-glm   # worker on GLM
+gv orchestrator new --profile openrouter-glm             # orchestrator pane on GLM
+gv adopt grove-42                                        # revives on the profile it was grabbed with
+```
+
+Any orchestrator can dispatch onto any profile — the flag is per-dispatch,
+so models freely delegate to other models. Visibility is built in and the
+no-profile path is untouched: profiled workers get a `· <profile>` window
+suffix and a `PROFILE` column in `gv ls`; a profiled orchestrator pane
+carries a permanent `⚡ <profile>` border tag; profiled orchestrators keep
+their own `--continue` history per profile. Set `model_profile: <name>` on
+a repo to make it that repo's default; `--profile anthropic` strips it.
+Secrets are self-sourced from `~/.config/grove/.env` at launch — never
+inherited from the shell — and only the env var *name* appears in config.
 
 ## Doc map
 
@@ -46,6 +83,6 @@ from overstory (builds green, tests pass) awaiting generalization.
 ## Build
 
 ```sh
-go build ./... && go vet ./... && go test ./...   # safe, expected green
-# go install / running gv: NOT until TASKS.md P0.0 is done
+go build ./... && go vet ./... && go test ./...   # expected green
+go install ./cmd/gv                               # refreshes ~/go/bin/gv in place
 ```
