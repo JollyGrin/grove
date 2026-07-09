@@ -588,8 +588,8 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
-	dir := orchestratorDirFor(ws, cfg)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	baseDir := orchestratorDirFor(ws, cfg)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return "", err
 	}
 	if !tmux.SessionExists(session) {
@@ -610,7 +610,19 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 		})
 	}
 
-	paneID, err := tmux.SpawnPane(session, dir, orchestratorCmdProfile(cfg, root, p))
+	// Per-profile cwd (grove-36 T4): Claude Code keys `--continue` by cwd, so
+	// running the profiled pane in <orchDir>/<profile>/ gives each backend its
+	// own continuity — a fresh GLM orchestrator can no longer resume the
+	// Anthropic default pane's conversation (the confirmed bug). The
+	// orchestrator CLAUDE.md brain still loads: Claude Code reads memory
+	// recursively up the tree, and this dir's parent is the orchestrator dir
+	// that holds CLAUDE.md. The unprofiled path (spawnOrchestrator) is
+	// untouched — its pane keeps cwd = orchDir exactly as before.
+	paneDir := filepath.Join(baseDir, resolvedName)
+	if err := os.MkdirAll(paneDir, 0o755); err != nil {
+		return "", err
+	}
+	paneID, err := tmux.SpawnPane(session, paneDir, orchestratorCmdProfile(cfg, root, p))
 	if err != nil {
 		return "", err
 	}
