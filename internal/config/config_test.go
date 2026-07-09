@@ -445,3 +445,38 @@ func TestResolveProfile(t *testing.T) {
 		t.Error("unknown profile should error")
 	}
 }
+
+func TestResolveDefaultProfile(t *testing.T) {
+	// Rule 3: zero profiles, no default → not resolvable.
+	if name, ok := (&Config{}).ResolveDefaultProfile(); ok || name != "" {
+		t.Errorf("zero profiles: got (%q, %v), want (\"\", false)", name, ok)
+	}
+
+	// Rule 2: exactly one profile, no default → that lone profile.
+	one := &Config{ModelProfiles: map[string]*ModelProfile{
+		"openrouter-glm": {BaseURL: "https://openrouter.ai/api"},
+	}}
+	if name, ok := one.ResolveDefaultProfile(); !ok || name != "openrouter-glm" {
+		t.Errorf("single profile: got (%q, %v), want (\"openrouter-glm\", true)", name, ok)
+	}
+
+	// Rule 3: several profiles, no default → don't guess.
+	several := &Config{ModelProfiles: map[string]*ModelProfile{
+		"openrouter-glm": {}, "openrouter-kimi": {},
+	}}
+	if name, ok := several.ResolveDefaultProfile(); ok || name != "" {
+		t.Errorf("several profiles, no default: got (%q, %v), want (\"\", false)", name, ok)
+	}
+
+	// Rule 1: explicit default wins even when several profiles exist.
+	several.Orchestrator.DefaultProfile = "openrouter-kimi"
+	if name, ok := several.ResolveDefaultProfile(); !ok || name != "openrouter-kimi" {
+		t.Errorf("explicit default: got (%q, %v), want (\"openrouter-kimi\", true)", name, ok)
+	}
+
+	// Rule 1 precedence: default wins over the lone-profile shortcut too.
+	one.Orchestrator.DefaultProfile = "openrouter-glm"
+	if name, ok := one.ResolveDefaultProfile(); !ok || name != "openrouter-glm" {
+		t.Errorf("default over single: got (%q, %v), want (\"openrouter-glm\", true)", name, ok)
+	}
+}

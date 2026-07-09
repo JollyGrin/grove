@@ -337,6 +337,21 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return flashMsg(out)
 		}
+	case ")": // O's profiled sibling: spawn an orchestrator on a model profile
+		cfg := m.cfg
+		profile, ok := cfg.ResolveDefaultProfile()
+		if !ok {
+			m.flash = "set orchestrator.default_profile or configure exactly one profile"
+			return m, nil
+		}
+		m.flash = "spawning orchestrator chat (" + profile + ")…"
+		return m, func() tea.Msg {
+			out, err := SpawnOrchestratorProfile(cfg, profile)
+			if err != nil {
+				return flashMsg(err.Error())
+			}
+			return flashMsg(out)
+		}
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -534,6 +549,14 @@ var CloseWorkspace = func(stateDir, label string) error {
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
 // there); wired at startup to avoid an import cycle. Returns a flash line.
 var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
+	return "", fmt.Errorf("orchestrator spawn not wired")
+}
+
+// SpawnOrchestratorProfile is SpawnOrchestrator's profile-aware twin,
+// injected by cmd/gv — the `)` keybind's spawn path (grove-41). It opens
+// the new pane on the named model profile, exactly like
+// `gv orchestrator new --profile <name>`.
+var SpawnOrchestratorProfile = func(cfg *config.Config, profile string) (string, error) {
 	return "", fmt.Errorf("orchestrator spawn not wired")
 }
 

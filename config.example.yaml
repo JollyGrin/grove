@@ -47,6 +47,8 @@ repos:
 orchestrator:
   dir: ~/.config/grove/orchestrator
   claude: claude --dangerously-skip-permissions   # default; guardrails live in the orchestrator's CLAUDE.md
+  # default_profile: openrouter-glm   # which model_profiles entry the cockpit's `)` hotkey opens (grove-41);
+                                      # unset falls back to the sole model_profiles entry, else `)` shows a hint
 
 audit:
   stale_days: 7   # no-PR tasks with a dead/idle agent older than this classify `abandoned`
