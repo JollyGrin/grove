@@ -1,6 +1,9 @@
 package tmux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestWorkerWindow(t *testing.T) {
 	cases := []struct {
@@ -16,6 +19,50 @@ func TestWorkerWindow(t *testing.T) {
 	for _, tc := range cases {
 		if got := WorkerWindow(tc.repoShort, tc.ticket); got != tc.want {
 			t.Errorf("%s: WorkerWindow(%q, %q) = %q, want %q", tc.name, tc.repoShort, tc.ticket, got, tc.want)
+		}
+	}
+}
+
+func TestWorkerWindowProfile(t *testing.T) {
+	cases := []struct {
+		name      string
+		repoShort string
+		ticket    string
+		profile   string
+		want      string
+	}{
+		// No profile: byte-identical to WorkerWindow (load-bearing invariant).
+		{"no profile", "p2p", "154-undo-button", "", "p2p · 154-undo-button"},
+		{"with profile", "p2p", "154-undo-button", "openrouter-glm", "p2p · 154-undo-button · openrouter-glm"},
+		{"sanitizes profile", "p2p", "39-x", "open.router:glm", "p2p · 39-x · open-router-glm"},
+	}
+	for _, tc := range cases {
+		got := WorkerWindowProfile(tc.repoShort, tc.ticket, tc.profile)
+		if got != tc.want {
+			t.Errorf("%s: WorkerWindowProfile(%q, %q, %q) = %q, want %q", tc.name, tc.repoShort, tc.ticket, tc.profile, got, tc.want)
+		}
+		// The no-profile path must equal WorkerWindow exactly.
+		if tc.profile == "" {
+			if base := WorkerWindow(tc.repoShort, tc.ticket); got != base {
+				t.Errorf("%s: no-profile name %q diverged from WorkerWindow %q", tc.name, got, base)
+			}
+		}
+	}
+}
+
+func TestPaneBorderFormat(t *testing.T) {
+	// The profiled pane's tag must live in the @grove_profile user option —
+	// the OSC-title-proof carrier (grove-36 T1) — and fall back to the pane
+	// title when the option is unset so unprofiled panes are visually
+	// unchanged. Guard the exact expansion so a refactor can't silently drop
+	// the fallback (which would blank every unprofiled pane's border).
+	want := "#{pane_index}: #{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}"
+	if paneBorderFormat != want {
+		t.Errorf("paneBorderFormat = %q, want %q", paneBorderFormat, want)
+	}
+	for _, needle := range []string{"@grove_profile", "#{pane_title}", "#{pane_index}"} {
+		if !strings.Contains(paneBorderFormat, needle) {
+			t.Errorf("paneBorderFormat %q missing %q", paneBorderFormat, needle)
 		}
 	}
 }

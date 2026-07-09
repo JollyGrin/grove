@@ -8,6 +8,7 @@
 #   claude:        worker command (default: claude --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
 #   provider:      per-repo task backend override (markdown|linear|github; default: global kind)
+#   model_profile: default model_profiles entry for this repo's workers (default: none = anthropic)
 #   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
 
 # Task backend. github: the repo's GitHub issues via `gh` (ids <repo>-<n>;
@@ -58,10 +59,27 @@ notify:
   ntfy: ""                # e.g. https://ntfy.sh/grove-<long-random-suffix>
   ntfy_body: full         # `title-only` keeps sentinel text off the public server
 
+# Model profiles (grove-36): run a worker or orchestrator against any
+# Anthropic-API-compatible backend instead of the operator's own Claude sub —
+# OpenRouter's "Anthropic Skin" (native /v1/messages) is the reference case.
+# Secrets are NEVER stored here: auth_token_env names an env VAR (read from
+# ~/.config/grove/.env, perms 600), never the key itself. Absent/empty =
+# today's behavior, byte-for-byte.
+#   gv grab <ticket> --repo myapp --profile openrouter-glm
+#   gv orchestrator new --profile openrouter-glm
+# model_profiles:
+#   openrouter-glm:
+#     base_url: https://openrouter.ai/api
+#     auth_token_env: OPENROUTER_API_KEY
+#     opus:   z-ai/glm-5.2
+#     sonnet: z-ai/glm-5.2
+#     haiku:  z-ai/glm-4.5-air
+
 cost:
   # stuck_turns: 30      # turns with no delivery movement before a stuck flag
   # pricing:             # per-model USD/MTok overrides (estimates only)
   #   claude-sonnet-5: {input: 3, output: 15}
+  #   z-ai/glm-5.2: {input: 0.42, output: 1.32}     # OpenRouter metered $, not an effort-estimate
   # Persistent spend ledger (<state>/ledger.csv): record snapshots so cost
   # history survives Claude Code transcript pruning (~30 days) and worktree
   # removal. This is only the DEFAULT — the cockpit costs page ($ key, then

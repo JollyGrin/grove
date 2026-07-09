@@ -7,7 +7,6 @@ package cost
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -34,9 +33,11 @@ func derive(input, output float64) Rates {
 }
 
 // defaultRates: current Anthropic pricing (claude-api reference, cached
-// 2026-06-24). Explicit per model — no prefix matching: Opus 4.0/4.1 were
-// $15/$75 while 4.5+ is $5/$25, so prefixes would misprice. Overridable
-// via config `cost.pricing`.
+// 2026-06-24). Explicit per minor version — Opus 4.0/4.1 were $15/$75 while
+// 4.5+ is $5/$25, so every priced version is its own key. rateFor's prefix
+// match only ever strips a trailing "-<suffix>" (a dated snapshot/variant),
+// and longest-wins keeps a dated 4.8 on the 4.8 key, so it never collapses
+// two distinct minor versions. Overridable via config `cost.pricing`.
 var defaultRates = map[string]Rates{
 	"claude-fable-5":    derive(10, 50),
 	"claude-mythos-5":   derive(10, 50),
@@ -62,14 +63,27 @@ func Overrides(pricing map[string]Rates) {
 	}
 }
 
-var datedSuffix = regexp.MustCompile(`-\d{8}$`)
-
+// rateFor resolves a model id to its rates: an exact key first, else the
+// LONGEST configured key K such that the id is K + "-<suffix>" (a dated
+// snapshot or variant — e.g. z-ai/glm-5.2-20260616 → z-ai/glm-5.2). The "-"
+// boundary is required so a prefix never bleeds across a version bump:
+// z-ai/glm-5.2 matches z-ai/glm-5.2-20260616 but never z-ai/glm-5.20.
+// Longest-wins keeps a dated claude-opus-4-8-* on the $5/$25 4.8 rate rather
+// than sliding onto the bare claude-opus-4 ($15/$75) key.
 func rateFor(model string) (Rates, bool) {
 	if r, ok := defaultRates[model]; ok {
 		return r, true
 	}
-	r, ok := defaultRates[datedSuffix.ReplaceAllString(model, "")]
-	return r, ok
+	best := ""
+	for k := range defaultRates {
+		if len(k) > len(best) && strings.HasPrefix(model, k+"-") {
+			best = k
+		}
+	}
+	if best == "" {
+		return Rates{}, false
+	}
+	return defaultRates[best], true
 }
 
 // Totals is the aggregate for one ticket (all sessions + subagents).

@@ -51,7 +51,7 @@ const usage = `gv — grove
                                               parent scope in a folder of sibling repos)
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
-  gv grab [<task>] [--repo name] [--manual] [--model id]   task → worktree → agent (no arg: list backlog)
+  gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
@@ -66,7 +66,8 @@ const usage = `gv — grove
   gv sweep                                    clean up all merged tasks
   gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
-  gv orchestrator new                         add an orchestrator chat pane (O in the TUI)
+  gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI);
+                                              --profile opens it on a model profile instead of Claude
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
@@ -243,7 +244,7 @@ func main() {
 	case "orchestrator":
 		switch {
 		case len(args) > 0 && args[0] == "new":
-			err = cmdOrchestratorNew()
+			err = cmdOrchestratorNew(args[1:])
 		case len(args) > 0 && args[0] == "close":
 			err = cmdOrchestratorClose(args[1:])
 		default:
@@ -498,17 +499,38 @@ func orchestratorCmd(cfg *config.Config, root string) string {
 	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
+// orchestratorCmdProfile is orchestratorCmd's profile-wrapped twin
+// (grove-36 T4 / design §3.1): each `--continue`-or-fresh limb gets its
+// own full env wrap. exec replaces the shell process, so the two limbs
+// can't share one wrap — without this, a `--continue` failure would fall
+// through the `||` into a bare, unwrapped relaunch on the operator's own
+// Claude sub instead of the profile's backend.
+func orchestratorCmdProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
+	launch := orchestratorLaunch(cfg, root)
+	secrets := config.SecretsPath()
+	resumeLimb := config.WrapProfile(launch+" --continue 2>/dev/null", p, secrets)
+	freshLimb := config.WrapProfile(launch, p, secrets)
+	return fmt.Sprintf("%s || %s", resumeLimb, freshLimb)
+}
+
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
 // cockpit's right column (cockpit design §4) — the O keybind's CLI twin.
-// Builds the cockpit first if it isn't running.
-func cmdOrchestratorNew() error {
+// Builds the cockpit first if it isn't running. --profile (grove-36) opens
+// the new pane on a model profile instead of the operator's own Claude sub.
+func cmdOrchestratorNew(args []string) error {
+	fs := flag.NewFlagSet("orchestrator new", flag.ExitOnError)
+	profileFlag := fs.String("profile", "", "open this orchestrator on a model profile (e.g. openrouter-glm) instead of Claude")
+	_ = fs.Parse(args)
+
 	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
-	if _, err := spawnOrchestrator(cfg); err != nil {
+	msg, err := spawnOrchestratorProfile(cfg, *profileFlag)
+	if err != nil {
 		return err
 	}
+	fmt.Println(msg)
 	if !tmux.IsInsideTmux() {
 		return tmux.AttachSession(cockpitSessionFor(ambient.ws))
 	}
@@ -548,6 +570,74 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		return "", err
 	}
 	return "✓ new orchestrator chat pane", nil
+}
+
+// spawnOrchestratorProfile is spawnOrchestrator's profile-aware twin
+// (grove-36 T4): an empty/unknown-as-"anthropic" profileName falls back to
+// spawnOrchestrator unchanged (today's exact behavior). Otherwise the new
+// pane's launch — both the `--continue` and fresh limbs — runs wrapped in
+// the profile's backend (orchestratorCmdProfile), never the operator's own
+// Claude sub.
+func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
+	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		return spawnOrchestrator(cfg)
+	}
+	ws := ambient.ws
+	session := cockpitSessionFor(ws)
+	baseDir := orchestratorDirFor(ws, cfg)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", err
+	}
+	if !tmux.SessionExists(session) {
+		// Build the (unprofiled) cockpit first — 0/the default pane stays
+		// Anthropic — then fall through to add the profiled pane below.
+		if err := buildCockpit(ws, cfg); err != nil {
+			return "", err
+		}
+	}
+	root := ""
+	if ws != nil {
+		root = ws.Root
+	}
+	if mem, err := resource.Read(); err == nil {
+		_ = resource.Log(stateDir(), resource.Sample{
+			Avail: mem.AvailBytes, Total: mem.TotalBytes,
+			Workers: resource.LiveWorkers(), Kind: resource.KindOrchestrator,
+		})
+	}
+
+	// Per-profile cwd (grove-36 T4): Claude Code keys `--continue` by cwd, so
+	// running the profiled pane in <orchDir>/<profile>/ gives each backend its
+	// own continuity — a fresh GLM orchestrator can no longer resume the
+	// Anthropic default pane's conversation (the confirmed bug). The
+	// orchestrator CLAUDE.md brain still loads: Claude Code reads memory
+	// recursively up the tree, and this dir's parent is the orchestrator dir
+	// that holds CLAUDE.md. The unprofiled path (spawnOrchestrator) is
+	// untouched — its pane keeps cwd = orchDir exactly as before.
+	paneDir := filepath.Join(baseDir, resolvedName)
+	if err := os.MkdirAll(paneDir, 0o755); err != nil {
+		return "", err
+	}
+	paneID, err := tmux.SpawnPane(session, paneDir, orchestratorCmdProfile(cfg, root, p))
+	if err != nil {
+		return "", err
+	}
+	// Best-effort visual tag: label the new pane with its profile and turn on
+	// the cockpit window's pane borders so a profiled orchestrator is
+	// distinguishable from the default Anthropic pane it shares the window
+	// with. Cosmetic — never fail the spawn over it, and never rename the
+	// cockpit window itself (cockpit-detection keys off its literal name).
+	if err := tmux.SetPaneProfile(paneID, resolvedName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not tag orchestrator pane with profile %q: %v\n", resolvedName, err)
+	}
+	if err := tmux.ShowPaneBorders(session + ":cockpit"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not show cockpit pane borders: %v\n", err)
+	}
+	return fmt.Sprintf("✓ new orchestrator chat pane (%s)", resolvedName), nil
 }
 
 // cmdOrchestratorClose dismisses the calling orchestrator's own cockpit
@@ -642,9 +732,10 @@ func cmdGrab(args []string) error {
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
+	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name]")
 	}
 
 	cfg, err := loadCfg()
@@ -676,7 +767,7 @@ func cmdGrab(args []string) error {
 	}
 	if kind == "linear" {
 		if len(positionals) != 1 {
-			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id]")
+			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name]")
 		}
 		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
 			return err
@@ -728,10 +819,18 @@ func cmdGrab(args []string) error {
 			task.ID, t.Worktree, task.ID, task.ID, task.ID)
 	}
 
+	profileName, profile, err := cfg.ResolveProfile(*profileFlag, repo)
+	if err != nil {
+		return err
+	}
+
 	name := task.ID + "-" + slugify(task.Title)
 	fmt.Printf("→ %s on %s (branch %s)\n", task.ID, repoName, name)
 	if *modelFlag != "" {
 		fmt.Printf("→ model pinned to %s (this worker only)\n", *modelFlag)
+	}
+	if profileName != "" {
+		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
 	}
 
 	if git.HasRemote(repo.Path, "origin") {
@@ -792,7 +891,9 @@ func cmdGrab(args []string) error {
 	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	windowName := tmux.WorkerWindow(repoShort(repoName, ws), name)
+	// Tag the window with the active profile so a profiled worker reads at a
+	// glance in `Ctrl-b w` / `gv ls`; the no-profile name stays byte-identical.
+	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 	if err := tmux.CreateWindow(sessionName, windowName, wt.Path); err != nil {
 		return err
 	}
@@ -811,6 +912,11 @@ func cmdGrab(args []string) error {
 	// pane returns to a shell if claude exits.
 	claudeBin := config.WithModel(repo.Claude, *modelFlag)
 	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
+	// Profile wrap applies to the composed claude+prompt command only —
+	// never to repo.Claude itself (hooks resolve the worker's config dir
+	// from the stored r.Claude, hooks.go:246-274) and never to the setup
+	// prefix added just below.
+	claudeCmd = config.WrapProfile(claudeCmd, profile, config.SecretsPath())
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
@@ -819,13 +925,18 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
+	grabData := map[string]string{
+		"title": task.Title, "url": task.URL, "repo": repoName,
+		"branch": name, "worktree": wt.Path,
+		"tmux_session": sessionName, "tmux_window": windowName,
+	}
+	// Persist the profile only when set so an unprofiled grab's event stays
+	// byte-identical to today's (grove-36 T2).
+	if profileName != "" {
+		grabData["model_profile"] = profileName
+	}
 	if err := state.Append(stateDir(), state.Event{
-		Type: state.EvTaskCreated, Ticket: task.ID,
-		Data: map[string]string{
-			"title": task.Title, "url": task.URL, "repo": repoName,
-			"branch": name, "worktree": wt.Path,
-			"tmux_session": sessionName, "tmux_window": windowName,
-		},
+		Type: state.EvTaskCreated, Ticket: task.ID, Data: grabData,
 	}); err != nil {
 		return err
 	}
@@ -1214,8 +1325,22 @@ func cmdLs(args []string) error {
 		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
 	}
-	fmt.Printf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s\n",
+	// The PROFILE column collapses entirely when no active task is profiled,
+	// so the default (all-Anthropic) fleet's table is byte-identical to today
+	// (grove-36 T2 invariant).
+	anyProfile := false
+	for _, r := range rows {
+		if r.ModelProfile != "" {
+			anyProfile = true
+			break
+		}
+	}
+	header := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
 		"TICKET", "REPO", "STATUS", "LIVE", "PR", "CI", "PREVIEW", "COST", "AGE")
+	if anyProfile {
+		header += "  PROFILE"
+	}
+	fmt.Println(header)
 	for _, r := range rows {
 		pr, ci, preview := "—", "—", "—"
 		if r.PR != nil {
@@ -1235,8 +1360,16 @@ func cmdLs(args []string) error {
 				preview = "⬡ up"
 			}
 		}
-		fmt.Printf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s\n",
+		line := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
 			r.Ticket, r.Repo, r.Label(), r.Live, pr, ci, preview, fmtUSD(r.Cost), age(r.Created))
+		if anyProfile {
+			prof := "—"
+			if r.ModelProfile != "" {
+				prof = "⚡ " + r.ModelProfile
+			}
+			line += "  " + prof
+		}
+		fmt.Println(line)
 		if r.Agent == state.AgentWaiting && r.Question != "" {
 			fmt.Printf("  ◆ %s\n", truncateLine(r.Question, 90))
 		}
@@ -1763,9 +1896,10 @@ func cmdAdopt(args []string) error {
 	branchFlag := fs.String("branch", "", "branch to adopt (default: from state, or origin/<ticket>-* inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
+	profileFlag := fs.String("profile", "", "run this worker on a model profile (default: the profile it was grabbed with; 'anthropic' strips it)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name]")
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -1813,10 +1947,10 @@ func cmdAdopt(args []string) error {
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
 	// seen this task (active, done, or untracked), else cold via provider.
-	var repoName, branch, sessionID string
+	var repoName, branch, sessionID, storedProfile string
 	var task *provider.Task
 	if t, ok := tasks[id]; ok {
-		repoName, branch, sessionID = t.Repo, t.Branch, t.SessionID
+		repoName, branch, sessionID, storedProfile = t.Repo, t.Branch, t.SessionID, t.ModelProfile
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
@@ -1842,6 +1976,20 @@ func cmdAdopt(args []string) error {
 	repo, ok := cfg.Repos[repoName]
 	if !ok {
 		return fmt.Errorf("repo %q no longer in config", repoName)
+	}
+
+	// Effective profile: an explicit --profile wins; otherwise default to the
+	// profile the worker was grabbed with (grove-36 T3 — adopt must not
+	// silently resurrect a GLM worker on the operator's own Anthropic sub).
+	// --profile anthropic (or an empty stored profile) strips it. Falls back
+	// to the repo's model_profile default via ResolveProfile, exactly like grab.
+	effProfile := *profileFlag
+	if effProfile == "" {
+		effProfile = storedProfile
+	}
+	profileName, profile, err := cfg.ResolveProfile(effProfile, repo)
+	if err != nil {
+		return err
 	}
 
 	// Fresh task fetch enriches the pickup prompt (description + new
@@ -1877,6 +2025,9 @@ func cmdAdopt(args []string) error {
 	}
 
 	fmt.Printf("→ adopting %s on %s (branch %s)\n", id, repoName, branch)
+	if profileName != "" {
+		fmt.Printf("→ model profile %s\n", profileName)
+	}
 
 	// Worktree: reuse as-is when present (never touch dirty files), else
 	// re-create from the existing branch.
@@ -1926,7 +2077,7 @@ func cmdAdopt(args []string) error {
 	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	windowName := tmux.WorkerWindow(repoShort(repoName, ws), branch)
+	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), branch, profileName)
 	if tmux.WindowExists(sessionName, windowName) {
 		return fmt.Errorf("window %s:%s already exists — `gv attach %s`", sessionName, windowName, id)
 	}
@@ -1944,21 +2095,39 @@ func cmdAdopt(args []string) error {
 	// Event BEFORE the pane command: FindByCwd skips Done tasks, so the
 	// revived session's SessionStart hook only matches (and captures the
 	// new session id) once the fold has flipped Done=false.
+	adoptData := map[string]string{
+		"title": task.Title, "url": task.URL, "repo": repoName,
+		"branch": branch, "worktree": wtPath,
+		"tmux_session": sessionName, "tmux_window": windowName,
+	}
+	// Persist the effective profile so state stays true — including the
+	// intentional strip: `--profile anthropic` writes "" and clears the field
+	// on fold (grove-36 T3). Only omit the key when there was never a profile
+	// to change, keeping unprofiled adopt events byte-identical.
+	if profileName != "" || storedProfile != "" {
+		adoptData["model_profile"] = profileName
+	}
 	if err := state.Append(stateDir(), state.Event{
-		Type: state.EvTaskAdopted, Ticket: id,
-		Data: map[string]string{
-			"title": task.Title, "url": task.URL, "repo": repoName,
-			"branch": branch, "worktree": wtPath,
-			"tmux_session": sessionName, "tmux_window": windowName,
-		},
+		Type: state.EvTaskAdopted, Ticket: id, Data: adoptData,
 	}); err != nil {
 		return err
 	}
 
 	claudeBin := config.WithModel(repo.Claude, *modelFlag)
-	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
+	secrets := config.SecretsPath()
+	// Wrap each claude limb separately: WrapProfile ends in `exec`, which
+	// replaces the shell, so a single wrap around `resume || fresh` would make
+	// the `|| fresh` fallback unreachable and, on a resume failure, silently
+	// drop to the operator's own Claude sub — the exact provider switch this
+	// ticket kills (grove-36 T3; mirrors orchestratorCmdProfile). Wrap the
+	// composed claude+prompt command only, never repo.Claude itself (hooks
+	// resolve the worker's config dir from the stored r.Claude) nor the setup
+	// prefix added below. profile == nil leaves every limb byte-identical.
+	freshCmd := config.WrapProfile(fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath), profile, secrets)
+	claudeCmd := freshCmd
 	if sessionID != "" && !*manual {
-		claudeCmd = fmt.Sprintf("%s --resume %s || %s", claudeBin, sessionID, claudeCmd)
+		resumeCmd := config.WrapProfile(fmt.Sprintf("%s --resume %s", claudeBin, sessionID), profile, secrets)
+		claudeCmd = resumeCmd + " || " + freshCmd
 	}
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()

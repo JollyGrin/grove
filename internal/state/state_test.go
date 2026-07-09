@@ -60,6 +60,45 @@ func TestFoldLifecycle(t *testing.T) {
 	}
 }
 
+func TestFoldModelProfile(t *testing.T) {
+	dir := t.TempDir()
+	// A profiled grab persists the field; an unprofiled grab and a pre-field
+	// event both fold to "" (additive, no migration — grove-36 T2).
+	evs := []Event{
+		{Type: EvTaskCreated, Ticket: "DEV-30", Data: map[string]string{
+			"title": "glm", "repo": "grove", "model_profile": "openrouter-glm",
+		}},
+		{Type: EvTaskCreated, Ticket: "DEV-31", Data: map[string]string{
+			"title": "plain", "repo": "grove", // no model_profile key at all
+		}},
+	}
+	for _, ev := range evs {
+		if err := Append(dir, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tasks["DEV-30"].ModelProfile; got != "openrouter-glm" {
+		t.Errorf("profiled task ModelProfile = %q, want openrouter-glm", got)
+	}
+	if got := tasks["DEV-31"].ModelProfile; got != "" {
+		t.Errorf("unprofiled task ModelProfile = %q, want empty", got)
+	}
+	// Adopt refreshes the field when the event carries it.
+	if err := Append(dir, Event{Type: EvTaskAdopted, Ticket: "DEV-31", Data: map[string]string{
+		"model_profile": "openrouter-glm",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ = Load(dir)
+	if got := tasks["DEV-31"].ModelProfile; got != "openrouter-glm" {
+		t.Errorf("adopted task ModelProfile = %q, want openrouter-glm", got)
+	}
+}
+
 func TestFoldSurvivesTornFinalLine(t *testing.T) {
 	dir := t.TempDir()
 	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "DEV-2", Data: map[string]string{"title": "x"}}); err != nil {

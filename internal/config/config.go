@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,8 +20,22 @@ type Repo struct {
 	Setup        string   `yaml:"setup"`
 	Claude       string   `yaml:"claude"`
 	Prompt       string   `yaml:"prompt"`
-	Provider     string   `yaml:"provider"` // per-repo task backend override (markdown|linear); empty = global kind
+	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
+	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
 	LinearLabels []string `yaml:"linear_labels"`
+}
+
+// ModelProfile bundles what makes a non-Anthropic, Anthropic-API-compatible
+// backend reachable: endpoint + credential-reference + which slug fills
+// each Claude Code model class. base_url/auth_token_env travel with the
+// slugs because ANTHROPIC_BASE_URL is process-global (grove-36 design §2) —
+// a bare model override can't express "also point at a different backend."
+type ModelProfile struct {
+	BaseURL      string `yaml:"base_url"`
+	AuthTokenEnv string `yaml:"auth_token_env"` // env VAR NAME holding the key, never the key itself
+	Opus         string `yaml:"opus"`
+	Sonnet       string `yaml:"sonnet"`
+	Haiku        string `yaml:"haiku"`
 }
 
 type Config struct {
@@ -33,8 +49,9 @@ type Config struct {
 		APIKeyEnv string `yaml:"api_key_env"`
 		Team      string `yaml:"team"`
 	} `yaml:"linear"`
-	Repos        map[string]*Repo `yaml:"repos"`
-	Orchestrator struct {
+	Repos         map[string]*Repo         `yaml:"repos"`
+	ModelProfiles map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
+	Orchestrator  struct {
 		Dir    string `yaml:"dir"`
 		Claude string `yaml:"claude"`
 	} `yaml:"orchestrator"`
@@ -221,6 +238,87 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// SecretsPath is the model-profile secrets file the launch wrap
+// self-sources (grove-36 design §2.1) — never inherited from the tmux
+// server's or launching shell's environment.
+func SecretsPath() string {
+	return filepath.Join(Dir(), ".env")
+}
+
+// modelFlagValue extracts a --model flag's shell-quoted value from a
+// WithModel'd command, e.g. `claude --model 'opus' --foo` -> "opus".
+var modelFlagValue = regexp.MustCompile(`--model\s+'([^']*)'`)
+
+// modelSlot classifies a (possibly WithModel'd) claude command into the
+// opus/sonnet/haiku class it requested, so a profile can substitute its own
+// slug for that class. No --model flag (the common case — grab/orchestrator
+// launches rarely pin one) defaults to sonnet, Claude Code's own baseline
+// tier.
+func modelSlot(modeledCmd string) string {
+	m := modelFlagValue.FindStringSubmatch(modeledCmd)
+	if m == nil {
+		return "sonnet"
+	}
+	v := strings.ToLower(m[1])
+	switch {
+	case strings.Contains(v, "opus"):
+		return "opus"
+	case strings.Contains(v, "haiku"):
+		return "haiku"
+	default:
+		return "sonnet"
+	}
+}
+
+// slugFor returns the profile's slug for a slot, falling back to Sonnet's
+// when the requested slot's own field is empty (e.g. a profile that only
+// bothered to set opus/sonnet).
+func (p *ModelProfile) slugFor(slot string) string {
+	switch slot {
+	case "opus":
+		if p.Opus != "" {
+			return p.Opus
+		}
+	case "haiku":
+		if p.Haiku != "" {
+			return p.Haiku
+		}
+	}
+	return p.Sonnet
+}
+
+// WrapProfile wraps an already-`WithModel`'d claude command so it runs
+// against a model profile's backend instead of the operator's own Claude
+// sub. p == nil returns modeledCmd unchanged — the no-profile path is
+// byte-for-byte today's behavior.
+//
+// The wrap self-sources secretsPath (~/.config/grove/.env) rather than
+// relying on inherited environment — validated by experiment that a fresh
+// tmux pane does not inherit an interactive shell's export (grove-36 design
+// §2.1). `export … ; exec` (never `env NAME=$VAR`) keeps the expanded
+// token out of argv and out of `tmux capture-pane`; base_url and every
+// slug are shell-quoted, the token stays a bare $NAME so it expands only
+// from the sourced file.
+//
+// Sets ANTHROPIC_MODEL to the slug for the class the modeled command
+// requested (opus/sonnet/haiku), plus all three ANTHROPIC_DEFAULT_*_MODEL
+// vars so an in-session `/model` switch still resolves to one of the
+// profile's own slugs rather than an Anthropic one.
+func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string {
+	if p == nil {
+		return modeledCmd
+	}
+	slug := p.slugFor(modelSlot(modeledCmd))
+	return fmt.Sprintf(
+		"( . %s && export ANTHROPIC_BASE_URL=%s ANTHROPIC_AUTH_TOKEN=\"$%s\" ANTHROPIC_MODEL=%s "+
+			"ANTHROPIC_DEFAULT_OPUS_MODEL=%s ANTHROPIC_DEFAULT_SONNET_MODEL=%s ANTHROPIC_DEFAULT_HAIKU_MODEL=%s "+
+			"&& exec %s )",
+		shellQuote(secretsPath), shellQuote(p.BaseURL), p.AuthTokenEnv, shellQuote(slug),
+		shellQuote(p.Opus), shellQuote(p.Sonnet), shellQuote(p.Haiku),
+		modeledCmd,
+	)
+}
+
 // ProviderKindFor returns the effective task backend for a repo: its own
 // provider override when set, else the global kind. Lets one fleet mix
 // Linear-driven repos with markdown-driven ones until per-workspace config
@@ -271,6 +369,35 @@ func (c *Config) ResolveRepo(explicit string, labels []string) (string, *Repo, e
 		}
 	}
 	return "", nil, fmt.Errorf("cannot infer repo from labels %v — pass --repo <%s>", labels, strings.Join(c.repoNames(), "|"))
+}
+
+// ResolveProfile picks the effective model profile: an explicit
+// (--profile) name wins, else the repo's own `model_profile` default, else
+// none. An empty name or "anthropic" both mean no profile — the operator's
+// own Claude sub, unwrapped launch. r may be nil (no repo-level default to
+// fall back to, e.g. an orchestrator launch).
+func (c *Config) ResolveProfile(explicit string, r *Repo) (string, *ModelProfile, error) {
+	name := explicit
+	if name == "" && r != nil {
+		name = r.ModelProfile
+	}
+	if name == "" || name == "anthropic" {
+		return "", nil, nil
+	}
+	p, ok := c.ModelProfiles[name]
+	if !ok {
+		return "", nil, fmt.Errorf("unknown model profile %q (configured: %s)", name, strings.Join(c.profileNames(), ", "))
+	}
+	return name, p, nil
+}
+
+func (c *Config) profileNames() []string {
+	var names []string
+	for n := range c.ModelProfiles {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (c *Config) repoNames() []string {
