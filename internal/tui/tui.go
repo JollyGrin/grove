@@ -29,6 +29,7 @@ const (
 	modeConfirmDone
 	modeConfirmClose
 	modeCosts
+	modeProfilePick
 )
 
 type refreshMsg struct {
@@ -76,6 +77,11 @@ type Model struct {
 	paneTail string
 	input    textinput.Model
 	nudging  bool // detail input sends a nudge instead of an answer
+
+	// modeProfilePick overlay state (grove-45): the sorted candidate profile
+	// names and the cursor into them. Runtime-only — nothing is persisted.
+	pickProfiles []string
+	pickSel      int
 
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
@@ -320,6 +326,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeCosts {
 		return m.handleCostsKey(k)
 	}
+	if m.mode == modeProfilePick {
+		return m.handleProfilePickKey(k)
+	}
 
 	switch k.String() {
 	case "q", "ctrl+c":
@@ -339,19 +348,20 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case ")": // O's profiled sibling: spawn an orchestrator on a model profile
 		cfg := m.cfg
-		profile, ok := cfg.ResolveDefaultProfile()
-		if !ok {
-			m.flash = "set orchestrator.default_profile or configure exactly one profile"
+		profile, candidates, action := cfg.ResolveOrchestratorProfile()
+		switch action {
+		case config.ProfileHint:
+			m.flash = "no model_profiles configured — add one to ~/.config/grove/config.yaml"
+			return m, nil
+		case config.ProfilePick:
+			// ≥2 profiles, no default → let the operator choose (grove-45).
+			m.pickProfiles = candidates
+			m.pickSel = 0
+			m.mode = modeProfilePick
+			m.flash = ""
 			return m, nil
 		}
-		m.flash = "spawning orchestrator chat (" + profile + ")…"
-		return m, func() tea.Msg {
-			out, err := SpawnOrchestratorProfile(cfg, profile)
-			if err != nil {
-				return flashMsg(err.Error())
-			}
-			return flashMsg(out)
-		}
+		return m.spawnProfile(profile)
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -521,6 +531,55 @@ func (m Model) handleCloseKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeList
 	return m, nil
+}
+
+// handleProfilePickKey drives the modeProfilePick overlay (grove-45): j/k or
+// arrows move the cursor, enter spawns the selected profile's orchestrator
+// pane, esc (or any exit key) backs out cleanly to the fleet list. The
+// selection is runtime-only — nothing is persisted to config.
+func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "esc", "q":
+		m.mode = modeList
+		m.pickProfiles = nil
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "j", "down":
+		if m.pickSel < len(m.pickProfiles)-1 {
+			m.pickSel++
+		}
+		return m, nil
+	case "k", "up":
+		if m.pickSel > 0 {
+			m.pickSel--
+		}
+		return m, nil
+	case "enter":
+		if m.pickSel < 0 || m.pickSel >= len(m.pickProfiles) {
+			return m, nil
+		}
+		profile := m.pickProfiles[m.pickSel]
+		m.mode = modeList
+		m.pickProfiles = nil
+		return m.spawnProfile(profile)
+	}
+	return m, nil
+}
+
+// spawnProfile fires the profiled-orchestrator spawn for a resolved profile
+// name — shared by the `)` auto-pick path and the picker's enter. It returns
+// the flash-setting model plus the async spawn command.
+func (m Model) spawnProfile(profile string) (tea.Model, tea.Cmd) {
+	cfg := m.cfg
+	m.flash = "spawning orchestrator chat (" + profile + ")…"
+	return m, func() tea.Msg {
+		out, err := SpawnOrchestratorProfile(cfg, profile)
+		if err != nil {
+			return flashMsg(err.Error())
+		}
+		return flashMsg(out)
+	}
 }
 
 // sessionName is the workspace's shared tmux session (grove-<label>, or the
