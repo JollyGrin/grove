@@ -54,24 +54,28 @@ type Event struct {
 }
 
 type Task struct {
-	Ticket      string    `json:"ticket"`
-	Title       string    `json:"title"`
-	URL         string    `json:"url"`
-	Repo        string    `json:"repo"`
-	Branch      string    `json:"branch"`
-	Worktree    string    `json:"worktree"`
-	TmuxSession string    `json:"tmux_session"`
-	TmuxWindow  string    `json:"tmux_window"`
-	SessionID   string    `json:"claude_session_id,omitempty"`
-	Agent       string    `json:"agent"`
-	Sentinel    string    `json:"sentinel,omitempty"` // question | blocked | done | none
-	Question    string    `json:"question,omitempty"`
-	LastMessage string    `json:"last_message,omitempty"`
-	Human       string    `json:"human,omitempty"`
-	Attached    bool      `json:"attached"`
-	Done        bool      `json:"done"`
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	Ticket      string `json:"ticket"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	Repo        string `json:"repo"`
+	Branch      string `json:"branch"`
+	Worktree    string `json:"worktree"`
+	TmuxSession string `json:"tmux_session"`
+	TmuxWindow  string `json:"tmux_window"`
+	// ModelProfile is the named non-Anthropic backend a worker runs on
+	// (grove-36); empty = the operator's own Claude sub. Additive & optional:
+	// events predating the field simply lack it and fold to "".
+	ModelProfile string    `json:"model_profile,omitempty"`
+	SessionID    string    `json:"claude_session_id,omitempty"`
+	Agent        string    `json:"agent"`
+	Sentinel     string    `json:"sentinel,omitempty"` // question | blocked | done | none
+	Question     string    `json:"question,omitempty"`
+	LastMessage  string    `json:"last_message,omitempty"`
+	Human        string    `json:"human,omitempty"`
+	Attached     bool      `json:"attached"`
+	Done         bool      `json:"done"`
+	Created      time.Time `json:"created"`
+	Updated      time.Time `json:"updated"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -169,6 +173,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Title, t.URL, t.Repo = d["title"], d["url"], d["repo"]
 		t.Branch, t.Worktree = d["branch"], d["worktree"]
 		t.TmuxSession, t.TmuxWindow = d["tmux_session"], d["tmux_window"]
+		t.ModelProfile = d["model_profile"] // "" for unprofiled + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
 	case EvSessionStarted:
@@ -216,6 +221,8 @@ func fold(tasks map[string]*Task, ev Event) {
 				t.TmuxSession = v
 			case "tmux_window":
 				t.TmuxWindow = v
+			case "model_profile":
+				t.ModelProfile = v
 			case "session_id":
 				t.SessionID = v
 			}

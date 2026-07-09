@@ -913,13 +913,18 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
+	grabData := map[string]string{
+		"title": task.Title, "url": task.URL, "repo": repoName,
+		"branch": name, "worktree": wt.Path,
+		"tmux_session": sessionName, "tmux_window": windowName,
+	}
+	// Persist the profile only when set so an unprofiled grab's event stays
+	// byte-identical to today's (grove-36 T2).
+	if profileName != "" {
+		grabData["model_profile"] = profileName
+	}
 	if err := state.Append(stateDir(), state.Event{
-		Type: state.EvTaskCreated, Ticket: task.ID,
-		Data: map[string]string{
-			"title": task.Title, "url": task.URL, "repo": repoName,
-			"branch": name, "worktree": wt.Path,
-			"tmux_session": sessionName, "tmux_window": windowName,
-		},
+		Type: state.EvTaskCreated, Ticket: task.ID, Data: grabData,
 	}); err != nil {
 		return err
 	}
@@ -1308,8 +1313,22 @@ func cmdLs(args []string) error {
 		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
 	}
-	fmt.Printf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s\n",
+	// The PROFILE column collapses entirely when no active task is profiled,
+	// so the default (all-Anthropic) fleet's table is byte-identical to today
+	// (grove-36 T2 invariant).
+	anyProfile := false
+	for _, r := range rows {
+		if r.ModelProfile != "" {
+			anyProfile = true
+			break
+		}
+	}
+	header := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
 		"TICKET", "REPO", "STATUS", "LIVE", "PR", "CI", "PREVIEW", "COST", "AGE")
+	if anyProfile {
+		header += "  PROFILE"
+	}
+	fmt.Println(header)
 	for _, r := range rows {
 		pr, ci, preview := "—", "—", "—"
 		if r.PR != nil {
@@ -1329,8 +1348,16 @@ func cmdLs(args []string) error {
 				preview = "⬡ up"
 			}
 		}
-		fmt.Printf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s\n",
+		line := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
 			r.Ticket, r.Repo, r.Label(), r.Live, pr, ci, preview, fmtUSD(r.Cost), age(r.Created))
+		if anyProfile {
+			prof := "—"
+			if r.ModelProfile != "" {
+				prof = "⚡ " + r.ModelProfile
+			}
+			line += "  " + prof
+		}
+		fmt.Println(line)
 		if r.Agent == state.AgentWaiting && r.Question != "" {
 			fmt.Printf("  ◆ %s\n", truncateLine(r.Question, 90))
 		}
