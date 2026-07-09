@@ -100,7 +100,31 @@ generous default intervals; the whole box being off unless explicitly
 enabled so the default cost is genuinely zero. This tension is the thing
 the design pass has to resolve before anything else.)*
 
-## 5. Prior art / analogs to look at
+## 5. Second-order use — the orchestrator reads the box too
+
+Once these monitors exist in a project, they're not just for Dean's
+at-a-glance view — the **orchestrator can consume the same signals as
+diagnostic context** for its own reasoning and advice. Two concrete
+examples:
+
+- **Unbrewed**: be cautious about a big push/deploy when lots of people
+  are currently playing. (There should be a graceful reset regardless, but
+  the orchestrator knowing "42 in-game right now" changes the advice it
+  gives about timing a merge.)
+- **The grid**: if a worker is failing to preview an environment and the
+  box shows **staging GraphQL is down**, that's very likely *why* — the
+  orchestrator can connect those two facts instead of sending the worker
+  chasing a phantom code bug.
+
+So the monitor data wants to be readable by the orchestrator (not just
+rendered in the TUI) — the same out-of-process results file that feeds the
+box could feed the orchestrator's context.
+
+*(fill in: is this pull, i.e. the orchestrator reads the results file when
+relevant, or push, i.e. a red monitor proactively surfaces "staging is
+down, this may explain DEV-X's failure"? Push is more useful but noisier.)*
+
+## 6. Prior art / analogs to look at
 
 *(fill in: tmux status-line plugins (tmux-plugins), Waybar/Polybar custom
 modules, i3blocks/i3status, Übersicht widgets, k9s plugins, lazygit custom
