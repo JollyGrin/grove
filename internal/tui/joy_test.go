@@ -170,8 +170,11 @@ func TestCountDone(t *testing.T) {
 }
 
 // fixtureModel builds a deterministic list-mode Model with one working agent
-// and a merged PR, for the render-level assertions below.
+// and a merged PR, for the render-level assertions below. It pins the render
+// clock to daytime — night renders a firefly (A7, grove-56) into empty
+// panels, which would make these assertions flap with the wall clock.
 func fixtureModel() Model {
+	nowHour = func() int { return 10 }
 	m := New(nil, "", "")
 	m.width, m.height = 120, 40
 	m.tasks = []*state.Task{{Ticket: "grove-18", Title: "joy", Repo: "grove", Agent: state.AgentWorking, Created: time.Now()}}

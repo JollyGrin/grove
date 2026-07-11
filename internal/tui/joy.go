@@ -7,6 +7,8 @@ package tui
 // consts). See docs/plans/2026-07-08-cockpit-joy-design.md.
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -213,5 +215,215 @@ func countDone(events []state.Event) int {
 }
 
 // nowHour is the current hour, isolated so tests reason about time-of-day via
-// the pure timeOfDay/emptyLine functions rather than the clock.
-func nowHour() int { return time.Now().Hour() }
+// the pure timeOfDay/emptyLine functions rather than the clock. A var, not a
+// func: render tests pin it (fireflies only fly at night) — grove-56.
+var nowHour = func() int { return time.Now().Hour() }
+
+// --- grove-56: joy v2 (A5–A7, J3–J6) ---
+
+// trees phrases a count in the grove dialect — "one tree" / "3 trees" — for
+// the farewell and first-light lines.
+func trees(n int) string {
+	if n == 1 {
+		return "one tree"
+	}
+	return fmt.Sprintf("%d trees", n)
+}
+
+// countWorking tallies agents actually at work (working or still in setup) —
+// the header count, the farewell count.
+func countWorking(tasks []*state.Task) int {
+	n := 0
+	for _, t := range tasks {
+		if t.Agent == state.AgentWorking || t.Agent == state.AgentSetup {
+			n++
+		}
+	}
+	return n
+}
+
+// --- A5: quit farewell ---
+//
+// One dim line printed by cmd/gv AFTER the alt-screen closes — the grove's
+// goodbye. Phrasing follows the time of day; silent at off.
+
+var farewellBusy = [...]string{
+	"morning tends the grove — %s still working",
+	"the grove keeps growing — %s still working",
+	"the grove works into the evening — %s still working",
+	"the grove tends itself tonight — %s still working",
+}
+
+var farewellRest = [...]string{
+	"the grove rests in the morning light",
+	"the grove rests",
+	"the grove rests for the evening",
+	"the grove sleeps",
+}
+
+// farewellLine is the unstyled farewell — empty at off (A5's silence is part
+// of the fx-off contract), a rest line at zero working, else the busy line
+// with the tree count.
+func farewellLine(fx fxLevel, working, hour int) string {
+	if fx < fxCalm {
+		return ""
+	}
+	if working <= 0 {
+		return farewellRest[timeOfDay(hour)]
+	}
+	return fmt.Sprintf(farewellBusy[timeOfDay(hour)], trees(working))
+}
+
+// --- J3: the forest strip ---
+//
+// One ⸙ per shipped tree (EvTaskDone in the loaded event window), in the
+// header left of the counts. Past the cap it condenses to ⸙×N — the orchard
+// keeps its size without eating the header.
+
+const forestGlyph = "⸙"
+const forestStripCap = 12
+
+// sForest renders the strip in moss green — grown wood, not fresh canopy.
+var sForest = lipgloss.NewStyle().Foreground(cMoss)
+
+func forestStrip(done int) string {
+	if done <= 0 {
+		return ""
+	}
+	if done <= forestStripCap {
+		return strings.Repeat(forestGlyph, done)
+	}
+	return fmt.Sprintf("%s×%d", forestGlyph, done)
+}
+
+// --- J4: planting ---
+//
+// A freshly grabbed task's ACTIVITY row reads as a planting for its first
+// minute, then settles to the normal line. Presentation-layer only: the
+// match is on the stable feedItems string (asserted against feed.go by
+// TestPlantingMatchesFeed), never a rewrite of it.
+
+const plantWindow = time.Minute
+const plantGlyph = "✿"
+const plantText = "planted — roots taking"
+
+// grabbedText mirrors feed.go's EvTaskCreated row byte-for-byte.
+const grabbedText = "grabbed — worktree up"
+
+func planting(text string, age time.Duration) bool {
+	return text == grabbedText && age >= 0 && age < plantWindow
+}
+
+// --- J5: question knock ---
+//
+// When a task's label first flips to QUESTION its amber ◆ pulses bold↔normal
+// for a few ticks — the knock that pulls the eye to the thing that needs a
+// human. Detection diffs prior vs fresh tasks in Update (the J1 pattern);
+// state rides in the existing capped celebrations map under a prefixed key.
+
+const knockTicks = 4
+
+// knockKey namespaces a knock in the celebrations map so it can never
+// collide with a J1 merge-sparkle entry (keyed by the bare ticket).
+func knockKey(ticket string) string { return "?" + ticket }
+
+// knockStyle alternates the QUESTION glyph bold↔normal on the tick — same
+// amber both phases, only the weight moves.
+func knockStyle(tick uint64) lipgloss.Style {
+	if tick%2 == 0 {
+		return sWaiting
+	}
+	return sQuestion
+}
+
+// freshQuestions returns tickets whose label flipped to QUESTION between the
+// prior and fresh task snapshots. A question already knocking last poll stays
+// quiet; one present at first load knocks once (matching J1's first-poll
+// sparkle — the eye should land on it).
+func freshQuestions(prev, next []*state.Task) []string {
+	old := make(map[string]bool, len(prev))
+	for _, t := range prev {
+		if t.Label() == "QUESTION" {
+			old[t.Ticket] = true
+		}
+	}
+	var out []string
+	for _, t := range next {
+		if t.Label() == "QUESTION" && !old[t.Ticket] {
+			out = append(out, t.Ticket)
+		}
+	}
+	return out
+}
+
+// --- J6: milestones ---
+
+// doneRitualFlash is the J2 done ritual, upgraded every 10th tree. n is the
+// season's shipped count including the tree just done.
+func doneRitualFlash(ticket string, n int) string {
+	if n > 0 && n%10 == 0 {
+		return fmt.Sprintf("✓ %s shipped — that's %d this season — quite the orchard", ticket, n)
+	}
+	return fmt.Sprintf("✓ %s shipped — tree #%d this season", ticket, n)
+}
+
+// --- A6: first light ---
+//
+// The footer flash greets once, at the first data refresh after launch; the
+// next real flash naturally overwrites it. standing = active tasks (trees in
+// the ground, working or not).
+
+var firstLightBusy = [...]string{
+	"morning in the grove — %s standing",
+	"the canopy is full — %s standing",
+	"the canopy holds for the evening — %s standing",
+	"night in the grove — %s standing watch",
+}
+
+var firstLightRest = [...]string{
+	"morning in the grove — ground ready for planting",
+	"a quiet day in the grove",
+	"the canopy holds for the evening",
+	"the grove sleeps — the fireflies keep watch",
+}
+
+func firstLight(hour, standing int) string {
+	if standing <= 0 {
+		return firstLightRest[timeOfDay(hour)]
+	}
+	return fmt.Sprintf(firstLightBusy[timeOfDay(hour)], trees(standing))
+}
+
+// --- A7: night fireflies ---
+//
+// In the night-bucket empty states one ✦ drifts a cell per tick through the
+// dark to the right of the line, ping-ponged (breathPhase's mirror trick) so
+// it never jumps at the seam. Deterministic from the tick — no state.
+
+const fireflyGlyph = "✦"
+
+// fireflySpan is the drift width in cells; a full out-and-back crossing takes
+// 2*(span-1) ticks (~46s) — a firefly, not a cursor.
+const fireflySpan = 24
+
+var sFirefly = lipgloss.NewStyle().Foreground(cAmber)
+
+// fireflyPos ping-pongs over [0, span) at one cell per tick, mirrored on the
+// return leg exactly like breathPhase.
+func fireflyPos(tick uint64, span int) int {
+	if span <= 1 {
+		return 0
+	}
+	period := 2*span - 2
+	p := int(tick % uint64(period))
+	if p >= span {
+		p = period - p
+	}
+	return p
+}
+
+// fireflyTrail is the styled tail appended to a night empty-state line: the
+// gap to the firefly's current cell, then the glyph.
+func fireflyTrail(tick uint64) string {
+	return strings.Repeat(" ", 2+fireflyPos(tick, fireflySpan)) + sFirefly.Render(fireflyGlyph)
+}
