@@ -196,6 +196,18 @@
   any lookup keyed on the configured slug (cost pricing) needs
   exact-match-then-prefix-match at a `-` boundary or it silently reports
   unknown.
+- **2026-07-10 · orchestrator cadence: one long-lived chat per sitting** —
+  a fresh orchestrator spawn pays a ~50k-token initial prompt; only ~3.1k
+  (~6%) is grove's own files (orchestrator brain + repo CLAUDE.md +
+  memory index), the rest is harness + inherited MCP load. `gv` reads are
+  stateless and live, so a long-lived chat never goes stale — `/clear`
+  between unrelated batches instead of close-and-reopen, and reserve
+  fresh spawns for genuinely parallel workloads (the `)` pane). The ~50k
+  floor is paid per SESSION even where caching is good (Anthropic 5-min
+  cache reads ~0.1×; GLM cached 99.3%, see the 2026-07-09 entry), so
+  close-and-reopen re-pays the floor every cycle for nothing. Trimming
+  inherited MCP servers shrinks the floor itself (2026-07-10: user scope
+  emptied; posthog/grid moved to thegrid project scope). (grove-48.)
 
 - **The full loop is proven** (2026-06-10, DEV-4556): grab → worktree +
   setup → autonomous work → PR + CI green + previews + self-review →
