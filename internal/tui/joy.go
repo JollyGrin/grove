@@ -276,11 +276,11 @@ func farewellLine(fx fxLevel, working, hour int) string {
 
 // --- J3: the forest strip ---
 //
-// One ⸙ per shipped tree (EvTaskDone in the loaded event window), in the
-// header left of the counts. Past the cap it condenses to ⸙×N — the orchard
+// One ♠ per shipped tree (EvTaskDone in the loaded event window), in the
+// header left of the counts. Past the cap it condenses to ♠×N — the orchard
 // keeps its size without eating the header.
 
-const forestGlyph = "⸙"
+const forestGlyph = "♠" // grove-63: ⸙ rendered as tofu in the operator's font
 const forestStripCap = 12
 
 // sForest renders the strip in moss green — grown wood, not fresh canopy.

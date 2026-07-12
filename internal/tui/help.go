@@ -34,6 +34,7 @@ var (
 		{"L", "layout: cycle the cockpit pane split (persisted on the session)"},
 		{"$", "costs: per-ticket spend, ledger history, spend-over-time chart"},
 		{"*", "effects: cycle ambient effects off → calm → full (runtime only)"},
+		{"g", "gardens: the almanac — one garden per day, h/l walk days"},
 		{"X", "park: stop workers + orchestrator + cockpit; state stays on disk"},
 		{"r", "refresh PR states now (also polled every 30s)"},
 		{"q", "quit the cockpit — workers keep running"},

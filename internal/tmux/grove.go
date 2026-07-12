@@ -223,6 +223,29 @@ func ResolveWindowName(session, base string) string {
 	return base
 }
 
+// ActiveWindow returns the name of the session's active window ("" on any
+// error). Read-only: list-windows only, never touches window state — the
+// living grove's queen (grove-63) reads Dean's tmux focus, it never sets it.
+func ActiveWindow(session string) string {
+	out, err := run("list-windows", "-t", session, "-F", "#{window_active}\t#{window_name}")
+	if err != nil {
+		return ""
+	}
+	return parseActiveWindow(out)
+}
+
+// parseActiveWindow is split from the exec so it can be tested against
+// canned list-windows output without a live tmux server.
+func parseActiveWindow(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(parts) == 2 && parts[0] == "1" {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
 // WorkerWindow builds a worker window's display name: "<repo-short> · <ticket>".
 // The middle dot groups a workspace's repos visually in `Ctrl-b w`. tmux
 // forbids "." and ":" in the parts (they collide with pane/window target

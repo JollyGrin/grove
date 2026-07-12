@@ -26,6 +26,9 @@ func (m Model) View() string {
 	if m.mode == modeHelp {
 		return m.viewHelp()
 	}
+	if m.mode == modeAlmanac {
+		return m.viewAlmanac()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
@@ -33,6 +36,13 @@ func (m Model) View() string {
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
 	b.WriteString(m.viewActivity())
+	// The living grove (grove-63): the scene fills exactly the rows ACTIVITY
+	// yielded to it (rowBudgets), between the feed and the footer, no
+	// border — open air. fxOff never yields any (byte-identical to today).
+	if _, sceneRows := m.rowBudgets(); sceneRows > 0 {
+		b.WriteString("\n")
+		b.WriteString(m.viewScene(sceneRows))
+	}
 	b.WriteString("\n")
 	b.WriteString(m.viewFooter())
 	return b.String()
@@ -44,12 +54,12 @@ func (m Model) viewHeader() string {
 	if m.label != "" {
 		scope = "· " + m.label
 	}
-	left := sTitle.Render(" ⁂ GROVE ") + sChrome.Render(scope)
+	left := m.chromeTitle().Render(" ⁂ GROVE ") + sChrome.Render(scope)
 	counts := fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
 		sDelivery.Render(fmt.Sprint(review)))
-	// J3 forest strip: one ⸙ per shipped tree in the loaded window, moss
+	// J3 forest strip: one ♠ per shipped tree in the loaded window, moss
 	// green, left of the counts (grove-56).
 	strip := ""
 	if m.fx >= fxCalm {
@@ -68,7 +78,11 @@ func (m Model) viewHeader() string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + sChrome.Render(right)
+	line := left + strings.Repeat(" ", gap) + sChrome.Render(right)
+	// grove-63 S0: a long workspace label + gauge + counts can still exceed
+	// m.width even after the gap floor above — clamp the whole line so it
+	// can never hard-wrap the alt-screen.
+	return truncPad(line, m.width)
 }
 
 // memGauge renders `avail GB · N workers`, color-coded against the memory
@@ -209,7 +223,7 @@ func (m Model) viewAgents() string {
 	}
 
 	body := sPanelTitleFocus.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
-	return sPanelFocus.Width(m.width - 2).Render(body)
+	return m.chromeBorder().Width(m.width - 2).Render(body)
 }
 
 // viewActivity renders the newest-first swarm history — the objective
@@ -221,16 +235,9 @@ func (m Model) viewActivity() string {
 	// Fill the space between the agents panel and the footer. The footer may
 	// wrap onto several real lines (grove-60) — ACTIVITY yields exactly that
 	// many rows, or the total render exceeds m.height and scrolls the
-	// alt-screen. 5 = header + this panel's borders/title + one spare.
-	avail := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
-	if avail < 0 {
-		// No minimum: a forced floor here is exactly how the render used to
-		// exceed m.height on short panes — the feed yields to the last row.
-		avail = 0
-	}
-	if avail > len(items) {
-		avail = len(items)
-	}
+	// alt-screen. At fxCalm+ the scene shares this leftover (rowBudgets);
+	// the split lives there so both panels agree on the same total.
+	avail, _ := m.rowBudgets()
 
 	rows := []string{}
 	if len(items) == 0 {

@@ -31,6 +31,7 @@ const (
 	modeCosts
 	modeProfilePick
 	modeHelp
+	modeAlmanac
 )
 
 type refreshMsg struct {
@@ -39,7 +40,8 @@ type refreshMsg struct {
 	events  []state.Event
 	mem     resource.Mem
 	workers int
-	ok      bool // state.Load succeeded — a zero msg (load error) stays false
+	ok      bool   // state.Load succeeded — a zero msg (load error) stays false
+	focused string // grove-63: ticket at the tmux-focused window, "" if none
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -100,6 +102,18 @@ type Model struct {
 	tick         uint64
 	celebrations map[string]int
 
+	// focused is the ticket at the tmux-focused window, read once per
+	// refresh via the read-only tmux.ActiveWindow (grove-63 S2) — the
+	// amber queen stands on its plot. "" means no worker window is focused
+	// (Dean's on the cockpit itself, or a resolve failed).
+	focused string
+
+	// modeAlmanac state (grove-63 S4): almanac is a snapshot read once on
+	// mode entry (almanacCmd), never re-read on the 1s tick; almSel indexes
+	// the browsed day.
+	almSel  int
+	almanac almanacMsg
+
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
 	greeted bool
@@ -141,7 +155,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.stateDir), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery())
+	return tea.Batch(refreshCmd(m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery())
 }
 
 // --- commands ---
@@ -157,7 +171,7 @@ func prTickEvery() tea.Cmd {
 	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return nil })
 }
 
-func refreshCmd(stateDir string) tea.Cmd {
+func refreshCmd(stateDir, session string) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := state.Load(stateDir)
 		if err != nil {
@@ -165,14 +179,22 @@ func refreshCmd(stateDir string) tea.Cmd {
 		}
 		active := state.Active(tasks)
 		live := map[string]string{}
+		// grove-63 S2: one read-only list-windows call per refresh; the queen
+		// stands on whichever plot's resolved window name matches it.
+		activeWindow := tmux.ActiveWindow(session)
+		focused := ""
 		for _, t := range active {
 			// Resolve the current window name — a P3 status glyph is a display
 			// suffix on the stable base, and the detect probe matches exactly.
-			info := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
+			resolved := tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow)
+			info := detect.DetectLive(t.TmuxSession, resolved)
 			if !info.Exists {
 				live[t.Ticket] = "gone"
 			} else {
 				live[t.Ticket] = info.Status.String()
+			}
+			if activeWindow != "" && resolved == activeWindow {
+				focused = t.Ticket
 			}
 		}
 		events, _ := state.ReadEvents(stateDir, 200)
@@ -188,7 +210,7 @@ func refreshCmd(stateDir string) tea.Cmd {
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers, ok: true}
+		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers, ok: true, focused: focused}
 	}
 }
 
@@ -237,7 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		return m, tea.Batch(refreshCmd(m.stateDir), tickEvery(time.Second))
+		return m, tea.Batch(refreshCmd(m.stateDir, m.sessionName()), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -269,10 +291,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.celebrations[knockKey(tk)] = knockTicks
 				}
+				// S2 walk-off: a pawn whose task just left AgentWorking lingers
+				// a few ticks, walking off its plot (grove-63). Same capped,
+				// prefixed-key pattern as the knock, so it can never collide.
+				for _, tk := range walkedOff(m.tasks, msg.tasks) {
+					if len(m.celebrations) >= maxCelebrations {
+						break
+					}
+					m.celebrations[walkKey(tk)] = walkTicks
+				}
 			}
 			m.tasks = msg.tasks
 			m.live = msg.live
 			m.events = msg.events
+			m.focused = msg.focused
 			if m.detail != nil { // keep detail pointed at fresh data
 				for _, t := range m.tasks {
 					if t.Ticket == m.detail.Ticket {
@@ -294,6 +326,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case costsMsg:
 		m.costs = msg
+		return m, nil
+
+	case almanacMsg:
+		// A one-shot snapshot (grove-63 S4) — never re-fired by the 1s tick,
+		// unlike costs. m.almSel lands on the newest day (today).
+		m.almanac = msg
+		m.almSel = len(msg.days) - 1
+		if m.almSel < 0 {
+			m.almSel = 0
+		}
+		if m.mode == modeAlmanac {
+			m.flash = ""
+		}
 		return m, nil
 
 	case prsMsg:
@@ -339,7 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ done"
 		}
-		return m, refreshCmd(m.stateDir)
+		return m, refreshCmd(m.stateDir, m.sessionName())
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -365,6 +410,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeHelp {
 		return m.handleHelpKey(k)
+	}
+	if m.mode == modeAlmanac {
+		return m.handleAlmanacKey(k)
 	}
 
 	switch k.String() {
@@ -484,7 +532,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "reviewing " + t.Ticket
 			}
-			return m, refreshCmd(m.stateDir)
+			return m, refreshCmd(m.stateDir, m.sessionName())
 		}
 	case "d":
 		if t := m.selected(); t != nil {
@@ -506,6 +554,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// (when recording is on) — the cheap periodic point between grabs
 		// and the final gv done row.
 		return m, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, true)
+	case "g": // THE ALMANAC (grove-63): one garden per day, browsable history
+		m.mode = modeAlmanac
+		m.flash = "leafing through the almanac…"
+		return m, almanacCmd(m.stateDir)
 	}
 	return m, nil
 }
@@ -539,7 +591,7 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.detail = nil
 		m.input.Blur()
-		return m, refreshCmd(m.stateDir)
+		return m, refreshCmd(m.stateDir, m.sessionName())
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
