@@ -98,3 +98,12 @@ cockpit:
   #   off             — today's exact render, no flourish.
   # Cycle at runtime with the `*` key (not persisted). Unknown value = full.
   # effects: full
+
+  # Cockpit pane split (grove-52) — seeds the session's @grove_layout at
+  # build time:
+  #   horizontal (default) — dash + chats as equal side-by-side columns.
+  #   vertical             — dash a wide 55% left pane, chats stacked right.
+  #   tiled                — even grid.
+  # Cycle at runtime with the `L` key (persists for the session's life).
+  # Unknown value = horizontal.
+  # layout: horizontal
