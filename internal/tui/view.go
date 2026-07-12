@@ -240,6 +240,7 @@ func (m Model) viewFooter() string {
 		sKey.Render("X") + sFoot.Render(" park"),
 		sKey.Render("$") + sFoot.Render(" costs"),
 		sKey.Render("*") + sFoot.Render(" effects"),
+		sKey.Render("L") + sFoot.Render(" layout"),
 		sKey.Render("q") + sFoot.Render(" quit"),
 	}
 	line := " " + strings.Join(keys, sDim.Render(" · "))

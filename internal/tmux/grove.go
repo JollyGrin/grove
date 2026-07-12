@@ -9,6 +9,60 @@ import (
 	"strings"
 )
 
+// defaultCockpitLayout is the last-resort pane orientation when neither the
+// session option nor config supplies one (grove-52): side-by-side columns.
+const defaultCockpitLayout = "horizontal"
+
+// cockpitMainWidth is the dash pane's share of the window in the vertical
+// (main-vertical) layout — the pre-grove-52 cockpit shape.
+const cockpitMainWidth = 55
+
+// tmuxLayout maps a grove-facing layout name to tmux's. Trap: the names
+// invert — grove "horizontal" (panes in a side-by-side row) is tmux
+// even-horizontal, whose dividers are vertical. Unknown falls back to the
+// default's tmux shape.
+func tmuxLayout(name string) string {
+	switch name {
+	case "vertical":
+		return "main-vertical"
+	case "tiled":
+		return "tiled"
+	default:
+		return "even-horizontal"
+	}
+}
+
+// SelectLayout re-tiles the session's active window to the given grove
+// layout name. vertical delegates to MainVertical so the dash keeps its
+// tested 55% share; the rest are plain select-layout calls. Targets the
+// bare session (its active window) exactly like MainVertical/SpawnPane.
+func SelectLayout(session, name string) error {
+	if name == "vertical" {
+		return MainVertical(session, cockpitMainWidth)
+	}
+	_, err := run("select-layout", "-t", session, tmuxLayout(name))
+	return err
+}
+
+// SetCockpitLayout persists the cockpit's pane orientation in a session
+// user-option (mechanism of @grove_cockpit) so every gv process — the dash's
+// L hotkey, `gv orchestrator new`, the cockpit build — reads the same value.
+// Dies with the session; the config default re-seeds it on the next build.
+func SetCockpitLayout(session, name string) error {
+	_, err := run("set-option", "-t", session, "@grove_layout", name)
+	return err
+}
+
+// CockpitLayout reads the session's persisted layout name; "" when unset
+// or the session is unreachable (callers fall back to the default).
+func CockpitLayout(session string) string {
+	out, err := run("show-options", "-t", session, "-v", "@grove_layout")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // MainVertical lays a session's first window out as main-vertical (main
 // pane left, others stacked right) with the main pane holding width% of
 // the window — the cockpit shape: TUI left, orchestrator chats right.
@@ -40,17 +94,23 @@ func SetTitle(session, title string) error {
 }
 
 // SpawnPane opens a fresh shell pane in the session's first window rooted
-// at dir, re-tiles main-vertical, types cmd into it, and focuses it.
-// The command is typed (SendKeys) rather than passed to split-window so
-// shell aliases in worker/orchestrator commands keep working, and the
-// pane survives the command exiting.
+// at dir, re-tiles to the session's chosen layout (@grove_layout, or the
+// package default when unset — never a hardcoded shape, so an L-hotkey
+// choice survives spawns), types cmd into it, and focuses it. The command
+// is typed (SendKeys) rather than passed to split-window so shell aliases
+// in worker/orchestrator commands keep working, and the pane survives the
+// command exiting.
 func SpawnPane(session, dir, cmd string) (string, error) {
 	paneID, err := run("split-window", "-t", session, "-c", dir, "-P", "-F", "#{pane_id}")
 	if err != nil {
 		return "", err
 	}
 	paneID = strings.TrimSpace(paneID)
-	if _, err := run("select-layout", "-t", session, "main-vertical"); err != nil {
+	layout := CockpitLayout(session)
+	if layout == "" {
+		layout = defaultCockpitLayout
+	}
+	if err := SelectLayout(session, layout); err != nil {
 		return "", err
 	}
 	if err := SendKeys(paneID, cmd); err != nil {

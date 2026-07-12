@@ -79,9 +79,26 @@ type Config struct {
 	// joy knob: full (default) | calm (ambient only) | off (today's exact
 	// render). Empty/unknown resolves to full in the TUI — a typo never
 	// breaks the cockpit, so parse() deliberately leaves it untouched.
+	// Layout is the pane orientation the cockpit window is built with
+	// (grove-52): horizontal (default, side-by-side columns) | vertical
+	// (main-vertical, dash-dominant left) | tiled. Resolved through
+	// CockpitLayout, which is equally typo-forgiving.
 	Cockpit struct {
 		Effects string `yaml:"effects"`
+		Layout  string `yaml:"layout"`
 	} `yaml:"cockpit"`
+}
+
+// CockpitLayout resolves cockpit.layout to a valid grove layout name.
+// Empty/unknown falls back to horizontal (mirrors parseFx's forgiveness —
+// a typo in the config must never break the cockpit).
+func (c *Config) CockpitLayout() string {
+	switch c.Cockpit.Layout {
+	case "vertical", "tiled":
+		return c.Cockpit.Layout
+	default:
+		return "horizontal"
+	}
 }
 
 // Notify configures phone push via ntfy. The topic URL is the only secret
