@@ -13,6 +13,11 @@ Read [HANDOFF.md](HANDOFF.md) first if you are picking this repo up fresh.
 `docs/` (connections/wizard, learnings, cockpit); [TASKS.md](TASKS.md) is
 the status board; [LEARNINGS.md](LEARNINGS.md) holds verified surprises —
 update both when you ship or get surprised. Plans go in `docs/plans/`.
+The recurring traps are distilled into `.claude/skills/`
+(tmux-discipline, shipping-gates, claude-code-facts) — load the matching
+skill before touching tmux, the test gate/e2e, or hook/session/transcript
+code. When a new learning generalizes into a rule, update the skill too;
+LEARNINGS.md stays the dated log.
 
 ## Running the binary (P0.0 done — safe, with two cautions)
 

@@ -7,14 +7,22 @@
 > Phases mirror DESIGN.md §13 (redrawn 2026-07-03 per design review).
 > Each phase gets a `docs/plans/` plan (plan-reviewer gated) before code.
 
-## Now
+## Now (2026-07-12)
 
-- [ ] **Operator: first live test** — `gv init` + `gv grab` a real task in a
-      real repo with a real Claude worker (Phase 0 shipped 2026-07-04).
-      Then `gv hooks install` for live status capture (verified to
-      preserve ovs entries; deliberately not run overnight —
-      propose-then-dispose).
-- [ ] Fold live-test findings into the Phase 1 plan.
+Grove is the operator's live daily driver and dogfoods itself: the real
+backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
+by grove workers. Live tests + hooks install happened long ago; day-to-day
+flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
+
+- [ ] Phase 1 remainder: 1b pack loading, 1c drift detection (below)
+- [ ] Phase 4 remainder: hooks/inbox generalization, generic orchestrator
+      CLAUDE.md + pack overlay (below)
+- [ ] Phase 5: learnings system first cut (below)
+- [ ] Phase 6: OSS polish → Grid pack → parity gate → ovs retirement
+- [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
+      Obsidian live board (issue #9, design paused at REVISE), remote PC
+      fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
+      virtualization)
 
 ## Phase 0 — extraction proven (skeleton + local-md) ✅ 2026-07-04
 

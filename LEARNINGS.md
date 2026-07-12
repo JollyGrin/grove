@@ -9,6 +9,11 @@
 > within each section. If a learning invalidates a DESIGN.md decision,
 > update the doc and note it here.
 >
+> **Distilled 2026-07-12** into `.claude/skills/` (tmux-discipline ·
+> shipping-gates · claude-code-facts) so workers load the rules
+> automatically. This file stays the dated log of record; when adding an
+> entry that generalizes into a rule, update the matching skill too.
+>
 > **Seeded 2026-07-03** from overstory-tui's LEARNINGS.md (@ `8c2f4f0`) —
 > the *generic* entries only; each was verified live in ovs. Grid-specific
 > entries (Linear pipeline rules, monorepo deploy semantics, worktree:setup

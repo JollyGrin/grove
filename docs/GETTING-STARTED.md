@@ -59,11 +59,19 @@ state, orchestrator brain). The repo becomes a grove **workspace**.
 
 ---
 
-## 3. Use Linear for task management (let your LLM do it)
+## 3. Pick a task backend (let your LLM do it)
 
-By default grove uses local markdown files as the task backend. To switch to
-**Linear**, two things need to be true — get your API key, then point grove's
-config at Linear. Ask your LLM:
+By default grove uses local markdown files (`.grove/tasks/*.md`) as the task
+backend — zero setup, fine for trying the loop. Two remote backends exist:
+
+- **GitHub issues** (lightest remote option — grove develops itself on it):
+  no API key beyond `gh auth login`. Set `provider.kind: github` and task ids
+  become `<repo>-<n>` for issue #n. Agents transition issues via labels; your
+  merge closes them.
+- **Linear** — the rest of this section.
+
+To switch to **Linear**, two things need to be true — get your API key, then
+point grove's config at Linear. Ask your LLM:
 
 > Switch grove's task backend to Linear. My Linear team key is `DEV`. Walk me
 > through creating a personal API key, then update grove's config to use the
@@ -123,20 +131,26 @@ Run `gv doctor` again — the Linear key row should now be green.
 gv       # opens the cockpit: dashboard on the left, orchestrator chat on the right
 ```
 
-The cockpit is a tmux session. The **left pane** is a live dashboard of every
-worker (state, PR, CI, questions). The **right column** is one or more
-**orchestrator chats** — this is where you spend ~90% of your time.
+The cockpit is a tmux session (`grove-<workspace>`): window 0 holds the
+**dashboard** pane and one or more **orchestrator chats** side by side —
+this is where you spend ~90% of your time. Each worker gets its own window
+(1+) in the same session, named after its task with a live state glyph, so
+**`ctrl-b w`** shows the whole fleet as a tree.
 
 Standard tmux keys work: **`ctrl-b z`** zooms the focused pane fullscreen,
-**`ctrl-b ↑/↓`** moves between panes.
+**`ctrl-b ↑/↓`** moves between panes. The default split is horizontal
+(equal columns); **`L`** cycles horizontal → vertical → tiled.
 
 ### Open a new orchestrator chat
 
 From the dashboard pane, press **`O`** (or **`0`** — same key, the glyph reads
 as a zero in some fonts). This splits a fresh orchestrator chat into the right
-column and focuses it, ready to type. Use a separate chat per parallel
-thread of work; for sequential unrelated topics, just `/clear` in one chat
-instead.
+column and focuses it, ready to type. **`)`** does the same on a configured
+**model profile** (e.g. an OpenRouter backend) — it picks the repo's
+`default_profile`, or offers a picker when several profiles exist. Use a
+separate chat per parallel thread of work; for sequential unrelated topics,
+just `/clear` in one chat instead — a fresh spawn re-pays the ~50k-token
+session floor for nothing.
 
 ### Close a chat
 
@@ -147,17 +161,26 @@ orchestrator re-derives everything from `gv ls`.
 
 ### Dashboard keys (left pane)
 
+Press **`?`** for the full help overlay. The main keys:
+
 | Key | Action |
 |-----|--------|
 | `O` / `0` | new orchestrator chat |
+| `)` | new orchestrator chat on a model profile |
 | `j` / `k` | move selection |
 | `a` | **attach** — jump into the selected worker's tmux window |
-| `enter` | task detail |
+| `enter` | task detail / reply to a waiting question |
 | `n` | nudge the selected worker (send a follow-up) |
+| `v` | mark reviewing |
 | `o` | open the worker's preview |
 | `p` | open the worker's PR in the browser |
 | `t` | open the ticket in the browser |
 | `d` | mark done (verify merged → clean up) |
+| `$` | costs page (spend ledger, per-task/model breakdown; `esc` back) |
+| `L` | cycle pane layout (horizontal / vertical / tiled) |
+| `*` | cycle joy effects (full / calm / off) |
+| `X` | park the workspace (kill session; revive via `gv adopt`) |
+| `?` | help overlay |
 | `q` | quit |
 
 ---

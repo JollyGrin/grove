@@ -24,12 +24,31 @@ orchestrator field-tested on The Grid's real ticket flow. Team-specific
 setups (like the Grid's) become **packs** — versioned overlays of
 conventions, checks, and prompts — instead of hardcoding.
 
-## Status: live daily driver (2026-07-09)
+## Status: live daily driver, dogfooding itself (2026-07-12)
 
 The namespace split from overstory is done (P0.0, 2026-07-04) — the binary
-is safe to run and is the operator's daily driver. See [TASKS.md](TASKS.md)
-for the phase board and [CLAUDE.md](CLAUDE.md) for the one remaining
-coexistence caution (`gv hooks install` writes a shared settings file).
+is safe to run and is the operator's daily driver. Grove now builds itself
+through itself: its real backlog is **GitHub issues on this repo**
+(`grove-N` = issue #N), grabbed and shipped by grove workers. Shipped and
+proven live:
+
+- **Phase 0** (extraction) and most of **Phase 1** (wizard, doctor,
+  connections manifest, workspaces + ambient walk-up) — remainder is pack
+  loading (1b) and drift detection (1c).
+- **Phase 3** (`github-issues` provider) — the TaskProvider seam held with
+  zero changes to the other providers.
+- Much of **Phase 4**: the cockpit is mature — one `grove-<label>` tmux
+  session per workspace (window 0 = dashboard + orchestrator chats,
+  windows 1+ = workers with live task-state glyphs), costs page with a
+  persistent spend ledger, layout cycling, effects, a `?` help overlay.
+- **Model profiles** (below) — workers *and* orchestrators on OpenRouter
+  or any Anthropic-compatible backend, per dispatch.
+- **Phase 2** (model routing/tiers) is parked — not worth it at solo
+  scale; the cost ledger it would measure against already exists.
+
+See [TASKS.md](TASKS.md) for the live phase board and
+[CLAUDE.md](CLAUDE.md) for the one remaining coexistence caution
+(`gv hooks install` writes a shared settings file).
 
 ## Model profiles (OpenRouter etc.)
 
@@ -71,6 +90,8 @@ inherited from the shell — and only the env var *name* appears in config.
 | Doc | What |
 |---|---|
 | [HANDOFF.md](HANDOFF.md) | **Start here** — full pickup path for a fresh agent/human |
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Operator guide: install → wizard → cockpit → first ticket |
+| [.claude/skills/](.claude/skills/) | Distilled hard-won rules, auto-loaded by workers: tmux discipline, shipping gates, Claude Code integration facts |
 | [DESIGN.md](DESIGN.md) | Founding spec: architecture, TaskProvider, routing, workspaces, phasing |
 | [docs/grove-connections-design.md](docs/grove-connections-design.md) | Wizard, doctor, drift detection, connections manifest, pack system, parity gate |
 | [docs/grove-learnings-design.md](docs/grove-learnings-design.md) | Layered learnings/memory system |
@@ -83,6 +104,17 @@ inherited from the shell — and only the env var *name* appears in config.
 ## Build
 
 ```sh
-go build ./... && go vet ./... && go test ./...   # expected green
-go install ./cmd/gv                               # refreshes ~/go/bin/gv in place
+go build ./... && go vet ./... && go test ./...   # expected green (run bare — never pipe the gate)
+go install ./cmd/gv                               # refreshes ~/go/bin/gv in place — from main ONLY
 ```
+
+Two field-tested rules (details in [LEARNINGS.md](LEARNINGS.md) and
+`.claude/skills/`):
+
+- **Never `go install` from an unmerged branch** — hooks and live sessions
+  reference `~/go/bin/gv` by absolute path. For manual testing of a branch,
+  hand over a throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`.
+- **Run `e2e/dummy.sh` before merging anything that touches the task
+  lifecycle** — it exercises grab/ls/hook/untrack/done against fully
+  scratch state (the dummy-data pattern; other suites: `wizard.sh`,
+  `workspace.sh`, `github.sh`, `cockpit.sh`).

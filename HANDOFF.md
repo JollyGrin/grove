@@ -9,6 +9,18 @@
 > to run), TaskProvider seam + markdown provider + `gv init` + E2E green
 > (`e2e/dummy.sh`). The do-not-run trap below is historical; CLAUDE.md and
 > TASKS.md carry the current state. Next: the operator's live test → Phase 1 plan.
+>
+> **Update 2026-07-12: grove is the live daily driver and builds itself.**
+> The real backlog is GitHub issues on this repo (`grove-N` = issue #N),
+> worked by grove workers; ~40 tickets have shipped through the loop.
+> Phase 0, most of Phase 1 (wizard/doctor/workspaces), Phase 3
+> (github-issues provider), and much of Phase 4 (cockpit) are done;
+> Phase 2 (routing) is parked. The sections below marked "historical"
+> describe the 2026-07-03 scaffold moment — still the honest origin story,
+> but read TASKS.md §Now for what's actually next. The hard-won rules are
+> distilled into `.claude/skills/` (tmux-discipline, shipping-gates,
+> claude-code-facts) — workers load them automatically; read them before
+> touching tmux, the test gate, or hook/session code.
 
 ## What this repo is
 
@@ -48,46 +60,66 @@ Everything below is DONE:
 
 ## What you do first
 
-1. **Read, in order:** [CLAUDE.md](CLAUDE.md) (rules — especially the
-   ⚠️ do-not-run warning), this file, [DESIGN.md](DESIGN.md), then the
-   three docs/ designs, then [docs/seed-manifest.md](docs/seed-manifest.md)
-   and [LEARNINGS.md](LEARNINGS.md).
-2. **Do NOT run the `gv` binary** until P0.0 (namespace rename) is done —
-   the copied code still points at the live overstory config/state/hooks.
-   Build and test freely.
-3. **Write the Phase 0 plan** (`docs/plans/`) against DESIGN.md §13's
-   redrawn phasing. Phase 0 = P0.0 namespace rename → markdown provider
-   (with the event-state-authoritative rule and no-remote degraded path,
-   DESIGN.md §5.2) → `gv grab/ls/done` E2E on a dummy repo (worker =
-   `echo`) → dual-hook coexistence smoke test (DESIGN.md §12).
-   [TASKS.md](TASKS.md) has the seeded breakdown. Get the plan reviewed
-   (plan-reviewer) before executing — the design corpus is deliberately
-   what/why; the plan is yours to write.
+1. **Read, in order:** [CLAUDE.md](CLAUDE.md) (rules), this file,
+   [TASKS.md](TASKS.md) §Now, the three `.claude/skills/`,
+   [LEARNINGS.md](LEARNINGS.md), then [DESIGN.md](DESIGN.md) and the
+   docs/ designs as the work demands
+   ([docs/seed-manifest.md](docs/seed-manifest.md) when touching a
+   copied package). New to driving grove as an operator?
+   [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+2. *(Historical — resolved by P0.0, 2026-07-04.)* ~~Do NOT run the `gv`
+   binary until the namespace rename is done.~~ The binary is safe; the
+   one remaining coexistence caution is in CLAUDE.md (`gv hooks install`
+   writes a shared settings file).
+3. **Follow the plan flow for non-trivial work:** brainstorm →
+   `docs/plans/YYYY-MM-DD-<slug>-design.md` (design-reviewer) →
+   `docs/plans/YYYY-MM-DD-<slug>.md` (plan-reviewer) → execute on a
+   short-lived branch in a worktree. The design corpus is deliberately
+   what/why; plans are yours to write.
 4. **Never edit `~/git/thegrid/overstory-tui`.** It is frozen and is
    the operator's daily driver. It is also your reference: when a copied package
    confuses you, diff against upstream and read its DESIGN.md/LEARNINGS.md.
 
 ## Traps we already know about (don't rediscover)
 
-- **Running gv pre-P0.0 corrupts live ovs state** — the whole reason P0.0
-  exists. Config `~/.config/overstory/`, state `~/.local/state/overstory/`,
-  env `OVERSTORY_STATE_DIR`, hook commands `ovs hook <event>` +
-  `~/go/bin/ovs` — all must be renamed/namespaced first.
-- **Both ovs and gv hooks will fire on the same worker sessions** during
-  the transition window. "Not my session" must key on *task ownership in
+The live-incident traps are distilled into `.claude/skills/` — the
+distillation is canonical, [LEARNINGS.md](LEARNINGS.md) is the dated log
+behind it. The four that have actually burned us, in one line each:
+
+- **`$TMUX` beats `TMUX_TMPDIR`** — an "isolated" tmux script run from a
+  worker pane targets the REAL server; a bare `tmux kill-server` killed
+  the whole fleet once (2026-07-07). → `.claude/skills/tmux-discipline`
+- **Never pipe the test gate** — `go test ./... | tail` reports the
+  pipe's exit status; two red runs merged to main that way in one
+  evening. → `.claude/skills/shipping-gates`
+- **Never `go install` from an unmerged branch** — hooks and live
+  sessions run `~/go/bin/gv` by absolute path; hand the operator a
+  throwaway `go build -o /tmp/gv-<ticket>` instead.
+  → `.claude/skills/shipping-gates`
+- **Claude Code behavior is documented, not guessed** — hook payloads,
+  Stop-vs-Notification, transcript/resume mechanics, per-profile worlds.
+  → `.claude/skills/claude-code-facts`
+
+Structural traps that predate the skills and still hold:
+
+- **Both ovs and gv hooks fire on the same worker sessions** during any
+  transition window. "Not my session" must key on *task ownership in
   this workspace's tasks.json*, NOT on workspace resolution — an
   ovs-created worktree can resolve to a grove workspace via the `.grove/`
   walk-up (DESIGN.md §12, design review I-6).
 - **The parity gate's byte-comparison is against an empty learnings
   corpus** (docs/grove-connections-design.md §8.2) — don't chase
   byte-parity once learnings inject.
-- **LEARNINGS.md here is seeded from ovs's generic entries** — they are
-  verified facts (tmux SendKeys is single-line, squash-merge defeats
-  `branch -d`, transcripts key on encoded cwd, …). Trust them; they were
-  each learned the hard way.
-- The state/tmux/git/worktree/detect/transcript packages were themselves
-  copied into ovs from parkranger and have survived two tools — treat them
-  as the most-proven code in the tree.
+- **A git-inited $HOME shadows parent-folder detection** — `gv init`
+  once made HOME the workspace because a dotfiles repo enclosed the cwd;
+  parent-of-repos detection tests the cwd itself first.
+- **LEARNINGS.md is verified fact, not opinion** — every entry was
+  learned the hard way (many field-hit within minutes of shipping).
+  Trust it; when it invalidates a design doc, the doc gets updated and
+  the entry notes it.
+- The state/tmux/git/worktree/detect/transcript packages were copied into
+  ovs from parkranger and have survived two tools — treat them as the
+  most-proven code in the tree.
 
 ## The end state you are building toward
 
