@@ -61,15 +61,28 @@ func (m Model) handleHelpKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) viewHelp() string {
 	w := m.width - 4
 
-	var sections []string
-	for _, s := range helpSections {
-		rows := []string{sPanelTitleFocus.Render(truncPad(s.title, w))}
+	var rows []string
+	for i, s := range helpSections {
+		if i > 0 {
+			rows = append(rows, "")
+		}
+		rows = append(rows, sPanelTitleFocus.Render(truncPad(s.title, w)))
 		for _, e := range s.entries {
 			rows = append(rows, truncPad("  "+sKey.Render(pad(e.key, 7))+sFoot.Render(e.desc), w))
 		}
-		sections = append(sections, strings.Join(rows, "\n"))
 	}
-	panel := sPanelFocus.Width(m.width - 2).Render(strings.Join(sections, "\n\n"))
+	// Same height discipline as the footer itself (grove-60): the overlay
+	// must fit m.height — header(1) + panel borders(2) + foot(1) leave
+	// height-4 content rows; anything past that is trimmed behind a hint,
+	// never soft-scrolled by the alt-screen.
+	if maxRows := m.height - 4; len(rows) > maxRows {
+		if maxRows < 1 {
+			maxRows = 1
+		}
+		rows = rows[:maxRows]
+		rows[len(rows)-1] = sDim.Render(truncPad("  … a taller pane shows the rest", w))
+	}
+	panel := sPanelFocus.Width(m.width - 2).Render(strings.Join(rows, "\n"))
 
 	foot := " " + sKey.Render("esc") + sFoot.Render(" or ") +
 		sKey.Render("?") + sFoot.Render(" close")

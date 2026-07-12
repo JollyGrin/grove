@@ -223,8 +223,10 @@ func (m Model) viewActivity() string {
 	// many rows, or the total render exceeds m.height and scrolls the
 	// alt-screen. 5 = header + this panel's borders/title + one spare.
 	avail := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
-	if avail < 3 {
-		avail = 3
+	if avail < 0 {
+		// No minimum: a forced floor here is exactly how the render used to
+		// exceed m.height on short panes — the feed yields to the last row.
+		avail = 0
 	}
 	if avail > len(items) {
 		avail = len(items)
@@ -281,11 +283,18 @@ func (m Model) viewFooter() string {
 	}
 	// The grouped legend, deliberately wrapped (grove-60) — footerHeight
 	// mirrors this exactly, so the flash may only ride an existing line.
+	// It rides the roomiest one: the flash is the only surface errors have,
+	// and the last line is often nearly full at wrap-threshold widths.
 	lines := footerLines(m.width, len(m.tasks) > 0)
 	if m.flash != "" {
-		last := len(lines) - 1
-		if room := m.width - lipgloss.Width(lines[last]) - 4; room > 1 {
-			lines[last] += "   " + sChrome.Render(trunc(m.flash, room))
+		best, room := -1, 1
+		for i, l := range lines {
+			if r := m.width - lipgloss.Width(l) - 4; r > room {
+				best, room = i, r
+			}
+		}
+		if best >= 0 {
+			lines[best] += "   " + sChrome.Render(trunc(m.flash, room))
 		}
 	}
 	return strings.Join(lines, "\n")

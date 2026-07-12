@@ -148,6 +148,27 @@ func TestFooterHeight(t *testing.T) {
 	}
 }
 
+// The flash is the only surface errors have: it must stay visible across
+// the wrap-threshold widths where the LAST legend line runs nearly full —
+// it rides the roomiest line instead of being silently dropped.
+func TestFooterFlashVisibleAtThresholdWidths(t *testing.T) {
+	m := New(nil, "", "")
+	m.tasks = []*state.Task{{Ticket: "grove-60", Repo: "grove"}}
+	m.flash = "error: worktree missing"
+	for width := 55; width <= 65; width++ {
+		m.width = width
+		out := m.viewFooter()
+		if !strings.Contains(out, "error") {
+			t.Errorf("width %d: flash dropped from footer:\n%s", width, out)
+		}
+		for i, l := range strings.Split(out, "\n") {
+			if lw := lipgloss.Width(l); lw > width {
+				t.Errorf("width %d: line %d with flash is %d cells", width, i, lw)
+			}
+		}
+	}
+}
+
 // A flash rides an existing legend line — it never adds one, so the height
 // budget holds while a flash is up.
 func TestFooterFlashKeepsHeight(t *testing.T) {
@@ -178,11 +199,27 @@ func TestViewHeightBudget(t *testing.T) {
 			Type: state.EvAnswered, Ticket: "grove-60", Time: time.Now(),
 		})
 	}
-	for _, tc := range []struct{ w, h int }{{200, 30}, {120, 30}, {60, 30}, {60, 24}, {40, 30}} {
+	for _, tc := range []struct{ w, h int }{
+		{200, 30}, {120, 30}, {60, 30}, {60, 24}, {40, 30},
+		// Short panes: the old 'avail < 3' floor overflowed exactly here —
+		// a 4-line footer at 60 cols left no room for a forced 3-row feed.
+		{60, 15}, {60, 16}, {60, 17}, {60, 18}, {40, 15},
+	} {
 		m.width, m.height = tc.w, tc.h
 		out := m.View()
 		if got := strings.Count(out, "\n") + 1; got > tc.h {
 			t.Errorf("%dx%d: View renders %d lines (> height)", tc.w, tc.h, got)
+		}
+	}
+
+	// The ? overlay obeys the same budget — a stock 80x24 terminal (and
+	// shorter) must not overflow the alt-screen on '?'.
+	m.mode = modeHelp
+	for _, tc := range []struct{ w, h int }{{80, 24}, {120, 15}, {60, 40}} {
+		m.width, m.height = tc.w, tc.h
+		out := m.View()
+		if got := strings.Count(out, "\n") + 1; got > tc.h {
+			t.Errorf("help %dx%d: View renders %d lines (> height)", tc.w, tc.h, got)
 		}
 	}
 }
