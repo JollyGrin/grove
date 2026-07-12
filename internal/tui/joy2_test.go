@@ -229,7 +229,7 @@ func TestKnockDetectionInUpdate(t *testing.T) {
 	m := fixtureModel(t)
 	m.fx = fxFull
 	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
-	next, _ := m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}})
+	next, _ := m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}, ok: true})
 	got := next.(Model)
 	if got.celebrations[knockKey("grove-9")] != knockTicks {
 		t.Errorf("flip to QUESTION did not seed a knock: %v", got.celebrations)
@@ -241,7 +241,7 @@ func TestKnockDetectionInUpdate(t *testing.T) {
 	m = fixtureModel(t)
 	m.fx = fxCalm
 	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
-	next, _ = m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}})
+	next, _ = m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}, ok: true})
 	if got := next.(Model); len(got.celebrations) != 0 {
 		t.Errorf("calm must not seed knocks: %v", got.celebrations)
 	}

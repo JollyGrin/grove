@@ -265,9 +265,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
 		// runs both on the beat and on ad-hoc refreshes (answers, reviews,
 		// dones); it must never re-arm a timer or touch m.tick.
-		// Gauge refreshes every time — even at zero active tasks, where
-		// msg.tasks is nil and the block below is skipped. A failed read is a
-		// zero Mem (OK()==false) and simply hides the gauge.
+		// Gauge refreshes every time, independent of msg.ok below. A failed
+		// read is a zero Mem (OK()==false) and simply hides the gauge.
 		m.mem = msg.mem
 		m.workers = msg.workers
 		// A6 first light: greet once, at the first SUCCESSFUL refresh after
@@ -280,7 +279,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.flash = firstLight(nowHour(), len(msg.tasks))
 			}
 		}
-		if msg.tasks != nil {
+		if msg.ok {
+			// Gate on ok, not tasks != nil: an empty-but-healthy fleet also
+			// returns a nil tasks slice from state.Active, and that must still
+			// apply below — only a load-error zero msg should leave state
+			// untouched (grove-65).
 			// J5 question knock: a label freshly flipped to QUESTION earns a
 			// few ticks of glyph pulse. Same diff-in-Update move as J1, same
 			// capped celebrations map under a prefixed key (grove-56).
