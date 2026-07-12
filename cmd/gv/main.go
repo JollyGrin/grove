@@ -282,7 +282,7 @@ func cmdDashboard() error {
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.AttachTask = attachTask
 	tui.CloseWorkspace = closeWorkspace
-	attachTo, err := tui.Run(cfg, stateDir(), wsLabel())
+	attachTo, farewell, err := tui.Run(cfg, stateDir(), wsLabel())
 	if err != nil {
 		return err
 	}
@@ -290,6 +290,11 @@ func cmdDashboard() error {
 		// Outside-tmux path only: attach replaces the process, so the
 		// TUI had to quit first. Inside tmux the TUI attaches in place.
 		return attachTask(attachTo)
+	}
+	// A5 quit farewell (grove-56): one dim line after the alt-screen closes.
+	// Empty at fx off — a quiet quit stays quiet.
+	if farewell != "" {
+		fmt.Println(farewell)
 	}
 	return nil
 }

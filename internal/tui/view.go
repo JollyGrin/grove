@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/JollyGrin/grove/internal/resource"
-	"github.com/JollyGrin/grove/internal/state"
 )
 
 func (m Model) View() string {
@@ -37,22 +36,32 @@ func (m Model) View() string {
 }
 
 func (m Model) viewHeader() string {
-	working, mail, review := 0, len(m.mailRows()), len(m.reviewRows())
-	for _, t := range m.tasks {
-		if t.Agent == state.AgentWorking || t.Agent == state.AgentSetup {
-			working++
-		}
-	}
+	working, mail, review := countWorking(m.tasks), len(m.mailRows()), len(m.reviewRows())
 	scope := "· the canopy"
 	if m.label != "" {
 		scope = "· " + m.label
 	}
 	left := sTitle.Render(" ⁂ GROVE ") + sChrome.Render(scope)
-	right := m.memGauge() + fmt.Sprintf("%s working · %s mail · %s review ",
+	counts := fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
 		sDelivery.Render(fmt.Sprint(review)))
+	// J3 forest strip: one ⸙ per shipped tree in the loaded window, moss
+	// green, left of the counts (grove-56).
+	strip := ""
+	if m.fx >= fxCalm {
+		if s := forestStrip(countDone(m.events)); s != "" {
+			strip = sForest.Render(s) + " · "
+		}
+	}
+	right := m.memGauge() + strip + counts
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 && strip != "" {
+		// A narrow pane sheds the flourish before the data: an overflowing
+		// header would hard-wrap the alt-screen, so the strip goes first.
+		right = m.memGauge() + counts
+		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	}
 	if gap < 1 {
 		gap = 1
 	}
@@ -119,7 +128,12 @@ func (m Model) viewAgents() string {
 		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
 			empty = emptyAgentsLine(nowHour())
 		}
-		rows = append(rows, sDim.Render(empty))
+		line := sDim.Render(empty)
+		if m.fx >= fxCalm && timeOfDay(nowHour()) == 3 {
+			// A7: at night one firefly drifts through the dark (grove-56).
+			line = truncPad(line+fireflyTrail(m.tick), w)
+		}
+		rows = append(rows, line)
 	}
 	for i, t := range m.tasks {
 		label := t.Label()
@@ -165,6 +179,13 @@ func (m Model) viewAgents() string {
 			glyphStyle = breathStyle(m.tick)
 			statusText = verbFor(t.Ticket, m.tick)
 		}
+		// J5 question knock: a freshly flipped QUESTION pulses its ◆
+		// bold↔normal for a few ticks (grove-56).
+		if m.fx >= fxFull && label == "QUESTION" {
+			if _, ok := m.celebrations[knockKey(t.Ticket)]; ok {
+				glyphStyle = knockStyle(m.tick)
+			}
+		}
 		live := m.live[t.Ticket]
 		line := cursor + glyphStyle.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
@@ -209,15 +230,26 @@ func (m Model) viewActivity() string {
 		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
 			empty = emptyActivityLine(nowHour())
 		}
-		rows = append(rows, sDim.Render(empty))
+		line := sDim.Render(empty)
+		if m.fx >= fxCalm && timeOfDay(nowHour()) == 3 {
+			// A7: at night one firefly drifts through the dark (grove-56).
+			line = truncPad(line+fireflyTrail(m.tick), w)
+		}
+		rows = append(rows, line)
 	}
 	tw := m.ticketColWidth()
 	for _, it := range items[:avail] {
+		glyph, text := statusStyle("").Render(it.Glyph), sDim.Render(it.Text)
+		if m.fx >= fxFull && planting(it.Text, time.Since(it.Time)) {
+			// J4 planting: a grab younger than a minute reads as a planting —
+			// presentation only, the feedItem string is untouched (grove-56).
+			glyph, text = sWorking.Render(plantGlyph), sDim.Render(plantText)
+		}
 		line := fmt.Sprintf(" %s %s  %s %s",
 			sChrome.Render(pad(age(it.Time), 7)),
-			statusStyle("").Render(it.Glyph),
+			glyph,
 			pad(it.Ticket, tw),
-			sDim.Render(it.Text))
+			text)
 		rows = append(rows, truncPad(line, w))
 	}
 

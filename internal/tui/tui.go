@@ -38,6 +38,7 @@ type refreshMsg struct {
 	events  []state.Event
 	mem     resource.Mem
 	workers int
+	ok      bool // state.Load succeeded — a zero msg (load error) stays false
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -98,6 +99,10 @@ type Model struct {
 	tick         uint64
 	celebrations map[string]int
 
+	// greeted latches after the first data refresh — the A6 first-light
+	// flash fires exactly once per cockpit launch (grove-56).
+	greeted bool
+
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
 	// and so can't happen inside the tea loop. Inside tmux, attach is a
@@ -118,14 +123,20 @@ func New(cfg *config.Config, stateDir, label string) Model {
 	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
 }
 
-func Run(cfg *config.Config, stateDir, label string) (*state.Task, error) {
+// Run returns the attach target plus the A5 quit farewell — one styled line
+// cmd/gv prints after the alt-screen closes (empty at fx off, grove-56).
+func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error) {
 	p := tea.NewProgram(New(cfg, stateDir, label), tea.WithAltScreen())
 	out, err := p.Run()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	m := out.(Model)
-	return m.AttachTo, nil
+	farewell := farewellLine(m.fx, countWorking(m.tasks), nowHour())
+	if farewell != "" {
+		farewell = sChrome.Render(farewell)
+	}
+	return m.AttachTo, farewell, nil
 }
 
 func (m Model) Init() tea.Cmd {
@@ -176,7 +187,7 @@ func refreshCmd(stateDir string) tea.Cmd {
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers}
+		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers, ok: true}
 	}
 }
 
@@ -236,7 +247,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// zero Mem (OK()==false) and simply hides the gauge.
 		m.mem = msg.mem
 		m.workers = msg.workers
+		// A6 first light: greet once, at the first SUCCESSFUL refresh after
+		// launch — a load-error zero msg must not greet an empty grove that
+		// isn't (nor latch; the next good refresh greets). The next real
+		// flash overwrites it naturally (grove-56).
+		if !m.greeted && msg.ok {
+			m.greeted = true
+			if m.fx >= fxCalm && m.flash == "" {
+				m.flash = firstLight(nowHour(), len(msg.tasks))
+			}
+		}
 		if msg.tasks != nil {
+			// J5 question knock: a label freshly flipped to QUESTION earns a
+			// few ticks of glyph pulse. Same diff-in-Update move as J1, same
+			// capped celebrations map under a prefixed key (grove-56).
+			if m.fx >= fxFull {
+				for _, tk := range freshQuestions(m.tasks, msg.tasks) {
+					if len(m.celebrations) >= maxCelebrations {
+						break
+					}
+					m.celebrations[knockKey(tk)] = knockTicks
+				}
+			}
 			m.tasks = msg.tasks
 			m.live = msg.live
 			m.events = msg.events
@@ -298,10 +330,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.flash = msg.err.Error()
 		} else if m.fx >= fxFull && msg.ticket != "" {
-			// J2 done ritual. The just-shipped tree isn't in m.events yet (its
-			// refresh is still in flight), so count the loaded EvTaskDone and
-			// add this one — precision doesn't matter (design J2).
-			m.flash = fmt.Sprintf("✓ %s shipped — tree #%d this season", msg.ticket, countDone(m.events)+1)
+			// J2 done ritual, J6 milestone every 10th tree. The just-shipped
+			// tree isn't in m.events yet (its refresh is still in flight), so
+			// count the loaded EvTaskDone and add this one — precision doesn't
+			// matter (design J2).
+			m.flash = doneRitualFlash(msg.ticket, countDone(m.events)+1)
 		} else {
 			m.flash = "✓ done"
 		}
