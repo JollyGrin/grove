@@ -155,13 +155,27 @@ func TestFooterFlashVisibleAtThresholdWidths(t *testing.T) {
 	m := New(nil, "", "")
 	m.tasks = []*state.Task{{Ticket: "grove-60", Repo: "grove"}}
 	m.flash = "error: worktree missing"
-	for width := 55; width <= 65; width++ {
+	// 55–65: multi-line wrap with a nearly full last line. 179–184: the
+	// single-line legend exactly fills the pane — hints must yield.
+	var widths []int
+	for w := 55; w <= 65; w++ {
+		widths = append(widths, w)
+	}
+	for w := 179; w <= 184; w++ {
+		widths = append(widths, w)
+	}
+	for _, width := range widths {
 		m.width = width
 		out := m.viewFooter()
 		if !strings.Contains(out, "error") {
 			t.Errorf("width %d: flash dropped from footer:\n%s", width, out)
 		}
-		for i, l := range strings.Split(out, "\n") {
+		lines := strings.Split(out, "\n")
+		if len(lines) != m.footerHeight() {
+			t.Errorf("width %d: flash changed the line count (%d vs footerHeight %d)",
+				width, len(lines), m.footerHeight())
+		}
+		for i, l := range lines {
 			if lw := lipgloss.Width(l); lw > width {
 				t.Errorf("width %d: line %d with flash is %d cells", width, i, lw)
 			}

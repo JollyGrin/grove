@@ -293,6 +293,20 @@ func (m Model) viewFooter() string {
 				best, room = i, r
 			}
 		}
+		if best < 0 {
+			// Every line is full — the band where the legend exactly fills
+			// its last line (~179–184 cols). Hints yield to the flash, the
+			// only surface errors have: truncate the last line to fit it.
+			best, room = len(lines)-1, len([]rune(m.flash))
+			if lim := m.width / 2; room > lim {
+				room = lim
+			}
+			if room > 1 {
+				lines[best] = truncPad(lines[best], m.width-room-4)
+			} else {
+				best = -1
+			}
+		}
 		if best >= 0 {
 			lines[best] += "   " + sChrome.Render(trunc(m.flash, room))
 		}
