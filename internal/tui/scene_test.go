@@ -13,6 +13,25 @@ import (
 
 // --- ticketLabel ---
 
+// Every glyph the living grove introduces must be exactly one terminal
+// cell — pad/trunc/the grid all do plain rune-cell math, and a double-width
+// glyph desyncs every column after it (the locked vocabulary table's own
+// warning, and the reason ⸙ got swapped out in S0).
+func TestSceneGlyphsAreSingleCell(t *testing.T) {
+	glyphs := []string{
+		forestGlyph, "♣", "∆", "ψ", plantGlyph, "◌", "▁", "✗", // plants/soil
+		"┃", "│", // trunks
+		"♟", "♛", "✧", "˙", "·", // cast
+		"☼", "☾", fireflyGlyph, // sky
+		"◆", "⚠", // markers
+	}
+	for _, g := range glyphs {
+		if w := lipgloss.Width(g); w != 1 {
+			t.Errorf("glyph %q width = %d, want 1", g, w)
+		}
+	}
+}
+
 func TestTicketLabel(t *testing.T) {
 	cases := map[string]string{
 		"grove-63":    "#63",
