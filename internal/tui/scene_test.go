@@ -73,38 +73,38 @@ func TestBuildTaskPlotStagesAndOverlays(t *testing.T) {
 	cel := map[string]int{}
 
 	dead := &state.Task{Ticket: "grove-1", Agent: state.AgentDead, Created: now}
-	if p := buildTaskPlot(dead, nil, fxFull, 0, cel); p.canopy != "✗" || p.label != "#1 ✗" {
+	if p := buildTaskPlot(dead, nil, fxFull, 0, cel, scenePalettes[1]); p.canopy != "✗" || p.label != "#1 ✗" {
 		t.Errorf("dead plot = %+v", p)
 	}
 
 	merged := &state.Task{Ticket: "grove-2", Agent: state.AgentWorking, Created: now.Add(-3 * time.Hour)}
 	pr := &github.PR{State: "MERGED"}
-	if p := buildTaskPlot(merged, pr, fxFull, 0, cel); p.canopy != forestGlyph || p.trunk != "┃" || p.label != "#2 ⬢" {
+	if p := buildTaskPlot(merged, pr, fxFull, 0, cel, scenePalettes[1]); p.canopy != forestGlyph || p.trunk != "┃" || p.label != "#2 ⬢" {
 		t.Errorf("merged plot = %+v, want mature canopy + ⬢ label regardless of age", p)
 	}
 
 	setup := &state.Task{Ticket: "grove-3", Agent: state.AgentSetup, Created: now}
-	if p := buildTaskPlot(setup, nil, fxFull, 0, cel); p.canopy != "◌" || p.label != "#3 setup" {
+	if p := buildTaskPlot(setup, nil, fxFull, 0, cel, scenePalettes[1]); p.canopy != "◌" || p.label != "#3 setup" {
 		t.Errorf("setup plot = %+v", p)
 	}
 
 	question := &state.Task{Ticket: "grove-4", Agent: state.AgentWaiting, Created: now.Add(-time.Hour)}
-	if p := buildTaskPlot(question, nil, fxFull, 0, cel); p.marker != "◆" || p.label != "#4 ?" || p.canopy != "∆" {
+	if p := buildTaskPlot(question, nil, fxFull, 0, cel, scenePalettes[1]); p.marker != "◆" || p.label != "#4 ?" || p.canopy != "∆" {
 		t.Errorf("QUESTION plot = %+v, want ∆ stage + ◆ marker + ?-label", p)
 	}
 
 	blocked := &state.Task{Ticket: "grove-5", Agent: state.AgentBlocked, Created: now.Add(-time.Minute)}
-	if p := buildTaskPlot(blocked, nil, fxFull, 0, cel); p.marker != "⚠" || p.label != "#5 ⚠" {
+	if p := buildTaskPlot(blocked, nil, fxFull, 0, cel, scenePalettes[1]); p.marker != "⚠" || p.label != "#5 ⚠" {
 		t.Errorf("BLOCKED plot = %+v", p)
 	}
 
 	idle := &state.Task{Ticket: "grove-6", Agent: state.AgentIdle, Sentinel: "done", Created: now.Add(-time.Hour)}
-	if p := buildTaskPlot(idle, nil, fxFull, 0, cel); p.label != "#6 ✓" {
+	if p := buildTaskPlot(idle, nil, fxFull, 0, cel, scenePalettes[1]); p.label != "#6 ✓" {
 		t.Errorf("idle✓ plot = %+v", p)
 	}
 
 	working := &state.Task{Ticket: "grove-7", Agent: state.AgentWorking, Created: now.Add(-5 * time.Second)}
-	if p := buildTaskPlot(working, nil, fxFull, 0, cel); p.marker != "" || !strings.HasPrefix(p.label, "#7 ") {
+	if p := buildTaskPlot(working, nil, fxFull, 0, cel, scenePalettes[1]); p.marker != "" || !strings.HasPrefix(p.label, "#7 ") {
 		t.Errorf("plain working plot = %+v", p)
 	}
 }
@@ -114,15 +114,15 @@ func TestBuildTaskPlotStagesAndOverlays(t *testing.T) {
 func TestBuildTaskPlotQuestionKnock(t *testing.T) {
 	q := &state.Task{Ticket: "grove-9", Agent: state.AgentWaiting, Created: time.Now()}
 	cel := map[string]int{knockKey("grove-9"): knockTicks}
-	p := buildTaskPlot(q, nil, fxFull, 0, cel)
+	p := buildTaskPlot(q, nil, fxFull, 0, cel, scenePalettes[1])
 	if p.markerSt.Render("◆") != knockStyle(0).Render("◆") {
 		t.Error("live knock at fxFull should style the marker with knockStyle")
 	}
-	p = buildTaskPlot(q, nil, fxCalm, 0, cel)
+	p = buildTaskPlot(q, nil, fxCalm, 0, cel, scenePalettes[1])
 	if p.markerSt.Render("◆") != sQuestion.Render("◆") {
 		t.Error("calm must never apply the knock style")
 	}
-	p = buildTaskPlot(q, nil, fxFull, 0, map[string]int{})
+	p = buildTaskPlot(q, nil, fxFull, 0, map[string]int{}, scenePalettes[1])
 	if p.markerSt.Render("◆") != sQuestion.Render("◆") {
 		t.Error("expired knock should fall back to plain amber")
 	}
@@ -338,7 +338,7 @@ func TestSceneLinesDeterministic(t *testing.T) {
 func TestRenderSkyRowSingleMarkerPerPlot(t *testing.T) {
 	plots := []scenePlot{{ticket: "a", canopy: "∆", marker: "◆", markerSt: sQuestion}}
 	layouts := layoutPlots(plots, plotW)
-	_, _, _, _, skyGrid := renderPlotRows(layouts, plotW, true)
+	_, _, _, _, skyGrid := renderPlotRows(layouts, plotW, true, scenePalettes[1].soil)
 	row := skyGrid.String()
 	if strings.Count(row, "◆") != 1 {
 		t.Errorf("expected exactly one marker glyph, got %q", row)
@@ -488,6 +488,98 @@ func TestSceneLinesCastGatedToFxFull(t *testing.T) {
 	calm := strings.Join(sceneLines(tasks, nil, events, nil, 0, 80, 9, 10, fxCalm, ""), "\n")
 	if strings.Contains(calm, "♟") || strings.Contains(calm, "✧") {
 		t.Errorf("fxCalm must not render the cast, got:\n%s", calm)
+	}
+}
+
+// --- S3: day cycle ---
+
+// The four buckets must actually render distinct ambient sky content —
+// otherwise the day cycle isn't doing anything.
+func TestApplyAmbientSkyDistinctByBucket(t *testing.T) {
+	renders := map[int]string{}
+	hours := []int{2, 8, 14, 19} // night, morning, day, evening
+	for _, h := range hours {
+		g := newSceneGrid(20)
+		applyAmbientSky(h, 0, g)
+		renders[h] = g.String()
+	}
+	seen := map[string]bool{}
+	for _, s := range renders {
+		seen[s] = true
+	}
+	if len(seen) != len(hours) {
+		t.Errorf("expected 4 distinct ambient renders, got %d: %v", len(seen), renders)
+	}
+}
+
+// Ambient sky is the lowest priority: it must never overwrite a
+// QUESTION/BLOCKED marker already occupying that cell.
+func TestApplyAmbientSkyNeverOverwritesMarker(t *testing.T) {
+	g := newSceneGrid(10)
+	g.set(9, '◆', sQuestion) // day's sun would land at the last column
+	applyAmbientSky(14, 0, g)
+	if g.chars[9] != '◆' {
+		t.Errorf("ambient sky overwrote a marker: got %q", g.chars[9])
+	}
+}
+
+func TestApplyAmbientSkyEmptyGridNoop(t *testing.T) {
+	g := newSceneGrid(0)
+	applyAmbientSky(14, 0, g) // must not panic on a zero-width grid
+}
+
+// buildTaskPlot's growing-stage canopy is time-tinted; the merged/dead/idle
+// paths are semantic and must stay fixed regardless of the palette bucket.
+func TestBuildTaskPlotPaletteAffectsOnlyGrowingStage(t *testing.T) {
+	morning, night := scenePalettes[0], scenePalettes[3]
+	working := &state.Task{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now().Add(-time.Hour)}
+	pm := buildTaskPlot(working, nil, fxFull, 0, nil, morning)
+	pn := buildTaskPlot(working, nil, fxFull, 0, nil, night)
+	if pm.style.GetForeground() == pn.style.GetForeground() {
+		t.Error("a growing plant's canopy should shift with the palette")
+	}
+
+	dead := &state.Task{Ticket: "grove-2", Agent: state.AgentDead}
+	dm := buildTaskPlot(dead, nil, fxFull, 0, nil, morning)
+	dn := buildTaskPlot(dead, nil, fxFull, 0, nil, night)
+	if dm.style.GetForeground() != dn.style.GetForeground() {
+		t.Error("dead is a semantic status color and must not shift with the palette")
+	}
+
+	pr := &github.PR{State: "MERGED"}
+	mm := buildTaskPlot(working, pr, fxFull, 0, nil, morning)
+	mn := buildTaskPlot(working, pr, fxFull, 0, nil, night)
+	if mm.style.GetForeground() != mn.style.GetForeground() {
+		t.Error("merged/orchard moss must not shift with the palette")
+	}
+}
+
+// --- S3: chrome tint ---
+
+func TestChromeTintGatedToFxFull(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 40
+	pinHour(t, 19) // evening: tint differs from the base color
+	m.fx = fxCalm
+	if m.chromeTitle().GetForeground() != sTitle.GetForeground() {
+		t.Error("below fxFull the title must stay the fixed sTitle style")
+	}
+	if m.chromeBorder().GetBorderTopForeground() != sPanelFocus.GetBorderTopForeground() {
+		t.Error("below fxFull the border must stay the fixed sPanelFocus style")
+	}
+
+	m.fx = fxFull
+	if m.chromeTitle().GetForeground() == sTitle.GetForeground() {
+		t.Error("fxFull evening should tint the title away from the fixed style")
+	}
+	if m.chromeBorder().GetBorderTopForeground() == sPanelFocus.GetBorderTopForeground() {
+		t.Error("fxFull evening should tint the border away from the fixed style")
+	}
+}
+
+func TestChromeTintColorsCoverAllBuckets(t *testing.T) {
+	if len(chromeBorderStyles) != 4 || len(chromeTitleStyles) != 4 {
+		t.Fatalf("expected 4 precomputed chrome styles per table, got %d/%d", len(chromeBorderStyles), len(chromeTitleStyles))
 	}
 }
 

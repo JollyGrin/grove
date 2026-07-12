@@ -43,6 +43,135 @@ func sceneTierFor(rows int) sceneTier {
 	}
 }
 
+// --- S3: day cycle ---
+//
+// scenePalette tints the scene's ambient (non-semantic) surfaces by
+// time-of-day bucket (morning/day/evening/night, timeOfDay's buckets):
+// the "growing" plant stages' canopy/trunk color and the soil row. Status
+// colors (QUESTION amber, BLOCKED rust, dead fog, the merged/orchard moss)
+// are semantic and never shift with the clock. Built once at package load —
+// the RAM rule forbids per-frame style construction.
+type scenePalette struct {
+	canopy lipgloss.Style
+	soil   lipgloss.Style
+}
+
+var scenePalettes = [4]scenePalette{
+	{ // morning
+		canopy: lipgloss.NewStyle().Foreground(lipgloss.Color("#76b053")),
+		soil:   lipgloss.NewStyle().Foreground(cMoss),
+	},
+	{ // day — unchanged from the pre-S3 look
+		canopy: lipgloss.NewStyle().Foreground(cCanopy),
+		soil:   lipgloss.NewStyle().Foreground(cMoss),
+	},
+	{ // evening
+		canopy: lipgloss.NewStyle().Foreground(lipgloss.Color("#a8b454")),
+		soil:   lipgloss.NewStyle().Foreground(lipgloss.Color("#6b5d3a")),
+	},
+	{ // night
+		canopy: lipgloss.NewStyle().Foreground(lipgloss.Color("#3f5d3a")),
+		soil:   lipgloss.NewStyle().Foreground(cFog),
+	},
+}
+
+// sDew/sMoon/sSun/sSceneFirefly are the ambient sky accent's precomputed
+// styles — package-level, built once.
+var (
+	sDew        = lipgloss.NewStyle().Foreground(cSky)
+	sMoon       = lipgloss.NewStyle().Foreground(cSky)
+	sSun        = lipgloss.NewStyle().Foreground(cAmber)
+	sSceneFly   = lipgloss.NewStyle().Foreground(cAmber)
+	fireflyRune = []rune(fireflyGlyph)[0]
+)
+
+// chromeBorderStyles/chromeTitleStyles: the panel-border and ⁂ GROVE title
+// tint per time-of-day bucket, fxFull only (S3's "chrome tint"). Unlike
+// scenePalette these never touch data styles — only the AGENTS panel border
+// and the header's branding title. Built once at package load.
+var chromeTintColors = [4]lipgloss.Color{
+	cMoss,                     // morning
+	cMoss,                     // day — unchanged
+	lipgloss.Color("#8a7a4a"), // evening
+	lipgloss.Color("#3a4a6a"), // night
+}
+
+var chromeBorderStyles = [4]lipgloss.Style{
+	sPanelFocus.BorderForeground(chromeTintColors[0]),
+	sPanelFocus.BorderForeground(chromeTintColors[1]),
+	sPanelFocus.BorderForeground(chromeTintColors[2]),
+	sPanelFocus.BorderForeground(chromeTintColors[3]),
+}
+
+var chromeTitleStyles = [4]lipgloss.Style{
+	lipgloss.NewStyle().Bold(true).Foreground(chromeTintColors[0]),
+	lipgloss.NewStyle().Bold(true).Foreground(chromeTintColors[1]),
+	lipgloss.NewStyle().Bold(true).Foreground(chromeTintColors[2]),
+	lipgloss.NewStyle().Bold(true).Foreground(chromeTintColors[3]),
+}
+
+// chromeBorder/chromeTitle pick the AGENTS panel border and the header
+// title style: today's fixed sPanelFocus/sTitle below fxFull, the
+// time-of-day tint at fxFull (S3's hard constraint — chrome tint is
+// fxFull-only; data styles never shift).
+func (m Model) chromeBorder() lipgloss.Style {
+	if m.fx < fxFull {
+		return sPanelFocus
+	}
+	return chromeBorderStyles[timeOfDay(nowHour())]
+}
+
+func (m Model) chromeTitle() lipgloss.Style {
+	if m.fx < fxFull {
+		return sTitle
+	}
+	return chromeTitleStyles[timeOfDay(nowHour())]
+}
+
+// applyAmbientSky paints the day-cycle's sky accent into the row closest to
+// the canopy, lowest priority (never overwrites a QUESTION/BLOCKED marker or
+// the fairy — the hard priority order is ◆/⚠ > fairy > ambient). morning's
+// dew is sparse dots across the row; day/evening place a sun at the right/
+// left edge; night places a moon plus two drifting fireflies.
+func applyAmbientSky(hour int, tick uint64, skyGrid *sceneGrid) {
+	width := len(skyGrid.chars)
+	if width == 0 {
+		return
+	}
+	switch timeOfDay(hour) {
+	case 0: // morning: sparse dew dots
+		for x := 0; x < width; x++ {
+			if x%7 == 0 && !skyGrid.occupied(x) {
+				skyGrid.set(x, '·', sDew)
+			}
+		}
+	case 1: // day: sun top-right
+		if x := width - 1; !skyGrid.occupied(x) {
+			skyGrid.set(x, '☼', sSun)
+		}
+	case 2: // evening: sun low-left
+		if !skyGrid.occupied(0) {
+			skyGrid.set(0, '☼', sSun)
+		}
+	case 3: // night: moon top-right + two drifting fireflies
+		if x := width - 1; !skyGrid.occupied(x) {
+			skyGrid.set(x, '☾', sMoon)
+		}
+		span := fireflySpan
+		if span > width {
+			span = width
+		}
+		if span > 0 {
+			if x := fireflyPos(tick, span); !skyGrid.occupied(x) {
+				skyGrid.set(x, fireflyRune, sSceneFly)
+			}
+			if x := fireflyPos(tick+7, span); !skyGrid.occupied(x) {
+				skyGrid.set(x, fireflyRune, sSceneFly)
+			}
+		}
+	}
+}
+
 // scenePlot is one tile of the landscape: either an orchard tile (a done
 // tree, ticket-less when condensed) or a live task's plant.
 type scenePlot struct {
@@ -156,7 +285,7 @@ func buildOrchardPlots(events []state.Event) []scenePlot {
 // buildTaskPlot renders one active task's plant. Priority mirrors the S1
 // table: dead > merged PR > setup > the age-bucketed growth stage, with
 // QUESTION/BLOCKED/idle overlaying a marker or style on that stage glyph.
-func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebrations map[string]int) scenePlot {
+func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebrations map[string]int, pal scenePalette) scenePlot {
 	tl := ticketLabel(t.Ticket)
 	label := t.Label()
 
@@ -170,7 +299,7 @@ func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebr
 	}
 
 	canopy, trunk := plantStage(time.Since(t.Created))
-	p := scenePlot{ticket: t.Ticket, canopy: canopy, trunk: trunk, style: sWorking}
+	p := scenePlot{ticket: t.Ticket, canopy: canopy, trunk: trunk, style: pal.canopy}
 
 	switch label {
 	case "QUESTION":
@@ -343,7 +472,7 @@ func clampCol(c, lo, hi int) int {
 // overlay ever touches them) and the trunk/sky rows as sceneGrids — S2's
 // cast overlays (pawn/queen/walk-off/fairy) mutate those grids before the
 // caller stringifies them.
-func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, soil, label string, trunkGrid, skyGrid *sceneGrid) {
+func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgloss.Style) (canopy, soil, label string, trunkGrid, skyGrid *sceneGrid) {
 	width := len(layouts) * pw
 	trunkGrid = newSceneGrid(width)
 	skyGrid = newSceneGrid(width)
@@ -364,7 +493,7 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, soil, 
 			skyGrid.set(col+l.pos, []rune(l.plot.marker)[0], l.plot.markerSt)
 		}
 
-		sb.WriteString(sChrome.Render(strings.Repeat("▁", pw)))
+		sb.WriteString(soilStyle.Render(strings.Repeat("▁", pw)))
 
 		lbl := trunc(l.plot.label, pw-1)
 		lPad := pw - len([]rune(lbl))
@@ -517,7 +646,9 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 		if !skyGrid.occupied(trail) {
 			skyGrid.set(trail, fairyTrailRune(tick), sDim)
 		}
-		skyGrid.set(center+fairyOffset(tick), '✧', sDelivery)
+		if fairyCol := center + fairyOffset(tick); !skyGrid.occupied(fairyCol) {
+			skyGrid.set(fairyCol, '✧', sDelivery)
+		}
 	}
 }
 
@@ -540,9 +671,11 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 		return blank()
 	}
 
+	pal := scenePalettes[timeOfDay(hour)]
+
 	plots := buildOrchardPlots(events)
 	for _, t := range tasks {
-		plots = append(plots, buildTaskPlot(t, prs[t.Ticket], fx, tick, celebrations))
+		plots = append(plots, buildTaskPlot(t, prs[t.Ticket], fx, tick, celebrations, pal))
 	}
 
 	if len(plots) == 0 {
@@ -551,7 +684,7 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 		for i := range out {
 			out[i] = strings.Repeat(" ", width)
 		}
-		out[rows-1] = truncPad(sChrome.Render(strings.Repeat("▁", width)), width)
+		out[rows-1] = truncPad(pal.soil.Render(strings.Repeat("▁", width)), width)
 		if timeOfDay(hour) == 3 {
 			out[0] = truncPad(fireflyTrail(tick), width)
 		}
@@ -571,7 +704,7 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 
 	fitted, pw := fitPlots(plots, width)
 	layouts := layoutPlots(fitted, pw)
-	canopyRow, soilRow, labelRow, trunkGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk)
+	canopyRow, soilRow, labelRow, trunkGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk, pal.soil)
 
 	ticketCol := map[string]int{}
 	col := 0
@@ -584,12 +717,17 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 	if fx >= fxFull {
 		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, hasTrunk, trunkGrid, skyGrid)
 	}
+	if topRows > 0 {
+		// S3: the day-cycle sky accent is the lowest-priority sky glyph —
+		// it never overwrites a QUESTION/BLOCKED marker or the fairy.
+		applyAmbientSky(hour, tick, skyGrid)
+	}
 	trunkRow, skyRow := trunkGrid.String(), skyGrid.String()
 
 	out := make([]string, 0, rows)
 	for i := 0; i < topRows; i++ {
 		line := strings.Repeat(" ", width)
-		if i == topRows-1 { // the sky row closest to the canopy carries markers/fairy
+		if i == topRows-1 { // the sky row closest to the canopy carries markers/fairy/sky
 			line = skyRow
 		}
 		out = append(out, truncPad(line, width))

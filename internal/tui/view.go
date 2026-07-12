@@ -51,7 +51,7 @@ func (m Model) viewHeader() string {
 	if m.label != "" {
 		scope = "· " + m.label
 	}
-	left := sTitle.Render(" ⁂ GROVE ") + sChrome.Render(scope)
+	left := m.chromeTitle().Render(" ⁂ GROVE ") + sChrome.Render(scope)
 	counts := fmt.Sprintf("%s working · %s mail · %s review ",
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
@@ -220,7 +220,7 @@ func (m Model) viewAgents() string {
 	}
 
 	body := sPanelTitleFocus.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
-	return sPanelFocus.Width(m.width - 2).Render(body)
+	return m.chromeBorder().Width(m.width - 2).Render(body)
 }
 
 // viewActivity renders the newest-first swarm history — the objective
