@@ -199,11 +199,11 @@ func (m Model) viewAlmanac() string {
 		if plots := almanacPlots(day); len(plots) > 0 {
 			fitted, pw := fitPlots(plots, w)
 			layouts := layoutPlots(fitted, pw)
-			canopyRow, soilRow, labelRow, trunkGrid, _ := renderPlotRows(layouts, pw, true, sChrome)
+			canopyRow, labelRow, trunkGrid, soilGrid, _ := renderPlotRows(layouts, pw, true, sChrome)
 			body = append(body,
 				truncPad(canopyRow, w),
 				truncPad(trunkGrid.String(), w),
-				truncPad(soilRow, w),
+				truncPad(soilGrid.String(), w),
 				truncPad(labelRow, w),
 			)
 		} else {
