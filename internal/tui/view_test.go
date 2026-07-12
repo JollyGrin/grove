@@ -47,11 +47,12 @@ func TestViewAgentsTitleHint(t *testing.T) {
 		t.Errorf("narrow pane should omit the task title hint, got:\n%s", narrow)
 	}
 
-	// At width 60 the footer legend wraps deliberately (grove-60): several
-	// real lines, each within the pane, matching footerHeight exactly.
+	// At width 60 the legend stays a single line (grove-72): low-priority
+	// hints drop instead of wrapping, matching footerHeight exactly.
 	foot := strings.Split(m.viewFooter(), "\n")
-	if len(foot) < 2 {
-		t.Errorf("width 60: footer should wrap onto multiple lines, got:\n%s", foot[0])
+	if len(foot) != 1 {
+		t.Errorf("width 60: footer should be one line, got %d:\n%s",
+			len(foot), strings.Join(foot, "\n"))
 	}
 	if len(foot) != m.footerHeight() {
 		t.Errorf("width 60: footer is %d lines, footerHeight says %d", len(foot), m.footerHeight())
