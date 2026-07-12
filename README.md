@@ -1,8 +1,10 @@
 # grove (`gv`)
 
 <img width="1892" height="963" alt="image" src="https://github.com/user-attachments/assets/e744695c-b6b9-44f6-afed-2905afa0e59f" />
-(The chats are orchestrators, not workers. Orchestrators dispatch, review, and manage a fleet of workers based off your task list, and update your task list in real time)
 
+_The chats are orchestrators, not workers. Orchestrators dispatch, review, and manage a fleet of workers based off your task list, and update your task list in real time_
+
+---
 
 A repo-agnostic orchestrator for autonomous Claude Code sessions: drop it
 into any repo (or a parent folder of repos), let the wizard wire it up, and
