@@ -418,7 +418,7 @@ func TestApplyCastPawnQueenOpposite(t *testing.T) {
 	skyGrid := newSceneGrid(plotW)
 	ticketCol := map[string]int{"grove-1": 0}
 
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "grove-1", true, trunkGrid, skyGrid)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "grove-1", true, trunkGrid, newSceneGrid(plotW), skyGrid)
 
 	row := trunkGrid.String()
 	if !strings.Contains(row, "♟") {
@@ -445,9 +445,9 @@ func TestApplyCastWalkOffPawnOffsetsRight(t *testing.T) {
 	ticketCol := map[string]int{"grove-1": 0}
 
 	early := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): walkTicks}, 0, "", true, early, newSceneGrid(plotW))
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): walkTicks}, 0, "", true, early, newSceneGrid(plotW), newSceneGrid(plotW))
 	late := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): 1}, 0, "", true, late, newSceneGrid(plotW))
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): 1}, 0, "", true, late, newSceneGrid(plotW), newSceneGrid(plotW))
 
 	earlyCol, lateCol := -1, -1
 	for i, ch := range early.chars {
@@ -476,14 +476,14 @@ func TestApplyCastFairyRecencyWindow(t *testing.T) {
 
 	fresh := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-5 * time.Second)}}
 	skyFresh := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, fresh, map[string]int{}, 0, "", false, newSceneGrid(plotW), skyFresh)
+	applyCast(layouts, ticketCol, plotW, tasks, fresh, map[string]int{}, 0, "", false, newSceneGrid(plotW), newSceneGrid(plotW), skyFresh)
 	if !strings.Contains(skyFresh.String(), "✧") {
 		t.Errorf("a recent answer should summon the fairy, got %q", skyFresh.String())
 	}
 
 	stale := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-time.Minute)}}
 	skyStale := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, stale, map[string]int{}, 0, "", false, newSceneGrid(plotW), skyStale)
+	applyCast(layouts, ticketCol, plotW, tasks, stale, map[string]int{}, 0, "", false, newSceneGrid(plotW), newSceneGrid(plotW), skyStale)
 	if strings.Contains(skyStale.String(), "✧") {
 		t.Errorf("an answer older than 45s must not summon the fairy, got %q", skyStale.String())
 	}
@@ -620,5 +620,184 @@ func TestViewIncludesSceneAtCalmPlus(t *testing.T) {
 	after := m2.View()
 	if before != after {
 		t.Error("fxOff render should be deterministic/unaffected by scene wiring")
+	}
+}
+
+// --- grove-66: life raises the floor, strip tier falls back to soil ---
+
+func TestRowBudgetsRaisesFloorForLife(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 25
+	m.fx = fxFull
+	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	for i := 0; i < 200; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+	}
+	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	if leftover < 10 {
+		t.Fatalf("test setup: leftover=%d, need >=10 for the floor raise to be eligible", leftover)
+	}
+	if len(feedItems(m.events)) <= leftover {
+		t.Fatalf("test setup: feed must be busier than leftover")
+	}
+
+	activityRows, sceneRows := m.rowBudgets()
+	if sceneRows != 6 {
+		t.Fatalf("a working agent should raise the floor to compact tier (6), got sceneRows=%d (leftover=%d)", sceneRows, leftover)
+	}
+	if activityRows < 4 {
+		t.Errorf("ACTIVITY should keep its own floor of >=4 rows, got %d", activityRows)
+	}
+
+	lines := sceneLines(m.tasks, nil, m.events, m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
+	if !strings.Contains(strings.Join(lines, "\n"), "♟") {
+		t.Errorf("compact-tier scene with a working agent should show the pawn on the trunk row")
+	}
+}
+
+func TestRowBudgetsBusyFeedNoLifeStaysStrip(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 25
+	m.fx = fxFull
+	for i := 0; i < 200; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+	}
+	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	if leftover < 10 {
+		t.Fatalf("test setup: leftover=%d, need >=10 to prove the floor stays put without life", leftover)
+	}
+
+	_, sceneRows := m.rowBudgets()
+	if sceneRows != 3 {
+		t.Errorf("no working agent/queen/fairy: floor should stay at strip (3), got %d", sceneRows)
+	}
+	if sceneTierFor(sceneRows) != sceneStrip {
+		t.Errorf("expected strip tier, got %v", sceneTierFor(sceneRows))
+	}
+}
+
+func TestRowBudgetsFloorNotRaisedAtCalm(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 25
+	m.fx = fxCalm
+	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	for i := 0; i < 200; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+	}
+	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	if leftover < 10 {
+		t.Fatalf("test setup: leftover=%d, need >=10 to prove fxCalm doesn't raise the floor", leftover)
+	}
+
+	_, sceneRows := m.rowBudgets()
+	if sceneRows != 3 {
+		t.Errorf("floor-raising is fxFull-only; fxCalm should keep the strip floor (3), got %d", sceneRows)
+	}
+}
+
+func TestApplyCastStripFallbackPawnBesideTrunkBase(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking}}
+	plots := []scenePlot{{ticket: "grove-1", canopy: "∆"}}
+	layouts := layoutPlots(plots, plotW)
+	ticketCol := map[string]int{"grove-1": 0}
+
+	trunkGrid := newSceneGrid(plotW)
+	soilGrid := newSceneGrid(plotW)
+	skyGrid := newSceneGrid(plotW)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "", false, trunkGrid, soilGrid, skyGrid)
+
+	if strings.Contains(trunkGrid.String(), "♟") {
+		t.Errorf("strip tier has no trunk row; the fallback pawn must not land there, got %q", trunkGrid.String())
+	}
+	pawnCol := -1
+	for i, ch := range soilGrid.chars {
+		if ch == '♟' {
+			pawnCol = i
+		}
+	}
+	if pawnCol < 0 {
+		t.Fatalf("expected the strip-tier fallback pawn on the soil row, got %q", soilGrid.String())
+	}
+	wantCol := clampCol(layouts[0].pos+pawnSide("grove-1", 0), 0, plotW-1)
+	if pawnCol != wantCol {
+		t.Errorf("fallback pawn at soil col %d, want %d (one cell beside the trunk base)", pawnCol, wantCol)
+	}
+}
+
+func TestForcedStripTierRendersPawnOnSoil(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 20
+	m.fx = fxFull
+	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	for i := 0; i < 50; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+	}
+	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	if leftover < 0 || leftover >= 10 {
+		t.Fatalf("test setup: leftover=%d, need [0,10) to force strip tier despite life", leftover)
+	}
+
+	_, sceneRows := m.rowBudgets()
+	if sceneRows == 0 || sceneTierFor(sceneRows) != sceneStrip {
+		t.Fatalf("test setup: sceneRows=%d is tier %v, want a nonzero strip tier", sceneRows, sceneTierFor(sceneRows))
+	}
+
+	lines := sceneLines(m.tasks, nil, m.events, m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "♟") {
+		t.Fatalf("forced strip tier with a working agent should fall back to a pawn on the soil row, got:\n%s", joined)
+	}
+	soilRow := lines[len(lines)-2] // strip tier: [..sky..] canopy, soil, label
+	if !strings.Contains(soilRow, "♟") {
+		t.Errorf("fallback pawn should land on the soil row (second-to-last line), got %q", soilRow)
+	}
+	trunkless := lines[:len(lines)-2]
+	for _, l := range trunkless {
+		if strings.Contains(l, "♟") {
+			t.Errorf("strip tier has no trunk row; pawn must not appear above the soil row, got %q", l)
+		}
+	}
+}
+
+func TestSceneHeightDisciplineMatrix(t *testing.T) {
+	heights := []int{16, 20, 25, 40, 60}
+	fxLevels := []fxLevel{fxOff, fxCalm, fxFull}
+	eventCounts := []int{0, 200}
+
+	for _, h := range heights {
+		for _, fx := range fxLevels {
+			for _, ec := range eventCounts {
+				m := fixtureModel(t)
+				m.height = h
+				m.fx = fx
+				m.events = nil
+				for i := 0; i < ec; i++ {
+					m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+				}
+				out := m.View()
+				if got := lipgloss.Height(out); got > m.height {
+					t.Errorf("height=%d fx=%v events=%d: render is %d lines, want <=%d", h, fx, ec, got, m.height)
+				}
+				for _, l := range strings.Split(out, "\n") {
+					if w := lipgloss.Width(l); w > m.width {
+						t.Errorf("height=%d fx=%v events=%d: line %q is %d cells wide, want <=%d", h, fx, ec, l, w, m.width)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestRowBudgetsOffStaysZeroWithLife(t *testing.T) {
+	m := New(nil, "", "")
+	m.width, m.height = 120, 25
+	m.fx = fxOff
+	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	for i := 0; i < 200; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
+	}
+	_, sceneRows := m.rowBudgets()
+	if sceneRows != 0 {
+		t.Errorf("fxOff must never yield scene rows even with a working agent, got %d", sceneRows)
 	}
 }

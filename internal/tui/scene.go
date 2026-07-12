@@ -468,16 +468,19 @@ func clampCol(c, lo, hi int) int {
 	return c
 }
 
-// renderPlotRows lays out the canopy/soil/label rows as plain strings (no
-// overlay ever touches them) and the trunk/sky rows as sceneGrids — S2's
-// cast overlays (pawn/queen/walk-off/fairy) mutate those grids before the
-// caller stringifies them.
-func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgloss.Style) (canopy, soil, label string, trunkGrid, skyGrid *sceneGrid) {
+// renderPlotRows lays out the canopy/label rows as plain strings (no overlay
+// ever touches them) and the trunk/soil/sky rows as sceneGrids — S2's cast
+// overlays (pawn/queen/walk-off/fairy) mutate those grids before the caller
+// stringifies them. soilGrid starts as the plain "▁" row per plot; the
+// strip-tier fallback (grove-66) overlays pawn/queen there when there's no
+// trunk row to put them on.
+func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgloss.Style) (canopy, label string, trunkGrid, soilGrid, skyGrid *sceneGrid) {
 	width := len(layouts) * pw
 	trunkGrid = newSceneGrid(width)
+	soilGrid = newSceneGrid(width)
 	skyGrid = newSceneGrid(width)
 
-	var cb, sb, lb strings.Builder
+	var cb, lb strings.Builder
 	col := 0
 	for _, l := range layouts {
 		right := pw - l.left - len([]rune(l.cluster))
@@ -493,7 +496,9 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgl
 			skyGrid.set(col+l.pos, []rune(l.plot.marker)[0], l.plot.markerSt)
 		}
 
-		sb.WriteString(soilStyle.Render(strings.Repeat("▁", pw)))
+		for x := 0; x < pw; x++ {
+			soilGrid.set(col+x, '▁', soilStyle)
+		}
 
 		lbl := trunc(l.plot.label, pw-1)
 		lPad := pw - len([]rune(lbl))
@@ -506,7 +511,7 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgl
 
 		col += pw
 	}
-	return cb.String(), sb.String(), lb.String(), trunkGrid, skyGrid
+	return cb.String(), lb.String(), trunkGrid, soilGrid, skyGrid
 }
 
 // --- S2: the cast (fxFull only) ---
@@ -592,43 +597,53 @@ func findLayout(layouts []plotLayout, ticket string) (plotLayout, bool) {
 }
 
 // applyCast overlays the pawn(s), the queen, walk-off pawns, and the fairy
-// onto the trunk/sky grids — fxFull only, purely derived from tasks/events/
-// celebrations/focused, no new state beyond the existing capped map.
-func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, hasTrunk bool, trunkGrid, skyGrid *sceneGrid) {
+// onto the trunk/soil/sky grids — fxFull only, purely derived from tasks/
+// events/celebrations/focused, no new state beyond the existing capped map.
+// At strip tier (hasTrunk false) there's no trunk row, so pawn/queen fall
+// back to the soil row beside the tree base (grove-66) instead of being
+// silently dropped; the fairy stays sky-only either way.
+func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, hasTrunk bool, trunkGrid, soilGrid, skyGrid *sceneGrid) {
+	castGrid := soilGrid
 	if hasTrunk {
-		for _, t := range tasks {
-			if t.Agent != state.AgentWorking {
-				continue
-			}
-			l, ok := findLayout(layouts, t.Ticket)
-			if !ok {
-				continue
-			}
-			c := ticketCol[t.Ticket]
-			pos := clampCol(c+l.pos+pawnSide(t.Ticket, tick), c, c+pw-1)
-			trunkGrid.set(pos, '♟', sWorking)
-		}
+		castGrid = trunkGrid
+	}
 
-		for _, t := range tasks {
-			remaining, ok := celebrations[walkKey(t.Ticket)]
-			if !ok {
-				continue
-			}
-			l, ok := findLayout(layouts, t.Ticket)
-			if !ok {
-				continue
-			}
-			c := ticketCol[t.Ticket]
-			pos := clampCol(c+l.pos+(walkTicks-remaining), c, c+pw-1)
-			trunkGrid.set(pos, '♟', sIdle)
+	for _, t := range tasks {
+		if t.Agent != state.AgentWorking {
+			continue
 		}
+		l, ok := findLayout(layouts, t.Ticket)
+		if !ok {
+			continue
+		}
+		c := ticketCol[t.Ticket]
+		pos := clampCol(c+l.pos+pawnSide(t.Ticket, tick), c, c+pw-1)
+		castGrid.set(pos, '♟', sWorking)
+	}
 
-		if focused != "" {
-			if l, ok := findLayout(layouts, focused); ok {
-				c := ticketCol[focused]
-				pos := clampCol(c+l.pos-pawnSide(focused, tick), c, c+pw-1)
-				trunkGrid.set(pos, '♛', sWaiting)
-			}
+	for _, t := range tasks {
+		remaining, ok := celebrations[walkKey(t.Ticket)]
+		if !ok {
+			continue
+		}
+		l, ok := findLayout(layouts, t.Ticket)
+		if !ok {
+			continue
+		}
+		c := ticketCol[t.Ticket]
+		offset := walkTicks - remaining
+		if !hasTrunk {
+			offset = 1
+		}
+		pos := clampCol(c+l.pos+offset, c, c+pw-1)
+		castGrid.set(pos, '♟', sIdle)
+	}
+
+	if focused != "" {
+		if l, ok := findLayout(layouts, focused); ok {
+			c := ticketCol[focused]
+			pos := clampCol(c+l.pos-pawnSide(focused, tick), c, c+pw-1)
+			castGrid.set(pos, '♛', sWaiting)
 		}
 	}
 
@@ -704,7 +719,7 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 
 	fitted, pw := fitPlots(plots, width)
 	layouts := layoutPlots(fitted, pw)
-	canopyRow, soilRow, labelRow, trunkGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk, pal.soil)
+	canopyRow, labelRow, trunkGrid, soilGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk, pal.soil)
 
 	ticketCol := map[string]int{}
 	col := 0
@@ -715,14 +730,14 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 		col += pw
 	}
 	if fx >= fxFull {
-		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, hasTrunk, trunkGrid, skyGrid)
+		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, hasTrunk, trunkGrid, soilGrid, skyGrid)
 	}
 	if topRows > 0 {
 		// S3: the day-cycle sky accent is the lowest-priority sky glyph —
 		// it never overwrites a QUESTION/BLOCKED marker or the fairy.
 		applyAmbientSky(hour, tick, skyGrid)
 	}
-	trunkRow, skyRow := trunkGrid.String(), skyGrid.String()
+	trunkRow, soilRow, skyRow := trunkGrid.String(), soilGrid.String(), skyGrid.String()
 
 	out := make([]string, 0, rows)
 	for i := 0; i < topRows; i++ {
@@ -741,10 +756,40 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 	return out
 }
 
+// sceneHasLife reports whether the cast has anything to show right now: a
+// working-agent pawn, a live walk-off pawn, a queen (focused task), or a
+// fairy inside its answer window (grove-66). rowBudgets uses this to decide
+// whether the scene's floor is worth raising above strip tier — no life
+// means the trunk row would sit empty anyway.
+func sceneHasLife(tasks []*state.Task, events []state.Event, celebrations map[string]int, focused string) bool {
+	for _, t := range tasks {
+		if t.Agent == state.AgentWorking {
+			return true
+		}
+		if _, ok := celebrations[walkKey(t.Ticket)]; ok {
+			return true
+		}
+	}
+	if focused != "" {
+		return true
+	}
+	now := time.Now()
+	for _, at := range latestAnswered(events) {
+		if now.Sub(at) < fairyWindow && now.Sub(at) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // rowBudgets splits the leftover height between ACTIVITY and the scene. At
 // fxOff it is byte-identical to the pre-scene sizing (sceneRows always 0);
 // at fxCalm+ the scene takes what the feed doesn't need, yielding to the
-// feed down to 0 rather than forcing a strip that doesn't fit.
+// feed down to 0 rather than forcing a strip that doesn't fit. grove-66:
+// when the cast has life to show (fxFull only — the cast itself is
+// fxFull-gated), the floor rises from strip (3) to compact (6) so the
+// trunk row exists, as long as ACTIVITY can still keep its own 4-row floor
+// (leftover >= 10). No life, or fxCalm, leaves the floor at strip.
 func (m Model) rowBudgets() (activityRows, sceneRows int) {
 	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
 	if leftover < 0 {
@@ -759,10 +804,15 @@ func (m Model) rowBudgets() (activityRows, sceneRows int) {
 		return activityRows, 0
 	}
 	sceneRows = leftover - activityRows
-	if sceneRows < 3 && leftover >= 7 {
-		sceneRows = 3
+
+	floor := 3
+	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.tasks, m.events, m.celebrations, m.focused) {
+		floor = 6
 	}
-	if sceneRows < 3 {
+	if sceneRows < floor && leftover >= floor+4 {
+		sceneRows = floor
+	}
+	if sceneRows < floor {
 		sceneRows = 0
 	}
 	activityRows = leftover - sceneRows
