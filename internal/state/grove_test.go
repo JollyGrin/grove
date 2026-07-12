@@ -10,18 +10,28 @@ func TestGlyph(t *testing.T) {
 	cases := []struct {
 		agent, sentinel, want string
 	}{
+		{AgentSetup, "", "◌"},
+		{AgentWorking, "", "●"},
 		{AgentWaiting, "question", "⏸"},
-		{AgentBlocked, "blocked", "⏸"},
-		{AgentDead, "", "✗"},
+		{AgentBlocked, "blocked", "⚠"},
+		{AgentBlocked, "done", "⚠"}, // sentinel never overrides a blocked agent
 		{AgentIdle, "done", "✔"},
 		{AgentIdle, "none", "✗"},
-		{AgentWorking, "", "●"},
-		{AgentSetup, "", "●"},
+		{AgentIdle, "", "✗"},
+		{AgentDead, "", "✗"},
 	}
 	for _, tc := range cases {
 		if got := Glyph(tc.agent, tc.sentinel); got != tc.want {
 			t.Errorf("Glyph(%q, %q) = %q, want %q", tc.agent, tc.sentinel, got, tc.want)
 		}
+	}
+
+	// The two collisions grove-47 splits must stay split.
+	if Glyph(AgentSetup, "") == Glyph(AgentWorking, "") {
+		t.Error("setup and working must map to distinct glyphs")
+	}
+	if Glyph(AgentBlocked, "") == Glyph(AgentWaiting, "") {
+		t.Error("blocked and waiting must map to distinct glyphs")
 	}
 }
 

@@ -255,23 +255,30 @@ func (t *Task) Label() string {
 
 // Glyph is the one-rune live-status marker pushed into a worker's tmux
 // window name so `Ctrl-b w` reads as a fleet board (grove-29 P3). It mirrors
-// Label's actionability buckets:
+// Label's actionability buckets; the setup/blocked runes are shared with the
+// cockpit AGENTS list (grove-47) so both surfaces read as one vocabulary:
 //
+//	◌ booting     setup, spinning up
+//	● live        actively working
 //	⏸ needs you   waiting on a question / plan approval
+//	⚠ blocked     BLOCKED sentinel, needs a decision
 //	✔ done        agent reports done (PR likely following)
 //	✗ stalled     dead/crashed, or idle with no STATUS sentinel
-//	● live        setup or actively working
 func Glyph(agent, sentinel string) string {
 	switch {
-	case agent == AgentWaiting || agent == AgentBlocked:
+	case agent == AgentWaiting:
 		return "⏸"
+	case agent == AgentBlocked:
+		return "⚠"
 	case agent == AgentDead:
 		return "✗"
 	case agent == AgentIdle && sentinel == "done":
 		return "✔"
 	case agent == AgentIdle:
 		return "✗"
-	default: // setup, working
+	case agent == AgentSetup:
+		return "◌"
+	default: // working
 		return "●"
 	}
 }
