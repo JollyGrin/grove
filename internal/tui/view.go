@@ -23,6 +23,9 @@ func (m Model) View() string {
 	if m.mode == modeProfilePick {
 		return m.viewProfilePick()
 	}
+	if m.mode == modeHelp {
+		return m.viewHelp()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
@@ -215,8 +218,11 @@ func (m Model) viewActivity() string {
 	w := m.width - 4
 	items := feedItems(m.events)
 
-	// Fill the space between the agents panel and the footer.
-	avail := m.height - (len(m.tasks) + 4) - 6
+	// Fill the space between the agents panel and the footer. The footer may
+	// wrap onto several real lines (grove-60) — ACTIVITY yields exactly that
+	// many rows, or the total render exceeds m.height and scrolls the
+	// alt-screen. 5 = header + this panel's borders/title + one spare.
+	avail := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
 	if avail < 3 {
 		avail = 3
 	}
@@ -258,30 +264,10 @@ func (m Model) viewActivity() string {
 }
 
 func (m Model) viewFooter() string {
-	keys := []string{
-		sKey.Render("O") + sFoot.Render(" new chat"),
-		sKey.Render(")") + sFoot.Render(" profiled chat"),
-		sKey.Render("enter") + sFoot.Render(" reply"),
-		sKey.Render("a") + sFoot.Render(" attach"),
-		sKey.Render("o") + sFoot.Render(" preview"),
-		sKey.Render("p") + sFoot.Render(" PR"),
-		sKey.Render("t") + sFoot.Render(" task"),
-		sKey.Render("v") + sFoot.Render(" reviewing"),
-		sKey.Render("n") + sFoot.Render(" nudge"),
-		sKey.Render("d") + sFoot.Render(" done"),
-		sKey.Render("X") + sFoot.Render(" park"),
-		sKey.Render("$") + sFoot.Render(" costs"),
-		sKey.Render("*") + sFoot.Render(" effects"),
-		sKey.Render("L") + sFoot.Render(" layout"),
-		sKey.Render("q") + sFoot.Render(" quit"),
-	}
-	line := " " + strings.Join(keys, sDim.Render(" · "))
-	if m.flash != "" {
-		line += "   " + sChrome.Render(trunc(m.flash, m.width-lipgloss.Width(line)-4))
-	}
 	if m.mode == modeConfirmDone && m.detail != nil {
-		line = " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
+		line := " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+		return truncPad(line, m.width)
 	}
 	if m.mode == modeConfirmClose {
 		// Spell out exactly what park does: which session dies, that N
@@ -289,10 +275,20 @@ func (m Model) viewFooter() string {
 		// and how to bring it back (grove-33).
 		prompt := fmt.Sprintf("park %s? stops %d worker(s) + orchestrator + cockpit · state saved on disk · resume: gv, then gv adopt <ticket> ",
 			m.sessionName(), len(m.tasks))
-		line = " " + sBlocked.Render(prompt) +
+		line := " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+		return truncPad(line, m.width)
 	}
-	return line
+	// The grouped legend, deliberately wrapped (grove-60) — footerHeight
+	// mirrors this exactly, so the flash may only ride an existing line.
+	lines := footerLines(m.width, len(m.tasks) > 0)
+	if m.flash != "" {
+		last := len(lines) - 1
+		if room := m.width - lipgloss.Width(lines[last]) - 4; room > 1 {
+			lines[last] += "   " + sChrome.Render(trunc(m.flash, room))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) viewDetail() string {
