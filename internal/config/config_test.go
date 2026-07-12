@@ -484,3 +484,49 @@ func TestResolveOrchestratorProfile(t *testing.T) {
 		t.Errorf("default over single: got (%q, _, %d), want (\"openrouter-glm\", _, ProfileSpawn)", name, act)
 	}
 }
+
+func TestCockpitLayout(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty defaults to horizontal", "", "horizontal"},
+		{"horizontal", "horizontal", "horizontal"},
+		{"vertical", "vertical", "vertical"},
+		{"tiled", "tiled", "tiled"},
+		{"garbage falls back to horizontal", "sideways", "horizontal"},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Cockpit.Layout = tc.in
+		if got := c.CockpitLayout(); got != tc.want {
+			t.Errorf("%s: CockpitLayout() with %q = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+
+	// A workspace-layer cockpit.layout merges over the global one (cockpit
+	// merges field-wise: layout wins per-key, sibling effects inherited).
+	setHome(t)
+	writeGlobal(t, `
+cockpit:
+  effects: calm
+  layout: tiled
+`)
+	root := newWorkspace(t, `
+workspace:
+  label: grid
+cockpit:
+  layout: vertical
+`)
+	c, err := LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.CockpitLayout(); got != "vertical" {
+		t.Errorf("workspace cockpit.layout = %q, want vertical (workspace wins)", got)
+	}
+	if c.Cockpit.Effects != "calm" {
+		t.Errorf("cockpit.effects = %q, want calm inherited from global", c.Cockpit.Effects)
+	}
+}

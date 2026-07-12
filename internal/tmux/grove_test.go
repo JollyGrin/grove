@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestTmuxLayout(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"horizontal", "horizontal", "even-horizontal"},
+		{"vertical", "vertical", "main-vertical"},
+		{"tiled", "tiled", "tiled"},
+		{"empty falls back to default", "", "even-horizontal"},
+		{"garbage falls back to default", "garbage", "even-horizontal"},
+	}
+	for _, tc := range cases {
+		if got := tmuxLayout(tc.in); got != tc.want {
+			t.Errorf("%s: tmuxLayout(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+	// The package default must itself map to the side-by-side shape.
+	if got := tmuxLayout(defaultCockpitLayout); got != "even-horizontal" {
+		t.Errorf("tmuxLayout(defaultCockpitLayout) = %q, want even-horizontal", got)
+	}
+}
+
 func TestWorkerWindow(t *testing.T) {
 	cases := []struct {
 		name      string

@@ -369,6 +369,18 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
+	case "L": // cycle cockpit pane orientation (grove-52) — persisted in the
+		// session option @grove_layout, which is the source of truth (read
+		// live: a Model copy would go stale across dash reconnects).
+		session := m.sessionName()
+		cur := tmux.CockpitLayout(session)
+		if cur == "" && m.cfg != nil {
+			cur = m.cfg.CockpitLayout()
+		}
+		next := nextLayout(cur)
+		_ = tmux.SetCockpitLayout(session, next)
+		_ = tmux.SelectLayout(session, next)
+		m.flash = "layout: " + next
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"

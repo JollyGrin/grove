@@ -432,6 +432,11 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SelectWindow(cockpitWin); err != nil {
 		return err
 	}
+	// Seed the session's layout option from config before the first spawn,
+	// so SpawnPane's re-tile already honors it (grove-52).
+	if err := tmux.SetCockpitLayout(session, cfg.CockpitLayout()); err != nil {
+		return err
+	}
 	// Name the outer terminal tab after the workspace so several cockpits
 	// in separate tabs are tellable apart. Session-scoped: won't leak into
 	// worker windows or unrelated tmux sessions.
@@ -450,7 +455,7 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
 		return err
 	}
-	if err := tmux.MainVertical(session, 55); err != nil {
+	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
 		return err
 	}
 	// Mark the cockpit built so a later `gv` (openCockpit) attaches instead
