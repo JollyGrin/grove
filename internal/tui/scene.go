@@ -291,10 +291,65 @@ func layoutPlots(plots []scenePlot, pw int) []plotLayout {
 	return out
 }
 
-// renderPlotRows lays out the canopy/trunk/soil/label rows across the fitted
-// plots. trunk is emitted only when the tier calls for it (compact/full).
-func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, trunk, soil, label string) {
-	var cb, tb, sb, lb strings.Builder
+// sceneGrid is a rune-per-column canvas with per-column styling — used for
+// the trunk and sky rows, the only two that need cell-granular overlay
+// (pawn/queen/walk-off/fairy on top of the base trunk glyph or marker).
+type sceneGrid struct {
+	chars  []rune
+	styles []lipgloss.Style
+}
+
+func newSceneGrid(width int) *sceneGrid {
+	g := &sceneGrid{chars: make([]rune, width), styles: make([]lipgloss.Style, width)}
+	for i := range g.chars {
+		g.chars[i] = ' '
+	}
+	return g
+}
+
+func (g *sceneGrid) occupied(col int) bool {
+	return col >= 0 && col < len(g.chars) && g.chars[col] != ' '
+}
+
+func (g *sceneGrid) set(col int, ch rune, st lipgloss.Style) {
+	if col < 0 || col >= len(g.chars) {
+		return
+	}
+	g.chars[col] = ch
+	g.styles[col] = st
+}
+
+func (g *sceneGrid) String() string {
+	var b strings.Builder
+	for i, ch := range g.chars {
+		b.WriteString(g.styles[i].Render(string(ch)))
+	}
+	return b.String()
+}
+
+// clampCol keeps a cast member's column inside its own plot's cell — a pawn
+// or queen never wanders into the neighboring plot.
+func clampCol(c, lo, hi int) int {
+	if c < lo {
+		return lo
+	}
+	if c > hi {
+		return hi
+	}
+	return c
+}
+
+// renderPlotRows lays out the canopy/soil/label rows as plain strings (no
+// overlay ever touches them) and the trunk/sky rows as sceneGrids — S2's
+// cast overlays (pawn/queen/walk-off/fairy) mutate those grids before the
+// caller stringifies them.
+func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, soil, label string, trunkGrid, skyGrid *sceneGrid) {
+	width := len(layouts) * pw
+	trunkGrid = newSceneGrid(width)
+	skyGrid = newSceneGrid(width)
+
+	var cb, sb, lb strings.Builder
+	col := 0
 	for _, l := range layouts {
 		right := pw - l.left - len([]rune(l.cluster))
 		if right < 0 {
@@ -302,16 +357,11 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, trunk,
 		}
 		cb.WriteString(l.plot.style.Render(strings.Repeat(" ", l.left) + l.cluster + strings.Repeat(" ", right)))
 
-		if hasTrunk {
-			if l.plot.trunk == "" {
-				tb.WriteString(strings.Repeat(" ", pw))
-			} else {
-				trailing := pw - l.pos - 1
-				if trailing < 0 {
-					trailing = 0
-				}
-				tb.WriteString(strings.Repeat(" ", l.pos) + l.plot.style.Render(l.plot.trunk) + strings.Repeat(" ", trailing))
-			}
+		if hasTrunk && l.plot.trunk != "" {
+			trunkGrid.set(col+l.pos, []rune(l.plot.trunk)[0], l.plot.style)
+		}
+		if l.plot.marker != "" {
+			skyGrid.set(col+l.pos, []rune(l.plot.marker)[0], l.plot.markerSt)
 		}
 
 		sb.WriteString(sChrome.Render(strings.Repeat("▁", pw)))
@@ -324,34 +374,158 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool) (canopy, trunk,
 		lLeft := lPad / 2
 		lRight := lPad - lLeft
 		lb.WriteString(sChrome.Render(strings.Repeat(" ", lLeft) + lbl + strings.Repeat(" ", lRight)))
+
+		col += pw
 	}
-	return cb.String(), tb.String(), sb.String(), lb.String()
+	return cb.String(), sb.String(), lb.String(), trunkGrid, skyGrid
 }
 
-// renderSkyRow is the single row immediately above the canopy — the only
-// place QUESTION/BLOCKED markers (and, from S2/S3 on, the fairy/sky glyphs)
-// render. Priority when a cell wants more than one: marker wins.
-func renderSkyRow(layouts []plotLayout, pw int) string {
-	var b strings.Builder
+// --- S2: the cast (fxFull only) ---
+
+// walkTicks is how long a pawn lingers, walking off its now-idle plot, after
+// its task leaves AgentWorking.
+const walkTicks = 8
+
+// walkKey namespaces a walk-off in the celebrations map so it can never
+// collide with a J1 merge-sparkle entry (bare ticket) or a J5 knock ("?"
+// prefix).
+func walkKey(ticket string) string { return "w" + ticket }
+
+// walkedOff returns tickets whose Agent flipped away from AgentWorking
+// between the prior and fresh task snapshots — still present, just no
+// longer working. Same diff-in-Update shape as J5's freshQuestions.
+func walkedOff(prev, next []*state.Task) []string {
+	wasWorking := map[string]bool{}
+	for _, t := range prev {
+		if t.Agent == state.AgentWorking {
+			wasWorking[t.Ticket] = true
+		}
+	}
+	var out []string
+	for _, t := range next {
+		if wasWorking[t.Ticket] && t.Agent != state.AgentWorking {
+			out = append(out, t.Ticket)
+		}
+	}
+	return out
+}
+
+// pawnSide alternates a worker's pawn every 4 ticks: -1 left, +1 right.
+// hashTicket fixes the starting side so two agents rarely mirror each other.
+func pawnSide(ticket string, tick uint64) int {
+	if (tick/4+hashTicket(ticket))%2 == 0 {
+		return -1
+	}
+	return 1
+}
+
+// orbitOffsets is the fairy's 8-tick loop around a plot's center column.
+var orbitOffsets = [8]int{-2, -1, 0, 1, 2, 1, 0, -1}
+
+func fairyOffset(tick uint64) int { return orbitOffsets[tick%8] }
+
+// fairyTrailOffset is one tick behind fairyOffset — (tick+7)%8 rather than
+// tick-1 so it never underflows at tick 0.
+func fairyTrailOffset(tick uint64) int { return orbitOffsets[(tick+7)%8] }
+
+// fairyTrailRune alternates the dim trail rune by tick parity.
+func fairyTrailRune(tick uint64) rune {
+	if tick%2 == 0 {
+		return '˙'
+	}
+	return '·'
+}
+
+// fairyWindow: an EvAnswered older than this no longer summons the fairy.
+const fairyWindow = 45 * time.Second
+
+// latestAnswered maps ticket -> time of its most recent EvAnswered event.
+// events is oldest-first, so the last write per ticket wins.
+func latestAnswered(events []state.Event) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, ev := range events {
+		if ev.Type == state.EvAnswered {
+			out[ev.Ticket] = ev.Time
+		}
+	}
+	return out
+}
+
+// findLayout locates a ticket's plot layout, if any (orchard tiles and
+// dropped-by-overflow tickets have none).
+func findLayout(layouts []plotLayout, ticket string) (plotLayout, bool) {
 	for _, l := range layouts {
-		if l.plot.marker == "" {
-			b.WriteString(strings.Repeat(" ", pw))
+		if l.plot.ticket == ticket {
+			return l, true
+		}
+	}
+	return plotLayout{}, false
+}
+
+// applyCast overlays the pawn(s), the queen, walk-off pawns, and the fairy
+// onto the trunk/sky grids — fxFull only, purely derived from tasks/events/
+// celebrations/focused, no new state beyond the existing capped map.
+func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, hasTrunk bool, trunkGrid, skyGrid *sceneGrid) {
+	if hasTrunk {
+		for _, t := range tasks {
+			if t.Agent != state.AgentWorking {
+				continue
+			}
+			l, ok := findLayout(layouts, t.Ticket)
+			if !ok {
+				continue
+			}
+			c := ticketCol[t.Ticket]
+			pos := clampCol(c+l.pos+pawnSide(t.Ticket, tick), c, c+pw-1)
+			trunkGrid.set(pos, '♟', sWorking)
+		}
+
+		for _, t := range tasks {
+			remaining, ok := celebrations[walkKey(t.Ticket)]
+			if !ok {
+				continue
+			}
+			l, ok := findLayout(layouts, t.Ticket)
+			if !ok {
+				continue
+			}
+			c := ticketCol[t.Ticket]
+			pos := clampCol(c+l.pos+(walkTicks-remaining), c, c+pw-1)
+			trunkGrid.set(pos, '♟', sIdle)
+		}
+
+		if focused != "" {
+			if l, ok := findLayout(layouts, focused); ok {
+				c := ticketCol[focused]
+				pos := clampCol(c+l.pos-pawnSide(focused, tick), c, c+pw-1)
+				trunkGrid.set(pos, '♛', sWaiting)
+			}
+		}
+	}
+
+	now := time.Now()
+	for ticket, at := range latestAnswered(events) {
+		if now.Sub(at) >= fairyWindow || now.Sub(at) < 0 {
 			continue
 		}
-		trailing := pw - l.pos - 1
-		if trailing < 0 {
-			trailing = 0
+		l, ok := findLayout(layouts, ticket)
+		if !ok {
+			continue
 		}
-		b.WriteString(strings.Repeat(" ", l.pos) + l.plot.markerSt.Render(l.plot.marker) + strings.Repeat(" ", trailing))
+		center := ticketCol[ticket] + l.pos
+		trail := center + fairyTrailOffset(tick)
+		if !skyGrid.occupied(trail) {
+			skyGrid.set(trail, fairyTrailRune(tick), sDim)
+		}
+		skyGrid.set(center+fairyOffset(tick), '✧', sDelivery)
 	}
-	return b.String()
 }
 
 // sceneLines is the scene's pure render function: always exactly `rows`
 // lines, each truncPad-ed to width. fx<fxCalm renders a blank scene (the
 // caller never invokes it there since sceneRows is 0 at fxOff, but staying
-// pure and total here costs nothing).
-func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel) []string {
+// total here costs nothing).
+func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel, focused string) []string {
 	if rows <= 0 {
 		return nil
 	}
@@ -397,13 +571,26 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 
 	fitted, pw := fitPlots(plots, width)
 	layouts := layoutPlots(fitted, pw)
-	canopyRow, trunkRow, soilRow, labelRow := renderPlotRows(layouts, pw, hasTrunk)
+	canopyRow, soilRow, labelRow, trunkGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk)
+
+	ticketCol := map[string]int{}
+	col := 0
+	for _, l := range layouts {
+		if l.plot.ticket != "" {
+			ticketCol[l.plot.ticket] = col
+		}
+		col += pw
+	}
+	if fx >= fxFull {
+		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, hasTrunk, trunkGrid, skyGrid)
+	}
+	trunkRow, skyRow := trunkGrid.String(), skyGrid.String()
 
 	out := make([]string, 0, rows)
 	for i := 0; i < topRows; i++ {
 		line := strings.Repeat(" ", width)
-		if i == topRows-1 { // the sky row closest to the canopy carries markers
-			line = renderSkyRow(layouts, pw)
+		if i == topRows-1 { // the sky row closest to the canopy carries markers/fairy
+			line = skyRow
 		}
 		out = append(out, truncPad(line, width))
 	}
@@ -446,6 +633,6 @@ func (m Model) rowBudgets() (activityRows, sceneRows int) {
 
 // viewScene renders the scene for the row budget rowBudgets handed it.
 func (m Model) viewScene(rows int) string {
-	lines := sceneLines(m.tasks, m.prs, m.events, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx)
+	lines := sceneLines(m.tasks, m.prs, m.events, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
 	return strings.Join(lines, "\n")
 }

@@ -28,6 +28,25 @@ func TestTmuxLayout(t *testing.T) {
 	}
 }
 
+func TestParseActiveWindow(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"active is first", "1\tgrove · 63\n0\tgrove · 58", "grove · 63"},
+		{"active is second", "0\tgrove · 63\n1\tgrove · 58", "grove · 58"},
+		{"single window", "1\tgrove", "grove"},
+		{"no active window", "0\tgrove · 63\n0\tgrove · 58", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := parseActiveWindow(tc.out); got != tc.want {
+			t.Errorf("%s: parseActiveWindow(%q) = %q, want %q", tc.name, tc.out, got, tc.want)
+		}
+	}
+}
+
 func TestWorkerWindow(t *testing.T) {
 	cases := []struct {
 		name      string

@@ -280,7 +280,7 @@ func TestSceneTierFor(t *testing.T) {
 
 func TestSceneLinesFxOffIsBlank(t *testing.T) {
 	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
-	lines := sceneLines(tasks, nil, nil, nil, 0, 80, 6, 10, fxOff)
+	lines := sceneLines(tasks, nil, nil, nil, 0, 80, 6, 10, fxOff, "")
 	if len(lines) != 6 {
 		t.Fatalf("must always emit exactly rows lines, got %d", len(lines))
 	}
@@ -301,7 +301,7 @@ func TestSceneLinesExactRowsAndWidth(t *testing.T) {
 		{Type: state.EvTaskDone, Ticket: "grove-91"},
 	}
 	for _, rows := range []int{3, 4, 5, 6, 8, 9, 15} {
-		lines := sceneLines(tasks, nil, events, nil, 3, 60, rows, 10, fxFull)
+		lines := sceneLines(tasks, nil, events, nil, 3, 60, rows, 10, fxFull, "")
 		if len(lines) != rows {
 			t.Errorf("rows=%d: got %d lines", rows, len(lines))
 		}
@@ -314,7 +314,7 @@ func TestSceneLinesExactRowsAndWidth(t *testing.T) {
 }
 
 func TestSceneLinesEmptyGrove(t *testing.T) {
-	lines := sceneLines(nil, nil, nil, nil, 0, 60, 6, 10, fxFull)
+	lines := sceneLines(nil, nil, nil, nil, 0, 60, 6, 10, fxFull, "")
 	if len(lines) != 6 {
 		t.Fatalf("empty grove must still emit exactly rows lines, got %d", len(lines))
 	}
@@ -326,8 +326,8 @@ func TestSceneLinesEmptyGrove(t *testing.T) {
 func TestSceneLinesDeterministic(t *testing.T) {
 	tasks := []*state.Task{{Ticket: "grove-42", Agent: state.AgentWorking, Created: time.Now().Add(-time.Hour)}}
 	events := []state.Event{{Type: state.EvTaskDone, Ticket: "grove-1"}}
-	a := sceneLines(tasks, nil, events, nil, 5, 80, 8, 10, fxFull)
-	b := sceneLines(tasks, nil, events, nil, 5, 80, 8, 10, fxFull)
+	a := sceneLines(tasks, nil, events, nil, 5, 80, 8, 10, fxFull, "")
+	b := sceneLines(tasks, nil, events, nil, 5, 80, 8, 10, fxFull, "")
 	if strings.Join(a, "\n") != strings.Join(b, "\n") {
 		t.Error("same inputs should render identically")
 	}
@@ -338,9 +338,156 @@ func TestSceneLinesDeterministic(t *testing.T) {
 func TestRenderSkyRowSingleMarkerPerPlot(t *testing.T) {
 	plots := []scenePlot{{ticket: "a", canopy: "∆", marker: "◆", markerSt: sQuestion}}
 	layouts := layoutPlots(plots, plotW)
-	row := renderSkyRow(layouts, plotW)
+	_, _, _, _, skyGrid := renderPlotRows(layouts, plotW, true)
+	row := skyGrid.String()
 	if strings.Count(row, "◆") != 1 {
 		t.Errorf("expected exactly one marker glyph, got %q", row)
+	}
+}
+
+// --- S2: the cast ---
+
+func TestWalkedOff(t *testing.T) {
+	prev := []*state.Task{
+		{Ticket: "grove-1", Agent: state.AgentWorking},
+		{Ticket: "grove-2", Agent: state.AgentWorking},
+		{Ticket: "grove-3", Agent: state.AgentIdle},
+	}
+	next := []*state.Task{
+		{Ticket: "grove-1", Agent: state.AgentIdle},    // walked off
+		{Ticket: "grove-2", Agent: state.AgentWorking}, // still working
+		{Ticket: "grove-3", Agent: state.AgentIdle},    // was never working
+	}
+	got := walkedOff(prev, next)
+	if len(got) != 1 || got[0] != "grove-1" {
+		t.Errorf("walkedOff = %v, want [grove-1]", got)
+	}
+	// A task that disappears entirely (done/cleaned) has no plot to walk off
+	// of — nothing to flag.
+	if got := walkedOff(prev, next[1:]); len(got) != 0 {
+		t.Errorf("a removed task should not walk off: %v", got)
+	}
+}
+
+func TestPawnSideAlternatesEvery4Ticks(t *testing.T) {
+	side0 := pawnSide("grove-1", 0)
+	for tick := uint64(0); tick < 4; tick++ {
+		if pawnSide("grove-1", tick) != side0 {
+			t.Errorf("pawn side changed within the same 4-tick window at tick %d", tick)
+		}
+	}
+	if pawnSide("grove-1", 4) == pawnSide("grove-1", 0) {
+		t.Error("pawn side should flip after 4 ticks")
+	}
+}
+
+func TestFairyOffsetOrbitsAndTrailIsOneTickBehind(t *testing.T) {
+	for tick := uint64(0); tick < 20; tick++ {
+		if fairyTrailOffset(tick+1) != fairyOffset(tick) {
+			t.Errorf("trail at tick %d should equal the fairy's offset the tick before", tick+1)
+		}
+	}
+	// No underflow at tick 0.
+	_ = fairyTrailOffset(0)
+}
+
+func TestApplyCastPawnQueenOpposite(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking}}
+	plots := []scenePlot{{ticket: "grove-1", canopy: "∆", trunk: "│"}}
+	layouts := layoutPlots(plots, plotW)
+	trunkGrid := newSceneGrid(plotW)
+	skyGrid := newSceneGrid(plotW)
+	ticketCol := map[string]int{"grove-1": 0}
+
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "grove-1", true, trunkGrid, skyGrid)
+
+	row := trunkGrid.String()
+	if !strings.Contains(row, "♟") {
+		t.Errorf("pawn should render on the working task's trunk row, got %q", row)
+	}
+	if !strings.Contains(row, "♛") {
+		t.Errorf("queen should render on the focused task's trunk row, got %q", row)
+	}
+	pawnCol := clampCol(0+layouts[0].pos+pawnSide("grove-1", 0), 0, plotW-1)
+	queenCol := clampCol(0+layouts[0].pos-pawnSide("grove-1", 0), 0, plotW-1)
+	if pawnCol == queenCol {
+		t.Skip("degenerate layout put pawn and queen on the same column — nothing to assert")
+	}
+	if trunkGrid.chars[pawnCol] != '♟' || trunkGrid.chars[queenCol] != '♛' {
+		t.Errorf("pawn/queen not at their expected opposite columns: pawn@%d=%q queen@%d=%q",
+			pawnCol, trunkGrid.chars[pawnCol], queenCol, trunkGrid.chars[queenCol])
+	}
+}
+
+func TestApplyCastWalkOffPawnOffsetsRight(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentIdle}}
+	plots := []scenePlot{{ticket: "grove-1", canopy: "ψ"}}
+	layouts := layoutPlots(plots, plotW)
+	ticketCol := map[string]int{"grove-1": 0}
+
+	early := newSceneGrid(plotW)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): walkTicks}, 0, "", true, early, newSceneGrid(plotW))
+	late := newSceneGrid(plotW)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): 1}, 0, "", true, late, newSceneGrid(plotW))
+
+	earlyCol, lateCol := -1, -1
+	for i, ch := range early.chars {
+		if ch == '♟' {
+			earlyCol = i
+		}
+	}
+	for i, ch := range late.chars {
+		if ch == '♟' {
+			lateCol = i
+		}
+	}
+	if earlyCol < 0 || lateCol < 0 {
+		t.Fatalf("expected a walk-off pawn in both grids, got early=%d late=%d", earlyCol, lateCol)
+	}
+	if lateCol <= earlyCol {
+		t.Errorf("walk-off pawn should drift right as remaining ticks fall: early=%d (remaining=walkTicks) late=%d (remaining=1)", earlyCol, lateCol)
+	}
+}
+
+func TestApplyCastFairyRecencyWindow(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1"}}
+	plots := []scenePlot{{ticket: "grove-1", canopy: "∆"}}
+	layouts := layoutPlots(plots, plotW)
+	ticketCol := map[string]int{"grove-1": 0}
+
+	fresh := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-5 * time.Second)}}
+	skyFresh := newSceneGrid(plotW)
+	applyCast(layouts, ticketCol, plotW, tasks, fresh, map[string]int{}, 0, "", false, newSceneGrid(plotW), skyFresh)
+	if !strings.Contains(skyFresh.String(), "✧") {
+		t.Errorf("a recent answer should summon the fairy, got %q", skyFresh.String())
+	}
+
+	stale := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-time.Minute)}}
+	skyStale := newSceneGrid(plotW)
+	applyCast(layouts, ticketCol, plotW, tasks, stale, map[string]int{}, 0, "", false, newSceneGrid(plotW), skyStale)
+	if strings.Contains(skyStale.String(), "✧") {
+		t.Errorf("an answer older than 45s must not summon the fairy, got %q", skyStale.String())
+	}
+}
+
+// The scene wiring end-to-end: a working task + a fresh answer at fxFull
+// renders both the pawn and the fairy; fxCalm renders neither (cast is
+// fxFull only, per S2).
+func TestSceneLinesCastGatedToFxFull(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now().Add(-time.Hour)}}
+	events := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-time.Second)}}
+
+	full := strings.Join(sceneLines(tasks, nil, events, nil, 0, 80, 9, 10, fxFull, ""), "\n")
+	if !strings.Contains(full, "♟") {
+		t.Errorf("fxFull scene should render the pawn, got:\n%s", full)
+	}
+	if !strings.Contains(full, "✧") {
+		t.Errorf("fxFull scene should render the fairy for a fresh answer, got:\n%s", full)
+	}
+
+	calm := strings.Join(sceneLines(tasks, nil, events, nil, 0, 80, 9, 10, fxCalm, ""), "\n")
+	if strings.Contains(calm, "♟") || strings.Contains(calm, "✧") {
+		t.Errorf("fxCalm must not render the cast, got:\n%s", calm)
 	}
 }
 
