@@ -61,6 +61,27 @@ func TestFooterLinesNarrowWraps(t *testing.T) {
 	}
 }
 
+// grove-69: slimming the legend to rowHints={enter}, globalHints minus
+// gardens must fit one line at typical widths and never wrap past two
+// lines down to a fairly narrow pane.
+func TestFooterLinesSlimmedFitsOneLine(t *testing.T) {
+	for _, width := range []int{110, 120, 160, 200} {
+		lines := footerLines(width, true)
+		if len(lines) != 1 {
+			t.Errorf("width %d: %d lines, want 1 (slimmed legend should fit one line at >=110 cols):\n%s",
+				width, len(lines), strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func TestFooterLinesSlimmedNeverExceedsTwoLines(t *testing.T) {
+	for width := 60; width <= 200; width++ {
+		if lines := footerLines(width, true); len(lines) > 2 {
+			t.Errorf("width %d: %d lines, want <=2:\n%s", width, len(lines), strings.Join(lines, "\n"))
+		}
+	}
+}
+
 // Zero tasks drop the row group entirely — the empty-state line already
 // teaches gv grab — and the shorter legend stops wrapping at usual widths.
 func TestFooterLinesZeroTasks(t *testing.T) {
@@ -84,7 +105,7 @@ func TestFooterLinesZeroTasks(t *testing.T) {
 // global group so help is the first thing a lost operator sees.
 func TestFooterGroupOrder(t *testing.T) {
 	joined := strings.Join(footerLines(200, true), "\n")
-	order := []string{"reply", "done", "new chat", "profiled chat", "help", "quit"}
+	order := []string{"reply", "new chat", "profiled chat", "help", "quit"}
 	last := -1
 	for _, s := range order {
 		i := strings.Index(joined, s)
@@ -155,13 +176,17 @@ func TestFooterFlashVisibleAtThresholdWidths(t *testing.T) {
 	m := New(nil, "", "")
 	m.tasks = []*state.Task{{Ticket: "grove-60", Repo: "grove"}}
 	m.flash = "error: worktree missing"
-	// 55–65: multi-line wrap with a nearly full last line. 179–184: the
-	// single-line legend exactly fills the pane — hints must yield.
+	// Recomputed for the slimmed grove-69 legend (rowHints down to one
+	// entry, globalHints minus gardens): the legend now collapses to two
+	// lines at width 56 and to one line at width 107 (was 179–184 with the
+	// old, wider legend). 58–65: multi-line wrap with a nearly full last
+	// line. 107–112: the single-line legend exactly fills the pane — hints
+	// must yield.
 	var widths []int
-	for w := 55; w <= 65; w++ {
+	for w := 58; w <= 65; w++ {
 		widths = append(widths, w)
 	}
-	for w := 179; w <= 184; w++ {
+	for w := 107; w <= 112; w++ {
 		widths = append(widths, w)
 	}
 	for _, width := range widths {

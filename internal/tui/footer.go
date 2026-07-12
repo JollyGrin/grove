@@ -14,14 +14,11 @@ type hint struct{ key, label string }
 // things, global is chrome. Package-level tables — the RAM rule forbids
 // rebuilding them per frame.
 var (
-	rowHints = []hint{
-		{"enter", "reply"}, {"a", "attach"}, {"o", "preview"}, {"p", "PR"},
-		{"t", "task"}, {"v", "reviewing"}, {"n", "nudge"}, {"d", "done"},
-	}
+	rowHints    = []hint{{"enter", "reply"}}
 	spawnHints  = []hint{{"O", "new chat"}, {")", "profiled chat"}}
 	globalHints = []hint{
 		{"?", "help"}, {"L", "layout"}, {"$", "costs"},
-		{"*", "effects"}, {"g", "gardens"}, {"X", "park"}, {"q", "quit"},
+		{"*", "effects"}, {"X", "park"}, {"q", "quit"},
 	}
 )
 
