@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -30,6 +32,21 @@ func TestViewAgentsTitleHint(t *testing.T) {
 	narrow := m.viewAgents()
 	if strings.Contains(narrow, "task title") {
 		t.Errorf("narrow pane should omit the task title hint, got:\n%s", narrow)
+	}
+
+	// At width 60 the footer legend wraps deliberately (grove-60): several
+	// real lines, each within the pane, matching footerHeight exactly.
+	foot := strings.Split(m.viewFooter(), "\n")
+	if len(foot) < 2 {
+		t.Errorf("width 60: footer should wrap onto multiple lines, got:\n%s", foot[0])
+	}
+	if len(foot) != m.footerHeight() {
+		t.Errorf("width 60: footer is %d lines, footerHeight says %d", len(foot), m.footerHeight())
+	}
+	for i, ln := range foot {
+		if lw := lipgloss.Width(ln); lw > 60 {
+			t.Errorf("width 60: footer line %d is %d cells:\n%s", i, lw, ln)
+		}
 	}
 
 	// Either way: never more than one line per row (header + one task = 2).

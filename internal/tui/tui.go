@@ -30,6 +30,7 @@ const (
 	modeConfirmClose
 	modeCosts
 	modeProfilePick
+	modeHelp
 )
 
 type refreshMsg struct {
@@ -362,6 +363,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeProfilePick {
 		return m.handleProfilePickKey(k)
 	}
+	if m.mode == modeHelp {
+		return m.handleHelpKey(k)
+	}
 
 	switch k.String() {
 	case "q", "ctrl+c":
@@ -492,6 +496,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.flash = "refreshing PRs…"
 		return m, prsCmd(m.cfg, m.stateDir, m.tasks)
+	case "?": // the cheat-sheet overlay (grove-60) — esc/? closes
+		m.mode = modeHelp
+		m.flash = ""
 	case "$", "c":
 		m.mode = modeCosts
 		m.flash = ""

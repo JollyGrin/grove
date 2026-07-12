@@ -23,6 +23,9 @@ func (m Model) View() string {
 	if m.mode == modeProfilePick {
 		return m.viewProfilePick()
 	}
+	if m.mode == modeHelp {
+		return m.viewHelp()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
@@ -215,10 +218,15 @@ func (m Model) viewActivity() string {
 	w := m.width - 4
 	items := feedItems(m.events)
 
-	// Fill the space between the agents panel and the footer.
-	avail := m.height - (len(m.tasks) + 4) - 6
-	if avail < 3 {
-		avail = 3
+	// Fill the space between the agents panel and the footer. The footer may
+	// wrap onto several real lines (grove-60) — ACTIVITY yields exactly that
+	// many rows, or the total render exceeds m.height and scrolls the
+	// alt-screen. 5 = header + this panel's borders/title + one spare.
+	avail := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	if avail < 0 {
+		// No minimum: a forced floor here is exactly how the render used to
+		// exceed m.height on short panes — the feed yields to the last row.
+		avail = 0
 	}
 	if avail > len(items) {
 		avail = len(items)
@@ -258,30 +266,10 @@ func (m Model) viewActivity() string {
 }
 
 func (m Model) viewFooter() string {
-	keys := []string{
-		sKey.Render("O") + sFoot.Render(" new chat"),
-		sKey.Render(")") + sFoot.Render(" profiled chat"),
-		sKey.Render("enter") + sFoot.Render(" reply"),
-		sKey.Render("a") + sFoot.Render(" attach"),
-		sKey.Render("o") + sFoot.Render(" preview"),
-		sKey.Render("p") + sFoot.Render(" PR"),
-		sKey.Render("t") + sFoot.Render(" task"),
-		sKey.Render("v") + sFoot.Render(" reviewing"),
-		sKey.Render("n") + sFoot.Render(" nudge"),
-		sKey.Render("d") + sFoot.Render(" done"),
-		sKey.Render("X") + sFoot.Render(" park"),
-		sKey.Render("$") + sFoot.Render(" costs"),
-		sKey.Render("*") + sFoot.Render(" effects"),
-		sKey.Render("L") + sFoot.Render(" layout"),
-		sKey.Render("q") + sFoot.Render(" quit"),
-	}
-	line := " " + strings.Join(keys, sDim.Render(" · "))
-	if m.flash != "" {
-		line += "   " + sChrome.Render(trunc(m.flash, m.width-lipgloss.Width(line)-4))
-	}
 	if m.mode == modeConfirmDone && m.detail != nil {
-		line = " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
+		line := " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+		return truncPad(line, m.width)
 	}
 	if m.mode == modeConfirmClose {
 		// Spell out exactly what park does: which session dies, that N
@@ -289,10 +277,41 @@ func (m Model) viewFooter() string {
 		// and how to bring it back (grove-33).
 		prompt := fmt.Sprintf("park %s? stops %d worker(s) + orchestrator + cockpit · state saved on disk · resume: gv, then gv adopt <ticket> ",
 			m.sessionName(), len(m.tasks))
-		line = " " + sBlocked.Render(prompt) +
+		line := " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+		return truncPad(line, m.width)
 	}
-	return line
+	// The grouped legend, deliberately wrapped (grove-60) — footerHeight
+	// mirrors this exactly, so the flash may only ride an existing line.
+	// It rides the roomiest one: the flash is the only surface errors have,
+	// and the last line is often nearly full at wrap-threshold widths.
+	lines := footerLines(m.width, len(m.tasks) > 0)
+	if m.flash != "" {
+		best, room := -1, 1
+		for i, l := range lines {
+			if r := m.width - lipgloss.Width(l) - 4; r > room {
+				best, room = i, r
+			}
+		}
+		if best < 0 {
+			// Every line is full — the band where the legend exactly fills
+			// its last line (~179–184 cols). Hints yield to the flash, the
+			// only surface errors have: truncate the last line to fit it.
+			best, room = len(lines)-1, len([]rune(m.flash))
+			if lim := m.width / 2; room > lim {
+				room = lim
+			}
+			if room > 1 {
+				lines[best] = truncPad(lines[best], m.width-room-4)
+			} else {
+				best = -1
+			}
+		}
+		if best >= 0 {
+			lines[best] += "   " + sChrome.Render(trunc(m.flash, room))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) viewDetail() string {
