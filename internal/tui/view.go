@@ -33,6 +33,13 @@ func (m Model) View() string {
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
 	b.WriteString(m.viewActivity())
+	// The living grove (grove-63): the scene fills exactly the rows ACTIVITY
+	// yielded to it (rowBudgets), between the feed and the footer, no
+	// border — open air. fxOff never yields any (byte-identical to today).
+	if _, sceneRows := m.rowBudgets(); sceneRows > 0 {
+		b.WriteString("\n")
+		b.WriteString(m.viewScene(sceneRows))
+	}
 	b.WriteString("\n")
 	b.WriteString(m.viewFooter())
 	return b.String()
@@ -225,16 +232,9 @@ func (m Model) viewActivity() string {
 	// Fill the space between the agents panel and the footer. The footer may
 	// wrap onto several real lines (grove-60) — ACTIVITY yields exactly that
 	// many rows, or the total render exceeds m.height and scrolls the
-	// alt-screen. 5 = header + this panel's borders/title + one spare.
-	avail := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
-	if avail < 0 {
-		// No minimum: a forced floor here is exactly how the render used to
-		// exceed m.height on short panes — the feed yields to the last row.
-		avail = 0
-	}
-	if avail > len(items) {
-		avail = len(items)
-	}
+	// alt-screen. At fxCalm+ the scene shares this leftover (rowBudgets);
+	// the split lives there so both panels agree on the same total.
+	avail, _ := m.rowBudgets()
 
 	rows := []string{}
 	if len(items) == 0 {
