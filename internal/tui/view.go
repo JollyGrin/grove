@@ -288,37 +288,24 @@ func (m Model) viewFooter() string {
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
 	}
-	// The grouped legend, deliberately wrapped (grove-60) — footerHeight
-	// mirrors this exactly, so the flash may only ride an existing line.
-	// It rides the roomiest one: the flash is the only surface errors have,
-	// and the last line is often nearly full at wrap-threshold widths.
-	lines := footerLines(m.width, len(m.tasks) > 0)
+	// The one-line legend (grove-72): hints drop by keep-priority to fit,
+	// so footerHeight is a constant 1. The flash is the only surface errors
+	// have — when it doesn't fit beside the included hints, optional hints
+	// yield (never the O/)/? trio), then the flash truncates as last resort.
+	hasTasks := len(m.tasks) > 0
+	line := footerLegend(m.width, hasTasks)
 	if m.flash != "" {
-		best, room := -1, 1
-		for i, l := range lines {
-			if r := m.width - lipgloss.Width(l) - 4; r > room {
-				best, room = i, r
-			}
+		flashW := len([]rune(m.flash))
+		room := m.width - lipgloss.Width(line) - 3
+		if flashW > room {
+			line = footerLegend(m.width-flashW-3, hasTasks)
+			room = m.width - lipgloss.Width(line) - 3
 		}
-		if best < 0 {
-			// Every line is full — the band where the legend exactly fills
-			// its last line (~179–184 cols). Hints yield to the flash, the
-			// only surface errors have: truncate the last line to fit it.
-			best, room = len(lines)-1, len([]rune(m.flash))
-			if lim := m.width / 2; room > lim {
-				room = lim
-			}
-			if room > 1 {
-				lines[best] = truncPad(lines[best], m.width-room-4)
-			} else {
-				best = -1
-			}
-		}
-		if best >= 0 {
-			lines[best] += "   " + sChrome.Render(trunc(m.flash, room))
+		if room > 1 {
+			line += "   " + sChrome.Render(trunc(m.flash, room))
 		}
 	}
-	return strings.Join(lines, "\n")
+	return truncPad(line, m.width)
 }
 
 func (m Model) viewDetail() string {

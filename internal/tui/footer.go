@@ -1,11 +1,10 @@
 package tui
 
-import "strings"
-
-// The list-mode footer legend (grove-60): atomic key+label cells flowed onto
-// as many REAL lines as the width requires. Bubble Tea's renderer assumes one
-// logical line = one screen row, so the footer must emit its own newlines —
-// a terminal-level soft wrap desyncs repaints (#53a).
+// The list-mode footer legend (grove-72): ALWAYS exactly one line. Instead of
+// wrapping, hints drop by keep-priority until the remainder fits the pane —
+// every hidden hint stays a live key, fully documented behind ?. Bubble Tea's
+// renderer assumes one logical line = one screen row (#53a); a single clamped
+// line can never desync repaints.
 
 // hint is one atomic legend cell — a key and its label, never split mid-hint.
 type hint struct{ key, label string }
@@ -22,10 +21,18 @@ var (
 	}
 )
 
+// keepRank orders hints by how long they survive a shrinking pane — lower
+// rank survives longer. Ranks below minKeep are the operator-specified
+// minimum trio (O, ), ?): they never drop, they only shed their labels and,
+// below the bare keys, truncate.
+var keepRank = map[string]int{
+	"?": 0, "O": 1, ")": 2, "enter": 3, "L": 4, "$": 5, "*": 6, "X": 7, "q": 8,
+}
+
 const (
-	intraSep   = " · "   // between hints of one group
-	interSep   = "  │  " // heavier break between groups
-	minLegendW = 20      // below this, degrade to one truncated line
+	intraSep = " · "   // between hints of one group
+	interSep = "  │  " // heavier break between groups
+	minKeep  = 3       // ranks below this never drop: the O/)/? trio
 )
 
 func (h hint) render() string { return sKey.Render(h.key) + sFoot.Render(" "+h.label) }
@@ -33,7 +40,7 @@ func (h hint) width() int     { return len([]rune(h.key)) + 1 + len([]rune(h.lab
 
 // footerGroups picks the groups for the current fleet: with zero tasks the
 // row group is dead weight — the empty-state line already teaches gv grab —
-// so it drops entirely and the legend usually stops wrapping at all.
+// so it drops entirely, regardless of width.
 func footerGroups(hasTasks bool) [][]hint {
 	if hasTasks {
 		return [][]hint{rowHints, spawnHints, globalHints}
@@ -41,80 +48,69 @@ func footerGroups(hasTasks bool) [][]hint {
 	return [][]hint{spawnHints, globalHints}
 }
 
-func groupWidth(g []hint) int {
-	w := 0
-	for i, h := range g {
-		if i > 0 {
-			w += len([]rune(intraSep))
-		}
-		w += h.width()
-	}
-	return w
-}
-
-// footerLines flows the legend into lines each ≤ width cells. Hints are
-// atomic; a wrap prefers a group boundary when the whole group fits on a
-// fresh line, else it breaks between hints. Pure function of its inputs —
-// widths are tracked as plain rune cells, styling is applied per cell, so
-// the math is ANSI-safe by construction.
-func footerLines(width int, hasTasks bool) []string {
-	groups := footerGroups(hasTasks)
-	if width < minLegendW {
-		// Absurdly narrow pane: one truncated line beats eating the screen.
-		var all []string
-		for _, g := range groups {
-			for _, h := range g {
-				all = append(all, h.render())
-			}
-		}
-		return []string{truncPad(" "+strings.Join(all, sDim.Render(intraSep)), width)}
-	}
-
-	var lines []string
-	cur, curW := " ", 1
-	flush := func() {
-		if curW > 1 {
-			lines = append(lines, cur)
-		}
-		cur, curW = " ", 1
-	}
+// legendLine renders the hints ranked below cut, in canonical group order,
+// with the usual separators and empty groups' separators dropped; hints
+// ranked at or above bareFrom render as their bare key. Returns the styled
+// line and its plain-cell width — styling is applied per cell, widths are
+// plain rune counts, so the math is ANSI-safe by construction.
+func legendLine(groups [][]hint, cut, bareFrom int) (string, int) {
+	line, w, first := " ", 1, true
 	for _, g := range groups {
-		// Prefer the break at the group boundary: if the group can't finish
-		// on this line but fits whole on a fresh one, break before it.
-		gw := groupWidth(g)
-		if curW > 1 && curW+len([]rune(interSep))+gw > width && 1+gw <= width {
-			flush()
-		}
-		for i, h := range g {
-			sep, sepW := "", 0
+		gFirst := true
+		for _, h := range g {
+			r, ok := keepRank[h.key]
+			if !ok {
+				r = 0 // unranked hints never drop — dropping would hide a live key
+			}
+			if r >= cut {
+				continue
+			}
 			switch {
-			case curW == 1: // line start — no separator
-			case i == 0:
-				sep, sepW = sDim.Render(interSep), len([]rune(interSep))
+			case first:
+			case gFirst:
+				line += sDim.Render(interSep)
+				w += len([]rune(interSep))
 			default:
-				sep, sepW = sDim.Render(intraSep), len([]rune(intraSep))
+				line += sDim.Render(intraSep)
+				w += len([]rune(intraSep))
 			}
-			if curW > 1 && curW+sepW+h.width() > width {
-				flush()
-				sep, sepW = "", 0
+			if r >= bareFrom {
+				line += sKey.Render(h.key)
+				w += len([]rune(h.key))
+			} else {
+				line += h.render()
+				w += h.width()
 			}
-			cur += sep + h.render()
-			curW += sepW + h.width()
+			first, gFirst = false, false
 		}
 	}
-	flush()
-	for i, l := range lines {
-		lines[i] = truncPad(l, width) // belt and braces: one oversized hint
-	}
-	return lines
+	return line, w
 }
 
-// footerHeight is the exact line count viewFooter will emit for the current
-// mode/width/fleet — viewActivity yields this many rows so the total render
-// never exceeds m.height and scrolls the alt-screen.
-func (m Model) footerHeight() int {
-	if (m.mode == modeConfirmDone && m.detail != nil) || m.mode == modeConfirmClose {
-		return 1
+// footerLegend is the one-line legend for the given width. Hints keep their
+// keepRank while the whole line fits and drop lowest-priority-first when it
+// doesn't; below the full trio the trio sheds labels lowest-priority-first.
+// The bare trio is the floor: below its width (~12 cells) the returned line
+// still carries all three keys and may exceed width — the caller clamps to
+// the pane (truncate, never wrap), so a flash reservation can never evict
+// the trio, only shrink the flash.
+func footerLegend(width int, hasTasks bool) string {
+	groups := footerGroups(hasTasks)
+	for cut := len(keepRank); cut > minKeep; cut-- {
+		if line, w := legendLine(groups, cut, cut); w <= width {
+			return line
+		}
 	}
-	return len(footerLines(m.width, len(m.tasks) > 0))
+	for bareFrom := minKeep; bareFrom > 0; bareFrom-- {
+		if line, w := legendLine(groups, minKeep, bareFrom); w <= width {
+			return line
+		}
+	}
+	line, _ := legendLine(groups, minKeep, 0)
+	return line
 }
+
+// footerHeight is the exact line count viewFooter will emit — one, always,
+// since grove-72. It stays a method so the layout math (rowBudgets, the
+// ACTIVITY budget) keeps reading a single source of truth.
+func (m Model) footerHeight() int { return 1 }
