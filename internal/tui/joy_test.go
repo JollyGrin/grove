@@ -172,9 +172,11 @@ func TestCountDone(t *testing.T) {
 // fixtureModel builds a deterministic list-mode Model with one working agent
 // and a merged PR, for the render-level assertions below. It pins the render
 // clock to daytime — night renders a firefly (A7, grove-56) into empty
-// panels, which would make these assertions flap with the wall clock.
-func fixtureModel() Model {
-	nowHour = func() int { return 10 }
+// panels, which would make these assertions flap with the wall clock — and
+// restores the real clock when the test ends.
+func fixtureModel(t *testing.T) Model {
+	t.Helper()
+	pinHour(t, 10)
 	m := New(nil, "", "")
 	m.width, m.height = 120, 40
 	m.tasks = []*state.Task{{Ticket: "grove-18", Title: "joy", Repo: "grove", Agent: state.AgentWorking, Created: time.Now()}}
@@ -191,7 +193,7 @@ func fixtureModel() Model {
 // celebrations map) and carries none of the new glyphs/verbs — while `full`
 // visibly differs. If any flourish leaked into off, one of these would move.
 func TestOffIsStatic(t *testing.T) {
-	base := fixtureModel()
+	base := fixtureModel(t)
 	base.fx = fxOff
 
 	m0 := base
@@ -231,7 +233,7 @@ func TestOffIsStatic(t *testing.T) {
 	}
 
 	// full must actually differ (breathing + verb + weather + sparkle).
-	full := fixtureModel()
+	full := fixtureModel(t)
 	full.fx = fxFull
 	full.tick = 0
 	full.celebrations = map[string]int{"grove-18": celebrationTicks}
@@ -255,7 +257,7 @@ func TestOffIsStatic(t *testing.T) {
 
 // calm shows ambient (A1–A4) but never a celebration sparkle (J1/J2 are fxFull).
 func TestCalmHasAmbientNotCelebration(t *testing.T) {
-	m := fixtureModel()
+	m := fixtureModel(t)
 	m.fx = fxCalm
 	m.tick = 0
 	m.celebrations = map[string]int{"grove-18": celebrationTicks}

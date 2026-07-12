@@ -42,6 +42,10 @@ func (m Model) viewHeader() string {
 		scope = "· " + m.label
 	}
 	left := sTitle.Render(" ⁂ GROVE ") + sChrome.Render(scope)
+	counts := fmt.Sprintf("%s working · %s mail · %s review ",
+		sWorking.Render(fmt.Sprint(working)),
+		sWaiting.Render(fmt.Sprint(mail)),
+		sDelivery.Render(fmt.Sprint(review)))
 	// J3 forest strip: one ⸙ per shipped tree in the loaded window, moss
 	// green, left of the counts (grove-56).
 	strip := ""
@@ -50,11 +54,14 @@ func (m Model) viewHeader() string {
 			strip = sForest.Render(s) + " · "
 		}
 	}
-	right := m.memGauge() + strip + fmt.Sprintf("%s working · %s mail · %s review ",
-		sWorking.Render(fmt.Sprint(working)),
-		sWaiting.Render(fmt.Sprint(mail)),
-		sDelivery.Render(fmt.Sprint(review)))
+	right := m.memGauge() + strip + counts
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 && strip != "" {
+		// A narrow pane sheds the flourish before the data: an overflowing
+		// header would hard-wrap the alt-screen, so the strip goes first.
+		right = m.memGauge() + counts
+		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	}
 	if gap < 1 {
 		gap = 1
 	}

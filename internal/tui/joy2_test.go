@@ -15,6 +15,16 @@ import (
 	"github.com/JollyGrin/grove/internal/state"
 )
 
+// pinHour pins the render clock for the duration of a test and restores the
+// real one on cleanup — fireflies fly only at night (A7), so an unpinned
+// clock makes render assertions flap with the wall clock.
+func pinHour(t *testing.T, hour int) {
+	t.Helper()
+	prev := nowHour
+	nowHour = func() int { return hour }
+	t.Cleanup(func() { nowHour = prev })
+}
+
 // Trap #2 again: every glyph joy v2 introduces must be exactly one cell.
 func TestJoyV2GlyphsAreSingleCell(t *testing.T) {
 	for _, g := range []string{forestGlyph, plantGlyph, fireflyGlyph} {
@@ -88,7 +98,7 @@ func TestForestStrip(t *testing.T) {
 }
 
 func TestForestStripInHeader(t *testing.T) {
-	m := fixtureModel()
+	m := fixtureModel(t)
 	m.fx = fxCalm
 	m.events = []state.Event{
 		{Type: state.EvTaskDone}, {Type: state.EvTaskDone}, {Type: state.EvTaskDone},
@@ -99,6 +109,30 @@ func TestForestStripInHeader(t *testing.T) {
 	m.fx = fxOff
 	if out := m.viewHeader(); strings.Contains(out, "⸙") {
 		t.Errorf("off header leaked the forest strip:\n%s", out)
+	}
+}
+
+// The strip must never overflow the header: on a pane too narrow for
+// left + gauge + strip + counts the flourish is shed, keeping the line
+// within m.width — an overflowing header hard-wraps the whole alt-screen.
+func TestForestStripNeverOverflowsHeader(t *testing.T) {
+	m := fixtureModel(t)
+	m.fx = fxCalm
+	for i := 0; i < 12; i++ {
+		m.events = append(m.events, state.Event{Type: state.EvTaskDone})
+	}
+	m.width = 80
+	if out := m.viewHeader(); lipgloss.Width(out) > m.width {
+		t.Errorf("header is %d cells on an %d-cell pane:\n%s", lipgloss.Width(out), m.width, out)
+	}
+	// Wide pane: the full 12-tree strip rides along untrimmed.
+	m.width = 140
+	out := m.viewHeader()
+	if !strings.Contains(out, strings.Repeat("⸙", 12)) {
+		t.Errorf("wide header should carry the full strip:\n%s", out)
+	}
+	if lipgloss.Width(out) > m.width {
+		t.Errorf("wide header overflows: %d > %d", lipgloss.Width(out), m.width)
 	}
 }
 
@@ -134,7 +168,7 @@ func TestPlantingWindow(t *testing.T) {
 }
 
 func TestPlantingRenders(t *testing.T) {
-	m := fixtureModel()
+	m := fixtureModel(t)
 	m.fx = fxFull
 	m.events = []state.Event{{Type: state.EvTaskCreated, Ticket: "grove-19", Time: time.Now().Add(-10 * time.Second)}}
 	out := m.View()
@@ -192,7 +226,7 @@ func TestKnockStyleAlternates(t *testing.T) {
 // The Update-level wiring: a refresh that flips a task to QUESTION seeds a
 // capped, prefixed celebrations entry at full — and never at calm.
 func TestKnockDetectionInUpdate(t *testing.T) {
-	m := fixtureModel()
+	m := fixtureModel(t)
 	m.fx = fxFull
 	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
 	next, _ := m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}})
@@ -204,7 +238,7 @@ func TestKnockDetectionInUpdate(t *testing.T) {
 		t.Error("knock key collided with the J1 merge-sparkle namespace")
 	}
 
-	m = fixtureModel()
+	m = fixtureModel(t)
 	m.fx = fxCalm
 	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
 	next, _ = m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}})
@@ -250,26 +284,40 @@ func TestFirstLight(t *testing.T) {
 	}
 }
 
-// The greeting fires exactly once, at the first refresh, calm+ only.
+// The greeting fires exactly once, at the first SUCCESSFUL refresh, calm+ only.
 func TestFirstLightGreetsOnce(t *testing.T) {
-	m := fixtureModel() // pins nowHour to 10
+	m := fixtureModel(t) // pins nowHour to 10
 	m.fx = fxCalm
-	next, _ := m.Update(refreshMsg{tasks: m.tasks})
+	next, _ := m.Update(refreshMsg{tasks: m.tasks, ok: true})
 	got := next.(Model)
 	if want := firstLight(10, len(m.tasks)); got.flash != want {
 		t.Errorf("first refresh flash = %q, want %q", got.flash, want)
 	}
 	// A later refresh (flash since cleared) must not greet again.
 	got.flash = ""
-	next, _ = got.Update(refreshMsg{tasks: m.tasks})
+	next, _ = got.Update(refreshMsg{tasks: m.tasks, ok: true})
 	if again := next.(Model); again.flash != "" {
 		t.Errorf("second refresh re-greeted: %q", again.flash)
 	}
 
+	// A load-error zero msg (state.Load failed at launch) must neither greet
+	// an empty grove that isn't, nor latch — the next good refresh greets.
+	m = fixtureModel(t)
+	m.fx = fxCalm
+	next, _ = m.Update(refreshMsg{})
+	bad := next.(Model)
+	if bad.flash != "" || bad.greeted {
+		t.Errorf("error refresh greeted: flash %q greeted %v", bad.flash, bad.greeted)
+	}
+	next, _ = bad.Update(refreshMsg{tasks: m.tasks, ok: true})
+	if got := next.(Model); got.flash == "" {
+		t.Error("the first good refresh after an error one should still greet")
+	}
+
 	// off: silent, but still latched (toggling fx later must not greet).
-	m = fixtureModel()
+	m = fixtureModel(t)
 	m.fx = fxOff
-	next, _ = m.Update(refreshMsg{tasks: m.tasks})
+	next, _ = m.Update(refreshMsg{tasks: m.tasks, ok: true})
 	if got := next.(Model); got.flash != "" || !got.greeted {
 		t.Errorf("off greeting: flash %q greeted %v, want silent + latched", got.flash, got.greeted)
 	}
@@ -305,9 +353,7 @@ func TestFireflyRendersAtNightOnly(t *testing.T) {
 		m.tick = tick
 		return m
 	}
-	defer func() { nowHour = func() int { return 10 } }()
-
-	nowHour = func() int { return 23 } // night bucket
+	pinHour(t, 23) // night bucket
 	if out := empty(fxCalm, 3).View(); !strings.Contains(out, fireflyGlyph) {
 		t.Errorf("night calm empty state should carry a firefly:\n%s", out)
 	}
@@ -324,7 +370,7 @@ func TestFireflyRendersAtNightOnly(t *testing.T) {
 		t.Error("off empty render changed with the tick")
 	}
 
-	nowHour = func() int { return 10 } // daytime: fireflies sleep
+	pinHour(t, 10) // daytime: fireflies sleep
 	if out := empty(fxFull, 3).View(); strings.Contains(out, fireflyGlyph) {
 		t.Errorf("daytime empty state must not carry a firefly:\n%s", out)
 	}
@@ -336,7 +382,7 @@ func TestFireflyRendersAtNightOnly(t *testing.T) {
 // strip, a planting, and a knock renders at off exactly as today — invariant
 // to the tick and celebrations, carrying none of the new glyphs or wording.
 func TestOffIsStaticJoyV2(t *testing.T) {
-	base := fixtureModel()
+	base := fixtureModel(t)
 	base.fx = fxOff
 	base.tasks = append(base.tasks, &state.Task{
 		Ticket: "grove-19", Repo: "grove", Agent: state.AgentWaiting, Created: time.Now(),

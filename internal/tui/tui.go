@@ -38,6 +38,7 @@ type refreshMsg struct {
 	events  []state.Event
 	mem     resource.Mem
 	workers int
+	ok      bool // state.Load succeeded — a zero msg (load error) stays false
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -186,7 +187,7 @@ func refreshCmd(stateDir string) tea.Cmd {
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers}
+		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers, ok: true}
 	}
 }
 
@@ -246,9 +247,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// zero Mem (OK()==false) and simply hides the gauge.
 		m.mem = msg.mem
 		m.workers = msg.workers
-		// A6 first light: greet once, at the first refresh after launch — the
-		// next real flash overwrites it naturally (grove-56).
-		if !m.greeted {
+		// A6 first light: greet once, at the first SUCCESSFUL refresh after
+		// launch — a load-error zero msg must not greet an empty grove that
+		// isn't (nor latch; the next good refresh greets). The next real
+		// flash overwrites it naturally (grove-56).
+		if !m.greeted && msg.ok {
 			m.greeted = true
 			if m.fx >= fxCalm && m.flash == "" {
 				m.flash = firstLight(nowHour(), len(msg.tasks))
