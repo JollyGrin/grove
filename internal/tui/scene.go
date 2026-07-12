@@ -6,6 +6,14 @@ package tui
 // exactly `rows` lines, each truncPad-ed to width. See
 // docs/plans/2026-07-12-living-grove-design.md for the locked glyph
 // vocabulary and algorithms this file implements.
+//
+// grove-71: the scene renders bottom-up from the soil. Every glyph column
+// touches the ground — trunks root ON the ground row (the row directly
+// above the soil), canopies stack above them, and height encodes age:
+// merged ♠ gets a 2-row canopy at full tier, ♣/∆ a 1-row canopy over a
+// trunk at compact+, and saplings/blossoms/seeds always sit bare on the
+// ground row. At strip tier NOTHING has a trunk — the whole cast of plants
+// sits uniformly on the soil.
 
 import (
 	"fmt"
@@ -27,7 +35,7 @@ const plotW = 10
 type sceneTier int
 
 const (
-	sceneStrip sceneTier = iota // 3-5 rows: canopy, soil, label — no trunk
+	sceneStrip sceneTier = iota // 3-5 rows: ground, soil, label — no trunks anywhere
 	sceneCompact
 	sceneFull
 )
@@ -40,6 +48,21 @@ func sceneTierFor(rows int) sceneTier {
 		return sceneCompact
 	default:
 		return sceneFull
+	}
+}
+
+// plantRowsFor is the height of the plant region (the rows between the soil
+// and the sky) per tier — height encodes age, degrading with the squeeze:
+// full fits a 2-row ♠ canopy over its trunk, compact a 1-row canopy over a
+// trunk, strip just the bare glyphs on the ground row.
+func plantRowsFor(tier sceneTier) int {
+	switch tier {
+	case sceneStrip:
+		return 1
+	case sceneCompact:
+		return 2
+	default:
+		return 3
 	}
 }
 
@@ -85,6 +108,10 @@ var (
 	fireflyRune = []rune(fireflyGlyph)[0]
 )
 
+// sIdlePlant renders an idle task's plant in dim moss — still alive, just
+// resting (grove-71). Grey (sDim/fog) stays reserved for dead ✗.
+var sIdlePlant = lipgloss.NewStyle().Foreground(cMoss)
+
 // chromeBorderStyles/chromeTitleStyles: the panel-border and ⁂ GROVE title
 // tint per time-of-day bucket, fxFull only (S3's "chrome tint"). Unlike
 // scenePalette these never touch data styles — only the AGENTS panel border
@@ -128,11 +155,15 @@ func (m Model) chromeTitle() lipgloss.Style {
 	return chromeTitleStyles[timeOfDay(nowHour())]
 }
 
-// applyAmbientSky paints the day-cycle's sky accent into the row closest to
-// the canopy, lowest priority (never overwrites a QUESTION/BLOCKED marker or
-// the fairy — the hard priority order is ◆/⚠ > fairy > ambient). morning's
-// dew is sparse dots across the row; day/evening place a sun at the right/
-// left edge; night places a moon plus two drifting fireflies.
+// applyAmbientSky paints the day-cycle's sky accent, lowest priority (never
+// overwrites a QUESTION/BLOCKED marker or the fairy — the hard priority
+// order is ◆/⚠ > fairy > ambient). morning's dew is sparse dots across the
+// row; day/evening place a sun; night places a moon plus two drifting
+// fireflies. The moon/sun keep a 1-cell right margin — the last column sits
+// at the clipping boundary (grove-71: the ☾ was visibly cut in the live
+// scene). The caller hands this the TOPMOST sky row when more than one
+// exists, so fireflies drift strictly above the tallest canopy instead of
+// reading as tree ornaments.
 func applyAmbientSky(hour int, tick uint64, skyGrid *sceneGrid) {
 	width := len(skyGrid.chars)
 	if width == 0 {
@@ -145,16 +176,16 @@ func applyAmbientSky(hour int, tick uint64, skyGrid *sceneGrid) {
 				skyGrid.set(x, '·', sDew)
 			}
 		}
-	case 1: // day: sun top-right
-		if x := width - 1; !skyGrid.occupied(x) {
+	case 1: // day: sun top-right, 1-cell margin
+		if x := width - 2; !skyGrid.occupied(x) {
 			skyGrid.set(x, '☼', sSun)
 		}
 	case 2: // evening: sun low-left
 		if !skyGrid.occupied(0) {
 			skyGrid.set(0, '☼', sSun)
 		}
-	case 3: // night: moon top-right + two drifting fireflies
-		if x := width - 1; !skyGrid.occupied(x) {
+	case 3: // night: moon top-right (1-cell margin) + two drifting fireflies
+		if x := width - 2; !skyGrid.occupied(x) {
 			skyGrid.set(x, '☾', sMoon)
 		}
 		span := fireflySpan
@@ -268,14 +299,14 @@ func buildOrchardPlots(events []state.Event) []scenePlot {
 	if remainder > 0 {
 		plots = append(plots, scenePlot{
 			orchard: true, condensed: true,
-			canopy: forestGlyph, style: sForest,
+			canopy: forestGlyph, trunk: "┃", style: sForest,
 			label: fmt.Sprintf("%s×%d", forestGlyph, remainder),
 		})
 	}
 	for _, tk := range done[n-individualN:] {
 		plots = append(plots, scenePlot{
 			ticket: tk, orchard: true,
-			canopy: forestGlyph, style: sForest,
+			canopy: forestGlyph, trunk: "┃", style: sForest,
 			label: ticketLabel(tk) + " ⬢",
 		})
 	}
@@ -316,7 +347,7 @@ func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebr
 		p.markerSt = sBlocked
 		p.label = tl + " ⚠"
 	case "idle ✓":
-		p.style = sIdle
+		p.style = sIdlePlant // idle ≠ dead: dim moss, never bark/fog grey
 		p.label = tl + " ✓"
 	default:
 		p.label = tl + " " + age(t.Created)
@@ -327,7 +358,8 @@ func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebr
 // fitPlots is the overflow ladder: drop the condensed orchard remainder,
 // then collapse the rest of the orchard to one tile, then shrink plotW
 // (8, then 6), and finally keep the leftmost tiles that fit at 6, relabeling
-// the last as "+K more". Never truncates mid-plot.
+// the last as "+K…" (grove-71: "+K more" truncated confusingly at pw=6).
+// Never truncates mid-plot.
 func fitPlots(plots []scenePlot, width int) ([]scenePlot, int) {
 	fits := func(n, w int) bool { return n*w <= width-2 }
 
@@ -359,7 +391,7 @@ func fitPlots(plots []scenePlot, width int) ([]scenePlot, int) {
 		dropped := len(cur) - n
 		cur = append([]scenePlot(nil), cur[:n]...)
 		last := cur[len(cur)-1]
-		last.label = fmt.Sprintf("+%d more", dropped)
+		last.label = fmt.Sprintf("+%d…", dropped)
 		cur[len(cur)-1] = last
 	}
 	return cur, w
@@ -468,36 +500,72 @@ func clampCol(c, lo, hi int) int {
 	return c
 }
 
-// renderPlotRows lays out the canopy/label rows as plain strings (no overlay
-// ever touches them) and the trunk/soil/sky rows as sceneGrids — S2's cast
-// overlays (pawn/queen/walk-off/fairy) mutate those grids before the caller
-// stringifies them. soilGrid starts as the plain "▁" row per plot; the
-// strip-tier fallback (grove-66) overlays pawn/queen there when there's no
-// trunk row to put them on.
-func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgloss.Style) (canopy, label string, trunkGrid, soilGrid, skyGrid *sceneGrid) {
-	width := len(layouts) * pw
-	trunkGrid = newSceneGrid(width)
+// soilTuft returns the sparse grass tuft rune for a soil column, or 0 —
+// roughly 1 in 7 columns, deterministic in the column index alone (never the
+// tick: the ground doesn't shimmer).
+func soilTuft(x int) rune {
+	h := uint64(x)*1099511628211 + 14695981039346656037
+	h ^= h >> 7
+	if h%7 != 0 {
+		return 0
+	}
+	if (h>>3)%2 == 0 {
+		return ','
+	}
+	return '.'
+}
+
+// renderPlotRows lays out the plant region bottom-up from the soil
+// (grove-71): plantGrids[0] is the GROUND row — the row directly above the
+// soil, where every plot touches down. A plot with a trunk roots it there
+// and lifts its canopy to plantGrids[1]; a merged ♠ adds a second canopy
+// row at plantGrids[2] when the tier grants it; trunkless glyphs
+// (ψ/✿/◌/✗ — and everything at strip, where plantRows is 1) sit bare on
+// the ground row. The label row stays a plain string (no overlay ever
+// touches it); the ground/soil/sky rows are sceneGrids so S2's cast
+// (pawn/queen/walk-off/fairy) can mutate them before stringifying. The
+// soil row runs the full scene width, textured with sparse tufts between
+// the plots' footprints.
+func renderPlotRows(layouts []plotLayout, pw, width, plantRows int, soilStyle lipgloss.Style) (plantGrids []*sceneGrid, label string, soilGrid, skyGrid *sceneGrid) {
+	if plantRows < 1 {
+		plantRows = 1
+	}
+	plantGrids = make([]*sceneGrid, plantRows)
+	for i := range plantGrids {
+		plantGrids[i] = newSceneGrid(width)
+	}
 	soilGrid = newSceneGrid(width)
 	skyGrid = newSceneGrid(width)
+	ground := plantGrids[0]
+	footprint := make([]bool, width)
 
-	var cb, lb strings.Builder
+	var lb strings.Builder
 	col := 0
 	for _, l := range layouts {
-		right := pw - l.left - len([]rune(l.cluster))
-		if right < 0 {
-			right = 0
-		}
-		cb.WriteString(l.plot.style.Render(strings.Repeat(" ", l.left) + l.cluster + strings.Repeat(" ", right)))
-
-		if hasTrunk && l.plot.trunk != "" {
-			trunkGrid.set(col+l.pos, []rune(l.plot.trunk)[0], l.plot.style)
+		cluster := []rune(l.cluster)
+		if plantRows == 1 || l.plot.trunk == "" {
+			for j, r := range cluster {
+				ground.set(col+l.left+j, r, l.plot.style)
+			}
+		} else {
+			ground.set(col+l.pos, []rune(l.plot.trunk)[0], l.plot.style)
+			for j, r := range cluster {
+				plantGrids[1].set(col+l.left+j, r, l.plot.style)
+			}
+			if plantRows >= 3 && l.plot.canopy == forestGlyph {
+				plantGrids[2].set(col+l.pos, []rune(forestGlyph)[0], l.plot.style)
+			}
 		}
 		if l.plot.marker != "" {
 			skyGrid.set(col+l.pos, []rune(l.plot.marker)[0], l.plot.markerSt)
 		}
-
-		for x := 0; x < pw; x++ {
-			soilGrid.set(col+x, '▁', soilStyle)
+		for j := range cluster {
+			if x := col + l.left + j; x >= 0 && x < width {
+				footprint[x] = true
+			}
+		}
+		if x := col + l.pos; x >= 0 && x < width {
+			footprint[x] = true
 		}
 
 		lbl := trunc(l.plot.label, pw-1)
@@ -511,7 +579,14 @@ func renderPlotRows(layouts []plotLayout, pw int, hasTrunk bool, soilStyle lipgl
 
 		col += pw
 	}
-	return cb.String(), lb.String(), trunkGrid, soilGrid, skyGrid
+	for x := 0; x < width; x++ {
+		if r := soilTuft(x); r != 0 && !footprint[x] {
+			soilGrid.set(x, r, sDim)
+		} else {
+			soilGrid.set(x, '▁', soilStyle)
+		}
+	}
+	return plantGrids, lb.String(), soilGrid, skyGrid
 }
 
 // --- S2: the cast (fxFull only) ---
@@ -597,17 +672,12 @@ func findLayout(layouts []plotLayout, ticket string) (plotLayout, bool) {
 }
 
 // applyCast overlays the pawn(s), the queen, walk-off pawns, and the fairy
-// onto the trunk/soil/sky grids — fxFull only, purely derived from tasks/
+// onto the ground/sky grids — fxFull only, purely derived from tasks/
 // events/celebrations/focused, no new state beyond the existing capped map.
-// At strip tier (hasTrunk false) there's no trunk row, so pawn/queen fall
-// back to the soil row beside the tree base (grove-66) instead of being
-// silently dropped; the fairy stays sky-only either way.
-func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, hasTrunk bool, trunkGrid, soilGrid, skyGrid *sceneGrid) {
-	castGrid := soilGrid
-	if hasTrunk {
-		castGrid = trunkGrid
-	}
-
+// Figures stand on the GROUND row beside the trunk base at every tier
+// (grove-71: grove-66's strip-tier fallback is now the universal rule — the
+// old trunk-row placement is gone); the fairy stays sky-only.
+func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, groundGrid, skyGrid *sceneGrid) {
 	for _, t := range tasks {
 		if t.Agent != state.AgentWorking {
 			continue
@@ -618,7 +688,7 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 		}
 		c := ticketCol[t.Ticket]
 		pos := clampCol(c+l.pos+pawnSide(t.Ticket, tick), c, c+pw-1)
-		castGrid.set(pos, '♟', sWorking)
+		groundGrid.set(pos, '♟', sWorking)
 	}
 
 	for _, t := range tasks {
@@ -631,19 +701,15 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 			continue
 		}
 		c := ticketCol[t.Ticket]
-		offset := walkTicks - remaining
-		if !hasTrunk {
-			offset = 1
-		}
-		pos := clampCol(c+l.pos+offset, c, c+pw-1)
-		castGrid.set(pos, '♟', sIdle)
+		pos := clampCol(c+l.pos+(walkTicks-remaining), c, c+pw-1)
+		groundGrid.set(pos, '♟', sIdle)
 	}
 
 	if focused != "" {
 		if l, ok := findLayout(layouts, focused); ok {
 			c := ticketCol[focused]
 			pos := clampCol(c+l.pos-pawnSide(focused, tick), c, c+pw-1)
-			castGrid.set(pos, '♛', sWaiting)
+			groundGrid.set(pos, '♛', sWaiting)
 		}
 	}
 
@@ -707,19 +773,21 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 	}
 
 	tier := sceneTierFor(rows)
-	hasTrunk := tier != sceneStrip
-	baseRows := 3
-	if hasTrunk {
-		baseRows = 4
+	plantRows := plantRowsFor(tier)
+	if plantRows > rows-2 {
+		plantRows = rows - 2
 	}
-	if baseRows > rows {
-		baseRows = rows
+	if plantRows < 1 {
+		plantRows = 1
 	}
-	topRows := rows - baseRows
+	topRows := rows - (plantRows + 2)
+	if topRows < 0 {
+		topRows = 0
+	}
 
 	fitted, pw := fitPlots(plots, width)
 	layouts := layoutPlots(fitted, pw)
-	canopyRow, labelRow, trunkGrid, soilGrid, skyGrid := renderPlotRows(layouts, pw, hasTrunk, pal.soil)
+	plantGrids, labelRow, soilGrid, skyGrid := renderPlotRows(layouts, pw, width, plantRows, pal.soil)
 
 	ticketCol := map[string]int{}
 	col := 0
@@ -730,29 +798,42 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 		col += pw
 	}
 	if fx >= fxFull {
-		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, hasTrunk, trunkGrid, soilGrid, skyGrid)
+		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, plantGrids[0], skyGrid)
 	}
-	if topRows > 0 {
-		// S3: the day-cycle sky accent is the lowest-priority sky glyph —
-		// it never overwrites a QUESTION/BLOCKED marker or the fairy.
+	// S3: the day-cycle sky accent is the lowest-priority sky glyph — it
+	// never overwrites a QUESTION/BLOCKED marker or the fairy. grove-71 sky
+	// discipline: with more than one sky row it paints the TOPMOST one, so
+	// fireflies/moon drift strictly above the tallest canopy instead of
+	// hugging the treetops like ornaments.
+	var ambientRow string
+	if topRows >= 2 {
+		ambientGrid := newSceneGrid(width)
+		applyAmbientSky(hour, tick, ambientGrid)
+		ambientRow = ambientGrid.String()
+	} else if topRows == 1 {
 		applyAmbientSky(hour, tick, skyGrid)
 	}
-	trunkRow, soilRow, skyRow := trunkGrid.String(), soilGrid.String(), skyGrid.String()
+	skyRow, soilRow := skyGrid.String(), soilGrid.String()
 
 	out := make([]string, 0, rows)
 	for i := 0; i < topRows; i++ {
 		line := strings.Repeat(" ", width)
-		if i == topRows-1 { // the sky row closest to the canopy carries markers/fairy/sky
+		switch {
+		case i == 0 && topRows >= 2:
+			line = ambientRow
+		case i == topRows-1: // the sky row closest to the plants carries markers/fairy
 			line = skyRow
 		}
 		out = append(out, truncPad(line, width))
 	}
-	out = append(out, truncPad(canopyRow, width))
-	if hasTrunk {
-		out = append(out, truncPad(trunkRow, width))
+	for i := plantRows - 1; i >= 0; i-- {
+		out = append(out, truncPad(plantGrids[i].String(), width))
 	}
 	out = append(out, truncPad(soilRow, width))
 	out = append(out, truncPad(labelRow, width))
+	if len(out) > rows { // rows 1-2: keep the rooted bottom, shed the sky
+		out = out[len(out)-rows:]
+	}
 	return out
 }
 

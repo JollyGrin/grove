@@ -20,6 +20,7 @@ import (
 func TestSceneGlyphsAreSingleCell(t *testing.T) {
 	glyphs := []string{
 		forestGlyph, "♣", "∆", "ψ", plantGlyph, "◌", "▁", "✗", // plants/soil
+		",", ".", // grass tufts (grove-71)
 		"┃", "│", // trunks
 		"♟", "♛", "✧", "˙", "·", // cast
 		"☼", "☾", fireflyGlyph, // sky
@@ -228,8 +229,12 @@ func TestFitPlotsNeverTruncatesMidPlot(t *testing.T) {
 	if len(fitted)*pw > 40-2 {
 		t.Errorf("even the narrowest ladder step must fit: %d plots * %d > %d", len(fitted), pw, 40-2)
 	}
-	if !strings.Contains(fitted[len(fitted)-1].label, "more") {
-		t.Errorf("last kept plot should be relabeled '+K more', got %+v", fitted[len(fitted)-1])
+	last := fitted[len(fitted)-1].label
+	if !strings.HasPrefix(last, "+") || !strings.HasSuffix(last, "…") {
+		t.Errorf("last kept plot should be relabeled '+K…', got %+v", fitted[len(fitted)-1])
+	}
+	if lipgloss.Width(last) > 5 { // must survive trunc to pw-1 at the narrowest step (6)
+		t.Errorf("overflow label %q is wider than the narrowest plot can show", last)
 	}
 }
 
@@ -357,7 +362,7 @@ func TestSceneLinesDeterministic(t *testing.T) {
 func TestRenderSkyRowSingleMarkerPerPlot(t *testing.T) {
 	plots := []scenePlot{{ticket: "a", canopy: "∆", marker: "◆", markerSt: sQuestion}}
 	layouts := layoutPlots(plots, plotW)
-	_, _, _, _, skyGrid := renderPlotRows(layouts, plotW, true, scenePalettes[1].soil)
+	_, _, _, skyGrid := renderPlotRows(layouts, plotW, plotW, 2, scenePalettes[1].soil)
 	row := skyGrid.String()
 	if strings.Count(row, "◆") != 1 {
 		t.Errorf("expected exactly one marker glyph, got %q", row)
@@ -414,27 +419,27 @@ func TestApplyCastPawnQueenOpposite(t *testing.T) {
 	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking}}
 	plots := []scenePlot{{ticket: "grove-1", canopy: "∆", trunk: "│"}}
 	layouts := layoutPlots(plots, plotW)
-	trunkGrid := newSceneGrid(plotW)
+	groundGrid := newSceneGrid(plotW)
 	skyGrid := newSceneGrid(plotW)
 	ticketCol := map[string]int{"grove-1": 0}
 
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "grove-1", true, trunkGrid, newSceneGrid(plotW), skyGrid)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "grove-1", groundGrid, skyGrid)
 
-	row := trunkGrid.String()
+	row := groundGrid.String()
 	if !strings.Contains(row, "♟") {
-		t.Errorf("pawn should render on the working task's trunk row, got %q", row)
+		t.Errorf("pawn should render on the working task's ground row, got %q", row)
 	}
 	if !strings.Contains(row, "♛") {
-		t.Errorf("queen should render on the focused task's trunk row, got %q", row)
+		t.Errorf("queen should render on the focused task's ground row, got %q", row)
 	}
 	pawnCol := clampCol(0+layouts[0].pos+pawnSide("grove-1", 0), 0, plotW-1)
 	queenCol := clampCol(0+layouts[0].pos-pawnSide("grove-1", 0), 0, plotW-1)
 	if pawnCol == queenCol {
 		t.Skip("degenerate layout put pawn and queen on the same column — nothing to assert")
 	}
-	if trunkGrid.chars[pawnCol] != '♟' || trunkGrid.chars[queenCol] != '♛' {
+	if groundGrid.chars[pawnCol] != '♟' || groundGrid.chars[queenCol] != '♛' {
 		t.Errorf("pawn/queen not at their expected opposite columns: pawn@%d=%q queen@%d=%q",
-			pawnCol, trunkGrid.chars[pawnCol], queenCol, trunkGrid.chars[queenCol])
+			pawnCol, groundGrid.chars[pawnCol], queenCol, groundGrid.chars[queenCol])
 	}
 }
 
@@ -445,9 +450,9 @@ func TestApplyCastWalkOffPawnOffsetsRight(t *testing.T) {
 	ticketCol := map[string]int{"grove-1": 0}
 
 	early := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): walkTicks}, 0, "", true, early, newSceneGrid(plotW), newSceneGrid(plotW))
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): walkTicks}, 0, "", early, newSceneGrid(plotW))
 	late := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): 1}, 0, "", true, late, newSceneGrid(plotW), newSceneGrid(plotW))
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{walkKey("grove-1"): 1}, 0, "", late, newSceneGrid(plotW))
 
 	earlyCol, lateCol := -1, -1
 	for i, ch := range early.chars {
@@ -476,14 +481,14 @@ func TestApplyCastFairyRecencyWindow(t *testing.T) {
 
 	fresh := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-5 * time.Second)}}
 	skyFresh := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, fresh, map[string]int{}, 0, "", false, newSceneGrid(plotW), newSceneGrid(plotW), skyFresh)
+	applyCast(layouts, ticketCol, plotW, tasks, fresh, map[string]int{}, 0, "", newSceneGrid(plotW), skyFresh)
 	if !strings.Contains(skyFresh.String(), "✧") {
 		t.Errorf("a recent answer should summon the fairy, got %q", skyFresh.String())
 	}
 
 	stale := []state.Event{{Type: state.EvAnswered, Ticket: "grove-1", Time: time.Now().Add(-time.Minute)}}
 	skyStale := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, stale, map[string]int{}, 0, "", false, newSceneGrid(plotW), newSceneGrid(plotW), skyStale)
+	applyCast(layouts, ticketCol, plotW, tasks, stale, map[string]int{}, 0, "", newSceneGrid(plotW), skyStale)
 	if strings.Contains(skyStale.String(), "✧") {
 		t.Errorf("an answer older than 45s must not summon the fairy, got %q", skyStale.String())
 	}
@@ -695,36 +700,35 @@ func TestRowBudgetsFloorNotRaisedAtCalm(t *testing.T) {
 	}
 }
 
-func TestApplyCastStripFallbackPawnBesideTrunkBase(t *testing.T) {
+func TestApplyCastPawnBesideTrunkBaseOnGround(t *testing.T) {
 	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking}}
 	plots := []scenePlot{{ticket: "grove-1", canopy: "∆"}}
 	layouts := layoutPlots(plots, plotW)
 	ticketCol := map[string]int{"grove-1": 0}
 
-	trunkGrid := newSceneGrid(plotW)
-	soilGrid := newSceneGrid(plotW)
+	groundGrid := newSceneGrid(plotW)
 	skyGrid := newSceneGrid(plotW)
-	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "", false, trunkGrid, soilGrid, skyGrid)
+	applyCast(layouts, ticketCol, plotW, tasks, nil, map[string]int{}, 0, "", groundGrid, skyGrid)
 
-	if strings.Contains(trunkGrid.String(), "♟") {
-		t.Errorf("strip tier has no trunk row; the fallback pawn must not land there, got %q", trunkGrid.String())
+	if strings.Contains(skyGrid.String(), "♟") {
+		t.Errorf("the pawn must never leave the ground, got sky %q", skyGrid.String())
 	}
 	pawnCol := -1
-	for i, ch := range soilGrid.chars {
+	for i, ch := range groundGrid.chars {
 		if ch == '♟' {
 			pawnCol = i
 		}
 	}
 	if pawnCol < 0 {
-		t.Fatalf("expected the strip-tier fallback pawn on the soil row, got %q", soilGrid.String())
+		t.Fatalf("expected the pawn on the ground row, got %q", groundGrid.String())
 	}
 	wantCol := clampCol(layouts[0].pos+pawnSide("grove-1", 0), 0, plotW-1)
 	if pawnCol != wantCol {
-		t.Errorf("fallback pawn at soil col %d, want %d (one cell beside the trunk base)", pawnCol, wantCol)
+		t.Errorf("pawn at ground col %d, want %d (one cell beside the trunk base)", pawnCol, wantCol)
 	}
 }
 
-func TestForcedStripTierRendersPawnOnSoil(t *testing.T) {
+func TestForcedStripTierRendersPawnOnGroundRow(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 20
 	m.fx = fxFull
@@ -745,16 +749,15 @@ func TestForcedStripTierRendersPawnOnSoil(t *testing.T) {
 	lines := sceneLines(m.tasks, nil, m.events, m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "♟") {
-		t.Fatalf("forced strip tier with a working agent should fall back to a pawn on the soil row, got:\n%s", joined)
+		t.Fatalf("strip tier with a working agent should still stand a pawn on the ground row, got:\n%s", joined)
 	}
-	soilRow := lines[len(lines)-2] // strip tier: [..sky..] canopy, soil, label
-	if !strings.Contains(soilRow, "♟") {
-		t.Errorf("fallback pawn should land on the soil row (second-to-last line), got %q", soilRow)
+	groundRow := lines[len(lines)-3] // strip tier: [..sky..] ground, soil, label
+	if !strings.Contains(groundRow, "♟") {
+		t.Errorf("pawn should stand on the ground row (third-to-last line), got %q", groundRow)
 	}
-	trunkless := lines[:len(lines)-2]
-	for _, l := range trunkless {
-		if strings.Contains(l, "♟") {
-			t.Errorf("strip tier has no trunk row; pawn must not appear above the soil row, got %q", l)
+	for i, l := range lines {
+		if i != len(lines)-3 && strings.Contains(l, "♟") {
+			t.Errorf("pawn must only appear on the ground row, found on line %d: %q", i, l)
 		}
 	}
 }
@@ -781,6 +784,287 @@ func TestSceneHeightDisciplineMatrix(t *testing.T) {
 				for _, l := range strings.Split(out, "\n") {
 					if w := lipgloss.Width(l); w > m.width {
 						t.Errorf("height=%d fx=%v events=%d: line %q is %d cells wide, want <=%d", h, fx, ec, l, w, m.width)
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- grove-71: root alignment, height = age, and the seasonings ---
+
+// Full tier, rows=9: sky 0-3, canopy-top 4, canopy 5, ground 6, soil 7,
+// label 8. Everything must touch down on the ground row — trunked plants
+// via their trunk, short stages by sitting there directly.
+func TestSceneRootAlignmentFullTier(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name   string
+		task   *state.Task
+		pr     *github.PR
+		ground string // glyph expected on the ground row (lines[6])
+		canopy string // glyph expected on the canopy row (lines[5]), "" = none
+		top    string // glyph expected on the canopy-top row (lines[4]), "" = none
+	}{
+		{"blossom sits on the ground", &state.Task{Ticket: "grove-1", Agent: state.AgentWorking, Created: now}, nil, plantGlyph, "", ""},
+		{"sapling sits on the ground", &state.Task{Ticket: "grove-2", Agent: state.AgentWorking, Created: now.Add(-5 * time.Minute)}, nil, "ψ", "", ""},
+		{"seed sits on the ground", &state.Task{Ticket: "grove-3", Agent: state.AgentSetup, Created: now}, nil, "◌", "", ""},
+		{"young roots a trunk", &state.Task{Ticket: "grove-4", Agent: state.AgentWorking, Created: now.Add(-time.Hour)}, nil, "│", "∆", ""},
+		{"established roots a trunk", &state.Task{Ticket: "grove-5", Agent: state.AgentWorking, Created: now.Add(-3 * time.Hour)}, nil, "│", "♣", ""},
+		{"merged gets the 2-row canopy", &state.Task{Ticket: "grove-6", Agent: state.AgentWorking, Created: now.Add(-3 * time.Hour)}, &github.PR{State: "MERGED"}, "┃", forestGlyph, forestGlyph},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prs := map[string]*github.PR{}
+			if c.pr != nil {
+				prs[c.task.Ticket] = c.pr
+			}
+			lines := sceneLines([]*state.Task{c.task}, prs, nil, nil, 0, 60, 9, 10, fxCalm, "")
+			if !strings.Contains(lines[6], c.ground) {
+				t.Errorf("ground row should carry %q, got %q", c.ground, lines[6])
+			}
+			// Row 0 carries the ambient sky accent; rows 1-5 must be empty
+			// except where the plant's canopy reaches.
+			for i := 1; i <= 5; i++ {
+				want := ""
+				if i == 5 {
+					want = c.canopy
+				} else if i == 4 {
+					want = c.top
+				}
+				if want != "" {
+					if !strings.Contains(lines[i], want) {
+						t.Errorf("row %d should carry %q, got %q", i, want, lines[i])
+					}
+					continue
+				}
+				if s := strings.TrimSpace(lines[i]); s != "" {
+					t.Errorf("row %d should be empty sky above a rooted plant, got %q", i, s)
+				}
+			}
+		})
+	}
+}
+
+// Height degrades with the tier: the merged ♠ is 3 plant-rows tall at full,
+// 2 at compact, and a bare ground glyph at strip — where NOTHING has a trunk.
+func TestMergedTreeHeightByTier(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now().Add(-3 * time.Hour)}}
+	prs := map[string]*github.PR{"grove-1": {State: "MERGED"}}
+
+	full := sceneLines(tasks, prs, nil, nil, 0, 60, 9, 10, fxCalm, "")
+	if !strings.Contains(full[4], forestGlyph) || !strings.Contains(full[5], forestGlyph) || !strings.Contains(full[6], "┃") {
+		t.Errorf("full tier merged tree should stack ♠ / ♠♠♠ / ┃ on rows 4-6, got:\n%s", strings.Join(full, "\n"))
+	}
+
+	compact := sceneLines(tasks, prs, nil, nil, 0, 60, 6, 10, fxCalm, "")
+	if !strings.Contains(compact[2], forestGlyph) || !strings.Contains(compact[3], "┃") {
+		t.Errorf("compact tier merged tree should stack ♠ / ┃ on rows 2-3, got:\n%s", strings.Join(compact, "\n"))
+	}
+
+	strip := sceneLines(tasks, prs, nil, nil, 0, 60, 3, 10, fxCalm, "")
+	if !strings.Contains(strip[0], forestGlyph) {
+		t.Errorf("strip tier merged tree should sit bare on the ground row, got %q", strip[0])
+	}
+	joined := strings.Join(strip, "\n")
+	if strings.Contains(joined, "┃") || strings.Contains(joined, "│") {
+		t.Errorf("at strip tier NOTHING has a trunk, got:\n%s", joined)
+	}
+}
+
+func TestStripTierUniformGround(t *testing.T) {
+	now := time.Now()
+	tasks := []*state.Task{
+		{Ticket: "grove-1", Agent: state.AgentWorking, Created: now},                     // blossom
+		{Ticket: "grove-2", Agent: state.AgentWorking, Created: now.Add(-time.Hour)},     // young ∆
+		{Ticket: "grove-3", Agent: state.AgentWorking, Created: now.Add(-3 * time.Hour)}, // established ♣
+	}
+	events := []state.Event{{Type: state.EvTaskDone, Ticket: "grove-90"}}
+	lines := sceneLines(tasks, nil, events, nil, 0, 80, 3, 10, fxCalm, "")
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "┃") || strings.Contains(joined, "│") {
+		t.Errorf("strip tier must not render any trunk, got:\n%s", joined)
+	}
+	for _, g := range []string{forestGlyph, plantGlyph, "∆", "♣"} {
+		if !strings.Contains(lines[0], g) {
+			t.Errorf("strip ground row should carry %q, got %q", g, lines[0])
+		}
+	}
+}
+
+// The orchard's done trees — including the condensed ♠×K tile — root to the
+// soil like everything else instead of floating at canopy height.
+func TestOrchardPlotsRooted(t *testing.T) {
+	events := []state.Event{
+		{Type: state.EvTaskDone, Ticket: "grove-1"},
+		{Type: state.EvTaskDone, Ticket: "grove-2"},
+		{Type: state.EvTaskDone, Ticket: "grove-3"},
+		{Type: state.EvTaskDone, Ticket: "grove-4"},
+	}
+	for _, p := range buildOrchardPlots(events) {
+		if p.trunk != "┃" {
+			t.Errorf("orchard plot %+v should carry a ┃ trunk", p)
+		}
+	}
+}
+
+// Idle ≠ dead: an idle plant keeps a living moss tint; grey stays reserved
+// for the dead ✗.
+func TestIdlePlantRendersMoss(t *testing.T) {
+	idle := &state.Task{Ticket: "grove-1", Agent: state.AgentIdle, Sentinel: "done", Created: time.Now().Add(-time.Hour)}
+	p := buildTaskPlot(idle, nil, fxFull, 0, nil, scenePalettes[1])
+	if p.style.GetForeground() != lipgloss.Color(cMoss) {
+		t.Errorf("idle plant should render in moss, got %v", p.style.GetForeground())
+	}
+	dead := &state.Task{Ticket: "grove-2", Agent: state.AgentDead}
+	d := buildTaskPlot(dead, nil, fxFull, 0, nil, scenePalettes[1])
+	if p.style.GetForeground() == d.style.GetForeground() {
+		t.Error("idle and dead must not share a color — idle is alive")
+	}
+}
+
+// Grass tufts: sparse, deterministic in the column index alone, and only
+// ever ',' or '.'.
+func TestSoilTuftSparseAndDeterministic(t *testing.T) {
+	count := 0
+	for x := 0; x < 700; x++ {
+		r := soilTuft(x)
+		if r != soilTuft(x) {
+			t.Fatalf("soilTuft(%d) is not deterministic", x)
+		}
+		if r == 0 {
+			continue
+		}
+		if r != ',' && r != '.' {
+			t.Fatalf("soilTuft(%d) = %q, want ',' or '.'", x, r)
+		}
+		count++
+	}
+	if count < 50 || count > 150 {
+		t.Errorf("tuft density = %d/700, want roughly 1 in 7 (100)", count)
+	}
+}
+
+func TestSoilRowTuftsBetweenPlots(t *testing.T) {
+	plots := []scenePlot{{ticket: "grove-1", canopy: "♣", trunk: "│"}}
+	layouts := layoutPlots(plots, plotW)
+	_, _, soilGrid, _ := renderPlotRows(layouts, plotW, 200, 2, scenePalettes[1].soil)
+
+	tufts := 0
+	for x, ch := range soilGrid.chars {
+		switch ch {
+		case '▁':
+		case ',', '.':
+			tufts++
+			lo := layouts[0].left
+			hi := layouts[0].left + len([]rune(layouts[0].cluster))
+			if (x >= lo && x < hi) || x == layouts[0].pos {
+				t.Errorf("tuft at col %d sits under the plant's footprint", x)
+			}
+		default:
+			t.Errorf("soil row carries a stray rune %q at col %d", ch, x)
+		}
+	}
+	if tufts == 0 {
+		t.Error("a 200-cell soil row should sprout at least one tuft")
+	}
+}
+
+// Sky discipline: the moon/sun keep a 1-cell right margin so they never sit
+// on the clipping boundary.
+func TestAmbientSkyRightMargin(t *testing.T) {
+	day := newSceneGrid(20)
+	applyAmbientSky(14, 0, day)
+	if day.chars[18] != '☼' || day.chars[19] != ' ' {
+		t.Errorf("day sun should sit at width-2 with a clear margin cell, got %q", day.String())
+	}
+	night := newSceneGrid(20)
+	applyAmbientSky(2, 0, night)
+	if night.chars[18] != '☾' || night.chars[19] != ' ' {
+		t.Errorf("night moon should sit at width-2 with a clear margin cell, got %q", night.String())
+	}
+}
+
+// Fireflies drift strictly above the tallest canopy: with more than one sky
+// row the ambient accents live on the topmost line only, never on the row
+// touching the treetops.
+func TestFirefliesAboveCanopyRows(t *testing.T) {
+	tasks := []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now().Add(-3 * time.Hour)}}
+	lines := sceneLines(tasks, nil, nil, nil, 3, 60, 9, 2, fxCalm, "") // night, full tier: sky rows 0-3
+	if !strings.Contains(lines[0], fireflyGlyph) && !strings.Contains(lines[0], "☾") {
+		t.Errorf("night ambient should paint the topmost sky row, got %q", lines[0])
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], fireflyGlyph) || strings.Contains(lines[i], "☾") {
+			t.Errorf("ambient sky leaked below the topmost row (line %d): %q", i, lines[i])
+		}
+	}
+}
+
+// The hard no-wrap guarantee (grove-71 #7): every scene line clips, never
+// wraps — swept across narrow widths × tiers × day buckets × cast
+// permutations.
+func TestSceneLinesNeverWrap(t *testing.T) {
+	now := time.Now()
+	fleet := []*state.Task{
+		{Ticket: "grove-1", Agent: state.AgentWorking, Created: now},                                // blossom
+		{Ticket: "grove-2", Agent: state.AgentWorking, Created: now.Add(-5 * time.Minute)},          // sapling
+		{Ticket: "grove-3", Agent: state.AgentWorking, Created: now.Add(-time.Hour)},                // young
+		{Ticket: "grove-4", Agent: state.AgentWorking, Created: now.Add(-3 * time.Hour)},            // established
+		{Ticket: "grove-5", Agent: state.AgentWaiting, Created: now.Add(-time.Hour)},                // QUESTION ◆
+		{Ticket: "grove-6", Agent: state.AgentBlocked, Created: now.Add(-time.Hour)},                // BLOCKED ⚠
+		{Ticket: "grove-7", Agent: state.AgentIdle, Sentinel: "done", Created: now.Add(-time.Hour)}, // idle ✓
+		{Ticket: "grove-8", Agent: state.AgentDead, Created: now.Add(-time.Hour)},                   // dead ✗
+		{Ticket: "grove-9", Agent: state.AgentSetup, Created: now},                                  // seed
+		{Ticket: "grove-10", Agent: state.AgentWorking, Created: now.Add(-4 * time.Hour)},           // merged ♠
+	}
+	prs := map[string]*github.PR{"grove-10": {State: "MERGED"}}
+	orchard := []state.Event{
+		{Type: state.EvTaskDone, Ticket: "grove-80"},
+		{Type: state.EvTaskDone, Ticket: "grove-81"},
+		{Type: state.EvTaskDone, Ticket: "grove-82"},
+		{Type: state.EvTaskDone, Ticket: "grove-83"},
+		{Type: state.EvTaskDone, Ticket: "grove-84"},
+	}
+	answered := append(append([]state.Event(nil), orchard...),
+		state.Event{Type: state.EvAnswered, Ticket: "grove-3", Time: now.Add(-2 * time.Second)})
+	celebrations := map[string]int{
+		walkKey("grove-7"):  walkTicks / 2,
+		knockKey("grove-5"): knockTicks,
+	}
+
+	casts := []struct {
+		name    string
+		tasks   []*state.Task
+		events  []state.Event
+		cel     map[string]int
+		focused string
+	}{
+		{"empty grove", nil, nil, nil, ""},
+		{"orchard only", nil, orchard, nil, ""},
+		{"full cast", fleet, answered, celebrations, "grove-3"},
+		{"lone worker", fleet[3:4], nil, nil, ""},
+	}
+
+	widths := []int{20, 24, 28, 32, 36, 40, 55, 80, 121}
+	rowsCases := []int{3, 4, 5, 6, 7, 8, 9, 12, 20}
+	hours := []int{2, 8, 14, 19}
+
+	for _, c := range casts {
+		for _, width := range widths {
+			for _, rows := range rowsCases {
+				for _, hour := range hours {
+					for _, fx := range []fxLevel{fxCalm, fxFull} {
+						lines := sceneLines(c.tasks, prs, c.events, c.cel, 5, width, rows, hour, fx, c.focused)
+						if len(lines) != rows {
+							t.Fatalf("%s w=%d rows=%d h=%d fx=%v: got %d lines", c.name, width, rows, hour, fx, len(lines))
+						}
+						for i, l := range lines {
+							if w := lipgloss.Width(l); w > width {
+								t.Errorf("%s w=%d rows=%d h=%d fx=%v: line %d is %d cells wide (would wrap): %q",
+									c.name, width, rows, hour, fx, i, w, l)
+							}
+						}
 					}
 				}
 			}
