@@ -1,5 +1,8 @@
 # grove (`gv`)
 
+<img width="1892" height="963" alt="image" src="https://github.com/user-attachments/assets/e744695c-b6b9-44f6-afed-2905afa0e59f" />
+
+
 A repo-agnostic orchestrator for autonomous Claude Code sessions: drop it
 into any repo (or a parent folder of repos), let the wizard wire it up, and
 run the loop — **one task → git worktree + tmux window + autonomous agent →
