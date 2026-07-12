@@ -199,10 +199,13 @@ func (m Model) viewAlmanac() string {
 		if plots := almanacPlots(day); len(plots) > 0 {
 			fitted, pw := fitPlots(plots, w)
 			layouts := layoutPlots(fitted, pw)
-			canopyRow, labelRow, trunkGrid, soilGrid, _ := renderPlotRows(layouts, pw, true, sChrome)
+			// Full-tier plant region (3 rows): the garden's ♠s root to the
+			// soil with the same bottom-up primitives as the scene (grove-71).
+			plantGrids, labelRow, soilGrid, _ := renderPlotRows(layouts, pw, w, 3, sChrome)
+			for i := len(plantGrids) - 1; i >= 0; i-- {
+				body = append(body, truncPad(plantGrids[i].String(), w))
+			}
 			body = append(body,
-				truncPad(canopyRow, w),
-				truncPad(trunkGrid.String(), w),
 				truncPad(soilGrid.String(), w),
 				truncPad(labelRow, w),
 			)
