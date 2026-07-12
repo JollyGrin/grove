@@ -9,6 +9,19 @@ import (
 	"github.com/JollyGrin/grove/internal/state"
 )
 
+// grove-63 S0: viewHeader had no final width clamp — a long workspace label
+// plus the gauge and counts could exceed m.width and hard-wrap the
+// alt-screen on a narrow pane, even with no forest strip riding along.
+func TestViewHeaderClampsWidth(t *testing.T) {
+	m := New(nil, "", "a-very-long-workspace-label-that-will-not-fit-a-narrow-pane")
+	m.width = 40
+	m.fx = fxOff
+	out := m.viewHeader()
+	if w := lipgloss.Width(out); w > m.width {
+		t.Errorf("header is %d cells on a %d-cell pane:\n%s", w, m.width, out)
+	}
+}
+
 // The AGENTS table shows a dimmed task-title hint after AGE when the pane is
 // wide, and drops it (with no broken layout — still one line per row) when the
 // pane is narrow.

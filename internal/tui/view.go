@@ -49,7 +49,7 @@ func (m Model) viewHeader() string {
 		sWorking.Render(fmt.Sprint(working)),
 		sWaiting.Render(fmt.Sprint(mail)),
 		sDelivery.Render(fmt.Sprint(review)))
-	// J3 forest strip: one ⸙ per shipped tree in the loaded window, moss
+	// J3 forest strip: one ♠ per shipped tree in the loaded window, moss
 	// green, left of the counts (grove-56).
 	strip := ""
 	if m.fx >= fxCalm {
@@ -68,7 +68,11 @@ func (m Model) viewHeader() string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + sChrome.Render(right)
+	line := left + strings.Repeat(" ", gap) + sChrome.Render(right)
+	// grove-63 S0: a long workspace label + gauge + counts can still exceed
+	// m.width even after the gap floor above — clamp the whole line so it
+	// can never hard-wrap the alt-screen.
+	return truncPad(line, m.width)
 }
 
 // memGauge renders `avail GB · N workers`, color-coded against the memory

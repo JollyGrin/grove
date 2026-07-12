@@ -84,11 +84,11 @@ func TestCountWorking(t *testing.T) {
 func TestForestStrip(t *testing.T) {
 	cases := map[int]string{
 		0:  "",
-		1:  "⸙",
-		5:  "⸙⸙⸙⸙⸙",
-		12: strings.Repeat("⸙", 12),
-		13: "⸙×13",
-		23: "⸙×23",
+		1:  "♠",
+		5:  "♠♠♠♠♠",
+		12: strings.Repeat("♠", 12),
+		13: "♠×13",
+		23: "♠×23",
 	}
 	for n, want := range cases {
 		if got := forestStrip(n); got != want {
@@ -103,11 +103,11 @@ func TestForestStripInHeader(t *testing.T) {
 	m.events = []state.Event{
 		{Type: state.EvTaskDone}, {Type: state.EvTaskDone}, {Type: state.EvTaskDone},
 	}
-	if out := m.viewHeader(); !strings.Contains(out, "⸙⸙⸙") {
+	if out := m.viewHeader(); !strings.Contains(out, "♠♠♠") {
 		t.Errorf("calm header should carry the forest strip, got:\n%s", out)
 	}
 	m.fx = fxOff
-	if out := m.viewHeader(); strings.Contains(out, "⸙") {
+	if out := m.viewHeader(); strings.Contains(out, "♠") {
 		t.Errorf("off header leaked the forest strip:\n%s", out)
 	}
 }
@@ -128,7 +128,7 @@ func TestForestStripNeverOverflowsHeader(t *testing.T) {
 	// Wide pane: the full 12-tree strip rides along untrimmed.
 	m.width = 140
 	out := m.viewHeader()
-	if !strings.Contains(out, strings.Repeat("⸙", 12)) {
+	if !strings.Contains(out, strings.Repeat("♠", 12)) {
 		t.Errorf("wide header should carry the full strip:\n%s", out)
 	}
 	if lipgloss.Width(out) > m.width {
@@ -418,7 +418,7 @@ func TestOffIsStaticJoyV2(t *testing.T) {
 	if rf == r0 {
 		t.Error("full render identical to off — joy v2 is not rendering")
 	}
-	for _, want := range []string{"⸙⸙", plantText} {
+	for _, want := range []string{"♠♠", plantText} {
 		if !strings.Contains(rf, want) {
 			t.Errorf("full render missing joy v2 flourish %q", want)
 		}
