@@ -26,6 +26,9 @@ func (m Model) View() string {
 	if m.mode == modeHelp {
 		return m.viewHelp()
 	}
+	if m.mode == modeAlmanac {
+		return m.viewAlmanac()
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader())

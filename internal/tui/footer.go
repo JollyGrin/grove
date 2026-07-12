@@ -21,7 +21,7 @@ var (
 	spawnHints  = []hint{{"O", "new chat"}, {")", "profiled chat"}}
 	globalHints = []hint{
 		{"?", "help"}, {"L", "layout"}, {"$", "costs"},
-		{"*", "effects"}, {"X", "park"}, {"q", "quit"},
+		{"*", "effects"}, {"g", "gardens"}, {"X", "park"}, {"q", "quit"},
 	}
 )
 

@@ -31,6 +31,7 @@ const (
 	modeCosts
 	modeProfilePick
 	modeHelp
+	modeAlmanac
 )
 
 type refreshMsg struct {
@@ -106,6 +107,12 @@ type Model struct {
 	// amber queen stands on its plot. "" means no worker window is focused
 	// (Dean's on the cockpit itself, or a resolve failed).
 	focused string
+
+	// modeAlmanac state (grove-63 S4): almanac is a snapshot read once on
+	// mode entry (almanacCmd), never re-read on the 1s tick; almSel indexes
+	// the browsed day.
+	almSel  int
+	almanac almanacMsg
 
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
@@ -321,6 +328,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.costs = msg
 		return m, nil
 
+	case almanacMsg:
+		// A one-shot snapshot (grove-63 S4) — never re-fired by the 1s tick,
+		// unlike costs. m.almSel lands on the newest day (today).
+		m.almanac = msg
+		m.almSel = len(msg.days) - 1
+		if m.almSel < 0 {
+			m.almSel = 0
+		}
+		if m.mode == modeAlmanac {
+			m.flash = ""
+		}
+		return m, nil
+
 	case prsMsg:
 		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
 		// short shimmer + footer flash. Detected by diffing old vs new — no new
@@ -390,6 +410,9 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeHelp {
 		return m.handleHelpKey(k)
+	}
+	if m.mode == modeAlmanac {
+		return m.handleAlmanacKey(k)
 	}
 
 	switch k.String() {
@@ -531,6 +554,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// (when recording is on) — the cheap periodic point between grabs
 		// and the final gv done row.
 		return m, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, true)
+	case "g": // THE ALMANAC (grove-63): one garden per day, browsable history
+		m.mode = modeAlmanac
+		m.flash = "leafing through the almanac…"
+		return m, almanacCmd(m.stateDir)
 	}
 	return m, nil
 }
