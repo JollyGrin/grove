@@ -25,6 +25,16 @@ const EvOrchestratorClosed = "orchestrator_closed"
 // ParkedTickets, not stored on Task.
 const EvWorkspaceParked = "workspace_parked"
 
+// Version returns an event record's plugin-contract version
+// (docs/plugins.md). Records written before the v field existed
+// (pre-grove-75) carry no stamp and read as v1.
+func (e Event) Version() int {
+	if e.V == 0 {
+		return 1
+	}
+	return e.V
+}
+
 // ParkedTickets derives, from the whole event log (oldest-first), the set of
 // tickets that are currently parked: a workspace_parked event marks every
 // then-active task, and any later revival of that ticket — a session start,

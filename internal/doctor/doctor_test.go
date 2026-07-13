@@ -12,6 +12,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/doctor"
+	"github.com/JollyGrin/grove/internal/schema"
 )
 
 func testConfig() *config.Config {
@@ -212,10 +213,18 @@ func TestRenderJSON(t *testing.T) {
 	if err := doctor.RenderJSON(&buf, rows(happyEnv(testConfig()))); err != nil {
 		t.Fatal(err)
 	}
-	var decoded []doctor.Row
-	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+	// grove-75: --json payloads ship in the plugin-contract envelope.
+	var envelope struct {
+		SchemaVersion int          `json:"schema_version"`
+		Rows          []doctor.Row `json:"rows"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 		t.Fatalf("output is not valid JSON: %v", err)
 	}
+	if envelope.SchemaVersion != schema.Version {
+		t.Errorf("schema_version = %d, want %d", envelope.SchemaVersion, schema.Version)
+	}
+	decoded := envelope.Rows
 	if len(decoded) != 13 {
 		t.Errorf("got %d rows, want 13", len(decoded))
 	}

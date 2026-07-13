@@ -97,8 +97,9 @@ inherited from the shell — and only the env var *name* appears in config.
 |---|---|
 | [HANDOFF.md](HANDOFF.md) | **Start here** — full pickup path for a fresh agent/human |
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Operator guide: install → wizard → cockpit → first ticket |
-| [.claude/skills/](.claude/skills/) | Distilled hard-won rules, auto-loaded by workers: tmux discipline, shipping gates, Claude Code integration facts |
+| [.claude/skills/](.claude/skills/) | Distilled hard-won rules, auto-loaded by workers: tmux discipline, shipping gates, Claude Code integration facts, plugin authoring (copyable) |
 | [DESIGN.md](DESIGN.md) | Founding spec: architecture, TaskProvider, routing, workspaces, phasing |
+| [docs/plugins.md](docs/plugins.md) | Surface-plugin contract: `--json` + events.jsonl are the API; build a `gv-<surface>` repo, tag it `grove-plugin` |
 | [docs/grove-connections-design.md](docs/grove-connections-design.md) | Wizard, doctor, drift detection, connections manifest, pack system, parity gate |
 | [docs/grove-learnings-design.md](docs/grove-learnings-design.md) | Layered learnings/memory system |
 | [docs/grove-cockpit-design.md](docs/grove-cockpit-design.md) | Cockpit UX: activity feed, parallel orchestrators |
