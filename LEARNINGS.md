@@ -132,6 +132,24 @@
 
 ## Go / CLI
 
+- **2026-07-13 · the first cockpit frame renders with ZERO events — clamp
+  every row budget to its data** (grove-79). Events load async, so
+  `View()` always runs once against an empty feed; `viewActivity`'s
+  `items[:avail]` used the rowBudgets leftover unclamped and panicked
+  (`slice bounds out of range [:2] with capacity 0`) on any pane whose
+  leftover rows fell below the scene floor — the e2e tape size, and any
+  brand-new fleet. Live cockpits never hit it (feed populated by frame 2,
+  tall panes give the scene its floor), so it shipped in grove-56 and sat
+  red for a day. Three compounding lessons: (a) any `[:budget]` slice in a
+  render path clamps to `len` — the budget and the data are computed from
+  different inputs; (b) render tests must sweep SMALL heights with an
+  empty model, not just narrow widths (`TestViewRendersNarrowPanesWithSparseFeed`
+  sweeps 40×5..30 × 3 fx levels × empty/short feeds); (c) three TUI PRs
+  merged while cockpit.sh + workspace.sh were red because nothing ran
+  them — `e2e/all.sh` now runs all six suites, and TUI-touching merges run
+  it. Bonus field-hit: the suites' bare `capture-pane -p` lost the panic
+  reason (alt-screen closes, reason scrolls off) — they capture `-S -300`
+  now, matching the tmux-discipline rule.
 - **2026-07-04 · never pipe the test gate** — `go test ./... | tail` (or
   `| grep -c FAIL`) reports the PIPE's exit status, not the tests'; two
   red runs merged to main that way in one evening. Gates run bare and

@@ -238,6 +238,13 @@ func (m Model) viewActivity() string {
 	// alt-screen. At fxCalm+ the scene shares this leftover (rowBudgets);
 	// the split lives there so both panels agree on the same total.
 	avail, _ := m.rowBudgets()
+	// rowBudgets hands ACTIVITY the whole leftover when the scene can't make
+	// its floor — which can exceed the feed's length (grove-79: the first
+	// frame renders before events load, and items[:avail] on the empty feed
+	// panicked every cockpit whose leftover rows landed in 1..floor+3).
+	if avail > len(items) {
+		avail = len(items)
+	}
 
 	rows := []string{}
 	if len(items) == 0 {

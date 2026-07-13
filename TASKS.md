@@ -23,6 +23,11 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Cockpit first-frame panic fix (grove-79, 2026-07-13): viewActivity's
+      `items[:avail]` clamped (grove-56 regression — empty feed + small
+      leftover panicked the render); narrow/short render-sweep test;
+      e2e/all.sh runs all six suites; cockpit.sh/workspace.sh re-greened
+      and capture with `-S -300`
 - [x] Surface-plugin contract v1 (grove-75, 2026-07-13): docs/plugins.md +
       copyable plugin-authoring skill; `schema_version`/`v` stamps;
       e2e/plugin.sh tripwire. First consumer: gv-remarkable (issue #76,

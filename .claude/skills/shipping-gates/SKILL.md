@@ -29,10 +29,20 @@ Anything touching the task lifecycle (grab/ls/hooks/untrack/done) must
 pass `e2e/dummy.sh` before merge. It runs the full loop against scratch
 everything: scratch `HOME` (config), `GROVE_STATE_DIR` override (state),
 and the repo's `claude:` command set to `echo` (worker). Other suites:
-`wizard.sh`, `workspace.sh`, `github.sh` (stub `gh`), `cockpit.sh`.
-Details: docs/seed-manifest.md §Dummy-data E2E. Scripted-tmux suites must
-also follow the [tmux-discipline](../tmux-discipline/SKILL.md) isolation
-rules.
+`wizard.sh`, `workspace.sh`, `github.sh` (stub `gh`), `cockpit.sh`,
+`plugin.sh`. **`e2e/all.sh` runs all six** — no CI covers them, so run it
+before merging anything that touches the TUI or the task lifecycle
+(grove-79: three TUI PRs merged while `cockpit.sh` + `workspace.sh` were
+red, because nothing ran them; the panic had shipped in a fourth a day
+earlier). Details: docs/seed-manifest.md §Dummy-data E2E. Scripted-tmux
+suites must also follow the
+[tmux-discipline](../tmux-discipline/SKILL.md) isolation rules —
+including capturing panes with `-S` so a panic keeps its reason line.
+
+TUI render code: the first frame always renders with ZERO events (they
+load async), so any `[:budget]` slice must clamp to `len(data)`, and
+render tests sweep small heights with empty models, not just narrow
+widths — grove-79's panic lived only at heights the tests never visited.
 
 ## Handing a change to the operator
 
