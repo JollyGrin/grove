@@ -17,7 +17,11 @@ The recurring traps are distilled into `.claude/skills/`
 (tmux-discipline, shipping-gates, claude-code-facts) — load the matching
 skill before touching tmux, the test gate/e2e, or hook/session/transcript
 code. When a new learning generalizes into a rule, update the skill too;
-LEARNINGS.md stays the dated log.
+LEARNINGS.md stays the dated log. External surfaces (gv-<surface> repos)
+build against the plugin contract — [docs/plugins.md](docs/plugins.md) +
+the copyable plugin-authoring skill; changing any `--json` field or
+events.jsonl record is a contract change (additive-only, `e2e/plugin.sh`
+is the tripwire).
 
 ## Running the binary (P0.0 done — safe, with two cautions)
 

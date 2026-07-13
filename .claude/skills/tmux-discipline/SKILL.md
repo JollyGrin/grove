@@ -60,3 +60,7 @@ grove worker) silently targets the **real server** unless it clears
   full ~30-line capture, never a bottom window.
 - The detector reads `unknown` for a plain shell pane (before Claude
   boots). Expected; the task status column carries the truth.
+- e2e assertions on pane content: a bare `capture-pane -p` sees only the
+  visible screen of the active pane — delivered text scrolls off and
+  hard-wraps at pane width. Capture every pane with `-S -` (scrollback)
+  and `tr -d '\n'` before grepping (grove-75 field-hit).

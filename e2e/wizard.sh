@@ -111,7 +111,9 @@ say "doctor renders the connections board"
 "$GV" doctor --json > "$SCRATCH/doctor.json" 2>&1 || true   # exit 1 = expected (scratch gh auth)
 python3 -c "
 import json,sys
-rows = json.load(open('$SCRATCH/doctor.json'))
+data = json.load(open('$SCRATCH/doctor.json'))
+assert data.get('schema_version') == 1, f'missing/wrong schema_version: {data.get(\"schema_version\")}'
+rows = data['rows']
 ids = {r['id'] for r in rows}
 need = {'binary:tmux','gh-auth'}
 missing = need - ids

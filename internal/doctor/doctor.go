@@ -12,6 +12,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/connections"
+	"github.com/JollyGrin/grove/internal/schema"
 )
 
 // Row is one evaluated connection, flattened for rendering and --json.
@@ -109,9 +110,10 @@ func Render(w io.Writer, rows []Row) {
 	}
 }
 
-// RenderJSON emits the rows for the orchestrator (`gv doctor --json`).
+// RenderJSON emits the rows for the orchestrator and plugins
+// (`gv doctor --json`), in the contract envelope (docs/plugins.md).
 func RenderJSON(w io.Writer, rows []Row) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(rows)
+	return enc.Encode(schema.Envelope("rows", rows))
 }

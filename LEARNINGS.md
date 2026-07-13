@@ -80,6 +80,15 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-13 · a bare `capture-pane -p` can miss text that was really
+  delivered** — it captures only the *visible* screen of the *active*
+  pane, and a pasted line the shell then executed both scrolls away
+  (command output pushes it off-screen) and hard-wraps at pane width
+  (default 80 cols splits any longish token across lines). e2e assertions
+  on pane content must capture every pane of the window with scrollback
+  (`capture-pane -p -S -` per `list-panes` pane id) and flatten newlines
+  (`tr -d '\n'`) before grepping. Field-hit: grove-75's plugin smoke test
+  asserted a delivered nudge was "missing" until captured this way.
 - **2026-07-07 · `$TMUX` beats `TMUX_TMPDIR`** — tmux resolves its socket
   as `-S`/`-L` > `$TMUX` > `TMUX_TMPDIR`, so every isolated-tmux-server
   script **must `unset TMUX` first** (or `env -u TMUX` each call), or when

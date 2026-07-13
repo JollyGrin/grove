@@ -11,6 +11,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"github.com/JollyGrin/grove/internal/schema"
 )
 
 // Event types.
@@ -51,6 +53,10 @@ type Event struct {
 	Type   string            `json:"type"`
 	Ticket string            `json:"ticket"`
 	Data   map[string]string `json:"data,omitempty"`
+	// V is the record's plugin-contract version (docs/plugins.md), stamped
+	// by Append. Records written before the field existed read as v1 —
+	// use Version(), never V directly.
+	V int `json:"v,omitempty"`
 }
 
 type Task struct {
@@ -84,6 +90,9 @@ func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
 func Append(stateDir string, ev Event) error {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
+	}
+	if ev.V == 0 {
+		ev.V = schema.Version
 	}
 	line, err := json.Marshal(ev)
 	if err != nil {

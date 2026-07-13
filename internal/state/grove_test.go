@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -217,5 +218,49 @@ func TestReadTasksMissingAndCorrupt(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, "tasks.json"))
 	if err != nil || string(raw) != "{not json" {
 		t.Errorf("corrupt view must be left as-is: %q, %v", raw, err)
+	}
+}
+
+// grove-75: every appended record carries the contract stamp, and
+// pre-stamp records (no v key) fold identically and read as v1.
+func TestEventVersionStamp(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "T-1", Data: map[string]string{"title": "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"v":1`) {
+		t.Errorf("appended record missing v stamp: %s", raw)
+	}
+
+	// A legacy record without v still folds, and reads as v1.
+	legacy := `{"time":"2026-01-01T00:00:00Z","type":"task_created","ticket":"T-old","data":{"title":"old"}}` + "\n"
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks["T-old"] == nil || tasks["T-1"] == nil {
+		t.Fatalf("mixed-version log did not fold both tasks: %v", tasks)
+	}
+	evs, err := ReadEvents(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if ev.Version() != 1 {
+			t.Errorf("event %s/%s Version() = %d, want 1", ev.Type, ev.Ticket, ev.Version())
+		}
 	}
 }

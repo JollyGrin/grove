@@ -32,6 +32,7 @@ import (
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/resource"
+	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
@@ -1277,6 +1278,16 @@ type lsRow struct {
 	Cost *cost.Totals `json:"cost,omitempty"`
 }
 
+// emitJSON prints a --json payload in the plugin-contract envelope
+// (docs/plugins.md): a top-level object with schema_version plus the
+// command's payload under one named key. Additive-only from here —
+// removing or renaming any emitted field is a major contract break.
+func emitJSON(key string, payload any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(schema.Envelope(key, payload))
+}
+
 func cmdLs(args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
@@ -1323,9 +1334,7 @@ func cmdLs(args []string) error {
 	}
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rows)
+		return emitJSON("tasks", rows)
 	}
 
 	if len(rows) == 0 {
@@ -1440,9 +1449,7 @@ func cmdAudit(args []string) error {
 	rep := audit.Gather(cfg, tasks, stateDir())
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rep)
+		return emitJSON("report", rep)
 	}
 
 	if len(rep.Tasks) == 0 {
@@ -1556,9 +1563,7 @@ func cmdCost(args []string) error {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Cost.USD > rows[j].Cost.USD })
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rows)
+		return emitJSON("rows", rows)
 	}
 
 	if len(rows) == 0 {
@@ -1594,9 +1599,7 @@ func costLedger(asJSON bool) error {
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 
 	if asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		return emitJSON("rows", out)
 	}
 	if len(out) == 0 {
 		fmt.Printf("ledger empty — enable with `gv cost --record on` (file: %s)\n", ledger.Path(stateDir()))
@@ -1724,9 +1727,7 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	sort.Slice(rep.Rows, func(i, j int) bool { return rep.Rows[i].Cost.USD > rep.Rows[j].Cost.USD })
 
 	if asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rep)
+		return emitJSON("report", rep)
 	}
 
 	fmt.Printf("%-11s %-11s %-9s %-8s %-6s %-6s %-7s %s\n",
@@ -2424,9 +2425,7 @@ func cmdSweep(args []string) error {
 	}
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(struct {
+		return emitJSON("report", struct {
 			Items        []sweepItem `json:"items"`
 			StalePrompts []string    `json:"stale_prompts"`
 		}{items, rep.StalePrompts})
@@ -2793,7 +2792,7 @@ func cmdWorkspaces(args []string) error {
 		return err
 	}
 	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(list)
+		return emitJSON("workspaces", list)
 	}
 	for _, ws := range list {
 		mark := " "

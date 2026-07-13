@@ -23,6 +23,10 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Surface-plugin contract v1 (grove-75, 2026-07-13): docs/plugins.md +
+      copyable plugin-authoring skill; `schema_version`/`v` stamps;
+      e2e/plugin.sh tripwire. First consumer: gv-remarkable (issue #76,
+      separate repo)
 
 ## Phase 0 — extraction proven (skeleton + local-md) ✅ 2026-07-04
 
