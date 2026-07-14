@@ -90,7 +90,8 @@ say "dash pane shows the workspace label (the driver)"
 tmux has-session -t grove-alpha 2>/dev/null || fail "grove-alpha session missing"
 sleep 2
 PANE0="$(tmux list-panes -t grove-alpha -F '#{pane_id}' | head -1)"
-CAP="$(tmux capture-pane -p -t "$PANE0")"
+# -S -300: include scrollback so a gv panic keeps its reason line (grove-79).
+CAP="$(tmux capture-pane -p -S -300 -t "$PANE0")"
 echo "$CAP" | grep -q 'GROVE' || fail "dash not rendering:
 $CAP"
 echo "$CAP" | grep -q 'alpha' || fail "dash must show the workspace label:

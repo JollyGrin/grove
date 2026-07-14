@@ -51,7 +51,10 @@ tmux has-session -t grove 2>/dev/null || fail "cockpit session not created"
 sleep 2
 say "left pane renders AGENTS + ACTIVITY, no MAIL/REVIEW"
 PANE0="$(tmux list-panes -t grove -F '#{pane_id}' | head -1)"
-CAP="$(tmux capture-pane -p -t "$PANE0")"
+# -S -300: include scrollback, not just the visible screen — if gv panics,
+# the alt-screen closes and the panic reason scrolls off a bare capture
+# (grove-79 lost its reason line exactly this way).
+CAP="$(tmux capture-pane -p -S -300 -t "$PANE0")"
 echo "$CAP" | grep -q 'AGENTS'     || fail "AGENTS panel missing:
 $CAP"
 echo "$CAP" | grep -q 'ACTIVITY'   || fail "ACTIVITY feed missing:
@@ -59,7 +62,10 @@ $CAP"
 # The narrow left pane truncates long lines — assert on prefixes.
 echo "$CAP" | grep -q 'asked: tabs' || fail "feed missing the question event:
 $CAP"
-echo "$CAP" | grep -q 'grabbed'     || fail "feed missing the grab event:
+# A grab younger than a minute renders as "planted" at full effects
+# (grove-56 J4, presentation-only); the seeded event is brand-new, so the
+# correct render here is the planting — accept either text.
+echo "$CAP" | grep -qE 'grabbed|planted' || fail "feed missing the grab event:
 $CAP"
 echo "$CAP" | grep -q 'MAIL'   && fail "MAIL panel should be gone" || true
 echo "$CAP" | grep -q 'REVIEW QUEUE' && fail "REVIEW panel should be gone" || true

@@ -22,6 +22,38 @@ func TestViewHeaderClampsWidth(t *testing.T) {
 	}
 }
 
+// grove-79: rowBudgets can budget ACTIVITY more rows than the feed holds —
+// when the leftover height is too small for the scene floor, the scene yields
+// and ACTIVITY inherits the whole leftover regardless of feed length. The
+// unclamped items[:avail] slice panicked the cockpit's FIRST frame (events
+// load async, so the feed is always empty then) on any pane whose leftover
+// landed below the floor — the e2e tape size, and any brand-new fleet. The
+// dashboard must render at every small size, empty feed or short feed,
+// without panicking and without exceeding the pane width.
+func TestViewRendersNarrowPanesWithSparseFeed(t *testing.T) {
+	feeds := map[string][]state.Event{
+		"empty": nil,
+		"short": {{Type: state.EvTaskCreated, Ticket: "grove-1"}},
+	}
+	for name, events := range feeds {
+		for _, fx := range []fxLevel{fxOff, fxCalm, fxFull} {
+			for h := 5; h <= 30; h++ {
+				m := New(nil, "", "")
+				m.width, m.height = 40, h
+				m.fx = fx
+				m.events = events
+				out := m.View() // must not panic
+				for i, ln := range strings.Split(out, "\n") {
+					if lw := lipgloss.Width(ln); lw > m.width {
+						t.Errorf("feed=%s fx=%d h=%d: line %d is %d cells on a %d-cell pane",
+							name, fx, h, i, lw, m.width)
+					}
+				}
+			}
+		}
+	}
+}
+
 // The AGENTS table shows a dimmed task-title hint after AGE when the pane is
 // wide, and drops it (with no broken layout — still one line per row) when the
 // pane is narrow.

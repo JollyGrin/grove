@@ -53,7 +53,10 @@ operator now runs grove exclusively.
   path — the installed gv and live sessions stay untouched.
 - `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
   scratch everything (the dummy-data pattern) — run it before merging
-  anything that touches the task lifecycle.
+  anything that touches the task lifecycle. `e2e/all.sh` runs all six
+  suites; no CI covers them, so run it before merging anything that
+  touches the TUI as well (grove-79: three TUI PRs merged while
+  cockpit.sh + workspace.sh were red).
 
 ## Hard rules (inherited from ovs, provider-neutral)
 
