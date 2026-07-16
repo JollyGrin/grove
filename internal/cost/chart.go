@@ -73,18 +73,22 @@ func (u BucketUnit) String() string {
 // Next cycles hourly → daily → weekly → hourly (the cockpit's b key).
 func (u BucketUnit) Next() BucketUnit { return (u + 1) % 3 }
 
-// truncate maps a time to its bucket start (UTC; weeks start Monday).
-func (u BucketUnit) truncate(t time.Time) time.Time {
-	t = t.UTC()
+// truncate maps a time to its bucket start in loc (weeks start Monday).
+// Boundaries are built from wall-clock components in loc, not
+// t.Truncate(time.Hour) — Truncate rounds against absolute time-since-zero
+// (effectively UTC), so it lands on the wrong hour in fractional-offset
+// zones (e.g. +5:30). Storage stays UTC-canonical; this is display only.
+func (u BucketUnit) truncate(t time.Time, loc *time.Location) time.Time {
+	t = t.In(loc)
 	switch u {
 	case Daily:
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 	case Weekly:
-		d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 		back := (int(d.Weekday()) + 6) % 7 // Monday=0 … Sunday=6
 		return d.AddDate(0, 0, -back)
 	default:
-		return t.Truncate(time.Hour)
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc)
 	}
 }
 
@@ -100,8 +104,11 @@ func (u BucketUnit) prev(t time.Time) time.Time {
 	}
 }
 
-// Label renders a bucket start for the chart's axis.
-func (u BucketUnit) Label(t time.Time) string {
+// Label renders a bucket start for the chart's axis, formatted in loc so the
+// operator sees wall-clock labels (a bucket keyed on a loc boundary already
+// carries that location, but callers pass loc explicitly to be safe).
+func (u BucketUnit) Label(t time.Time, loc *time.Location) string {
+	t = t.In(loc)
 	if u == Hourly {
 		return t.Format("15:04")
 	}
@@ -119,9 +126,14 @@ type Bucket struct {
 // bucket, oldest first and zero-filled. Points older than the window are
 // dropped — the ledger keeps the full history; the chart shows the recent
 // window.
-func Buckets(points []Point, unit BucketUnit, n int, now time.Time) []Bucket {
+// Buckets keys its map[time.Time]int on loc-truncated starts. time.Time map
+// equality compares wall-clock AND the *time.Location pointer, so the axis
+// truncation and the per-point truncation must share the SAME loc value —
+// passing a freshly LoadLocation'd copy for either would make no key match and
+// every bar read $0.
+func Buckets(points []Point, unit BucketUnit, n int, now time.Time, loc *time.Location) []Bucket {
 	out := make([]Bucket, n)
-	start := unit.truncate(now)
+	start := unit.truncate(now, loc)
 	for i := n - 1; i >= 0; i-- {
 		out[i] = Bucket{Start: start}
 		start = unit.prev(start)
@@ -131,7 +143,7 @@ func Buckets(points []Point, unit BucketUnit, n int, now time.Time) []Bucket {
 		idx[b.Start] = i
 	}
 	for _, p := range points {
-		if i, ok := idx[unit.truncate(p.Time)]; ok {
+		if i, ok := idx[unit.truncate(p.Time, loc)]; ok {
 			out[i].USD += p.USD
 		}
 	}

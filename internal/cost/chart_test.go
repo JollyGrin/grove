@@ -45,7 +45,7 @@ func TestBuckets(t *testing.T) {
 		{Time: now.Add(-1*time.Hour - 5*time.Minute), USD: 0.5}, // same previous hour
 		{Time: now.Add(-100 * time.Hour), USD: 99},              // out of range: dropped
 	}
-	b := Buckets(pts, Hourly, 6, now)
+	b := Buckets(pts, Hourly, 6, now, time.UTC)
 	if len(b) != 6 {
 		t.Fatalf("buckets = %d, want 6", len(b))
 	}
@@ -73,11 +73,11 @@ func TestBucketsDailyAndWeekly(t *testing.T) {
 		{Time: time.Date(2026, 7, 6, 23, 0, 0, 0, time.UTC), USD: 3}, // yesterday (Monday)
 		{Time: now, USD: 1},
 	}
-	d := Buckets(pts, Daily, 3, now)
+	d := Buckets(pts, Daily, 3, now, time.UTC)
 	if d[2].USD != 1 || d[1].USD != 3 {
 		t.Errorf("daily: today=%v yesterday=%v, want 1 and 3", d[2].USD, d[1].USD)
 	}
-	w := Buckets(pts, Weekly, 2, now)
+	w := Buckets(pts, Weekly, 2, now, time.UTC)
 	// Both points fall in the week starting Monday 2026-07-06.
 	if w[1].USD != 4 {
 		t.Errorf("weekly current = %v, want 4", w[1].USD)
@@ -89,17 +89,94 @@ func TestBucketsDailyAndWeekly(t *testing.T) {
 
 func TestBucketUnitLabels(t *testing.T) {
 	at := time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC)
-	if got := Hourly.Label(at); got != "14:00" {
+	if got := Hourly.Label(at, time.UTC); got != "14:00" {
 		t.Errorf("hourly label = %q", got)
 	}
-	if got := Daily.Label(at); got != "07-07" {
+	if got := Daily.Label(at, time.UTC); got != "07-07" {
 		t.Errorf("daily label = %q", got)
 	}
-	if got := Weekly.Label(at); got != "07-07" {
+	if got := Weekly.Label(at, time.UTC); got != "07-07" {
 		t.Errorf("weekly label = %q", got)
 	}
 	if Hourly.String() != "hourly" || Daily.String() != "daily" || Weekly.String() != "weekly" {
 		t.Error("unit names")
+	}
+}
+
+// TestBucketsLocalTimezone proves buckets key on the operator's wall clock, not
+// UTC: this is the grove-51 fix. A fixed zone (never time.Local) keeps it
+// deterministic on any CI box.
+func TestBucketsLocalTimezone(t *testing.T) {
+	ams, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("load zone: %v", err)
+	}
+	// Reproduction case: 14:00Z in summer (+2 CEST) is local 16:00. now must
+	// sit past the point's bucket so the window includes it.
+	now := time.Date(2026, 7, 7, 18, 0, 0, 0, time.UTC)
+	pt := Point{Time: time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC), USD: 5}
+	b := Buckets([]Point{pt}, Hourly, 6, now, ams)
+	var found *Bucket
+	for i := range b {
+		if b[i].USD > 0 {
+			found = &b[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("spend point landed in no bucket")
+	}
+	if got := Hourly.Label(found.Start, ams); got != "16:00" {
+		t.Errorf("14:00Z (+2) bucket label = %q, want 16:00", got)
+	}
+}
+
+// TestBucketsDailyLocalBoundary: a point at 23:00Z Monday is local Tuesday in
+// Amsterdam (+2) and must bucket into the local Tuesday, not UTC Monday.
+func TestBucketsDailyLocalBoundary(t *testing.T) {
+	ams, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("load zone: %v", err)
+	}
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) // local Tue afternoon
+	pt := Point{Time: time.Date(2026, 7, 6, 23, 0, 0, 0, time.UTC), USD: 3}
+	d := Buckets([]Point{pt}, Daily, 3, now, ams)
+	want := time.Date(2026, 7, 7, 0, 0, 0, 0, ams) // local Tuesday midnight
+	last := d[len(d)-1]
+	if !last.Start.Equal(want) {
+		t.Errorf("newest daily bucket start = %v, want local Tue %v", last.Start, want)
+	}
+	if last.USD != 3 {
+		t.Errorf("23:00Z Monday must count as local Tuesday: today=%v, want 3", last.USD)
+	}
+}
+
+// TestBucketsFractionalOffset proves the time.Date-vs-Truncate distinction:
+// India is +5:30, so UTC hour boundaries do not align with local hour
+// boundaries. time.Truncate(time.Hour) would key on a :30 wall-clock start.
+func TestBucketsFractionalOffset(t *testing.T) {
+	kol, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Fatalf("load zone: %v", err)
+	}
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	// 06:10Z is 11:40 IST → local 11:00 hour.
+	pt := Point{Time: time.Date(2026, 7, 7, 6, 10, 0, 0, time.UTC), USD: 2}
+	b := Buckets([]Point{pt}, Hourly, 12, now, kol)
+	var found *Bucket
+	for i := range b {
+		if b[i].USD > 0 {
+			found = &b[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("spend point landed in no bucket")
+	}
+	local := found.Start.In(kol)
+	if local.Minute() != 0 {
+		t.Errorf("bucket start not on a local hour boundary: %v (min=%d)", local, local.Minute())
+	}
+	if got := Hourly.Label(found.Start, kol); got != "11:00" {
+		t.Errorf("06:10Z (+5:30) bucket label = %q, want 11:00", got)
 	}
 }
 
