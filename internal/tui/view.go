@@ -399,7 +399,9 @@ func (m Model) viewProfilePick() string {
 	if m.flash != "" {
 		foot += "   " + sChrome.Render(m.flash)
 	}
-	return m.viewHeader() + "\n" + panel + "\n" + foot
+	// grove-53: clamp the bare footer so a narrow pane can't hard-wrap it and
+	// desync the alt-screen renderer (truncPad is a no-op when it already fits).
+	return m.viewHeader() + "\n" + panel + "\n" + truncPad(foot, m.width)
 }
 
 // --- text helpers ---
