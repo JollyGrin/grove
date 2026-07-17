@@ -62,8 +62,9 @@ func CreateSession(name, workDir string) error {
 }
 
 // SplitVertical splits the session's current window horizontally (side-by-side).
+// split-window takes a target-pane, which rejects a bare "=session" (grove-99).
 func SplitVertical(session, workDir string) error {
-	_, err := run("split-window", "-h", "-t", Exact(session), "-c", workDir)
+	_, err := run("split-window", "-h", "-t", ExactActive(session), "-c", workDir)
 	return err
 }
 

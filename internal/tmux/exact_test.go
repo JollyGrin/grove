@@ -20,6 +20,12 @@ func TestExact(t *testing.T) {
 	}
 }
 
+func TestExactActive(t *testing.T) {
+	if got := ExactActive("grove"); got != "=grove:" {
+		t.Errorf("ExactActive(grove) = %q, want =grove:", got)
+	}
+}
+
 // scratchServer isolates every tmux call in this test process onto a
 // throwaway server. Cleanups run LIFO: the scoped kill-server registered
 // here fires while the scratch env is still in place, then t.Setenv's own
@@ -102,5 +108,48 @@ func TestCreateWindowSessionExactCollision(t *testing.T) {
 	}
 	if SessionExists("grov") {
 		t.Error("SessionExists(grov) matched a longer session name")
+	}
+}
+
+// grove-99: tmux 3.6a rejects a bare "=name" -t on commands whose target is
+// a pane or window — set-option, show-options, select-layout, split-window
+// all died with "no such session"/"can't find pane", so every cockpit build
+// failed at SetCockpitLayout. Those helpers must anchor via ExactActive
+// ("=name:"); this exercises each one against a real server.
+func TestPaneTargetHelpersExactSession(t *testing.T) {
+	scratchServer(t)
+	dir := t.TempDir()
+
+	if _, err := run("new-session", "-d", "-s", "grove-x", "-n", "cockpit", "-c", dir); err != nil {
+		t.Fatalf("new-session grove-x: %v", err)
+	}
+
+	if err := SetCockpitLayout("grove-x", "horizontal"); err != nil {
+		t.Fatalf("SetCockpitLayout: %v", err)
+	}
+	if got := CockpitLayout("grove-x"); got != "horizontal" {
+		t.Errorf("CockpitLayout = %q, want horizontal", got)
+	}
+	if err := SetTitle("grove-x", "grove-x"); err != nil {
+		t.Fatalf("SetTitle: %v", err)
+	}
+	if CockpitReady("grove-x") {
+		t.Error("CockpitReady before MarkCockpitReady, want false")
+	}
+	if err := MarkCockpitReady("grove-x"); err != nil {
+		t.Fatalf("MarkCockpitReady: %v", err)
+	}
+	if !CockpitReady("grove-x") {
+		t.Error("CockpitReady after MarkCockpitReady, want true")
+	}
+	// SpawnPane covers split-window + the CockpitLayout read + SelectLayout.
+	if _, err := SpawnPane("grove-x", dir, "true"); err != nil {
+		t.Fatalf("SpawnPane: %v", err)
+	}
+	if err := MainVertical("grove-x", 55); err != nil {
+		t.Fatalf("MainVertical: %v", err)
+	}
+	if err := SelectLayout("grove-x", "tiled"); err != nil {
+		t.Fatalf("SelectLayout: %v", err)
 	}
 }

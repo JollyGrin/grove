@@ -80,6 +80,20 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-17 · `=`-anchoring is only valid where `-t` is a
+  target-session** (grove-99, live repro on tmux 3.6a) — grove-78's blanket
+  `Exact()` broke every cockpit build: commands whose `-t` is a
+  target-pane/target-window (`set-option`, `show-options`, `select-layout`,
+  `split-window`) reject a bare `=name` with "no such session" / "can't
+  find pane", while `has-session`/`kill-session`/`new-window`/
+  `list-windows` accept it. The universal safe form for the pane/window
+  class is `=name:` (trailing colon: exact session, its active window) —
+  `tmux.ExactActive`. Symptom chain: `CockpitReady`'s `show-options`
+  always-false → forced rebuild → death at `SetCockpitLayout`, so `gv`
+  could never open a cockpit. `e2e/cockpit.sh` catches it (it was red on
+  main — grove-78 merged without running it, the grove-79 lesson again);
+  regression test `TestPaneTargetHelpersExactSession` now runs every
+  affected helper against a scratch server.
 - **2026-07-13 · a bare `-t <session>` target matches window names across
   ALL sessions** (grove-78, live repro) — with a session literally named
   `grove` plus a worker window `grove · grove-75-…` in a *different*

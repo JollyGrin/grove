@@ -23,6 +23,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Cockpit build restored on tmux 3.6a (grove-99, 2026-07-17):
+      grove-78's blanket `=`-anchor broke every pane/window-target command
+      (`set-option`/`show-options`/`select-layout`/`split-window` reject
+      bare `=name` → `gv` died at SetCockpitLayout, CockpitReady always
+      false); those helpers now anchor via `tmux.ExactActive` (`=name:`),
+      Exact stays for true session-target commands; regression test vs
+      scratch server + e2e/cockpit.sh back to green. Leftover: workspace.sh
+      still red — legacy-path grab vs `.grove/tasks` workspace marker
+      (issue #100)
 - [x] Sweep offers: orphan kill + idle pause (grove-92, 2026-07-17):
       `gv sweep` gains two per-row-confirmed offer types — orphan process
       → plain-SIGTERM `kill <pid>` (a survivor is reported, never
