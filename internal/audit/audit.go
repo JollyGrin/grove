@@ -18,6 +18,7 @@ const (
 	Healthy      Class = "healthy"
 	Merged       Class = "merged"
 	Paused       Class = "paused"
+	Idle         Class = "idle"
 	Disconnected Class = "disconnected"
 	Abandoned    Class = "abandoned"
 	Drifted      Class = "drifted"
@@ -36,23 +37,31 @@ type Facts struct {
 	PRKnown        bool          `json:"pr_known"` // false = lookup failed; never enough to call abandoned
 	PRState        string        `json:"pr_state"` // OPEN | MERGED | CLOSED | "" (none)
 	Agent          string        `json:"agent"`
-	Parked         bool          `json:"parked"` // workspace parked (grove-33) — resumable, never abandoned
-	Paused         bool          `json:"paused"` // task paused via gv pause (grove-90) — a bookmark, never abandoned
-	Age            time.Duration `json:"-"`      // since the task's last update
+	Sentinel       string        `json:"sentinel,omitempty"` // last STATUS sentinel (question | blocked | done | "")
+	Parked         bool          `json:"parked"`             // workspace parked (grove-33) — resumable, never abandoned
+	Paused         bool          `json:"paused"`             // task paused via gv pause (grove-90) — a bookmark, never abandoned
+	Age            time.Duration `json:"-"`                  // since the task's last update
 }
 
 // Classify maps facts to a class. Precedence: merged > drifted > paused >
-// abandoned > disconnected > healthy. Abandoned requires a definitive
-// answer — a CLOSED PR, or provably no PR plus a dead/idle agent past
-// staleAfter; a failed PR lookup degrades to disconnected/healthy. A
-// parked task (grove-33) is deliberately resumable: its dead window and
-// staleness never make it Abandoned, so it drops to Disconnected ("gv
-// adopt") and is never offered for untrack --rm. A paused task (grove-90,
-// `gv pause`) is a per-ticket bookmark: it classifies Paused ahead of
-// abandoned and disconnected — no matter how stale or dead it looks, a
-// paused task must never fall through to those (a worktree deleted out
-// from under it still reads Drifted, the honest verdict; never abandoned).
-func Classify(f Facts, staleAfter time.Duration) Class {
+// abandoned > disconnected > idle > healthy. Abandoned requires a
+// definitive answer — a CLOSED PR, or provably no PR plus a dead/idle
+// agent past staleAfter; a failed PR lookup degrades to
+// disconnected/healthy. A parked task (grove-33) is deliberately
+// resumable: its dead window and staleness never make it Abandoned, so it
+// drops to Disconnected ("gv adopt") and is never offered for untrack
+// --rm. A paused task (grove-90, `gv pause`) is a per-ticket bookmark: it
+// classifies Paused ahead of abandoned and disconnected — no matter how
+// stale or dead it looks, a paused task must never fall through to those
+// (a worktree deleted out from under it still reads Drifted, the honest
+// verdict; never abandoned). Idle (grove-91) is the finished-but-burning
+// shape: window alive, agent done (STATUS done sentinel) or waiting on a
+// human, and quiet past idleAfter — the worker is holding a CPU for
+// nothing, so audit suggests `gv pause`. It requires a live window by
+// construction (a dead window already read Disconnected above), and a
+// working agent is never idle however quiet it looks — a silent working
+// agent is the stuck shape, which the cost flag owns.
+func Classify(f Facts, staleAfter, idleAfter time.Duration) Class {
 	if f.PRKnown && f.PRState == "MERGED" {
 		return Merged
 	}
@@ -72,6 +81,10 @@ func Classify(f Facts, staleAfter time.Duration) Class {
 	if !f.WindowAlive {
 		return Disconnected
 	}
+	finished := (f.Agent == state.AgentIdle && f.Sentinel == "done") || f.Agent == state.AgentWaiting
+	if finished && f.Age > idleAfter {
+		return Idle
+	}
 	return Healthy
 }
 
@@ -82,6 +95,8 @@ func Suggestion(c Class) string {
 		return "gv done"
 	case Paused:
 		return "gv adopt"
+	case Idle:
+		return "gv pause"
 	case Disconnected:
 		return "gv adopt"
 	case Abandoned:

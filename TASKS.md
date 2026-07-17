@@ -23,6 +23,13 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Audit idle class (grove-91, 2026-07-17): flag finished-but-burning
+      workers — window alive + agent done (idle with STATUS done sentinel)
+      or waiting + quiet past `audit.idle_after` (default 30m,
+      zero/invalid tolerant) classify `idle`, suggestion `gv pause`; ranks
+      below merged/drifted/paused/abandoned/disconnected, working agents
+      never idle (stuck stays the cost flag's job); additive `--json`
+      class + `facts.sentinel`
 - [x] Audit orphan-process report (grove-89, 2026-07-17): `gv audit`
       flags claude/mcp descendants reparented to launchd (ppid==1,
       not in any live tracked pane's ancestry) — pure detection fn

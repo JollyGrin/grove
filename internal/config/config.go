@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -60,7 +61,8 @@ type Config struct {
 		Claude         string `yaml:"claude"`
 	} `yaml:"orchestrator"`
 	Audit struct {
-		StaleDays int `yaml:"stale_days"` // no-PR + dead/idle tasks older than this classify abandoned (default 7)
+		StaleDays int    `yaml:"stale_days"` // no-PR + dead/idle tasks older than this classify abandoned (default 7)
+		IdleAfter string `yaml:"idle_after"` // done/waiting workers quiet longer than this classify idle (default 30m)
 	} `yaml:"audit"`
 	Notify Notify `yaml:"notify"`
 	Cost   struct {
@@ -94,6 +96,17 @@ type Config struct {
 		Effects string `yaml:"effects"`
 		Layout  string `yaml:"layout"`
 	} `yaml:"cockpit"`
+}
+
+// IdleAfter resolves audit.idle_after to a duration. Zero, unset, or
+// invalid falls back to 30m (mirrors CockpitLayout's forgiveness — a typo
+// in the config must never break the audit).
+func (c *Config) IdleAfter() time.Duration {
+	d, err := time.ParseDuration(c.Audit.IdleAfter)
+	if err != nil || d <= 0 {
+		return 30 * time.Minute
+	}
+	return d
 }
 
 // CockpitLayout resolves cockpit.layout to a valid grove layout name.
