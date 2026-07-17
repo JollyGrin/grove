@@ -216,7 +216,10 @@ func (m Model) viewCostsFooter() string {
 	if m.flash != "" {
 		line += "   " + sChrome.Render(m.flash)
 	}
-	return line
+	// grove-53: clamp so a narrow pane never hard-wraps this bare line and
+	// desyncs the alt-screen renderer. truncPad is ANSI-aware and a no-op
+	// passthrough when the line already fits.
+	return truncPad(line, m.width)
 }
 
 // fmtCostUSD mirrors gv cost's table: a ? marks tickets whose model had no

@@ -254,7 +254,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		return m, nil
+		// grove-53 cause (b): a shrink or a SIGWINCH replay on tmux re-attach
+		// leaves stale cells from the old geometry. Force one full repaint per
+		// resize so we always start from a clean slate — no per-frame cost.
+		return m, tea.ClearScreen
 
 	case tickMsg:
 		// The single cockpit beat (grove-24): advance the animation clock,
