@@ -260,3 +260,14 @@
   detection must test the cwd ITSELF (≥2 direct child repos AND cwd is not
   the git root) before trusting any enclosing repo root. Field-hit on
   the operator's machine within minutes of shipping.
+- **2026-07-17 · audit called every live worker disconnected — glyphed
+  window names vs exact compare** — grove-47's state glyphs append
+  ` ⏸`/` ●` to live window names; `tmux.WindowExists` compared the
+  listed names against the stored glyph-less name with `==`, so
+  `WindowAlive` was always false and `gv audit` suggested `gv adopt`
+  for healthy, minutes-old workers (caught live on grove-89/90 before
+  any adopt fired). The rule already existed in tmux-discipline
+  ("never rely on exact window-name equality") — the check predated
+  the glyphs and nobody re-audited it when grove-47 shipped. When a
+  feature decorates a shared identifier, grep for every consumer that
+  compares it. Fixed in grove-94 (match exact or `stored + " "` prefix).

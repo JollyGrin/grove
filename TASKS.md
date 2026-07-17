@@ -23,6 +23,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Audit orphan-process report (grove-89, 2026-07-17): `gv audit`
+      flags claude/mcp descendants reparented to launchd (ppid==1,
+      not in any live tracked pane's ancestry) — pure detection fn
+      over injected ps/tmux text, additive `orphan_processes` in
+      `--json`, human output prints a suggested `kill <pid>`;
+      report-only, audit stays pure read
+- [x] WindowExists glyph fix (grove-94, 2026-07-17): live window names
+      carry grove-47 state glyphs (`… ⏸`), audit's exact-equality
+      check classified every live worker `disconnected`; now matches
+      stored name exactly or as `stored + " "` prefix; kill/target
+      paths untouched
 - [x] `gv pause` (grove-90, 2026-07-17): park one worker — kill its window
       (worktree/branch/transcript untouched), `task_paused` event +
       `Task.Paused` fold, audit class `paused` (never falls through to
