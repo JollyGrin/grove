@@ -157,7 +157,19 @@
 
 ## Go / CLI
 
-- **2026-07-13 · the first cockpit frame renders with ZERO events — clamp
+- **2026-07-17 · a default backend's storage dir must never double as a
+  scope marker** (grove-100). The workspace marker was "any `.grove/`
+  dir" — but the markdown backend (grove's default) stores its tasks in
+  `.grove/tasks/`, so every `gv init`-scaffolded repo instantly became an
+  unregistered "workspace" and grove-78's fail-closed grab guard broke
+  the global-config grab path, i.e. the default onboarding flow.
+  workspace.sh's legacy section had it red on main for days, masked by
+  an earlier cockpit failure in the same suite. Fix: the marker now
+  requires workspace substance — `config.yaml`, `state/`, or
+  `orchestrator/` inside `.grove/`. The rule: when a scope marker and a
+  default-on feature share a directory, the marker predicate must key on
+  files only the scope's own init writes, or the default feature silently
+  flips everyone into the scoped regime.
   every row budget to its data** (grove-79). Events load async, so
   `View()` always runs once against an empty feed; `viewActivity`'s
   `items[:avail]` used the rowBudgets leftover unclamped and panicked
