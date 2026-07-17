@@ -32,7 +32,7 @@ var (
 	helpGlobal = []helpEntry{
 		{"?", "this cheat sheet"},
 		{"L", "layout: cycle the cockpit pane split (persisted on the session)"},
-		{"$", "costs: per-ticket spend, ledger history, spend-over-time chart"},
+		{"$", "costs: spend + account tabs — per-ticket spend, ledger, OpenRouter balance"},
 		{"*", "effects: cycle ambient effects off → calm → full (runtime only)"},
 		{"g", "gardens: the almanac — one garden per day, h/l walk days"},
 		{"X", "park: stop workers + orchestrator + cockpit; state stays on disk"},

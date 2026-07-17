@@ -12,6 +12,7 @@ import (
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/ledger"
+	"github.com/JollyGrin/grove/internal/openrouter"
 	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/state"
 )
@@ -96,10 +97,33 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "tab":
+		m.costsTab = (m.costsTab + 1) % 2
+		if m.costsTab == costsTabAccount {
+			// One-shot fetch on tab open (the costsCmd pattern) — the 1s tick
+			// never re-fires it; r refetches manually.
+			return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+		}
+		return m, nil
+	case "o":
+		if m.costsTab == costsTabAccount {
+			m.flash = openURL(openrouter.CreditsURL)
+		}
+		return m, nil
+	case "p":
+		if m.costsTab == costsTabAccount && m.account.fetched && m.account.keyMasked == "" {
+			m.flash = "reading clipboard…"
+			return m, pasteKeyCmd()
+		}
+		return m, nil
 	case "b":
 		m.bucketUnit = m.bucketUnit.Next()
 		return m, nil
 	case "r":
+		if m.costsTab == costsTabAccount {
+			m.flash = "refreshing account…"
+			return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+		}
 		on := !m.costs.recording
 		if err := ledger.SetRecording(m.stateDir, on); err != nil {
 			m.flash = err.Error()
@@ -117,9 +141,12 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) viewCosts() string {
+	if m.costsTab == costsTabAccount {
+		return m.viewAccount()
+	}
 	w := m.width - 4
 
-	var sections []string
+	sections := []string{m.costsTabBar()}
 
 	// Active tickets, live from transcripts.
 	rows := []string{sHeaderCol.Render(truncPad("   "+pad("TICKET", m.ticketColWidth())+pad("EST $", 9)+pad("TURNS", 7)+pad("IN", 9)+pad("OUT", 9)+pad("CACHE%", 8)+pad("MODELS", 12)+"TITLE", w))}
@@ -206,6 +233,7 @@ func (m Model) viewCostsFooter() string {
 		rec = sOK.Render("● on")
 	}
 	keys := []string{
+		sKey.Render("tab") + sFoot.Render(" account"),
 		sKey.Render("r") + sFoot.Render(" record ") + rec,
 		sKey.Render("b") + sFoot.Render(" buckets: "+m.bucketUnit.String()),
 		sKey.Render("esc") + sFoot.Render(" back"),
