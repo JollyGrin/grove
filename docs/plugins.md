@@ -86,9 +86,10 @@ a timer). One record per line:
 
 Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
-`task_done`, `task_untracked`, `task_adopted`. Workspace-scoped (empty
-`ticket`): `workspace_parked`, `orchestrator_closed`. New types will
-appear over time — skip what you don't know.
+`task_done`, `task_untracked`, `task_adopted`, `task_paused`.
+Workspace-scoped (empty `ticket`): `workspace_parked`,
+`orchestrator_closed`. New types will appear over time — skip what you
+don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
 itself does the same).

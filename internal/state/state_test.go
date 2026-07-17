@@ -6,6 +6,57 @@ import (
 	"testing"
 )
 
+// gv pause (grove-90): task_paused bookmarks a deliberately parked worker;
+// adopt (or any live session) clears it. Paused tasks stay Active.
+func TestFoldPause(t *testing.T) {
+	tasks := map[string]*Task{}
+	fold(tasks, Event{Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{
+		"title": "Park me", "repo": "dummy", "branch": "gr-1-park",
+		"worktree": "/tmp/wt/gr-1-park", "tmux_session": "grove-dummy", "tmux_window": "gr-1-park",
+	}})
+	fold(tasks, Event{Type: EvSessionStarted, Ticket: "gr-1", Data: map[string]string{"session_id": "s-1"}})
+	fold(tasks, Event{Type: EvAgentStatus, Ticket: "gr-1", Data: map[string]string{
+		"status": AgentIdle, "sentinel": "none", "message": "midway through the refactor",
+	}})
+
+	fold(tasks, Event{Type: EvTaskPaused, Ticket: "gr-1"})
+	task := tasks["gr-1"]
+	if !task.Paused {
+		t.Fatal("task_paused did not set Paused")
+	}
+	if task.Label() != "paused" {
+		t.Errorf("Label = %q, want paused", task.Label())
+	}
+	if task.Agent != AgentIdle {
+		t.Errorf("Agent = %q, want idle (pause normalizes a possibly-unreported agent)", task.Agent)
+	}
+	if task.SessionID != "s-1" || task.LastMessage != "midway through the refactor" {
+		t.Errorf("pause must not lose session/message: %+v", task)
+	}
+	if len(Active(tasks)) != 1 {
+		t.Error("a paused task must stay active — it is a bookmark, not trash")
+	}
+
+	// The window kill may still deliver a session_ended — paused survives it.
+	fold(tasks, Event{Type: EvSessionEnded, Ticket: "gr-1"})
+	if !task.Paused || task.Label() != "paused" {
+		t.Errorf("session_ended after pause must not unpause: %+v", task)
+	}
+
+	// Adopt resumes and clears the bookmark.
+	fold(tasks, Event{Type: EvTaskAdopted, Ticket: "gr-1", Data: map[string]string{"tmux_window": "gr-1-park"}})
+	if task.Paused {
+		t.Error("task_adopted did not clear Paused")
+	}
+
+	// A live session also un-pauses (self-heal, mirrors ParkedTickets).
+	fold(tasks, Event{Type: EvTaskPaused, Ticket: "gr-1"})
+	fold(tasks, Event{Type: EvSessionStarted, Ticket: "gr-1", Data: map[string]string{"session_id": "s-2"}})
+	if task.Paused {
+		t.Error("session_started did not clear Paused")
+	}
+}
+
 func TestFoldLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	evs := []Event{

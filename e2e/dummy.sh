@@ -140,6 +140,49 @@ grep -q task-001 "$SCRATCH/windows-adopt.out" || fail "adopt did not recreate th
 "$GV" audit --json > "$SCRATCH/audit-adopted.json"
 grep -q '"parked": *true' "$SCRATCH/audit-adopted.json" && fail "adopt did not clear the parked marker" || true
 
+# --- gv pause: park ONE worker, resume losslessly with adopt (grove-90) ---
+
+say "seed a session id via the SessionStart hook so pause→adopt can resume"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"SessionStart"}' "$WTDIR" | "$GV" hook session-start
+grep -q 's-pause-1' "$GROVE_STATE_DIR/events.jsonl" || fail "session-start hook not captured"
+
+say "gv pause guards a mid-turn worker (agent working) behind --force"
+("$GV" pause task-001 2>&1 || true) > "$SCRATCH/pause-guard.out"
+grep -q 'mid-turn' "$SCRATCH/pause-guard.out" || fail "pause should warn about the in-flight turn"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-guard.out"
+grep -q task-001 "$SCRATCH/windows-guard.out" || fail "guarded pause must not kill the window"
+
+say "gv pause --force parks the worker: window dies, worktree survives"
+"$GV" pause task-001 --force | tee "$SCRATCH/pause.out"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-paused.out"
+grep -q task-001 "$SCRATCH/windows-paused.out" && fail "pause did not kill the worker window" || true
+[ -d "$WTDIR" ] || fail "pause must leave the worktree untouched"
+grep -q '"type":"task_paused"' "$GROVE_STATE_DIR/events.jsonl" || fail "pause did not append task_paused"
+
+say "paused stays on the plate: ls --json carries paused, the table shows ⏸"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-paused.json"
+grep -q '"paused": *true' "$SCRATCH/ls-paused.json" || fail "ls --json missing the paused flag"
+"$GV" ls --no-pr --no-cost > "$SCRATCH/ls-paused.txt"
+grep -q '⏸ paused' "$SCRATCH/ls-paused.txt" || fail "ls table missing the ⏸ paused status"
+
+say "gv pause refuses a second time (already paused)"
+("$GV" pause task-001 2>&1 || true) | grep -q 'already paused' || fail "double pause should refuse"
+
+say "audit classifies paused — never disconnected, never abandoned (grove-90)"
+"$GV" audit --json > "$SCRATCH/audit-paused.json"
+grep -q '"class": *"paused"' "$SCRATCH/audit-paused.json" || fail "audit did not classify the task paused"
+grep -q '"suggestion": *"gv adopt"' "$SCRATCH/audit-paused.json" || fail "paused suggestion should be gv adopt"
+grep -q '"class": *"disconnected"' "$SCRATCH/audit-paused.json" && fail "paused fell through to disconnected" || true
+grep -q '"class": *"abandoned"' "$SCRATCH/audit-paused.json" && fail "paused fell through to abandoned" || true
+
+say "gv adopt resumes the paused worker via --resume <sessionID>"
+"$GV" adopt task-001 | tee "$SCRATCH/adopt-paused.out"
+grep -q 'resume s-pause-1' "$SCRATCH/adopt-paused.out" || fail "adopt did not resume the stored session id"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-resumed.out"
+grep -q task-001 "$SCRATCH/windows-resumed.out" || fail "adopt did not recreate the worker window"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-resumed.json"
+grep -q '"paused": *true' "$SCRATCH/ls-resumed.json" && fail "adopt did not clear the paused flag" || true
+
 say "gv untrack --rm --force (degraded: no remote to verify against)"
 "$GV" untrack task-001 --rm --force | tee "$SCRATCH/untrack.out"
 [ ! -d "$WTDIR" ] || fail "worktree survived untrack --rm"

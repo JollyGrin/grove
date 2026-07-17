@@ -329,6 +329,11 @@ func (m Model) viewDetail() string {
 	var sections []string
 	sections = append(sections, head, "")
 
+	if t.Paused {
+		// No live pane to scrape (grove-90): the stored last_message below is
+		// the freshest signal, and the one next action is the adopt.
+		sections = append(sections, sChrome.Render("⏸ paused — no live pane · resume: gv adopt "+t.Ticket), "")
+	}
 	if t.Question != "" {
 		sections = append(sections, sQuestion.Render("◆ "+t.Question), "")
 	}

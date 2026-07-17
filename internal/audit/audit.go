@@ -17,6 +17,7 @@ type Class string
 const (
 	Healthy      Class = "healthy"
 	Merged       Class = "merged"
+	Paused       Class = "paused"
 	Disconnected Class = "disconnected"
 	Abandoned    Class = "abandoned"
 	Drifted      Class = "drifted"
@@ -36,22 +37,30 @@ type Facts struct {
 	PRState        string        `json:"pr_state"` // OPEN | MERGED | CLOSED | "" (none)
 	Agent          string        `json:"agent"`
 	Parked         bool          `json:"parked"` // workspace parked (grove-33) — resumable, never abandoned
+	Paused         bool          `json:"paused"` // task paused via gv pause (grove-90) — a bookmark, never abandoned
 	Age            time.Duration `json:"-"`      // since the task's last update
 }
 
-// Classify maps facts to a class. Precedence: merged > drifted >
+// Classify maps facts to a class. Precedence: merged > drifted > paused >
 // abandoned > disconnected > healthy. Abandoned requires a definitive
 // answer — a CLOSED PR, or provably no PR plus a dead/idle agent past
 // staleAfter; a failed PR lookup degrades to disconnected/healthy. A
 // parked task (grove-33) is deliberately resumable: its dead window and
 // staleness never make it Abandoned, so it drops to Disconnected ("gv
-// adopt") and is never offered for untrack --rm.
+// adopt") and is never offered for untrack --rm. A paused task (grove-90,
+// `gv pause`) is a per-ticket bookmark: it classifies Paused ahead of
+// abandoned and disconnected — no matter how stale or dead it looks, a
+// paused task must never fall through to those (a worktree deleted out
+// from under it still reads Drifted, the honest verdict; never abandoned).
 func Classify(f Facts, staleAfter time.Duration) Class {
 	if f.PRKnown && f.PRState == "MERGED" {
 		return Merged
 	}
 	if !f.WorktreeExists {
 		return Drifted
+	}
+	if f.Paused {
+		return Paused
 	}
 	if f.PRKnown && f.PRState == "CLOSED" {
 		return Abandoned
@@ -71,6 +80,8 @@ func Suggestion(c Class) string {
 	switch c {
 	case Merged:
 		return "gv done"
+	case Paused:
+		return "gv adopt"
 	case Disconnected:
 		return "gv adopt"
 	case Abandoned:

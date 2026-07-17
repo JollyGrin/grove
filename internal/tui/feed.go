@@ -41,6 +41,8 @@ func feedItems(events []state.Event) []feedItem {
 			it = feedItem{Glyph: "⬢", Text: "done — cleaned up"}
 		case state.EvTaskUntracked:
 			it = feedItem{Glyph: "○", Text: "untracked"}
+		case state.EvTaskPaused:
+			it = feedItem{Glyph: "⏸", Text: "paused — worker parked, gv adopt resumes"}
 		case state.EvWorkspaceParked:
 			// Workspace-level, ticket-less (grove-33): render it as a standalone
 			// feed row so a reopened cockpit shows why the fleet went quiet.

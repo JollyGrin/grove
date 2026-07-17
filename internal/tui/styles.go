@@ -64,6 +64,8 @@ func statusStyle(label string) lipgloss.Style {
 		return sWorking
 	case "setup", "queued":
 		return sSetup
+	case "paused":
+		return sIdle // deliberate park (grove-90) — calm bark, never alarm
 	default:
 		return sIdle
 	}
@@ -83,6 +85,8 @@ func statusGlyph(label string) string {
 		return "◌"
 	case "idle ✓":
 		return "✓"
+	case "paused":
+		return "⏸"
 	default:
 		return "○"
 	}

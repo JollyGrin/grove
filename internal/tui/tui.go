@@ -237,6 +237,11 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 }
 
 func paneTailCmd(t *state.Task) tea.Cmd {
+	// A paused worker has no pane to scrape (grove-90) — the detail view
+	// renders the stored last_message plus the gv adopt hint instead.
+	if t.Paused {
+		return nil
+	}
 	return func() tea.Msg {
 		out, _ := tmux.CapturePaneBottom(t.TmuxSession+":"+t.TmuxWindow+".1", 14)
 		return paneTailMsg(out)
@@ -781,10 +786,14 @@ func openURL(url string) string {
 	return "opened " + url
 }
 
-// mailRows: tasks demanding a human decision.
+// mailRows: tasks demanding a human decision. A paused task never is one —
+// its idle/dead shape is deliberate (grove-90), not a stall.
 func (m Model) mailRows() []*state.Task {
 	var rows []*state.Task
 	for _, t := range m.tasks {
+		if t.Paused {
+			continue
+		}
 		if t.Agent == state.AgentWaiting || t.Agent == state.AgentBlocked || t.Agent == state.AgentDead ||
 			(t.Agent == state.AgentIdle && t.Sentinel == "none") {
 			rows = append(rows, t)

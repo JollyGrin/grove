@@ -35,9 +35,10 @@ append-only JSONL log, one record per line:
 `{"time", "type", "ticket", "data"{...}, "v"}`. Records without `v` are
 v1. Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
-`task_done`, `task_untracked`, `task_adopted`; workspace-scoped (empty
-ticket): `workspace_parked`, `orchestrator_closed`. Skip unknown types
-and lines that fail to parse (the last line may be torn mid-write).
+`task_done`, `task_untracked`, `task_adopted`, `task_paused`;
+workspace-scoped (empty ticket): `workspace_parked`, `orchestrator_closed`.
+Skip unknown types and lines that fail to parse (the last line may be
+torn mid-write).
 
 **Steer.** Mutations shell out to `gv` — it resolves the tmux pane, does
 safe paste injection, and appends the event for you:
