@@ -169,7 +169,7 @@ func (m Model) viewCosts() string {
 
 	// Spend-over-time bars.
 	n := bucketCounts[m.bucketUnit]
-	buckets := cost.Buckets(m.costs.points, m.bucketUnit, n, time.Now())
+	buckets := cost.Buckets(m.costs.points, m.bucketUnit, n, time.Now(), time.Local)
 	var maxUSD, totUSD float64
 	for _, b := range buckets {
 		totUSD += b.USD
@@ -189,7 +189,7 @@ func (m Model) viewCosts() string {
 			amount = fmt.Sprintf(" $%.2f", b.USD)
 		}
 		chart = append(chart, truncPad(fmt.Sprintf("   %s %s%s",
-			sChrome.Render(pad(m.bucketUnit.Label(b.Start), 6)),
+			sChrome.Render(pad(m.bucketUnit.Label(b.Start, time.Local), 6)),
 			sDelivery.Render(bar),
 			sChrome.Render(amount)), w))
 	}
