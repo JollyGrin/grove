@@ -90,6 +90,8 @@ type Model struct {
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
+	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
+	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
 
 	flash string
 
@@ -339,6 +341,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.costs = msg
 		return m, nil
 
+	case accountMsg:
+		m.account = msg
+		return m, nil
+
+	case keySavedMsg:
+		// Paste flow succeeded (grove-87): the key is validated and saved in
+		// ~/.config/grove/.env — refetch so the connect prompt becomes data.
+		m.flash = "✓ key saved to ~/.config/grove/.env (" + msg.masked + ")"
+		return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+
 	case almanacMsg:
 		// A one-shot snapshot (grove-63 S4) — never re-fired by the 1s tick,
 		// unlike costs. m.almSel lands on the newest day (today).
@@ -560,6 +572,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flash = ""
 	case "$", "c":
 		m.mode = modeCosts
+		m.costsTab = costsTabSpend // $ always lands on SPEND (grove-87)
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs

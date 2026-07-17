@@ -222,6 +222,46 @@ func SetRecording(stateDir string, on bool) error {
 	return os.WriteFile(togglePath(stateDir), []byte(v+"\n"), 0o644)
 }
 
+// ModelDeltaSpend attributes each ticket's USD growth at or after since to
+// models via the row's recorded mix (grove-87's BY MODEL totals): per
+// ticket, each row's delta since the previous snapshot splits by that row's
+// MixShares. Rows without a parseable mix (pre-grove-14 13-column rows)
+// land under "other" — visible, never silently dropped. Tickets in exclude
+// are skipped: their window is counted precisely from live transcripts, and
+// double counting would inflate the totals.
+func ModelDeltaSpend(rows []Row, exclude map[string]bool, since time.Time) map[string]float64 {
+	byTicket := map[string][]Row{}
+	for _, r := range rows {
+		if exclude[r.Ticket] {
+			continue
+		}
+		byTicket[r.Ticket] = append(byTicket[r.Ticket], r)
+	}
+	out := map[string]float64{}
+	for _, trs := range byTicket {
+		sort.Slice(trs, func(i, j int) bool { return trs[i].Time.Before(trs[j].Time) })
+		prev := 0.0
+		for _, r := range trs {
+			d := r.USD - prev
+			if r.USD > prev {
+				prev = r.USD
+			}
+			if d <= 0 || r.Time.Before(since) {
+				continue
+			}
+			shares := cost.MixShares(r.Models)
+			if shares == nil {
+				out["other"] += d
+				continue
+			}
+			for model, share := range shares {
+				out[model] += d * share
+			}
+		}
+	}
+	return out
+}
+
 // DeltaPoints turns cumulative ledger rows into chartable spend deltas:
 // per ticket, each row contributes the USD growth since the previous
 // snapshot at the row's timestamp (the first row contributes its full

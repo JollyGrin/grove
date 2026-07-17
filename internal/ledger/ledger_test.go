@@ -252,3 +252,35 @@ func TestDeltaPoints(t *testing.T) {
 	}
 	var _ []cost.Point = pts // points must be chartable by cost.Buckets
 }
+
+func TestModelDeltaSpend(t *testing.T) {
+	t0 := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	mixed := row("a", t0, 1.0)
+	mixed.Models = "fable 90% · haiku 10%"
+	mixed2 := row("a", t0.Add(time.Hour), 3.0) // +2.0, same mix
+	mixed2.Models = "fable 90% · haiku 10%"
+	old := row("b", t0.Add(-48*time.Hour), 5.0) // before since — dropped
+	old.Models = "fable 100%"
+	bare := row("c", t0, 2.0) // pre-grove-14 row: no mix → "other"
+	live := row("live", t0, 9.0)
+	live.Models = "fable 100%"
+
+	got := ModelDeltaSpend([]Row{mixed, mixed2, old, bare, live},
+		map[string]bool{"live": true}, t0.Add(-time.Hour))
+	if v := got["fable"]; v < 2.69 || v > 2.71 { // 3.0 total growth × 90%
+		t.Errorf("fable = %v, want 2.7 (got %v)", v, got)
+	}
+	if v := got["haiku"]; v < 0.29 || v > 0.31 {
+		t.Errorf("haiku = %v, want 0.3", v)
+	}
+	if got["other"] != 2.0 {
+		t.Errorf("other = %v, want 2.0 (mixless row)", got["other"])
+	}
+	var total float64
+	for _, v := range got {
+		total += v
+	}
+	if total < 4.99 || total > 5.01 { // excluded live and pre-since rows out
+		t.Errorf("total = %v, want 5.0", total)
+	}
+}
