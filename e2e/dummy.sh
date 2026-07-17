@@ -49,6 +49,7 @@ DUMMY="$SCRATCH/repos/dummy"
 SESSION="grove-dummy"
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+  kill "${ORPHAN_PID:-}" 2>/dev/null || true   # grove-92 seeded lookalike, if a fail left it running
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
   rm -rf "$SCRATCH"
 }
@@ -182,6 +183,84 @@ tmux list-windows -t "$SESSION" > "$SCRATCH/windows-resumed.out"
 grep -q task-001 "$SCRATCH/windows-resumed.out" || fail "adopt did not recreate the worker window"
 "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-resumed.json"
 grep -q '"paused": *true' "$SCRATCH/ls-resumed.json" && fail "adopt did not clear the paused flag" || true
+
+# --- gv sweep offers: idle → pause, orphan process → kill, paused invisible (grove-92) ---
+# Every sweep below runs with `ps` stubbed via PATH so the process table gv
+# sees is fully controlled — a piped `y` must never be able to reach a real
+# process on this machine. The "orphan" is a sleep we own, dressed in
+# claude-shaped args by the stub; the SIGTERM goes to its real pid.
+
+say "stub ps (empty table) so orphan scans are deterministic"
+STUBBIN="$SCRATCH/bin"
+mkdir -p "$STUBBIN"
+cat > "$STUBBIN/ps" <<'PSEOF'
+#!/bin/sh
+echo "  PID  PPID  %CPU ELAPSED ARGS"
+PSEOF
+chmod +x "$STUBBIN/ps"
+REAL_PATH="$PATH"
+export PATH="$STUBBIN:$PATH"
+
+say "make task-001 idle: agent done + quiet past a tiny idle_after"
+printf 'audit:\n  idle_after: 1ms\n' >> "$WCFG"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — wrapped up"}' \
+  "$WTDIR" | "$GV" hook stop
+"$GV" audit --json > "$SCRATCH/audit-idle.json"
+grep -q '"class": *"idle"' "$SCRATCH/audit-idle.json" || fail "done+quiet worker should classify idle"
+
+say "sweep --json offers pause for the idle worker without acting"
+"$GV" sweep --json > "$SCRATCH/sweep-idle.json"
+grep -q '"class": *"idle"' "$SCRATCH/sweep-idle.json" || fail "sweep --json missing the idle offer"
+grep -q '"action": *"pause' "$SCRATCH/sweep-idle.json" || fail "idle offer action should be pause"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-sweepjson.out"
+grep -q task-001 "$SCRATCH/windows-sweepjson.out" || fail "sweep --json must not act"
+
+say "pause offer declined → worker untouched"
+PAUSED_BEFORE=$(grep -c '"type":"task_paused"' "$GROVE_STATE_DIR/events.jsonl")
+printf 'n\n' | "$GV" sweep > "$SCRATCH/sweep-decline.out"
+grep -q 'pause' "$SCRATCH/sweep-decline.out" || fail "sweep did not offer pause interactively"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-decline.out"
+grep -q task-001 "$SCRATCH/windows-decline.out" || fail "declined sweep must not kill the window"
+[ "$(grep -c '"type":"task_paused"' "$GROVE_STATE_DIR/events.jsonl")" -eq "$PAUSED_BEFORE" ] || fail "declined sweep appended task_paused"
+
+say "pause offer confirmed → window gone, task paused"
+printf 'y\n' | "$GV" sweep > "$SCRATCH/sweep-confirm.out"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-swept.out"
+grep -q task-001 "$SCRATCH/windows-swept.out" && fail "confirmed sweep did not kill the idle window" || true
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-swept.json"
+grep -q '"paused": *true' "$SCRATCH/ls-swept.json" || fail "swept idle task should be paused"
+
+say "paused is invisible to sweep: ZERO offers of any kind (grove-92 hard rule)"
+"$GV" sweep --json > "$SCRATCH/sweep-paused.json"
+grep -q 'task-001' "$SCRATCH/sweep-paused.json" && fail "paused task appeared in sweep offers" || true
+
+say "seed an orphan-lookalike: real sleep pid, claude-shaped args via the ps stub"
+sleep 300 &
+ORPHAN_PID=$!
+cat > "$STUBBIN/ps" <<PSEOF
+#!/bin/sh
+echo "  PID  PPID  %CPU ELAPSED ARGS"
+echo "  $ORPHAN_PID     1   0.0   05:00 claude --resume orphan-e2e"
+PSEOF
+"$GV" sweep --json > "$SCRATCH/sweep-orphan.json"
+grep -q '"pid": *'"$ORPHAN_PID" "$SCRATCH/sweep-orphan.json" || fail "sweep --json missing the orphan-process kill offer"
+kill -0 "$ORPHAN_PID" 2>/dev/null || fail "sweep --json must not kill"
+
+say "kill offer declined → process untouched"
+printf 'n\n' | "$GV" sweep > "$SCRATCH/sweep-orphan-decline.out"
+grep -q "$ORPHAN_PID" "$SCRATCH/sweep-orphan-decline.out" || fail "sweep did not offer the kill interactively"
+kill -0 "$ORPHAN_PID" 2>/dev/null || fail "declined kill must leave the process alone"
+
+say "kill offer confirmed → SIGTERM, process gone (never SIGKILL)"
+printf 'y\n' | "$GV" sweep > "$SCRATCH/sweep-orphan-confirm.out"
+grep -q "pid $ORPHAN_PID terminated" "$SCRATCH/sweep-orphan-confirm.out" || fail "sweep did not report the SIGTERM landing"
+kill -0 "$ORPHAN_PID" 2>/dev/null && fail "confirmed kill left the process alive" || true
+
+say "restore real ps; adopt the paused worker back for the untrack leg"
+export PATH="$REAL_PATH"
+"$GV" adopt task-001 > "$SCRATCH/adopt-sweep.out"
+tmux list-windows -t "$SESSION" > "$SCRATCH/windows-readopt.out"
+grep -q task-001 "$SCRATCH/windows-readopt.out" || fail "adopt after sweep-pause did not rebuild the window"
 
 say "gv untrack --rm --force (degraded: no remote to verify against)"
 "$GV" untrack task-001 --rm --force | tee "$SCRATCH/untrack.out"

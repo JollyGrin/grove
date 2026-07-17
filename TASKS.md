@@ -23,6 +23,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Sweep offers: orphan kill + idle pause (grove-92, 2026-07-17):
+      `gv sweep` gains two per-row-confirmed offer types — orphan process
+      → plain-SIGTERM `kill <pid>` (a survivor is reported, never
+      SIGKILLed) and idle worker → `gv pause`; offer-building extracted to
+      pure `audit.SweepOffers`, which drops paused rows on the paused FACT
+      (not class — Merged outranks Paused in Classify), so a paused task
+      yields ZERO offers of any kind; `sweep --json` adds additive
+      `orphan_processes`; e2e stubs `ps` via PATH so a piped `y` can never
+      reach a real process
 - [x] Audit idle class (grove-91, 2026-07-17): flag finished-but-burning
       workers — window alive + agent done (idle with STATUS done sentinel)
       or waiting + quiet past `audit.idle_after` (default 30m,
