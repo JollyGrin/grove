@@ -62,6 +62,8 @@ const usage = `gv — grove
   gv attach <ticket>                          jump into the tmux window
   gv diff <ticket> [--stat]                   branch diff vs base — review without attach
   gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
+  gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
+                                              branch, and uncommitted changes survive; resume: gv adopt
   gv done <ticket> [--force]                  verify merged → clean up everything
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
   gv sweep                                    clean up all merged tasks
@@ -226,6 +228,8 @@ func main() {
 		err = cmdDiff(args)
 	case "adopt":
 		err = cmdAdopt(args)
+	case "pause":
+		err = cmdPause(args)
 	case "done":
 		err = cmdDone(args)
 	case "untrack":
@@ -1376,8 +1380,12 @@ func cmdLs(args []string) error {
 				preview = "⬡ up"
 			}
 		}
+		status := r.Label()
+		if r.Paused {
+			status = "⏸ " + status // paused stays on the plate, visibly resumable (grove-90)
+		}
 		line := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
-			r.Ticket, r.Repo, r.Label(), r.Live, pr, ci, preview, fmtUSD(r.Cost), age(r.Created))
+			r.Ticket, r.Repo, status, r.Live, pr, ci, preview, fmtUSD(r.Cost), age(r.Created))
 		if anyProfile {
 			prof := "—"
 			if r.ModelProfile != "" {
@@ -2163,6 +2171,50 @@ func cmdAdopt(args []string) error {
 		how += ", model " + *modelFlag
 	}
 	fmt.Printf("✓ %s adopted (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", id, how, id)
+	return nil
+}
+
+// --- pause ---
+
+// cmdPause parks one worker (grove-90): kill its tmux window to free the
+// CPU its node process + MCP children burn, leaving worktree, branch, and
+// session transcript untouched — `gv adopt <ticket>` resumes the stored
+// session losslessly. Paused is a bookmark, not trash: the task stays in
+// `gv ls` (⏸), audit classifies it `paused` (never abandoned), and sweep
+// never offers cleanup for it.
+func cmdPause(args []string) error {
+	echoWorkspace()
+	fs := flag.NewFlagSet("pause", flag.ExitOnError)
+	force := fs.Bool("force", false, "pause even mid-turn (the in-flight turn is lost; everything committed to the transcript survives)")
+	positionals := parseAnywhere(fs, args)
+	if len(positionals) != 1 {
+		return fmt.Errorf("usage: gv pause <ticket> [--force]  (kills the window only — worktree, branch, and uncommitted changes survive; resume: gv adopt <ticket>)")
+	}
+	t, err := findTask(positionals[0])
+	if err != nil {
+		return err
+	}
+	windowLive := tmux.WindowLive(t.TmuxSession, t.TmuxWindow)
+	if t.Paused && !windowLive {
+		return fmt.Errorf("%s is already paused — `gv adopt %s` resumes it", t.Ticket, t.Ticket)
+	}
+	// Mid-turn guard: agent state `working` means a turn is in flight
+	// (hooks are truth — Stop hasn't fired). Killing now loses only that
+	// turn, but the operator should choose that knowingly.
+	if t.Agent == state.AgentWorking && !*force {
+		return fmt.Errorf("%s appears mid-turn (agent working) — pausing now loses the in-flight turn; `gv pause %s --force` to pause anyway", t.Ticket, t.Ticket)
+	}
+	// Event BEFORE the kill (the grove-33 park pattern): the bookmark must
+	// be durable even if this process dies with the window.
+	if err := state.Append(stateDir(), state.Event{Type: state.EvTaskPaused, Ticket: t.Ticket}); err != nil {
+		return err
+	}
+	if windowLive {
+		if err := tmux.KillWindow(t.TmuxSession, t.TmuxWindow); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("⏸ %s paused — window killed; worktree, branch, and uncommitted changes untouched\n  resume: gv adopt %s\n", t.Ticket, t.Ticket)
 	return nil
 }
 

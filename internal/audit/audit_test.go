@@ -28,6 +28,13 @@ func TestClassify(t *testing.T) {
 		{"no pr + working + stale is healthy (agent alive)", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "", Agent: state.AgentWorking, Age: 10 * 24 * time.Hour}, Healthy},
 		{"missing worktree is drifted regardless of window", Facts{WorktreeExists: false, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentWorking}, Drifted},
 		{"missing worktree with merged pr is still merged (done now handles it)", Facts{WorktreeExists: false, WindowAlive: false, PRKnown: true, PRState: "MERGED", Agent: state.AgentDead}, Merged},
+		// gv pause (grove-90): a paused task with a missing window is Paused —
+		// never Disconnected, never Abandoned, however stale or dead it looks.
+		{"paused + window gone is paused, not disconnected", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Paused: true}, Paused},
+		{"paused + no pr + dead + stale is paused, not abandoned", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentDead, Age: 30 * 24 * time.Hour, Paused: true}, Paused},
+		{"paused + closed pr is paused (the bookmark outranks the closed PR)", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "CLOSED", Agent: state.AgentIdle, Paused: true}, Paused},
+		{"paused + merged pr is merged (ship beats bookmark)", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "MERGED", Agent: state.AgentIdle, Paused: true}, Merged},
+		{"paused + missing worktree is drifted (adopt re-creates it)", Facts{WorktreeExists: false, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentIdle, Paused: true}, Drifted},
 	}
 	for _, c := range cases {
 		if got := Classify(c.f, week); got != c.want {
@@ -40,6 +47,7 @@ func TestSuggestion(t *testing.T) {
 	cases := map[Class]string{
 		Healthy:      "",
 		Merged:       "gv done",
+		Paused:       "gv adopt",
 		Disconnected: "gv adopt",
 		Abandoned:    "gv untrack --rm",
 		Drifted:      "gv adopt (or gv untrack)",

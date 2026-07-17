@@ -108,3 +108,39 @@ func TestViewAgentsTitleHint(t *testing.T) {
 		}
 	}
 }
+
+// gv pause (grove-90): a paused row's detail view never scrapes a pane
+// (there is none) — paneTailCmd is nil — and instead surfaces the stored
+// last_message plus the one next action, gv adopt <ticket>. The AGENTS row
+// carries the ⏸ glyph so a parked worker stays visibly on the plate.
+func TestPausedRowDetailAndGlyph(t *testing.T) {
+	paused := &state.Task{
+		Ticket: "grove-90", Repo: "grove", Agent: state.AgentIdle, Paused: true,
+		LastMessage: "parked midway through the refactor",
+	}
+
+	if cmd := paneTailCmd(paused); cmd != nil {
+		t.Error("paneTailCmd must be nil for a paused task — no pane to open")
+	}
+
+	m := New(nil, "", "")
+	m.width, m.height = 100, 30
+	m.detail = paused
+	out := m.viewDetail()
+	if !strings.Contains(out, "gv adopt grove-90") {
+		t.Errorf("paused detail missing the adopt hint:\n%s", out)
+	}
+	if !strings.Contains(out, "parked midway through the refactor") {
+		t.Errorf("paused detail missing the stored last_message:\n%s", out)
+	}
+
+	m.tasks = []*state.Task{paused}
+	if agents := m.viewAgents(); !strings.Contains(agents, "⏸") {
+		t.Errorf("AGENTS row missing the ⏸ paused glyph:\n%s", agents)
+	}
+
+	// Deliberately parked ≠ mail: the idle/dead shape must not raise a flag.
+	if rows := m.mailRows(); len(rows) != 0 {
+		t.Errorf("a paused task must not appear in MAIL, got %d row(s)", len(rows))
+	}
+}

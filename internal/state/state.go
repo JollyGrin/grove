@@ -28,6 +28,7 @@ const (
 	EvTaskDone       = "task_done"
 	EvTaskUntracked  = "task_untracked"
 	EvTaskAdopted    = "task_adopted"
+	EvTaskPaused     = "task_paused"
 )
 
 // Human states (the `human` dimension): "" (untouched) · reviewing ·
@@ -71,17 +72,23 @@ type Task struct {
 	// ModelProfile is the named non-Anthropic backend a worker runs on
 	// (grove-36); empty = the operator's own Claude sub. Additive & optional:
 	// events predating the field simply lack it and fold to "".
-	ModelProfile string    `json:"model_profile,omitempty"`
-	SessionID    string    `json:"claude_session_id,omitempty"`
-	Agent        string    `json:"agent"`
-	Sentinel     string    `json:"sentinel,omitempty"` // question | blocked | done | none
-	Question     string    `json:"question,omitempty"`
-	LastMessage  string    `json:"last_message,omitempty"`
-	Human        string    `json:"human,omitempty"`
-	Attached     bool      `json:"attached"`
-	Done         bool      `json:"done"`
-	Created      time.Time `json:"created"`
-	Updated      time.Time `json:"updated"`
+	ModelProfile string `json:"model_profile,omitempty"`
+	SessionID    string `json:"claude_session_id,omitempty"`
+	Agent        string `json:"agent"`
+	Sentinel     string `json:"sentinel,omitempty"` // question | blocked | done | none
+	Question     string `json:"question,omitempty"`
+	LastMessage  string `json:"last_message,omitempty"`
+	Human        string `json:"human,omitempty"`
+	Attached     bool   `json:"attached"`
+	Done         bool   `json:"done"`
+	// Paused marks a deliberately parked worker (grove-90): its tmux window
+	// was killed to free CPU, but worktree, branch, and session transcript
+	// all survive — `gv adopt` resumes the stored session and clears the
+	// flag. A bookmark, never trash: paused tasks stay in Active().
+	// Additive & optional: events predating the field fold to false.
+	Paused  bool      `json:"paused,omitempty"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -185,11 +192,13 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.ModelProfile = d["model_profile"] // "" for unprofiled + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
+		t.Paused = false
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
 			t.Agent = AgentWorking
 		}
+		t.Paused = false // any live session un-pauses (mirrors ParkedTickets)
 	case EvAgentStatus:
 		t.Agent = d["status"]
 		t.Sentinel = d["sentinel"]
@@ -210,6 +219,13 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Done = true
 	case EvTaskUntracked:
 		t.Done = true // leaves Active(); the event type keeps the distinction in history
+	case EvTaskPaused:
+		// Deliberate park (grove-90). Agent normalizes to idle so a paused
+		// worker never ghosts the working counts — the window kill that
+		// follows the append may or may not deliver a session_ended.
+		// Sentinel/question/last_message survive: paused is a bookmark.
+		t.Paused = true
+		t.Agent = AgentIdle
 	case EvTaskAdopted:
 		// Refresh only the fields the event carries — an adopt may reuse
 		// the existing worktree/window, and title/url/repo survive from
@@ -237,6 +253,7 @@ func fold(tasks map[string]*Task, ev Event) {
 			}
 		}
 		t.Done = false
+		t.Paused = false
 		t.Agent = AgentSetup
 		t.Sentinel, t.Question = "", ""
 	}
@@ -247,6 +264,8 @@ func (t *Task) Label() string {
 	switch {
 	case t.Done:
 		return "done"
+	case t.Paused:
+		return "paused"
 	case t.Agent == AgentWaiting:
 		return "QUESTION"
 	case t.Agent == AgentBlocked:
@@ -294,6 +313,9 @@ func Glyph(agent, sentinel string) string {
 
 // SortRank orders by actionability: things needing a human float up.
 func (t *Task) SortRank() int {
+	if t.Paused {
+		return 4 // parked on purpose (grove-90) — calm, sorts with setup
+	}
 	switch t.Agent {
 	case AgentWaiting:
 		return 0

@@ -23,6 +23,13 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] `gv pause` (grove-90, 2026-07-17): park one worker — kill its window
+      (worktree/branch/transcript untouched), `task_paused` event +
+      `Task.Paused` fold, audit class `paused` (never falls through to
+      disconnected/abandoned; suggestion `gv adopt`), ⏸ in ls + cockpit,
+      paused detail skips the pane scrape and hints `gv adopt`; mid-turn
+      guard behind `--force`; dummy.sh pause→adopt loop asserts
+      `--resume <sessionID>`
 - [x] Cockpit first-frame panic fix (grove-79, 2026-07-13): viewActivity's
       `items[:avail]` clamped (grove-56 regression — empty feed + small
       leftover panicked the render); narrow/short render-sweep test;

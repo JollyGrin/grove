@@ -87,6 +87,7 @@ func auditTask(cfg *config.Config, t *state.Task, staleAfter time.Duration, cost
 		HasSessionID: t.SessionID != "",
 		Agent:        t.Agent,
 		Parked:       parked,
+		Paused:       t.Paused,
 		Age:          time.Since(t.Updated),
 	}
 	if _, err := os.Stat(t.Worktree); err == nil {
