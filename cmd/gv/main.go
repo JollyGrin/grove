@@ -1480,6 +1480,13 @@ func cmdAudit(args []string) error {
 			fmt.Printf("  %-11s %s%s\n", o.Repo, o.Path, dirty)
 		}
 	}
+	if len(rep.OrphanProcesses) > 0 {
+		fmt.Printf("\nORPHAN PROCESSES (claude/mcp descendants reparented to launchd — report only, never killed by gv):\n")
+		for _, p := range rep.OrphanProcesses {
+			fmt.Printf("  pid %-8d cpu %5.1f%%  elapsed %-10s %s\n", p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 80))
+			fmt.Printf("    kill %d\n", p.PID)
+		}
+	}
 	if len(rep.StalePrompts) > 0 {
 		fmt.Printf("\n%d stale prompt file(s) for done tasks (gv sweep prunes them)\n", len(rep.StalePrompts))
 	}
