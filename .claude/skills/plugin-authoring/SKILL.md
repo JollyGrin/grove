@@ -21,7 +21,7 @@ repo wins.
 |---|---|---|
 | `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task |
 | `gv audit --json` | `report` | task-vs-reality classification |
-| `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, stale_prompts}`) |
+| `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
 | `gv cost --analyze --json` | `report` | outcome-priced ledger |
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |

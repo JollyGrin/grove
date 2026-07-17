@@ -66,7 +66,8 @@ const usage = `gv — grove
                                               branch, and uncommitted changes survive; resume: gv adopt
   gv done <ticket> [--force]                  verify merged → clean up everything
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
-  gv sweep                                    clean up all merged tasks
+  gv sweep [--dry-run|--json]                 per-row-confirmed cleanup offers: merged→done,
+                                              abandoned→untrack, idle→pause, orphan process→kill
   gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI; ) for a profiled one);
@@ -1492,7 +1493,7 @@ func cmdAudit(args []string) error {
 		fmt.Printf("\nORPHAN PROCESSES (claude/mcp descendants reparented to launchd — report only, never killed by gv):\n")
 		for _, p := range rep.OrphanProcesses {
 			fmt.Printf("  pid %-8d cpu %5.1f%%  elapsed %-10s %s\n", p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 80))
-			fmt.Printf("    kill %d\n", p.PID)
+			fmt.Printf("    kill %d  (or confirm it via gv sweep)\n", p.PID)
 		}
 	}
 	if len(rep.StalePrompts) > 0 {
@@ -2204,12 +2205,17 @@ func cmdPause(args []string) error {
 	if t.Agent == state.AgentWorking && !*force {
 		return fmt.Errorf("%s appears mid-turn (agent working) — pausing now loses the in-flight turn; `gv pause %s --force` to pause anyway", t.Ticket, t.Ticket)
 	}
-	// Event BEFORE the kill (the grove-33 park pattern): the bookmark must
-	// be durable even if this process dies with the window.
+	return pauseTask(t)
+}
+
+// pauseTask is the shared pause action (gv pause and sweep's idle offer):
+// event BEFORE the kill (the grove-33 park pattern) — the bookmark must
+// be durable even if this process dies with the window.
+func pauseTask(t *state.Task) error {
 	if err := state.Append(stateDir(), state.Event{Type: state.EvTaskPaused, Ticket: t.Ticket}); err != nil {
 		return err
 	}
-	if windowLive {
+	if tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 		if err := tmux.KillWindow(t.TmuxSession, t.TmuxWindow); err != nil {
 			return err
 		}
@@ -2432,17 +2438,12 @@ func removeTaskArtifacts(cfg *config.Config, t *state.Task, rmRemote, force bool
 	return nil
 }
 
-// sweepItem is one proposed action (the --json / --dry-run contract).
-type sweepItem struct {
-	Ticket string      `json:"ticket"`
-	Class  audit.Class `json:"class"`
-	Action string      `json:"action"`
-	Detail string      `json:"detail,omitempty"`
-}
-
 // cmdSweep consumes the audit classification: merged tasks get the full
 // done cleanup, abandoned tasks (closed PR / stale with no PR) get
-// untrack --rm — each per-item confirmed, never forced. Stale prompt
+// untrack --rm, idle tasks (done/waiting, quiet past idle_after) get
+// pause, and orphaned claude/mcp processes get a plain SIGTERM — each
+// per-item confirmed, never forced. Offer-building is the pure
+// audit.SweepOffers (paused tasks yield zero offers there). Stale prompt
 // files of done tasks are pruned automatically at the end.
 func cmdSweep(args []string) error {
 	echoWorkspace()
@@ -2461,36 +2462,36 @@ func cmdSweep(args []string) error {
 	}
 	rep := audit.Gather(cfg, tasks, stateDir())
 
-	var items []sweepItem
+	items := audit.SweepOffers(rep.Tasks)
+	// Decorate abandoned offers with the worktree-guard preview — impure
+	// (stat + git), so it stays out of the pure offer builder.
+	byTicket := map[string]audit.TaskResult{}
 	for _, r := range rep.Tasks {
-		switch r.Class {
-		case audit.Merged:
-			detail := ""
-			if r.PR != nil {
-				detail = fmt.Sprintf("PR #%d merged", r.PR.Number)
-			}
-			items = append(items, sweepItem{Ticket: r.Ticket, Class: r.Class, Action: "done (full cleanup incl. remote branch)", Detail: detail})
-		case audit.Abandoned:
-			detail := "remote branch kept"
-			if _, statErr := os.Stat(r.Worktree); statErr == nil {
-				if repo, ok := cfg.Repos[r.Repo]; ok {
-					if ok, reason, err := git.SafeToRemove(r.Worktree, "origin/"+repo.Base); err == nil && !ok {
-						detail = "guard would refuse: " + reason
-					}
+		byTicket[r.Ticket] = r
+	}
+	for i := range items {
+		if items[i].Class != audit.Abandoned {
+			continue
+		}
+		r := byTicket[items[i].Ticket]
+		if _, statErr := os.Stat(r.Worktree); statErr == nil {
+			if repo, ok := cfg.Repos[r.Repo]; ok {
+				if ok, reason, err := git.SafeToRemove(r.Worktree, "origin/"+repo.Base); err == nil && !ok {
+					items[i].Detail = "guard would refuse: " + reason
 				}
 			}
-			items = append(items, sweepItem{Ticket: r.Ticket, Class: r.Class, Action: "untrack --rm (worktree + local branch)", Detail: detail})
 		}
 	}
 
 	if *asJSON {
 		return emitJSON("report", struct {
-			Items        []sweepItem `json:"items"`
-			StalePrompts []string    `json:"stale_prompts"`
-		}{items, rep.StalePrompts})
+			Items           []audit.SweepOffer    `json:"items"`
+			OrphanProcesses []audit.OrphanProcess `json:"orphan_processes"`
+			StalePrompts    []string              `json:"stale_prompts"`
+		}{items, rep.OrphanProcesses, rep.StalePrompts})
 	}
 
-	if len(items) == 0 && len(rep.StalePrompts) == 0 {
+	if len(items) == 0 && len(rep.OrphanProcesses) == 0 && len(rep.StalePrompts) == 0 {
 		fmt.Println("nothing to sweep")
 		return nil
 	}
@@ -2503,11 +2504,20 @@ func cmdSweep(args []string) error {
 			}
 			fmt.Println()
 		}
+		for _, p := range rep.OrphanProcesses {
+			fmt.Printf("pid %d [orphan process] → kill (SIGTERM)  (cpu %.1f%%, up %s: %s)\n",
+				p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
+		}
 		fmt.Printf("%d stale prompt file(s) would be pruned\n", len(rep.StalePrompts))
 		return nil
 	}
 
 	sc := bufio.NewScanner(os.Stdin)
+	confirm := func(prompt string) bool {
+		fmt.Printf("%s [y/N] ", prompt)
+		return sc.Scan() && strings.ToLower(strings.TrimSpace(sc.Text())) == "y"
+	}
+
 	swept := 0
 	for _, it := range items {
 		t := tasks[it.Ticket]
@@ -2518,8 +2528,7 @@ func cmdSweep(args []string) error {
 		if it.Detail != "" {
 			prompt += " (" + it.Detail + ")"
 		}
-		fmt.Printf("%s — proceed? [y/N] ", prompt)
-		if !sc.Scan() || strings.ToLower(strings.TrimSpace(sc.Text())) != "y" {
+		if !confirm(prompt + " — proceed?") {
 			continue
 		}
 		var actErr error
@@ -2530,6 +2539,10 @@ func cmdSweep(args []string) error {
 			if actErr = removeTaskArtifacts(cfg, t, false, false); actErr == nil {
 				actErr = state.Append(stateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: t.Ticket})
 			}
+		case audit.Idle:
+			// No mid-turn guard needed: Idle requires a done/waiting agent
+			// by construction — a working agent never classifies idle.
+			actErr = pauseTask(t)
 		}
 		if actErr != nil {
 			fmt.Fprintf(os.Stderr, "  %v\n", actErr)
@@ -2538,14 +2551,45 @@ func cmdSweep(args []string) error {
 		swept++
 	}
 
+	killed := 0
+	for _, p := range rep.OrphanProcesses {
+		prompt := fmt.Sprintf("pid %d [orphan process] (cpu %.1f%%, up %s): %s — kill (SIGTERM)?",
+			p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
+		if !confirm(prompt) {
+			continue
+		}
+		if err := killOrphan(p.PID); err != nil {
+			fmt.Fprintf(os.Stderr, "  %v\n", err)
+			continue
+		}
+		killed++
+	}
+
 	pruned := 0
 	for _, name := range rep.StalePrompts {
 		if err := os.Remove(filepath.Join(stateDir(), "prompts", name)); err == nil {
 			pruned++
 		}
 	}
-	fmt.Printf("swept %d task(s), pruned %d stale prompt file(s)\n", swept, pruned)
+	fmt.Printf("swept %d task(s), killed %d orphan process(es), pruned %d stale prompt file(s)\n", swept, killed, pruned)
 	return nil
+}
+
+// killOrphan SIGTERMs an orphaned claude/mcp process and waits briefly
+// for it to exit. A process that refuses to die is reported, never
+// SIGKILLed — escalation stays the human's call (propose, then dispose).
+func killOrphan(pid int) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("kill %d: %w", pid, err)
+	}
+	for range 20 {
+		time.Sleep(100 * time.Millisecond)
+		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+			fmt.Printf("→ pid %d terminated\n", pid)
+			return nil
+		}
+	}
+	return fmt.Errorf("pid %d still alive 2s after SIGTERM — not escalating; `kill -9 %d` is yours if you mean it", pid, pid)
 }
 
 // --- doctor / hooks ---
