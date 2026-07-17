@@ -7,16 +7,15 @@ import (
 	"testing"
 )
 
-// mkWorkspace creates dir/.grove (and optional config.yaml content).
+// mkWorkspace creates dir/.grove/config.yaml — workspace init always
+// writes a config, and since grove-100 a bare `.grove/` is not a marker.
 func mkWorkspace(t *testing.T, root, config string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(root, ".grove"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if config != "" {
-		if err := os.WriteFile(filepath.Join(root, ".grove", "config.yaml"), []byte(config), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(root, ".grove", "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -64,6 +63,31 @@ func TestFind(t *testing.T) {
 	// Config with bogus scope keeps the repo default.
 	bogus := filepath.Join(tmp, "bogus")
 	mkWorkspace(t, bogus, "workspace:\n  label: bog\n  scope: galaxy\n")
+	// grove-100: a `.grove/` holding only the markdown backend's tasks/
+	// storage is not a workspace (every gv init-scaffolded repo has one)…
+	tasksOnly := filepath.Join(tmp, "tasksonly")
+	if err := os.MkdirAll(filepath.Join(tasksOnly, ".grove", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// …and inside a real workspace the walk-up passes through it.
+	legacy := filepath.Join(outer, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacy, ".grove", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A bare empty `.grove/` has no workspace substance either.
+	empty := filepath.Join(tmp, "empty")
+	if err := os.MkdirAll(filepath.Join(empty, ".grove"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// state/ or orchestrator/ alone are substance — config.yaml optional.
+	stateOnly := filepath.Join(tmp, "stateonly")
+	if err := os.MkdirAll(filepath.Join(stateOnly, ".grove", "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orchOnly := filepath.Join(tmp, "orchonly")
+	if err := os.MkdirAll(filepath.Join(orchOnly, ".grove", "orchestrator"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -77,6 +101,11 @@ func TestFind(t *testing.T) {
 		{"file marker ignored", fake, nil},
 		{"corrupt config falls back", corrupt, &Workspace{corrupt, "corrupt", ScopeRepo}},
 		{"bogus scope defaults to repo", bogus, &Workspace{bogus, "bog", ScopeRepo}},
+		{"tasks-only is not a workspace", tasksOnly, nil},
+		{"tasks-only walks up to real workspace", legacy, &Workspace{outer, "grid", ScopeParent}},
+		{"bare empty .grove is not a workspace", empty, nil},
+		{"state-only is a workspace", stateOnly, &Workspace{stateOnly, "stateonly", ScopeRepo}},
+		{"orchestrator-only is a workspace", orchOnly, &Workspace{orchOnly, "orchonly", ScopeRepo}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,6 +252,23 @@ func TestAlive(t *testing.T) {
 	if Alive(Workspace{Root: dead}) {
 		t.Fatal("Alive(marker removed) = true")
 	}
+	// grove-100: a root whose `.grove/` holds only tasks/ is not alive…
+	tasksOnly := filepath.Join(tmp, "tasksonly")
+	if err := os.MkdirAll(filepath.Join(tasksOnly, ".grove", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if Alive(Workspace{Root: tasksOnly}) {
+		t.Fatal("Alive(tasks-only marker) = true")
+	}
+	// …but a still-configured workspace without config.yaml (state/ only)
+	// must not be reported dead.
+	stateOnly := filepath.Join(tmp, "stateonly")
+	if err := os.MkdirAll(filepath.Join(stateOnly, ".grove", "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !Alive(Workspace{Root: stateOnly}) {
+		t.Fatal("Alive(state-only marker) = false")
+	}
 }
 
 const rollupFixture = `[
@@ -273,9 +319,13 @@ func TestReadRollup(t *testing.T) {
 		t.Fatalf("ReadRollup(corrupt) = %+v, want zero", got)
 	}
 
-	// Missing state entirely → zero rollup AND nothing gets created.
+	// Missing state entirely → zero rollup AND nothing gets created
+	// (raw mkdir, not mkWorkspace: the emptiness assertion below needs a
+	// `.grove/` with no config.yaml, and ReadRollup never checks markers).
 	bare := filepath.Join(tmp, "bare")
-	mkWorkspace(t, bare, "")
+	if err := os.MkdirAll(filepath.Join(bare, ".grove"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if got := ReadRollup(Workspace{Root: bare}); got != (Rollup{}) {
 		t.Fatalf("ReadRollup(missing) = %+v, want zero", got)
 	}

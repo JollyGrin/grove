@@ -23,6 +23,14 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Workspace marker narrowed (grove-100, 2026-07-17): a `.grove/` is a
+      workspace marker only when it holds substance — `config.yaml`,
+      `state/`, or `orchestrator/`; a `.grove/` with only the markdown
+      backend's `tasks/` is NOT a workspace, so grove-78's fail-closed
+      grab guard no longer traps `gv init`-scaffolded repos on the
+      legacy global-config path. workspace.sh (red since the bare-dir
+      marker landed, unmasked by grove-99) back to green unmodified;
+      e2e/all.sh fully green.
 - [x] Cockpit build restored on tmux 3.6a (grove-99, 2026-07-17):
       grove-78's blanket `=`-anchor broke every pane/window-target command
       (`set-option`/`show-options`/`select-layout`/`split-window` reject

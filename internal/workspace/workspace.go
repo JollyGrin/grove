@@ -1,5 +1,7 @@
 // Package workspace implements grove workspaces (DESIGN.md §6.5): a
-// workspace is a root directory carrying a `.grove/` marker. Find walks
+// workspace is a root directory whose `.grove/` marker carries workspace
+// substance (config.yaml, state/, or orchestrator/) — a `.grove/` holding
+// only the markdown backend's tasks/ is not a workspace. Find walks
 // up from the cwd to the nearest marker (like git's .git discovery), the
 // registry (~/.config/grove/registry.yaml) indexes every known workspace,
 // and Rollup gives a cheap, read-only fleet summary for the switcher.
@@ -26,11 +28,27 @@ type Workspace struct {
 	Scope string `yaml:"scope" json:"scope"`
 }
 
-// markerDir reports whether dir contains a `.grove/` directory (a plain
-// file named .grove is not a marker).
+// markerDir reports whether dir contains a `.grove/` directory with
+// workspace substance: a config.yaml file, or a state/ or orchestrator/
+// directory. A plain file named .grove is not a marker, and neither is a
+// `.grove/` holding only the markdown backend's tasks/ storage (grove-100:
+// every `gv init`-scaffolded repo has one; a workspace is somewhere you've
+// configured, not somewhere tasks happen to live).
 func markerDir(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, ".grove"))
-	return err == nil && info.IsDir()
+	grove := filepath.Join(dir, ".grove")
+	info, err := os.Stat(grove)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if fi, err := os.Stat(filepath.Join(grove, "config.yaml")); err == nil && !fi.IsDir() {
+		return true
+	}
+	for _, sub := range []string{"state", "orchestrator"} {
+		if fi, err := os.Stat(filepath.Join(grove, sub)); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // Find walks up from cwd to the nearest directory containing a `.grove/`
