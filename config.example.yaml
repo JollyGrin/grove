@@ -52,6 +52,7 @@ orchestrator:
 
 audit:
   stale_days: 7   # no-PR tasks with a dead/idle agent older than this classify `abandoned`
+  idle_after: 30m # done/waiting workers quiet longer than this classify `idle` (suggest `gv pause`); zero/invalid falls back to 30m
 
 notify:
   # Phone push via ntfy (free, no account): subscribe to the topic in the

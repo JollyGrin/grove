@@ -9,6 +9,7 @@ import (
 
 func TestClassify(t *testing.T) {
 	week := 7 * 24 * time.Hour
+	idleAfter := 30 * time.Minute
 	cases := []struct {
 		name string
 		f    Facts
@@ -35,9 +36,19 @@ func TestClassify(t *testing.T) {
 		{"paused + closed pr is paused (the bookmark outranks the closed PR)", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "CLOSED", Agent: state.AgentIdle, Paused: true}, Paused},
 		{"paused + merged pr is merged (ship beats bookmark)", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "MERGED", Agent: state.AgentIdle, Paused: true}, Merged},
 		{"paused + missing worktree is drifted (adopt re-creates it)", Facts{WorktreeExists: false, WindowAlive: false, PRKnown: true, PRState: "", Agent: state.AgentIdle, Paused: true}, Drifted},
+		// grove-91: a finished worker whose window burns CPU for nothing.
+		{"done + quiet past idle_after is idle", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Sentinel: "done", Age: 47 * time.Minute}, Idle},
+		{"done + quiet under idle_after is healthy", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Sentinel: "done", Age: 10 * time.Minute}, Healthy},
+		{"waiting + quiet past idle_after is idle", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentWaiting, Age: 47 * time.Minute}, Idle},
+		{"working + quiet is NOT idle (stuck is cost-flag territory)", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentWorking, Age: 47 * time.Minute}, Healthy},
+		{"idle without a done sentinel is not idle (stalled, not finished)", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Age: 47 * time.Minute}, Healthy},
+		{"merged beats idle", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "MERGED", Agent: state.AgentIdle, Sentinel: "done", Age: 47 * time.Minute}, Merged},
+		{"drifted beats idle", Facts{WorktreeExists: false, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Sentinel: "done", Age: 47 * time.Minute}, Drifted},
+		{"dead window stays disconnected, never idle", Facts{WorktreeExists: true, WindowAlive: false, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Sentinel: "done", Age: 47 * time.Minute}, Disconnected},
+		{"paused is never idle", Facts{WorktreeExists: true, WindowAlive: true, PRKnown: true, PRState: "OPEN", Agent: state.AgentIdle, Sentinel: "done", Age: 47 * time.Minute, Paused: true}, Paused},
 	}
 	for _, c := range cases {
-		if got := Classify(c.f, week); got != c.want {
+		if got := Classify(c.f, week, idleAfter); got != c.want {
 			t.Errorf("%s: Classify = %s, want %s", c.name, got, c.want)
 		}
 	}
@@ -48,6 +59,7 @@ func TestSuggestion(t *testing.T) {
 		Healthy:      "",
 		Merged:       "gv done",
 		Paused:       "gv adopt",
+		Idle:         "gv pause",
 		Disconnected: "gv adopt",
 		Abandoned:    "gv untrack --rm",
 		Drifted:      "gv adopt (or gv untrack)",

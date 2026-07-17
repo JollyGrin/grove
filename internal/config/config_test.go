@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setHome points HOME (and the config Dir) at a scratch dir and clears
@@ -42,6 +43,44 @@ func newWorkspace(t *testing.T, yaml string) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// grove-91: audit.idle_after is a tolerant duration — zero/unset/invalid
+// all fall back to the 30m default, a set value is respected.
+func TestIdleAfter(t *testing.T) {
+	def := 30 * time.Minute
+	cases := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{"unset defaults to 30m", "", def},
+		{"set value respected", "45m", 45 * time.Minute},
+		{"hours work too", "2h", 2 * time.Hour},
+		{"zero falls back", "0", def},
+		{"negative falls back", "-10m", def},
+		{"garbage falls back", "soon", def},
+	}
+	for _, c := range cases {
+		cfg := &Config{}
+		cfg.Audit.IdleAfter = c.raw
+		if got := cfg.IdleAfter(); got != c.want {
+			t.Errorf("%s: IdleAfter(%q) = %v, want %v", c.name, c.raw, got, c.want)
+		}
+	}
+}
+
+// grove-91: idle_after survives a yaml round-trip through parse.
+func TestIdleAfterFromYAML(t *testing.T) {
+	setHome(t)
+	writeGlobal(t, "audit:\n  idle_after: 45m\n")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.IdleAfter(); got != 45*time.Minute {
+		t.Errorf("IdleAfter from yaml = %v, want 45m", got)
+	}
 }
 
 func TestLoadAtLegacyPassthrough(t *testing.T) {

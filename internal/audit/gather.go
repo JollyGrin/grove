@@ -53,6 +53,7 @@ type Report struct {
 // orphans and stale prompt files. Pure read.
 func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) Report {
 	staleAfter := time.Duration(cfg.Audit.StaleDays) * 24 * time.Hour
+	idleAfter := cfg.IdleAfter()
 	active := state.Active(tasks)
 	costCache := cost.NewCache()
 
@@ -67,7 +68,7 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 		wg.Add(1)
 		go func(i int, t *state.Task) {
 			defer wg.Done()
-			rows[i] = auditTask(cfg, t, staleAfter, costCache, parked[t.Ticket])
+			rows[i] = auditTask(cfg, t, staleAfter, idleAfter, costCache, parked[t.Ticket])
 		}(i, t)
 	}
 	wg.Wait()
@@ -82,10 +83,11 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 	return rep
 }
 
-func auditTask(cfg *config.Config, t *state.Task, staleAfter time.Duration, costCache *cost.Cache, parked bool) TaskResult {
+func auditTask(cfg *config.Config, t *state.Task, staleAfter, idleAfter time.Duration, costCache *cost.Cache, parked bool) TaskResult {
 	f := Facts{
 		HasSessionID: t.SessionID != "",
 		Agent:        t.Agent,
+		Sentinel:     t.Sentinel,
 		Parked:       parked,
 		Paused:       t.Paused,
 		Age:          time.Since(t.Updated),
@@ -111,7 +113,7 @@ func auditTask(cfg *config.Config, t *state.Task, staleAfter time.Duration, cost
 		}
 	}
 
-	class := Classify(f, staleAfter)
+	class := Classify(f, staleAfter, idleAfter)
 	res := TaskResult{
 		Ticket: t.Ticket, Repo: t.Repo, Branch: t.Branch, Worktree: t.Worktree,
 		Class: class, Suggestion: Suggestion(class), Facts: f, PR: pr, Updated: t.Updated,
