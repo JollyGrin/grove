@@ -80,6 +80,17 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-13 · a bare `-t <session>` target matches window names across
+  ALL sessions** (grove-78, live repro) — with a session literally named
+  `grove` plus a worker window `grove · grove-75-…` in a *different*
+  session, `new-window -d -t grove` resolved to the WINDOW and died on
+  "create window failed: index 1 in use", even though session `grove` had
+  only window 0. Verified in isolation; `-t '=grove'` (exact-match anchor)
+  targets the session correctly and leaves `session:window` window-side
+  prefix tolerance (glyph suffixes) intact. Every session-scoped `-t` in
+  `internal/tmux` now goes through `tmux.Exact`; regression test
+  `TestCreateWindowSessionExactCollision` runs the full collision against
+  a scratch server.
 - **2026-07-13 · a bare `capture-pane -p` can miss text that was really
   delivered** — it captures only the *visible* screen of the *active*
   pane, and a pasted line the shell then executed both scrolls away

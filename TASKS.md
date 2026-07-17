@@ -57,6 +57,12 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       copyable plugin-authoring skill; `schema_version`/`v` stamps;
       e2e/plugin.sh tripwire. First consumer: gv-remarkable (issue #76,
       separate repo)
+- [x] grab fail-closed + exact tmux session targets (grove-78,
+      2026-07-13): grab errors when the repo's workspace isn't the ambient
+      one (no legacy-session escape) and rolls back worktree/local
+      branch/prompt/window on failure (remote branch kept); every
+      session-scoped `-t` in internal/tmux `=`-anchored via `tmux.Exact`
+      (session `grove` vs `grove · <ticket>` window collision, live)
 
 ## Phase 0 — extraction proven (skeleton + local-md) ✅ 2026-07-04
 

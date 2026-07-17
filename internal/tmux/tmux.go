@@ -49,8 +49,9 @@ func PaneTarget(repo, worktree string, pane int) string {
 
 // SessionExists returns true if the named tmux session exists.
 // Returns false (not an error) if the tmux server is not running.
+// Exact-anchored (grove-78): a bare -t can match window names too.
 func SessionExists(name string) bool {
-	err := exec.Command("tmux", "has-session", "-t", name).Run()
+	err := exec.Command("tmux", "has-session", "-t", Exact(name)).Run()
 	return err == nil
 }
 
@@ -62,7 +63,7 @@ func CreateSession(name, workDir string) error {
 
 // SplitVertical splits the session's current window horizontally (side-by-side).
 func SplitVertical(session, workDir string) error {
-	_, err := run("split-window", "-h", "-t", session, "-c", workDir)
+	_, err := run("split-window", "-h", "-t", Exact(session), "-c", workDir)
 	return err
 }
 
@@ -76,7 +77,7 @@ func SendKeys(target, keys string) error {
 // Inside tmux: uses switch-client. Outside: replaces the process with tmux attach via syscall.Exec.
 func AttachSession(name string) error {
 	if IsInsideTmux() {
-		_, err := run("switch-client", "-t", name)
+		_, err := run("switch-client", "-t", Exact(name))
 		return err
 	}
 
@@ -87,7 +88,7 @@ func AttachSession(name string) error {
 	}
 
 	// syscall.Exec replaces this process entirely — no Go code runs after this
-	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", name}, os.Environ())
+	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", Exact(name)}, os.Environ())
 }
 
 // CapturePane captures the visible content of a tmux pane.
@@ -131,7 +132,7 @@ func CapturePaneBottom(target string, lines int) (string, error) {
 
 // KillSession destroys the named tmux session.
 func KillSession(name string) error {
-	_, err := run("kill-session", "-t", name)
+	_, err := run("kill-session", "-t", Exact(name))
 	return err
 }
 
@@ -155,7 +156,7 @@ func EnsureSession(repo, repoRootDir string) (bool, error) {
 // includes, so exact equality alone would report a healthy worker as
 // disconnected. matchesWindowName accounts for that suffix.
 func WindowExists(session, window string) bool {
-	out, err := run("list-windows", "-t", session, "-F", "#{window_name}")
+	out, err := run("list-windows", "-t", Exact(session), "-F", "#{window_name}")
 	if err != nil {
 		return false
 	}
@@ -183,20 +184,24 @@ func matchesWindowName(live, stored string) bool {
 // onto the freshly-spawned worker. The deliberate AttachWindow path stays the
 // way to intentionally jump to a worker.
 func CreateWindow(session, name, workDir string) error {
-	_, err := run("new-window", "-d", "-t", session, "-n", name, "-c", workDir)
+	// Exact-anchored session target (grove-78): tmux resolves a bare
+	// `-t <session>` against window names across ALL sessions, so a session
+	// literally named "grove" matched a "grove · <ticket>" worker window in
+	// a different session and failed with "index N in use".
+	_, err := run("new-window", "-d", "-t", Exact(session), "-n", name, "-c", workDir)
 	return err
 }
 
 // KillWindow destroys a named window in the given session.
 func KillWindow(session, windowName string) error {
-	_, err := run("kill-window", "-t", session+":"+windowName)
+	_, err := run("kill-window", "-t", Exact(session)+":"+windowName)
 	return err
 }
 
 // AttachWindow attaches to (or switches to) a specific window in a session.
 // select-window first so the target window is active, then switch-client/attach.
 func AttachWindow(session, windowName string) error {
-	target := session + ":" + windowName
+	target := Exact(session) + ":" + windowName
 
 	// Select the window first — switch-client and attach-session only take
 	// a target-session, so they ignore the :window suffix.
@@ -205,7 +210,7 @@ func AttachWindow(session, windowName string) error {
 	}
 
 	if IsInsideTmux() {
-		_, err := run("switch-client", "-t", session)
+		_, err := run("switch-client", "-t", Exact(session))
 		return err
 	}
 
@@ -214,7 +219,7 @@ func AttachWindow(session, windowName string) error {
 		return fmt.Errorf("tmux not found: %w", err)
 	}
 
-	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", session}, os.Environ())
+	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", Exact(session)}, os.Environ())
 }
 
 // IsInsideTmux returns true if the current process is running inside tmux.

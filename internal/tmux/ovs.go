@@ -29,7 +29,7 @@ type PaneInfo struct {
 // 0. Falls back to the historical pane 1 when the window can't be listed,
 // so callers behave exactly as before this helper existed.
 func ClaudePane(session, window string) int {
-	out, err := run("list-panes", "-t", session+":"+window,
+	out, err := run("list-panes", "-t", Exact(session)+":"+window,
 		"-F", "#{pane_index} #{pane_current_command}")
 	if err != nil {
 		return 1

@@ -45,6 +45,13 @@ grove worker) silently targets the **real server** unless it clears
   session:window` lookups still hit because tmux **prefix-matches**
   targets. Never rely on exact window-name equality; re-derive and
   re-store on adopt.
+- The session-side twin of that rule (grove-78): a BARE `-t <session>`
+  target resolves against **window names across all sessions** too — a
+  session literally named `grove` collides with every `grove · <ticket>`
+  worker window (`new-window -t grove` died on "index 1 in use" in a
+  different session). Every session-scoped `-t` must be `=`-anchored via
+  `tmux.Exact` (`-t '=grove'`); only the window side of `session:window`
+  may stay prefix-tolerant — that tolerance is what glyphed windows need.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.

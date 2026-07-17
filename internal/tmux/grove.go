@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// Exact anchors a session name as an exact-match tmux target ("=name").
+// tmux resolves a bare -t target against window names across ALL sessions
+// too, so a session literally named "grove" collides with every
+// "grove · <ticket>" worker window (grove-78, live: `new-window -t grove`
+// matched a worker window in a different session and died on "index 1 in
+// use"). Every session-scoped -t target must go through this; never use it
+// for -s/-n creation args (the "=" would become part of the name). The
+// window side of a "session:window" target stays unanchored on purpose —
+// glyph suffixes rely on window-name prefix tolerance (tmux-discipline §3).
+func Exact(session string) string { return "=" + session }
+
 // defaultCockpitLayout is the last-resort pane orientation when neither the
 // session option nor config supplies one (grove-52): side-by-side columns.
 const defaultCockpitLayout = "horizontal"
@@ -40,7 +51,7 @@ func SelectLayout(session, name string) error {
 	if name == "vertical" {
 		return MainVertical(session, cockpitMainWidth)
 	}
-	_, err := run("select-layout", "-t", session, tmuxLayout(name))
+	_, err := run("select-layout", "-t", Exact(session), tmuxLayout(name))
 	return err
 }
 
@@ -49,14 +60,14 @@ func SelectLayout(session, name string) error {
 // L hotkey, `gv orchestrator new`, the cockpit build — reads the same value.
 // Dies with the session; the config default re-seeds it on the next build.
 func SetCockpitLayout(session, name string) error {
-	_, err := run("set-option", "-t", session, "@grove_layout", name)
+	_, err := run("set-option", "-t", Exact(session), "@grove_layout", name)
 	return err
 }
 
 // CockpitLayout reads the session's persisted layout name; "" when unset
 // or the session is unreachable (callers fall back to the default).
 func CockpitLayout(session string) string {
-	out, err := run("show-options", "-t", session, "-v", "@grove_layout")
+	out, err := run("show-options", "-t", Exact(session), "-v", "@grove_layout")
 	if err != nil {
 		return ""
 	}
@@ -72,11 +83,11 @@ func MainVertical(session string, widthPercent int) error {
 	}
 	// Target the bare session (its active window) — window indexes depend
 	// on the user's base-index, so ":0" is not safe to assume.
-	if _, err := run("set-option", "-t", session, "-w", "main-pane-width",
+	if _, err := run("set-option", "-t", Exact(session), "-w", "main-pane-width",
 		fmt.Sprintf("%d%%", widthPercent)); err != nil {
 		return err
 	}
-	_, err := run("select-layout", "-t", session, "main-vertical")
+	_, err := run("select-layout", "-t", Exact(session), "main-vertical")
 	return err
 }
 
@@ -86,10 +97,10 @@ func MainVertical(session string, widthPercent int) error {
 // titles. A bare label is safe as the string — no tmux format expansion
 // we depend on.
 func SetTitle(session, title string) error {
-	if _, err := run("set-option", "-t", session, "set-titles", "on"); err != nil {
+	if _, err := run("set-option", "-t", Exact(session), "set-titles", "on"); err != nil {
 		return err
 	}
-	_, err := run("set-option", "-t", session, "set-titles-string", title)
+	_, err := run("set-option", "-t", Exact(session), "set-titles-string", title)
 	return err
 }
 
@@ -101,7 +112,7 @@ func SetTitle(session, title string) error {
 // in worker/orchestrator commands keep working, and the pane survives the
 // command exiting.
 func SpawnPane(session, dir, cmd string) (string, error) {
-	paneID, err := run("split-window", "-t", session, "-c", dir, "-P", "-F", "#{pane_id}")
+	paneID, err := run("split-window", "-t", Exact(session), "-c", dir, "-P", "-F", "#{pane_id}")
 	if err != nil {
 		return "", err
 	}
@@ -140,10 +151,10 @@ func EnsureWorkspaceSession(session, dir string) error {
 		if _, err := run("new-session", "-d", "-s", session, "-n", "cockpit", "-c", dir); err != nil {
 			return err
 		}
-		if err := DisableAutoRename(session + ":cockpit"); err != nil {
+		if err := DisableAutoRename(Exact(session) + ":cockpit"); err != nil {
 			return err
 		}
-		return SendKeys(session+":cockpit.0", cockpitHint)
+		return SendKeys(Exact(session)+":cockpit.0", cockpitHint)
 	}
 	// Session exists but predates the reserved slot (or was built cockpit-
 	// first without one): make sure a cockpit window is present so worker
@@ -152,7 +163,7 @@ func EnsureWorkspaceSession(session, dir string) error {
 		if err := CreateWindow(session, "cockpit", dir); err != nil {
 			return err
 		}
-		return DisableAutoRename(session + ":cockpit")
+		return DisableAutoRename(Exact(session) + ":cockpit")
 	}
 	return nil
 }
@@ -169,7 +180,7 @@ func SelectWindow(target string) error {
 // placeholder session (which exists but has no real cockpit yet) is
 // distinguishable from an opened one — openCockpit builds when not ready.
 func MarkCockpitReady(session string) error {
-	_, err := run("set-option", "-t", session, "@grove_cockpit", "ready")
+	_, err := run("set-option", "-t", Exact(session), "@grove_cockpit", "ready")
 	return err
 }
 
@@ -178,7 +189,7 @@ func CockpitReady(session string) bool {
 	if !SessionExists(session) {
 		return false
 	}
-	out, err := run("show-options", "-t", session, "-v", "@grove_cockpit")
+	out, err := run("show-options", "-t", Exact(session), "-v", "@grove_cockpit")
 	return err == nil && strings.TrimSpace(out) == "ready"
 }
 
@@ -192,7 +203,7 @@ func RenameWorker(session, base, glyph string) error {
 	if base == "" || glyph == "" {
 		return nil
 	}
-	_, err := run("rename-window", "-t", session+":"+base, base+" "+glyph)
+	_, err := run("rename-window", "-t", Exact(session)+":"+base, base+" "+glyph)
 	return err
 }
 
@@ -200,7 +211,7 @@ func RenameWorker(session, base, glyph string) error {
 // glyph suffix that exact name-comparison (tmux.WindowExists) would miss:
 // it targets session:base, which tmux prefix-matches to the glyphed window.
 func WindowLive(session, base string) bool {
-	_, err := run("list-panes", "-t", session+":"+base)
+	_, err := run("list-panes", "-t", Exact(session)+":"+base)
 	return err == nil
 }
 
@@ -210,7 +221,7 @@ func WindowLive(session, base string) bool {
 // comparable detect probes) resolve first so the glyph never hides a live
 // worker. Falls back to base when the session/window can't be listed.
 func ResolveWindowName(session, base string) string {
-	out, err := run("list-windows", "-t", session, "-F", "#{window_name}")
+	out, err := run("list-windows", "-t", Exact(session), "-F", "#{window_name}")
 	if err != nil {
 		return base
 	}
@@ -227,7 +238,7 @@ func ResolveWindowName(session, base string) string {
 // error). Read-only: list-windows only, never touches window state — the
 // living grove's queen (grove-63) reads Dean's tmux focus, it never sets it.
 func ActiveWindow(session string) string {
-	out, err := run("list-windows", "-t", session, "-F", "#{window_active}\t#{window_name}")
+	out, err := run("list-windows", "-t", Exact(session), "-F", "#{window_active}\t#{window_name}")
 	if err != nil {
 		return ""
 	}

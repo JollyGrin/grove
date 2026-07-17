@@ -430,7 +430,7 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.EnsureWorkspaceSession(session, workspaceRoot(ws, orchDir)); err != nil {
 		return err
 	}
-	cockpitWin := session + ":cockpit"
+	cockpitWin := tmux.Exact(session) + ":cockpit"
 	// Worker windows may have been created after the placeholder — focus the
 	// cockpit window so the pane ops below and main-vertical target it, not a
 	// worker.
@@ -831,6 +831,14 @@ func cmdGrab(args []string) error {
 			task.ID, t.Worktree, task.ID, task.ID, task.ID)
 	}
 
+	// grove-78: fail closed BEFORE any side effect — a worker never routes
+	// outside the workspace gv is running in. The session is derived from
+	// the workspace below; a repo whose path resolves elsewhere would
+	// silently escape to the legacy global session or a sibling workspace's.
+	if err := requireAmbientWorkspace(ambient.ws, workspace.Find(repo.Path), repoName, repo.Path); err != nil {
+		return err
+	}
+
 	profileName, profile, err := cfg.ResolveProfile(*profileFlag, repo)
 	if err != nil {
 		return err
@@ -844,6 +852,18 @@ func cmdGrab(args []string) error {
 	if profileName != "" {
 		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
 	}
+
+	// Collapse into the workspace's single session (grove-<label>, or the
+	// global grove for a true legacy run); window 0 stays the reserved
+	// cockpit, worker windows land alongside it — one legible `Ctrl-b w`
+	// node per workspace. requireAmbientWorkspace above guarantees the
+	// repo's own workspace IS the ambient one, so the ambient session is
+	// the only one a worker can land in. The window is tagged with the
+	// active profile so a profiled worker reads at a glance in
+	// `Ctrl-b w` / `gv ls`; the no-profile name stays byte-identical.
+	ws := ambient.ws
+	sessionName := cockpitSessionFor(ws)
+	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 
 	if git.HasRemote(repo.Path, "origin") {
 		if err := git.Fetch(repo.Path, "origin", repo.Base); err != nil {
@@ -859,6 +879,26 @@ func cmdGrab(args []string) error {
 		return err
 	}
 	fmt.Printf("→ worktree %s\n", wt.Path)
+
+	// grove-78: a failed grab must not strand artifacts that block the
+	// retry (live: an orphan worktree+branch made the re-grab die on
+	// "branch already exists"). From here until the task-created event is
+	// durably appended, any error rolls back the LOCAL side effects —
+	// worktree, branch, prompt file, fresh window. The remote branch
+	// (worktree.Add's best-effort push) is deliberately kept: gv may not be
+	// the only pusher, and an existing remote branch never blocks a retry.
+	grabbed := false
+	promptPath := ""
+	windowCreated := false
+	defer func() {
+		if grabbed {
+			return
+		}
+		if windowCreated {
+			_ = tmux.KillWindow(sessionName, windowName)
+		}
+		cleanupFailedGrab(repo.Path, wt.Path, name, promptPath)
+	}()
 
 	for _, envFile := range []string{".env", ".envrc", ".env.local"} {
 		src := filepath.Join(repo.Path, envFile)
@@ -878,7 +918,7 @@ func cmdGrab(args []string) error {
 	}
 	promptDir := filepath.Join(stateDir(), "prompts")
 	_ = os.MkdirAll(promptDir, 0o755)
-	promptPath := filepath.Join(promptDir, task.ID+".txt")
+	promptPath = filepath.Join(promptDir, task.ID+".txt")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return err
 	}
@@ -894,22 +934,16 @@ func cmdGrab(args []string) error {
 		})
 	}
 
-	// Collapse into the workspace's single session (grove-<label>, or the
-	// global grove for an un-workspaced repo); window 0 stays the reserved
-	// cockpit, worker windows land alongside it — one legible `Ctrl-b w`
-	// node per workspace.
-	ws := workspace.Find(repo.Path)
-	sessionName := cockpitSessionFor(ws)
 	if err := tmux.EnsureWorkspaceSession(sessionName, workspaceRoot(ws, repo.Path)); err != nil {
 		return err
 	}
-	// Tag the window with the active profile so a profiled worker reads at a
-	// glance in `Ctrl-b w` / `gv ls`; the no-profile name stays byte-identical.
-	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 	if err := tmux.CreateWindow(sessionName, windowName, wt.Path); err != nil {
 		return err
 	}
-	windowTarget := sessionName + ":" + windowName
+	windowCreated = true
+	// Session side exact-anchored (grove-78); the window side stays
+	// prefix-tolerant so a later status glyph never hides the window.
+	windowTarget := tmux.Exact(sessionName) + ":" + windowName
 	// Pin the ticket name: a worker window's name is the ticket, never
 	// whatever the claude pane's foreground process reports.
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
@@ -952,6 +986,9 @@ func cmdGrab(args []string) error {
 	}); err != nil {
 		return err
 	}
+	// The task is durably tracked from here — cleanup is `gv untrack`'s
+	// job now, so the failure rollback stands down.
+	grabbed = true
 
 	mode := "autonomous"
 	if *manual {
@@ -982,6 +1019,56 @@ func workspaceRoot(ws *workspace.Workspace, repoPath string) string {
 		return ws.Root
 	}
 	return repoPath
+}
+
+// requireAmbientWorkspace is grab's containment gate (grove-78): the tmux
+// session a worker lands in is derived from the workspace, so a repo whose
+// path resolves under no `.grove/` marker would silently escape to the
+// legacy global session, and one under a DIFFERENT workspace's marker
+// would escape to that sibling's session — both live surprises. Workers
+// must never leave the workspace gv runs in; fail closed with guidance.
+// The legacy session stays reachable only from true legacy runs (no
+// ambient workspace, un-workspaced repo).
+func requireAmbientWorkspace(ambientWS, repoWS *workspace.Workspace, repoName, repoPath string) error {
+	switch {
+	case ambientWS == nil && repoWS == nil:
+		return nil
+	case ambientWS != nil && repoWS != nil && ambientWS.Root == repoWS.Root:
+		return nil
+	case ambientWS == nil:
+		return fmt.Errorf("repo %s (%s) belongs to workspace %s — grab it from inside that workspace (cd %s)",
+			repoName, repoPath, repoWS.Label, repoWS.Root)
+	case repoWS == nil:
+		return fmt.Errorf("repo %s (%s) is outside the %s workspace — map it in its own workspace, or in a parent workspace of both",
+			repoName, repoPath, ambientWS.Label)
+	default:
+		return fmt.Errorf("repo %s (%s) belongs to workspace %s, not %s — grab it from there (cd %s)",
+			repoName, repoPath, repoWS.Label, ambientWS.Label, repoWS.Root)
+	}
+}
+
+// cleanupFailedGrab rolls back the LOCAL artifacts of a grab that failed
+// after worktree.Add: the worktree, its branch, and the kickoff prompt.
+// The remote branch is never touched — worktree.Add's best-effort push may
+// have landed, gv can't know it was the only pusher (hard-rule territory),
+// and a remote branch never blocks a retry. Best-effort: rollback failures
+// are warnings; the original grab error is what surfaces to the operator.
+func cleanupFailedGrab(repoPath, wtPath, branch, promptPath string) {
+	fmt.Fprintln(os.Stderr, "→ grab failed — rolling back worktree, local branch, prompt (remote branch, if pushed, untouched)")
+	if err := worktree.RemoveSafe(repoPath, wtPath); err != nil {
+		// The worktree is seconds old and created by this very call, so
+		// force is safe — copied .env files must not strand the rollback.
+		if err := git.RemoveWorktreeForce(repoPath, wtPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: rollback worktree remove: %v\n", err)
+			return // the branch is still checked out there; deleting it would fail too
+		}
+	}
+	if err := git.ForceDeleteBranch(repoPath, branch); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: rollback local branch delete: %v\n", err)
+	}
+	if promptPath != "" {
+		_ = os.Remove(promptPath)
+	}
 }
 
 // printBacklog renders the provider's grabbable backlog (gv grab with no
@@ -2107,7 +2194,8 @@ func cmdAdopt(args []string) error {
 	if err := tmux.CreateWindow(sessionName, windowName, wtPath); err != nil {
 		return err
 	}
-	windowTarget := sessionName + ":" + windowName
+	// Session side exact-anchored (grove-78); window side prefix-tolerant.
+	windowTarget := tmux.Exact(sessionName) + ":" + windowName
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
