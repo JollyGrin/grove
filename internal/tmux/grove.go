@@ -14,11 +14,23 @@ import (
 // too, so a session literally named "grove" collides with every
 // "grove · <ticket>" worker window (grove-78, live: `new-window -t grove`
 // matched a worker window in a different session and died on "index 1 in
-// use"). Every session-scoped -t target must go through this; never use it
-// for -s/-n creation args (the "=" would become part of the name). The
-// window side of a "session:window" target stays unanchored on purpose —
-// glyph suffixes rely on window-name prefix tolerance (tmux-discipline §3).
+// use"). Every session-scoped -t target must be exact-anchored — via this
+// for commands whose -t is a target-session (has-session, kill-session,
+// new-window, list-windows, switch-client, attach-session), via
+// ExactActive for everything else; never use it for -s/-n creation args
+// (the "=" would become part of the name). The window side of a
+// "session:window" target stays unanchored on purpose — glyph suffixes
+// rely on window-name prefix tolerance (tmux-discipline §3).
 func Exact(session string) string { return "=" + session }
+
+// ExactActive anchors a session for commands whose -t is a target-pane or
+// target-window (set-option, show-options, select-layout, split-window):
+// "=name:" — exact-match session, its active window. tmux 3.6a rejects
+// the bare "=name" form for those commands ("no such session" / "can't
+// find pane"), which broke every cockpit build (grove-99); the trailing
+// ":" routes the session part through the same exact matcher, so the
+// grove-78 window-name collision stays impossible.
+func ExactActive(session string) string { return Exact(session) + ":" }
 
 // defaultCockpitLayout is the last-resort pane orientation when neither the
 // session option nor config supplies one (grove-52): side-by-side columns.
@@ -51,7 +63,7 @@ func SelectLayout(session, name string) error {
 	if name == "vertical" {
 		return MainVertical(session, cockpitMainWidth)
 	}
-	_, err := run("select-layout", "-t", Exact(session), tmuxLayout(name))
+	_, err := run("select-layout", "-t", ExactActive(session), tmuxLayout(name))
 	return err
 }
 
@@ -60,14 +72,14 @@ func SelectLayout(session, name string) error {
 // L hotkey, `gv orchestrator new`, the cockpit build — reads the same value.
 // Dies with the session; the config default re-seeds it on the next build.
 func SetCockpitLayout(session, name string) error {
-	_, err := run("set-option", "-t", Exact(session), "@grove_layout", name)
+	_, err := run("set-option", "-t", ExactActive(session), "@grove_layout", name)
 	return err
 }
 
 // CockpitLayout reads the session's persisted layout name; "" when unset
 // or the session is unreachable (callers fall back to the default).
 func CockpitLayout(session string) string {
-	out, err := run("show-options", "-t", Exact(session), "-v", "@grove_layout")
+	out, err := run("show-options", "-t", ExactActive(session), "-v", "@grove_layout")
 	if err != nil {
 		return ""
 	}
@@ -83,11 +95,11 @@ func MainVertical(session string, widthPercent int) error {
 	}
 	// Target the bare session (its active window) — window indexes depend
 	// on the user's base-index, so ":0" is not safe to assume.
-	if _, err := run("set-option", "-t", Exact(session), "-w", "main-pane-width",
+	if _, err := run("set-option", "-t", ExactActive(session), "-w", "main-pane-width",
 		fmt.Sprintf("%d%%", widthPercent)); err != nil {
 		return err
 	}
-	_, err := run("select-layout", "-t", Exact(session), "main-vertical")
+	_, err := run("select-layout", "-t", ExactActive(session), "main-vertical")
 	return err
 }
 
@@ -97,10 +109,10 @@ func MainVertical(session string, widthPercent int) error {
 // titles. A bare label is safe as the string — no tmux format expansion
 // we depend on.
 func SetTitle(session, title string) error {
-	if _, err := run("set-option", "-t", Exact(session), "set-titles", "on"); err != nil {
+	if _, err := run("set-option", "-t", ExactActive(session), "set-titles", "on"); err != nil {
 		return err
 	}
-	_, err := run("set-option", "-t", Exact(session), "set-titles-string", title)
+	_, err := run("set-option", "-t", ExactActive(session), "set-titles-string", title)
 	return err
 }
 
@@ -112,7 +124,7 @@ func SetTitle(session, title string) error {
 // in worker/orchestrator commands keep working, and the pane survives the
 // command exiting.
 func SpawnPane(session, dir, cmd string) (string, error) {
-	paneID, err := run("split-window", "-t", Exact(session), "-c", dir, "-P", "-F", "#{pane_id}")
+	paneID, err := run("split-window", "-t", ExactActive(session), "-c", dir, "-P", "-F", "#{pane_id}")
 	if err != nil {
 		return "", err
 	}
@@ -180,7 +192,7 @@ func SelectWindow(target string) error {
 // placeholder session (which exists but has no real cockpit yet) is
 // distinguishable from an opened one — openCockpit builds when not ready.
 func MarkCockpitReady(session string) error {
-	_, err := run("set-option", "-t", Exact(session), "@grove_cockpit", "ready")
+	_, err := run("set-option", "-t", ExactActive(session), "@grove_cockpit", "ready")
 	return err
 }
 
@@ -189,7 +201,7 @@ func CockpitReady(session string) bool {
 	if !SessionExists(session) {
 		return false
 	}
-	out, err := run("show-options", "-t", Exact(session), "-v", "@grove_cockpit")
+	out, err := run("show-options", "-t", ExactActive(session), "-v", "@grove_cockpit")
 	return err == nil && strings.TrimSpace(out) == "ready"
 }
 
