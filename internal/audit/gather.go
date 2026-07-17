@@ -42,10 +42,11 @@ type Orphan struct {
 
 // Report is the full audit output (the --json contract).
 type Report struct {
-	Tasks           []TaskResult `json:"tasks"`
-	Orphans         []Orphan     `json:"orphans"`
-	StalePrompts    []string     `json:"stale_prompts"`
-	EventsSizeBytes int64        `json:"events_size_bytes"`
+	Tasks           []TaskResult    `json:"tasks"`
+	Orphans         []Orphan        `json:"orphans"`
+	OrphanProcesses []OrphanProcess `json:"orphan_processes"`
+	StalePrompts    []string        `json:"stale_prompts"`
+	EventsSizeBytes int64           `json:"events_size_bytes"`
 }
 
 // Gather cross-checks every active task against reality and scans for
@@ -73,6 +74,7 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 
 	rep := Report{Tasks: rows}
 	rep.Orphans = scanOrphans(cfg, tasks)
+	rep.OrphanProcesses = scanOrphanProcesses()
 	rep.StalePrompts = scanStalePrompts(stateDir, tasks)
 	if fi, err := os.Stat(filepath.Join(stateDir, "events.jsonl")); err == nil {
 		rep.EventsSizeBytes = fi.Size()
