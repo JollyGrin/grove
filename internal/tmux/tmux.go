@@ -149,17 +149,29 @@ func EnsureSession(repo, repoRootDir string) (bool, error) {
 }
 
 // WindowExists returns true if the named window exists in the given session.
+//
+// Since grove-47, live worker window names carry a trailing " <glyph>" state
+// indicator (e.g. "grove-89-foo ⏸") that the stored tmux_window value never
+// includes, so exact equality alone would report a healthy worker as
+// disconnected. matchesWindowName accounts for that suffix.
 func WindowExists(session, window string) bool {
 	out, err := run("list-windows", "-t", session, "-F", "#{window_name}")
 	if err != nil {
 		return false
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == window {
+		if matchesWindowName(strings.TrimSpace(line), window) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesWindowName reports whether a live tmux window name matches a
+// stored (glyph-less) window name: either an exact match, or the stored
+// name followed by a single trailing " <glyph>" state indicator.
+func matchesWindowName(live, stored string) bool {
+	return live == stored || strings.HasPrefix(live, stored+" ")
 }
 
 // CreateWindow creates a new named window in the given session.

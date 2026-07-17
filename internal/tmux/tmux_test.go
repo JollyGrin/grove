@@ -73,6 +73,29 @@ func TestWindowExistsNonexistent(t *testing.T) {
 	}
 }
 
+func TestMatchesWindowName(t *testing.T) {
+	tests := []struct {
+		name string
+		live string
+		want bool
+	}{
+		{"exact match", "name", true},
+		{"glyph suffix pause", "name ⏸", true},
+		{"glyph suffix dot", "name ●", true},
+		{"longer name is not a suffix match", "name-longer", false},
+		{"unrelated name", "other", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesWindowName(tt.live, "name")
+			if got != tt.want {
+				t.Errorf("matchesWindowName(%q, %q) = %v, want %v", tt.live, "name", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCapturePaneNonexistent(t *testing.T) {
 	out, err := CapturePane("pr-test-nonexistent-session-xyz:0.0")
 	if err != nil {
