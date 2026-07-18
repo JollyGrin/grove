@@ -23,6 +23,16 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] ACCOUNT tab → per-profile key manager (grove-104, 2026-07-18):
+      one selectable KEYS row per distinct `auth_token_env` across
+      configured model_profiles (shared vars merge, profile names on the
+      row) — masked value when the key resolves, an explicit "not set —
+      enter to paste" state when it doesn't; enter (or p) opens the paste
+      flow for the selected row's var; `openrouter.Key`/`SaveKey` are
+      var-agnostic (same 0600 replace-in-place contract, other lines
+      byte-for-byte); OpenRouter row keeps balance/runway/top-up extras,
+      other rows are stars-only; zero profiles → grove-87's standalone
+      OpenRouter view unchanged
 - [x] Workspace marker narrowed (grove-100, 2026-07-17): a `.grove/` is a
       workspace marker only when it holds substance — `config.yaml`,
       `state/`, or `orchestrator/`; a `.grove/` with only the markdown

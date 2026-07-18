@@ -2,9 +2,12 @@
 // account endpoints the cockpit's ACCOUNT tab shows (grove-87): credits
 // (lifetime purchased/used counters) and key usage (daily/weekly/monthly
 // burn). It also resolves — and, for the paste-key connect flow, persists —
-// OPENROUTER_API_KEY in the same secrets file worker profiles self-source
-// (~/.config/grove/.env). Display only: grove never mutates the OpenRouter
-// account, and there is no in-TUI payment flow, ever.
+// API keys in the same secrets file worker profiles self-source
+// (~/.config/grove/.env). The key-file helpers (Key/SaveKey/Mask) are
+// var-agnostic since grove-104 so the ACCOUNT tab can manage every model
+// profile's auth_token_env, not just OPENROUTER_API_KEY. Display only:
+// grove never mutates any provider account, and there is no in-TUI payment
+// flow, ever.
 package openrouter
 
 import (
@@ -45,18 +48,19 @@ type KeyUsage struct {
 	Monthly float64
 }
 
-// Key resolves the API key: the process environment first, then a tolerant
-// parse of envPath (the profile secrets file — `export NAME=value`,
-// bare `NAME=value`, quoted or not; last assignment wins, like sourcing).
-// "" means no key — callers degrade to dashes, never an error state.
-func Key(envPath string) string {
-	if k := os.Getenv(EnvVar); k != "" {
+// Key resolves the key held in env var varName: the process environment
+// first, then a tolerant parse of envPath (the profile secrets file —
+// `export NAME=value`, bare `NAME=value`, quoted or not; last assignment
+// wins, like sourcing). "" means no key — callers degrade to dashes,
+// never an error state.
+func Key(envPath, varName string) string {
+	if k := os.Getenv(varName); k != "" {
 		return k
 	}
-	return keyFromFile(envPath)
+	return keyFromFile(envPath, varName)
 }
 
-func keyFromFile(path string) string {
+func keyFromFile(path, varName string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -68,7 +72,7 @@ func keyFromFile(path string) string {
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		v, ok := strings.CutPrefix(line, EnvVar+"=")
+		v, ok := strings.CutPrefix(line, varName+"=")
 		if !ok {
 			continue
 		}
@@ -83,12 +87,12 @@ func keyFromFile(path string) string {
 	return key
 }
 
-// SaveKey persists key as the EnvVar assignment in envPath, creating the
+// SaveKey persists key as the varName assignment in envPath, creating the
 // file 0600 if absent and preserving every other line byte-for-byte. An
 // existing assignment (export or bare) is replaced in place so the file
 // never accumulates stale keys.
-func SaveKey(envPath, key string) error {
-	line := "export " + EnvVar + "=" + key
+func SaveKey(envPath, varName, key string) error {
+	line := "export " + varName + "=" + key
 	raw, err := os.ReadFile(envPath)
 	if os.IsNotExist(err) {
 		return os.WriteFile(envPath, []byte(line+"\n"), 0o600)
@@ -100,7 +104,7 @@ func SaveKey(envPath, key string) error {
 	replaced := false
 	for i, l := range lines {
 		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "export "))
-		if strings.HasPrefix(t, EnvVar+"=") {
+		if strings.HasPrefix(t, varName+"=") {
 			lines[i] = line
 			replaced = true
 		}
