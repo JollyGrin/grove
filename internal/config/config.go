@@ -37,6 +37,11 @@ type ModelProfile struct {
 	Opus         string `yaml:"opus"`
 	Sonnet       string `yaml:"sonnet"`
 	Haiku        string `yaml:"haiku"`
+	// Env carries backend-specific vars a profile needs beyond the six
+	// built-ins (grove-103, e.g. Kimi Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW).
+	// Exported before the built-ins in WrapProfile, so a profile's env can
+	// never shadow the dedicated base_url/auth_token_env/slug fields.
+	Env map[string]string `yaml:"env"`
 }
 
 type Config struct {
@@ -227,6 +232,16 @@ func parse(raw []byte, src string) (*Config, error) {
 			return nil, fmt.Errorf("repo %q: path %s is not a directory", name, r.Path)
 		}
 	}
+	for name, p := range c.ModelProfiles {
+		if p == nil {
+			continue
+		}
+		for k := range p.Env {
+			if !envKeyPattern.MatchString(k) {
+				return nil, fmt.Errorf("model profile %q: invalid env key %q (want %s)", name, k, envKeyPattern.String())
+			}
+		}
+	}
 	if c.Orchestrator.Dir == "" {
 		c.Orchestrator.Dir = filepath.Join(Dir(), "orchestrator")
 	} else {
@@ -290,6 +305,12 @@ func SecretsPath() string {
 // WithModel'd command, e.g. `claude --model 'opus' --foo` -> "opus".
 var modelFlagValue = regexp.MustCompile(`--model\s+'([^']*)'`)
 
+// envKeyPattern is the shape a ModelProfile.Env key must match — env keys
+// are interpolated unquoted into WrapProfile's shell line (they're the
+// variable name, not a value), so anything outside a bare identifier is a
+// config load error rather than a shell-injection surface.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // modelSlot classifies a (possibly WithModel'd) claude command into the
 // opus/sonnet/haiku class it requested, so a profile can substitute its own
 // slug for that class. No --model flag (the common case — grab/orchestrator
@@ -345,16 +366,31 @@ func (p *ModelProfile) slugFor(slot string) string {
 // requested (opus/sonnet/haiku), plus all three ANTHROPIC_DEFAULT_*_MODEL
 // vars so an in-session `/model` switch still resolves to one of the
 // profile's own slugs rather than an Anthropic one.
+//
+// p.Env entries (grove-103) are exported first, in sorted key order for
+// deterministic output, followed by the six built-ins — so a profile's env
+// map can never shadow the dedicated base_url/auth_token_env/slug fields.
 func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string {
 	if p == nil {
 		return modeledCmd
 	}
 	slug := p.slugFor(modelSlot(modeledCmd))
+	var extra strings.Builder
+	if len(p.Env) > 0 {
+		keys := make([]string, 0, len(p.Env))
+		for k := range p.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			extra.WriteString(k + "=" + shellQuote(p.Env[k]) + " ")
+		}
+	}
 	return fmt.Sprintf(
-		"( . %s && export ANTHROPIC_BASE_URL=%s ANTHROPIC_AUTH_TOKEN=\"$%s\" ANTHROPIC_MODEL=%s "+
+		"( . %s && export %sANTHROPIC_BASE_URL=%s ANTHROPIC_AUTH_TOKEN=\"$%s\" ANTHROPIC_MODEL=%s "+
 			"ANTHROPIC_DEFAULT_OPUS_MODEL=%s ANTHROPIC_DEFAULT_SONNET_MODEL=%s ANTHROPIC_DEFAULT_HAIKU_MODEL=%s "+
 			"&& exec %s )",
-		shellQuote(secretsPath), shellQuote(p.BaseURL), p.AuthTokenEnv, shellQuote(slug),
+		shellQuote(secretsPath), extra.String(), shellQuote(p.BaseURL), p.AuthTokenEnv, shellQuote(slug),
 		shellQuote(p.Opus), shellQuote(p.Sonnet), shellQuote(p.Haiku),
 		modeledCmd,
 	)
