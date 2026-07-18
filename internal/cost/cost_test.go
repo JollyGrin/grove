@@ -4,7 +4,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/JollyGrin/grove/internal/transcript"
 )
@@ -258,6 +260,75 @@ func TestForTaskSumsAllSessionsWithCache(t *testing.T) {
 	}
 	if c.parses != parsesBefore {
 		t.Errorf("unchanged files reparsed: %d → %d", parsesBefore, c.parses)
+	}
+}
+
+func TestEntriesForEvictsStaleGenerations(t *testing.T) {
+	// A live worker's transcript mutates mtime/size continuously — the
+	// cache must hold only the newest (mtime,size) generation per path,
+	// never accumulate one entry per historical poll.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sess.jsonl")
+
+	c := NewCache()
+	line := `{"type":"assistant","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(path, []byte(strings.Repeat(line+"\n", i+1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mtime := time.Now().Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.entriesFor(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := len(c.byFile); got != 1 {
+		t.Errorf("byFile has %d entries after 3 generations of one path, want 1", got)
+	}
+	if c.parses != 3 {
+		t.Errorf("parses = %d, want 3 (re-parse on every mtime/size change)", c.parses)
+	}
+}
+
+func TestEntriesForCachesDistinctPathsIndependently(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.jsonl")
+	pathB := filepath.Join(dir, "b.jsonl")
+	line := `{"type":"assistant","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	if err := os.WriteFile(pathA, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathB, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCache()
+	if _, err := c.entriesFor(pathA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.entriesFor(pathB); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(c.byFile); got != 2 {
+		t.Errorf("byFile has %d entries for 2 distinct paths, want 2", got)
+	}
+
+	parsesBefore := c.parses
+	if _, err := c.entriesFor(pathA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.entriesFor(pathB); err != nil {
+		t.Fatal(err)
+	}
+	if c.parses != parsesBefore {
+		t.Errorf("unchanged files reparsed: %d → %d", parsesBefore, c.parses)
+	}
+	if got := len(c.byFile); got != 2 {
+		t.Errorf("byFile has %d entries after re-fetch, want 2", got)
 	}
 }
 
