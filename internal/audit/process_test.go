@@ -65,6 +65,30 @@ func TestDetectOrphanProcesses(t *testing.T) {
 				{PID: 999, CPUPct: 0.1, Elapsed: "00:02:00", Args: "node /Users/dean/Library/Application Support/mcp-config.json --serve"},
 			},
 		},
+		{
+			name: "Claude desktop app bundle process is not an orphan",
+			ps: psHeader +
+				"33333     1   1.2   02:00:00 /Applications/Claude.app/Contents/MacOS/Claude --type=renderer\n",
+			panes: "",
+			want:  nil,
+		},
+		{
+			name: "args merely containing the substring mcp (no word boundary) are not an orphan",
+			ps: psHeader +
+				"44444     1   0.0   00:01:00 tmcpipe --daemon\n" +
+				"44445     1   0.0   00:01:00 curl https://example.com/mcprotocol/spec\n",
+			panes: "",
+			want:  nil,
+		},
+		{
+			name: "a real orphaned grove worker (claude with a tracked-worktree arg) is still detected",
+			ps: psHeader +
+				"55555     1   3.3   00:45:00 /usr/local/bin/claude --resume /Users/dean/git/.worktrees/grove/grove-42-some-task\n",
+			panes: "",
+			want: []OrphanProcess{
+				{PID: 55555, CPUPct: 3.3, Elapsed: "00:45:00", Args: "/usr/local/bin/claude --resume /Users/dean/git/.worktrees/grove/grove-42-some-task"},
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -103,14 +127,17 @@ func TestParsePanePIDs(t *testing.T) {
 
 func TestIsSuspectArgs(t *testing.T) {
 	cases := map[string]bool{
-		"/usr/local/bin/claude mcp serve":          true,
-		"claude --version":                         true,
-		"something-mcp-server --port 1234":         true,
-		"node /Users/dean/.claude/mcp-helper.js":   true,
-		"node /usr/local/bin/some-other-daemon.js": false,
-		"/usr/libexec/logd":                        false,
-		"my-claude-helper --run":                   true,  // boundary before trailing '-'
-		"notaclaudexprocess --run":                 false, // no boundary right after "claude"
+		"/usr/local/bin/claude mcp serve":                                true,
+		"claude --version":                                               true,
+		"something-mcp-server --port 1234":                               true,
+		"node /Users/dean/.claude/mcp-helper.js":                         true,
+		"node /usr/local/bin/some-other-daemon.js":                       false,
+		"/usr/libexec/logd":                                              false,
+		"my-claude-helper --run":                                         true,  // boundary before trailing '-'
+		"notaclaudexprocess --run":                                       false, // no boundary right after "claude"
+		"/Applications/Claude.app/Contents/MacOS/Claude --type=renderer": false, // app bundle, excluded outright
+		"tmcpipe --daemon":                                               false, // "mcp" substring, no word boundary
+		"curl https://example.com/mcprotocol/spec":                       false, // "mcp" substring, no word boundary
 	}
 	for args, want := range cases {
 		if got := isSuspectArgs(args); got != want {

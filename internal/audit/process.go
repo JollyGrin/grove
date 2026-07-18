@@ -26,17 +26,26 @@ type process struct {
 }
 
 var (
-	claudeOrMCPRe = regexp.MustCompile(`(?i)claude\b|mcp`)
+	claudeOrMCPRe = regexp.MustCompile(`(?i)claude\b|\bmcp\b`)
 	mcpPathRe     = regexp.MustCompile(`(?i)\.claude/|mcp[-_.]?config|mcp\.json`)
-	psLineRe      = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.*)$`)
+	// appBundleRe matches a macOS app-bundle executable path (e.g. the
+	// Claude desktop app's /Applications/Claude.app/Contents/MacOS/Claude).
+	// These are launchd-parented by design — ppid==1 is normal, not a
+	// grove worker gone orphan — so they're excluded outright regardless
+	// of any claude/mcp text elsewhere in argv.
+	appBundleRe = regexp.MustCompile(`(?i)\.app/Contents/`)
+	psLineRe    = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.*)$`)
 )
 
 // DetectOrphanProcesses parses raw `ps` and `tmux list-panes` output and
 // classifies suspect claude/mcp processes: ppid==1 (reparented to launchd)
-// whose args match `claude\b` or `mcp` (case-insensitive), or a `node`
-// process whose args reference ".claude/" or a known MCP config path —
-// AND whose pid is not in the ancestry (self or descendant) of any live
-// tracked pane.
+// whose args match `claude\b` or `\bmcp\b` (case-insensitive, word-bounded
+// so "mcprotocol"/"tmcpipe" don't false-positive), or a `node` process
+// whose args reference ".claude/" or a known MCP config path — AND whose
+// pid is not in the ancestry (self or descendant) of any live tracked
+// pane. App-bundle executables (".app/Contents/...", e.g. the Claude
+// desktop app) are excluded outright: they're launchd-parented by design,
+// not a grove worker gone orphan.
 //
 // psOutput: lines of `ps -Ao pid,ppid,pcpu,etime,args` (a non-matching
 // header line, if present, is skipped).
@@ -56,6 +65,9 @@ func DetectOrphanProcesses(psOutput, panePIDsOutput string) []OrphanProcess {
 }
 
 func isSuspectArgs(args string) bool {
+	if appBundleRe.MatchString(args) {
+		return false
+	}
 	if claudeOrMCPRe.MatchString(args) {
 		return true
 	}
