@@ -23,6 +23,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Model profile per-profile env map (grove-103, 2026-07-18): `env:`
+      map on `ModelProfile` for backend-specific vars beyond the six
+      built-ins (Kimi Code's K3 endpoint needs
+      `CLAUDE_CODE_AUTO_COMPACT_WINDOW`/`ENABLE_TOOL_SEARCH`/etc.) —
+      exported sorted, before the built-in six, which win on collision so
+      `env:` can't redirect `base_url`/`auth_token_env`; keys validated at
+      config load (`^[A-Za-z_][A-Za-z0-9_]*$`) since they're interpolated
+      unquoted into the wrap's shell line. No `env:` → byte-identical
+      `WrapProfile` output.
 - [x] Workspace marker narrowed (grove-100, 2026-07-17): a `.grove/` is a
       workspace marker only when it holds substance — `config.yaml`,
       `state/`, or `orchestrator/`; a `.grove/` with only the markdown
