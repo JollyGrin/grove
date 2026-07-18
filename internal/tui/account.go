@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,8 +29,13 @@ const (
 // rule: the two HTTP calls happen only when the operator asks).
 type accountMsg struct {
 	fetched   bool
-	keyMasked string // "" = no key resolved → the tab renders the connect prompt
+	keyMasked string // OpenRouter key mask; "" = unresolved → connect prompt (zero-profile mode)
 	hint      string // dim reason when OpenRouter columns are dashes (offline, non-200)
+
+	// keys is the per-profile key manager (grove-104): one row per distinct
+	// auth_token_env across configured model_profiles, sorted by var name.
+	// Empty = zero profiles configured → the standalone OpenRouter view.
+	keys []keyRow
 
 	creditsOK bool
 	credits   openrouter.Credits
@@ -40,9 +46,63 @@ type accountMsg struct {
 	byModel                            []cost.ModelSpend // 30d per-model grove estimates, biggest first
 }
 
-// keySavedMsg reports the paste-key flow persisted a validated key; the
-// handler flashes the masked form and re-fetches the tab.
-type keySavedMsg struct{ masked string }
+// keyRow is one env var the key manager shows: which profiles reference it
+// and its masked value when it resolves (process env or the secrets file).
+// masked "" = not set. The full key is never carried — masks only.
+type keyRow struct {
+	envVar   string
+	profiles []string // sorted profile names sharing this var
+	masked   string
+}
+
+// hasOpenRouter reports whether the OpenRouter extras (balance, runway,
+// top-up link) apply: a profile row references OPENROUTER_API_KEY, or zero
+// profiles are configured (the grove-87 standalone view is the fallback).
+func (a accountMsg) hasOpenRouter() bool {
+	if len(a.keys) == 0 {
+		return true
+	}
+	for _, r := range a.keys {
+		if r.envVar == openrouter.EnvVar {
+			return true
+		}
+	}
+	return false
+}
+
+// accountKeyRows builds the key-manager rows: one per distinct
+// auth_token_env (several profiles may share one var), sorted by var name.
+// resolve maps a var name to its key ("" = unset); only the mask survives
+// into the row.
+func accountKeyRows(profiles map[string]*config.ModelProfile, resolve func(string) string) []keyRow {
+	byVar := map[string][]string{}
+	for name, p := range profiles {
+		if p == nil || strings.TrimSpace(p.AuthTokenEnv) == "" {
+			continue
+		}
+		byVar[p.AuthTokenEnv] = append(byVar[p.AuthTokenEnv], name)
+	}
+	vars := make([]string, 0, len(byVar))
+	for v := range byVar {
+		vars = append(vars, v)
+	}
+	sort.Strings(vars)
+	rows := make([]keyRow, 0, len(vars))
+	for _, v := range vars {
+		names := byVar[v]
+		sort.Strings(names)
+		masked := ""
+		if k := resolve(v); k != "" {
+			masked = openrouter.Mask(k)
+		}
+		rows = append(rows, keyRow{envVar: v, profiles: names, masked: masked})
+	}
+	return rows
+}
+
+// keySavedMsg reports the paste-key flow persisted a key; the handler
+// flashes the masked form and re-fetches the tab.
+type keySavedMsg struct{ varName, masked string }
 
 // accountCmd assembles the ACCOUNT snapshot off the tea loop. The grove
 // side (windows + per-model totals) always computes — live transcripts via
@@ -77,7 +137,22 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 		msg.estDay, msg.estWeek, msg.estMonth, msg.estYear = cost.WindowSums(points, now)
 		msg.byModel = cost.SortedModelSpend(byModel)
 
-		key := openrouter.Key(config.SecretsPath())
+		// Key rows read the secrets file here — on tab open / r / after save,
+		// exactly like the OpenRouter fetch (cockpit RAM rule: no cache).
+		secrets := config.SecretsPath()
+		var profiles map[string]*config.ModelProfile
+		if cfg != nil {
+			profiles = cfg.ModelProfiles
+		}
+		msg.keys = accountKeyRows(profiles, func(v string) string { return openrouter.Key(secrets, v) })
+
+		// OpenRouter extras only apply to the OpenRouter row (or the
+		// zero-profile standalone view) — no balance API is assumed for
+		// other providers.
+		if !msg.hasOpenRouter() {
+			return msg
+		}
+		key := openrouter.Key(secrets, openrouter.EnvVar)
 		if key == "" {
 			return msg
 		}
@@ -96,14 +171,16 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 	}
 }
 
-// pasteKeyCmd is the connect flow (grove-87): read the clipboard, validate
-// the candidate against /api/v1/key, and only then persist it to the
-// profile secrets file. A rejected or unreadable key is never saved, and
-// the full key never renders — flashes carry the masked form at most.
-func pasteKeyCmd() tea.Cmd {
+// pasteKeyCmd is the connect flow (grove-87, generalized grove-104): read
+// the clipboard and persist the candidate as varName in the profile
+// secrets file. OpenRouter keys are validated live against /api/v1/key
+// first; other providers have no assumed API, so their keys save as
+// pasted. An unreadable or rejected key is never saved, and the full key
+// never renders — flashes carry the masked form at most.
+func pasteKeyCmd(varName string) tea.Cmd {
 	return func() tea.Msg {
 		if runtime.GOOS != "darwin" {
-			return flashMsg("paste needs pbpaste (macOS) — set OPENROUTER_API_KEY in ~/.config/grove/.env instead")
+			return flashMsg("paste needs pbpaste (macOS) — set " + varName + " in ~/.config/grove/.env instead")
 		}
 		out, err := exec.Command("pbpaste").Output()
 		if err != nil {
@@ -111,15 +188,17 @@ func pasteKeyCmd() tea.Cmd {
 		}
 		key := strings.TrimSpace(string(out))
 		if key == "" {
-			return flashMsg("clipboard is empty — copy your OpenRouter key first")
+			return flashMsg("clipboard is empty — copy your " + varName + " value first")
 		}
-		if err := openrouter.ValidateKey(openrouter.DefaultBaseURL, key); err != nil {
-			return flashMsg("key rejected (" + err.Error() + ") — not saved")
+		if varName == openrouter.EnvVar {
+			if err := openrouter.ValidateKey(openrouter.DefaultBaseURL, key); err != nil {
+				return flashMsg("key rejected (" + err.Error() + ") — not saved")
+			}
 		}
-		if err := openrouter.SaveKey(config.SecretsPath(), key); err != nil {
+		if err := openrouter.SaveKey(config.SecretsPath(), varName, key); err != nil {
 			return flashMsg("save failed: " + err.Error())
 		}
-		return keySavedMsg{masked: openrouter.Mask(key)}
+		return keySavedMsg{varName: varName, masked: openrouter.Mask(key)}
 	}
 }
 
@@ -256,6 +335,13 @@ func (m Model) viewAccount() string {
 	switch {
 	case !a.fetched:
 		sections = append(sections, sDim.Render("fetching account…"))
+	case len(a.keys) > 0:
+		// Profiles configured → the per-profile key manager (grove-104);
+		// the OpenRouter row keeps its balance/runway extras below.
+		sections = append(sections, m.viewKeyRows(w))
+		if a.keyMasked != "" {
+			sections = append(sections, m.viewBalanceRunway(w))
+		}
 	case a.keyMasked == "":
 		sections = append(sections, viewConnectPrompt(w))
 	default:
@@ -265,12 +351,35 @@ func (m Model) viewAccount() string {
 	if s := m.viewAccountByModel(w); s != "" {
 		sections = append(sections, s)
 	}
-	sections = append(sections, truncPad(
-		sKey.Render("o")+sFoot.Render(" top-up ↗ ")+
-			sDelivery.Render(strings.TrimPrefix(openrouter.CreditsURL, "https://")), w))
+	if a.hasOpenRouter() {
+		sections = append(sections, truncPad(
+			sKey.Render("o")+sFoot.Render(" top-up ↗ ")+
+				sDelivery.Render(strings.TrimPrefix(openrouter.CreditsURL, "https://")), w))
+	}
 
 	body := sPanelFocus.Width(m.width - 2).Render(strings.Join(sections, "\n\n"))
 	return m.viewHeader() + "\n" + body + "\n" + m.viewAccountFooter()
+}
+
+// viewKeyRows renders the key manager (grove-104): one selectable row per
+// distinct auth_token_env — var name, masked value (or an obvious unset
+// state), and the profiles that use it. Stars only: the full key never
+// renders, and non-OpenRouter rows assume no balance API.
+func (m Model) viewKeyRows(w int) string {
+	rows := []string{sPanelTitleFocus.Render("KEYS")}
+	for i, r := range m.account.keys {
+		cur := "  "
+		if i == m.accountSel {
+			cur = sKey.Render("▸ ")
+		}
+		val := sWaiting.Render(pad("not set — enter to paste", 26))
+		if r.masked != "" {
+			val = sWorking.Render(pad(r.masked, 26))
+		}
+		line := cur + pad(r.envVar, 22) + val + sDim.Render(strings.Join(r.profiles, ", "))
+		rows = append(rows, truncPad(line, w))
+	}
+	return strings.Join(rows, "\n")
 }
 
 // viewConnectPrompt replaces BALANCE/RUNWAY when no key resolves: explain
@@ -362,7 +471,9 @@ func (m Model) viewAccountByModel(w int) string {
 func (m Model) viewAccountFooter() string {
 	a := m.account
 	keys := []string{sKey.Render("tab") + sFoot.Render(" spend")}
-	if a.fetched && a.keyMasked == "" {
+	if len(a.keys) > 0 {
+		keys = append(keys, sKey.Render("enter")+sFoot.Render(" paste key"))
+	} else if a.fetched && a.keyMasked == "" {
 		keys = append(keys, sKey.Render("p")+sFoot.Render(" paste key"))
 	}
 	keys = append(keys,
@@ -370,7 +481,7 @@ func (m Model) viewAccountFooter() string {
 		sKey.Render("o")+sFoot.Render(" ")+hyperlink(openrouter.CreditsURL, sFoot.Render("top-up ↗")),
 		sKey.Render("esc")+sFoot.Render(" back"),
 	)
-	if a.keyMasked != "" {
+	if a.keyMasked != "" && len(a.keys) == 0 {
 		keys = append(keys, sDim.Render("key "+a.keyMasked))
 	}
 	keys = append(keys, sDim.Render("estimates, not billing"))

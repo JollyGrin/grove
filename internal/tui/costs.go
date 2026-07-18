@@ -110,10 +110,39 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = openURL(openrouter.CreditsURL)
 		}
 		return m, nil
-	case "p":
-		if m.costsTab == costsTabAccount && m.account.fetched && m.account.keyMasked == "" {
+	case "j", "down":
+		if m.costsTab == costsTabAccount && m.accountSel < len(m.account.keys)-1 {
+			m.accountSel++
+		}
+		return m, nil
+	case "k", "up":
+		if m.costsTab == costsTabAccount && m.accountSel > 0 {
+			m.accountSel--
+		}
+		return m, nil
+	case "enter":
+		// Key-manager rows (grove-104): enter opens the paste flow for the
+		// selected row's env var — set or unset, pasting re-keys it.
+		if m.costsTab == costsTabAccount && m.accountSel < len(m.account.keys) {
 			m.flash = "reading clipboard…"
-			return m, pasteKeyCmd()
+			return m, pasteKeyCmd(m.account.keys[m.accountSel].envVar)
+		}
+		return m, nil
+	case "p":
+		if m.costsTab != costsTabAccount || !m.account.fetched {
+			return m, nil
+		}
+		if ks := m.account.keys; len(ks) > 0 {
+			// p mirrors enter when profiles are configured — same row target.
+			if m.accountSel < len(ks) {
+				m.flash = "reading clipboard…"
+				return m, pasteKeyCmd(ks[m.accountSel].envVar)
+			}
+			return m, nil
+		}
+		if m.account.keyMasked == "" {
+			m.flash = "reading clipboard…"
+			return m, pasteKeyCmd(openrouter.EnvVar)
 		}
 		return m, nil
 	case "b":

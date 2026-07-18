@@ -15,7 +15,7 @@ func TestKeyPrefersEnvOverFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvVar, "from-env")
-	if got := Key(path); got != "from-env" {
+	if got := Key(path, EnvVar); got != "from-env" {
 		t.Errorf("Key = %q, want env to win", got)
 	}
 }
@@ -39,7 +39,7 @@ func TestKeyFromFileForms(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got := Key(path); got != want {
+		if got := Key(path, EnvVar); got != want {
 			t.Errorf("Key(%q) = %q, want %q", content, got, want)
 		}
 	}
@@ -47,14 +47,14 @@ func TestKeyFromFileForms(t *testing.T) {
 
 func TestKeyMissingFile(t *testing.T) {
 	t.Setenv(EnvVar, "")
-	if got := Key(filepath.Join(t.TempDir(), "nope")); got != "" {
+	if got := Key(filepath.Join(t.TempDir(), "nope"), EnvVar); got != "" {
 		t.Errorf("Key on missing file = %q, want empty", got)
 	}
 }
 
 func TestSaveKeyCreatesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	if err := SaveKey(path, "sk-or-v1-new"); err != nil {
+	if err := SaveKey(path, EnvVar, "sk-or-v1-new"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -76,7 +76,7 @@ func TestSaveKeyPreservesOtherEntriesAndReplaces(t *testing.T) {
 	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveKey(path, "sk-or-v1-new"); err != nil {
+	if err := SaveKey(path, EnvVar, "sk-or-v1-new"); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
@@ -91,7 +91,7 @@ func TestSaveKeyAppendsWhenAbsent(t *testing.T) {
 	if err := os.WriteFile(path, []byte("export LINEAR_API_KEY=lin\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveKey(path, "sk"); err != nil {
+	if err := SaveKey(path, EnvVar, "sk"); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
@@ -101,8 +101,40 @@ func TestSaveKeyAppendsWhenAbsent(t *testing.T) {
 	}
 	// Round-trip: the file SaveKey writes must be readable by Key.
 	t.Setenv(EnvVar, "")
-	if got := Key(path); got != "sk" {
+	if got := Key(path, EnvVar); got != "sk" {
 		t.Errorf("Key after SaveKey = %q", got)
+	}
+}
+
+// grove-104: the key-file helpers are var-agnostic — saving one profile's
+// var must never disturb another's, and each resolves independently.
+func TestSaveKeyMultipleVars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := SaveKey(path, EnvVar, "sk-or-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveKey(path, "KIMI_API_KEY", "kimi-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveKey(path, EnvVar, "sk-or-new"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	want := "export OPENROUTER_API_KEY=sk-or-new\nexport KIMI_API_KEY=kimi-1\n"
+	if string(raw) != want {
+		t.Errorf("content = %q, want %q", raw, want)
+	}
+	t.Setenv(EnvVar, "")
+	t.Setenv("KIMI_API_KEY", "")
+	if got := Key(path, EnvVar); got != "sk-or-new" {
+		t.Errorf("Key(%s) = %q", EnvVar, got)
+	}
+	if got := Key(path, "KIMI_API_KEY"); got != "kimi-1" {
+		t.Errorf("Key(KIMI_API_KEY) = %q", got)
+	}
+	// A var sharing a suffix must not match (prefix discipline).
+	if got := Key(path, "API_KEY"); got != "" {
+		t.Errorf("Key(API_KEY) = %q, want empty", got)
 	}
 }
 
