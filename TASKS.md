@@ -23,6 +23,14 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Kimi Code plan fuel gauges (grove-133, 2026-07-18): ACCOUNT tab
+      rows whose profile `base_url` targets `https://api.kimi.com/` show
+      per-window quota gauges under the key line
+      (`5h  ▓▓▓░░  62% left · resets in 2h 20m`) — new read-only
+      `internal/kimi` client (`GET /v1/usages`, schema per kimi-cli's
+      `_parse_usage_payload`, tolerant parsing: garbage → empty, non-200 →
+      dash + hint), fetched only inside the one-shot `accountCmd`; unset
+      key or failed fetch renders a dash fuel line, never an error state
 - [x] Window-side tmux target hardening (grove-116, 2026-07-18): worker
       windows resolve by immutable `@N` id via `tmux.WindowID` — the old
       `session:name` targets prefix-matched, so `repo · grove-1` could
