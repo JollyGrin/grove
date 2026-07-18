@@ -85,6 +85,72 @@ notify:
 	}
 }
 
+// Regression (grove-105 review): a bare `orchestrator:` key with all its
+// children commented out — the shape config.example.yaml teaches — parses
+// as a null scalar, not a mapping. Appending into that scalar encoded to
+// nothing: SaveHotkey reported success while the binding was silently
+// lost, and every later save no-oped too. The value node must be coerced
+// to a mapping.
+func TestSaveHotkeyCoercesNullSections(t *testing.T) {
+	for name, seed := range map[string]string{
+		"null orchestrator": `# my grove config
+provider:
+  kind: markdown
+orchestrator:
+  # dir: ~/.config/grove/orchestrator
+  # claude: claude --dangerously-skip-permissions
+`,
+		"null hotkeys": `orchestrator:
+  claude: claude --dangerously-skip-permissions
+  hotkeys:
+    # "1": openrouter-glm
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := SaveHotkey(path, "1", "kimi"); err != nil {
+				t.Fatalf("bind over null section: %v", err)
+			}
+			if hk := readHotkeys(t, path); hk["1"] != "kimi" {
+				out, _ := os.ReadFile(path)
+				t.Fatalf("binding lost over null section: hotkeys = %v, file:\n%s", hk, out)
+			}
+			// A second save still works (the old bug also bricked later saves).
+			if err := SaveHotkey(path, "2", "glm"); err != nil {
+				t.Fatalf("second bind: %v", err)
+			}
+			if hk := readHotkeys(t, path); hk["2"] != "glm" {
+				t.Fatalf("second binding lost: hotkeys = %v", hk)
+			}
+		})
+	}
+}
+
+// A comments-only file parses to an empty yaml document; those lines are
+// re-emitted verbatim ahead of the fresh mapping instead of being lost.
+func TestSaveHotkeyCommentOnlyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	seed := "# grove config\n# nothing enabled yet\n"
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveHotkey(path, "1", "kimi"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if hk := readHotkeys(t, path); hk["1"] != "kimi" {
+		t.Fatalf("hotkeys = %v, want 1→kimi", hk)
+	}
+	out, _ := os.ReadFile(path)
+	for _, want := range []string{"# grove config", "# nothing enabled yet"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("comment-only content lost %q:\n%s", want, out)
+		}
+	}
+}
+
 // A missing file is created with just the hotkeys block — a workspace
 // .grove/ may exist without a config.yaml.
 func TestSaveHotkeyCreatesFile(t *testing.T) {

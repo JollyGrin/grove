@@ -3,7 +3,9 @@
 // belongs to — the workspace's <root>/.grove/config.yaml when in a
 // workspace (orchestrator is workspace-scoped, see LoadAt), else the
 // global file. The write is yaml.Node surgery, not a re-marshal of the
-// parsed Config: comments and unrelated keys survive untouched.
+// parsed Config: comments and unrelated content survive, though not
+// byte-for-byte — the encoder re-indents and may rewrite equivalent
+// syntax (anchors/merge keys, quoting style).
 package config
 
 import (
@@ -25,11 +27,12 @@ func PathAt(root string) string {
 }
 
 // SaveHotkey binds digit → profile in orchestrator.hotkeys at path,
-// preserving every other byte of yaml structure (comments included).
-// Binding a taken digit steals it (overwrite); a profile holds at most
-// one digit, so its previous digit (if any) is dropped. profile == ""
-// unbinds the digit. A missing file is created with just the hotkeys
-// block — the workspace .grove/ dir may exist without a config.yaml.
+// preserving the rest of the yaml's content and comments (structure may
+// be re-indented — see the package comment). Binding a taken digit
+// steals it (overwrite); a profile holds at most one digit, so its
+// previous digit (if any) is dropped. profile == "" unbinds the digit.
+// A missing file is created with just the hotkeys block — the workspace
+// .grove/ dir may exist without a config.yaml.
 func SaveHotkey(path, digit, profile string) error {
 	var doc yaml.Node
 	raw, err := os.ReadFile(path)
@@ -43,7 +46,14 @@ func SaveHotkey(path, digit, profile string) error {
 	default:
 		return err
 	}
+	// A comments-only (or whitespace-only) file parses to an empty
+	// document — node surgery would drop those lines wholesale, so they
+	// are re-emitted verbatim ahead of the fresh mapping instead.
+	var preserved []byte
 	if doc.Kind == 0 || len(doc.Content) == 0 {
+		if len(bytes.TrimSpace(raw)) > 0 {
+			preserved = append(bytes.TrimRight(raw, "\n"), '\n')
+		}
 		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
 			{Kind: yaml.MappingNode, Tag: "!!map"},
 		}}
@@ -82,15 +92,27 @@ func SaveHotkey(path, digit, profile string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return os.WriteFile(path, append(preserved, buf.Bytes()...), 0o644)
 }
 
 // ensureMap returns the mapping node at key inside m, appending an empty
-// one when absent.
+// one when absent. A present-but-non-mapping value (a bare `orchestrator:`
+// or `hotkeys:` key with all children commented out — the shape
+// config.example.yaml teaches — parses as a null scalar) is coerced to a
+// mapping in place: appending into the scalar would encode to nothing and
+// silently drop the binding.
 func ensureMap(m *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
-			return m.Content[i+1]
+			v := m.Content[i+1]
+			if v.Kind != yaml.MappingNode {
+				v.Kind = yaml.MappingNode
+				v.Tag = "!!map"
+				v.Value = ""
+				v.Style = 0
+				v.Content = nil
+			}
+			return v
 		}
 	}
 	v := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
