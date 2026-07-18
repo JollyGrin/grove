@@ -362,8 +362,9 @@ func (m Model) viewDetail() string {
 }
 
 // viewProfilePick renders the modeProfilePick overlay (grove-45): the sorted
-// candidate profile names, each with its `opus` model as a one-line hint, and
-// a cursor. Shown only for ≥2 profiles with no default, so `)` needn't guess.
+// candidate profile names, each with its digit binding (grove-105) and its
+// `opus` model as a one-line hint, plus a cursor. `)` always lands here when
+// any profile is configured — the choice is never auto-spawned away.
 func (m Model) viewProfilePick() string {
 	w := m.width - 4
 
@@ -375,11 +376,15 @@ func (m Model) viewProfilePick() string {
 		}
 	}
 
-	rows := []string{sHeaderCol.Render(truncPad("   "+pad("PROFILE", nameW+2)+"OPUS MODEL", w))}
+	rows := []string{sHeaderCol.Render(truncPad("   KEY  "+pad("PROFILE", nameW+2)+"OPUS MODEL", w))}
 	for i, n := range m.pickProfiles {
 		opus := "—"
 		if p := m.cfg.ModelProfiles[n]; p != nil && p.Opus != "" {
 			opus = p.Opus
+		}
+		key := "[·]"
+		if d := m.cfg.HotkeyFor(n); d != "" {
+			key = "[" + d + "]"
 		}
 		cursor := " "
 		nameCell := pad(n, nameW+2)
@@ -387,18 +392,19 @@ func (m Model) viewProfilePick() string {
 			cursor = sSelected.Render("▸")
 			nameCell = sSelected.Render(nameCell)
 		}
-		line := cursor + " " + nameCell + sChrome.Render(opus)
+		line := cursor + " " + sKey.Render(key) + "  " + nameCell + sChrome.Render(opus)
 		rows = append(rows, truncPad(line, w))
 	}
 
 	body := sPanelTitleFocus.Render("PICK A PROFILE") +
-		sChrome.Render("  (no default set — ≥2 profiles configured)") +
+		sChrome.Render("  (enter spawns · a digit binds the highlighted row)") +
 		"\n" + strings.Join(rows, "\n")
 	panel := sPanelFocus.Width(m.width - 2).Render(body)
 
 	foot := " " + strings.Join([]string{
 		sKey.Render("j/k") + sFoot.Render(" move"),
 		sKey.Render("enter") + sFoot.Render(" spawn"),
+		sKey.Render("1-8") + sFoot.Render(" bind (again unbinds)"),
 		sKey.Render("esc") + sFoot.Render(" cancel"),
 	}, sDim.Render(" · "))
 	if m.flash != "" {

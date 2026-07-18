@@ -23,6 +23,11 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Orchestrator hotkeys (grove-105, 2026-07-18): `)` always opens the
+      profile picker (default_profile dropped, lingering yaml key ignored);
+      digits 1–8 spawn their bound profile directly, bound/unbound from the
+      picker and persisted to `orchestrator.hotkeys` in the workspace (or
+      global) config.yaml, comments preserved
 - [x] ACCOUNT tab → per-profile key manager (grove-104, 2026-07-18):
       one selectable KEYS row per distinct `auth_token_env` across
       configured model_profiles (shared vars merge, profile names on the

@@ -470,19 +470,27 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return flashMsg(out)
 		}
-	case ")": // O's profiled sibling: spawn an orchestrator on a model profile
-		cfg := m.cfg
-		profile, candidates, action := cfg.ResolveOrchestratorProfile()
-		switch action {
-		case config.ProfileHint:
+	case ")": // O's profiled sibling: pick a model profile to orchestrate on.
+		// Always the picker when any profile exists (grove-105) — no
+		// auto-spawn shortcut hiding the choice; direct spawns are the
+		// digit hotkeys' job.
+		candidates, action := m.cfg.ResolveOrchestratorProfile()
+		if action == config.ProfileHint {
 			m.flash = "no model_profiles configured — add one to ~/.config/grove/config.yaml"
 			return m, nil
-		case config.ProfilePick:
-			// ≥2 profiles, no default → let the operator choose (grove-45).
-			m.pickProfiles = candidates
-			m.pickSel = 0
-			m.mode = modeProfilePick
-			m.flash = ""
+		}
+		m.pickProfiles = candidates
+		m.pickSel = 0
+		m.mode = modeProfilePick
+		m.flash = ""
+		return m, nil
+	case "1", "2", "3", "4", "5", "6", "7", "8":
+		// Digit hotkeys (grove-105): one keypress → that bound profile's
+		// orchestrator pane, no intermediate UI. ("0" stays the O alias.)
+		digit := k.String()
+		profile := m.cfg.Orchestrator.Hotkeys[digit]
+		if profile == "" {
+			m.flash = digit + " unbound — bind it in the ) picker"
 			return m, nil
 		}
 		return m.spawnProfile(profile)
@@ -667,8 +675,11 @@ func (m Model) handleCloseKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleProfilePickKey drives the modeProfilePick overlay (grove-45): j/k or
 // arrows move the cursor, enter spawns the selected profile's orchestrator
-// pane, esc (or any exit key) backs out cleanly to the fleet list. The
-// selection is runtime-only — nothing is persisted to config.
+// pane, esc (or any exit key) backs out cleanly to the fleet list. Digits
+// 1–8 bind the highlighted profile to that hotkey (grove-105) — rebinding a
+// taken digit steals it, pressing the row's own digit again unbinds — and
+// persist through SaveHotkeyBinding; the picker stays open so several rows
+// can be bound in one visit.
 func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc", "q":
@@ -695,6 +706,38 @@ func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.pickProfiles = nil
 		return m.spawnProfile(profile)
+	case "1", "2", "3", "4", "5", "6", "7", "8":
+		if m.pickSel < 0 || m.pickSel >= len(m.pickProfiles) {
+			return m, nil
+		}
+		digit := k.String()
+		profile := m.pickProfiles[m.pickSel]
+		unbind := m.cfg.Orchestrator.Hotkeys[digit] == profile
+		save := profile
+		if unbind {
+			save = "" // pressing the row's own digit again unbinds it
+		}
+		if err := SaveHotkeyBinding(digit, save); err != nil {
+			m.flash = err.Error()
+			return m, nil
+		}
+		// Mirror the write into the loaded config so rows/digits react
+		// without a reload. Same steal/one-digit-per-profile semantics as
+		// the persisted map.
+		if m.cfg.Orchestrator.Hotkeys == nil {
+			m.cfg.Orchestrator.Hotkeys = map[string]string{}
+		}
+		delete(m.cfg.Orchestrator.Hotkeys, digit)
+		if unbind {
+			m.flash = digit + " unbound"
+			return m, nil
+		}
+		if old := m.cfg.HotkeyFor(profile); old != "" {
+			delete(m.cfg.Orchestrator.Hotkeys, old)
+		}
+		m.cfg.Orchestrator.Hotkeys[digit] = profile
+		m.flash = digit + " → " + profile
+		return m, nil
 	}
 	return m, nil
 }
@@ -749,6 +792,14 @@ var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
 // `gv orchestrator new --profile <name>`.
 var SpawnOrchestratorProfile = func(cfg *config.Config, profile string) (string, error) {
 	return "", fmt.Errorf("orchestrator spawn not wired")
+}
+
+// SaveHotkeyBinding persists one digit→profile hotkey binding from the `)`
+// picker (grove-105); profile "" unbinds the digit. Injected by cmd/gv,
+// which knows the ambient workspace root and so which config.yaml the
+// binding belongs to. The config write is the only mutation on this path.
+var SaveHotkeyBinding = func(digit, profile string) error {
+	return fmt.Errorf("hotkey persist not wired")
 }
 
 // AttachTask is injected by cmd/gv (attach bookkeeping — editor inject,

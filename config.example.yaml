@@ -47,8 +47,10 @@ repos:
 orchestrator:
   dir: ~/.config/grove/orchestrator
   claude: claude --dangerously-skip-permissions   # default; guardrails live in the orchestrator's CLAUDE.md
-  # default_profile: openrouter-glm   # which model_profiles entry the cockpit's `)` hotkey opens (grove-41);
-                                      # unset falls back to the sole model_profiles entry, else `)` shows a hint
+  # hotkeys:            # cockpit digit hotkeys (grove-105): the digit spawns that
+  #   "1": openrouter-glm   # profile's orchestrator directly. Bind/unbind from the
+  #   "2": openrouter-kimi  # `)` picker (which always opens when any profile exists) —
+  #                         # the picker writes this block back for you.
 
 audit:
   stale_days: 7   # no-PR tasks with a dead/idle agent older than this classify `abandoned`
