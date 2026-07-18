@@ -41,17 +41,25 @@ grove worker) silently targets the **real server** unless it clears
 - Claude's pane is **resolved, never assumed** — windows lose splits,
   panes renumber, and Claude's process title is its bare version string.
   All relay/detector/editor-inject paths go through `tmux.ClaudePane`.
-- Window names drift (trailing dashes, glyph changes) but `-t
-  session:window` lookups still hit because tmux **prefix-matches**
-  targets. Never rely on exact window-name equality; re-derive and
-  re-store on adopt.
+- Window names drift (trailing dashes, glyph changes), so never rely on
+  exact window-name equality; re-derive and re-store on adopt. But tmux's
+  window-side **prefix matching is a trap, not the answer** (grove-116):
+  worker names are prefixes of each other (`repo · grove-1` vs
+  `repo · grove-10`), so a `session:name` target is ambiguous while both
+  live (a live glyphed worker reads as dead) and **silently resolves to
+  the sibling** once the task's own window dies — kill/rename/paste then
+  hits the wrong worker. NEVER build a tmux target from a stored window
+  name: resolve through `tmux.WindowID` (list-windows +
+  `matchesWindowName`, glyph-tolerant) and target the immutable `@N` id;
+  relay text via `tmux.ClaudePaneTarget`'s `%N` pane id.
 - The session-side twin of that rule (grove-78): a BARE `-t <session>`
   target resolves against **window names across all sessions** too — a
   session literally named `grove` collides with every `grove · <ticket>`
   worker window (`new-window -t grove` died on "index 1 in use" in a
-  different session). Every session-scoped `-t` must be `=`-anchored; only
-  the window side of `session:window` may stay prefix-tolerant — that
-  tolerance is what glyphed windows need.
+  different session). Every session-scoped `-t` must be `=`-anchored; the
+  window side is never name-targeted at all since grove-116 — windows
+  resolve to `@N` ids via `tmux.WindowID` (glyph tolerance lives in
+  `matchesWindowName`, not in tmux's matcher).
 - But the anchor form depends on the command's target KIND (grove-99,
   tmux 3.6a): `tmux.Exact` (`-t '=grove'`) is only valid where `-t` is a
   *target-session* (`has-session`, `kill-session`, `new-window`,

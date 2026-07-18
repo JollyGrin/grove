@@ -205,26 +205,118 @@ func CockpitReady(session string) bool {
 	return err == nil && strings.TrimSpace(out) == "ready"
 }
 
+// WindowID resolves a stored (glyph-less) worker window name to the live
+// window's globally unique tmux id ("@N"), or ("", false) when no window
+// of the session matches. This is THE way to target a worker window
+// (grove-116): a raw "session:name" target tmux-prefix-matches, and worker
+// names are prefixes of each other ("repo · grove-1" vs "repo · grove-10"),
+// so a name target can silently resolve to a SIBLING task's window — a
+// kill/rename/paste then hits the wrong worker. Listing windows and
+// comparing via matchesWindowName keeps the glyph tolerance a live worker
+// needs while making a sibling unhittable; the returned id is immune to
+// prefix matching and to the window being renamed between resolve and use.
+func WindowID(session, base string) (string, bool) {
+	out, err := run("list-windows", "-t", Exact(session), "-F", "#{window_id}\t#{window_name}")
+	if err != nil {
+		return "", false
+	}
+	return matchWindowID(out, base)
+}
+
+// matchWindowID is WindowID's pure matcher, split from the exec so the
+// grove-1 vs grove-10 discrimination is testable without a tmux server.
+// out is list-windows "#{window_id}\t#{window_name}" output.
+func matchWindowID(out, base string) (string, bool) {
+	if base == "" {
+		return "", false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(parts) == 2 && matchesWindowName(parts[1], base) {
+			return parts[0], true
+		}
+	}
+	return "", false
+}
+
 // RenameWorker pushes a live status glyph into a worker window's name so
 // `Ctrl-b w` reads as a board (grove-29 P3): the window becomes
 // "<base> <glyph>". base is the task's stored tmux_window — which is NEVER
 // rewritten, so it stays a clean, stable resolution key; the glyph is only a
-// display suffix. Targeting session:base prefix-matches the current (possibly
-// already-glyphed) window, so re-glyphing on the next transition just works.
+// display suffix. The current (possibly already-glyphed) window is resolved
+// by id, so re-glyphing on the next transition just works — and a dead
+// window is an error, never a rename of a prefix-extending sibling
+// (grove-116: a late hook would otherwise re-badge "repo · grove-10" as
+// "repo · grove-1 <glyph>").
 func RenameWorker(session, base, glyph string) error {
 	if base == "" || glyph == "" {
 		return nil
 	}
-	_, err := run("rename-window", "-t", Exact(session)+":"+base, base+" "+glyph)
+	id, ok := WindowID(session, base)
+	if !ok {
+		return fmt.Errorf("no window matching %q in session %q", base, session)
+	}
+	_, err := run("rename-window", "-t", id, base+" "+glyph)
 	return err
 }
 
 // WindowLive reports whether a worker window exists, tolerating a status
-// glyph suffix that exact name-comparison (tmux.WindowExists) would miss:
-// it targets session:base, which tmux prefix-matches to the glyphed window.
+// glyph suffix. Resolved via WindowID (grove-116): the old session:base
+// target prefix-matched, so a live glyphed worker plus a sibling read as
+// ambiguous ("dead"), and a dead worker's target silently resolved to the
+// sibling ("alive" → the follow-up KillWindow killed the wrong worker).
 func WindowLive(session, base string) bool {
-	_, err := run("list-panes", "-t", Exact(session)+":"+base)
-	return err == nil
+	_, ok := WindowID(session, base)
+	return ok
+}
+
+// ClaudePaneTarget resolves the claude pane of a task's worker window to
+// its globally unique pane id ("%N") — the target for answer/steer text.
+// Errors when the window doesn't exist: pasting steers an agent, and the
+// pre-grove-116 name target could resolve to a SIBLING task's window,
+// delivering the operator's answer to the wrong agent.
+func ClaudePaneTarget(session, base string) (string, error) {
+	id, ok := WindowID(session, base)
+	if !ok {
+		return "", fmt.Errorf("no window matching %q in session %q", base, session)
+	}
+	out, err := run("list-panes", "-t", id, "-F", "#{pane_id} #{pane_index} #{pane_current_command}")
+	if err != nil {
+		return "", err
+	}
+	pane, ok := pickPaneID(out)
+	if !ok {
+		return "", fmt.Errorf("no panes in window %s (%q)", id, base)
+	}
+	return pane, nil
+}
+
+// pickPaneID parses list-panes "#{pane_id} #{pane_index} #{pane_current_command}"
+// output and returns the pane id chosen by pickPane's claude-finding rules.
+func pickPaneID(out string) (string, bool) {
+	ids := map[int]string{}
+	var panes []PaneInfo
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		idx, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		ids[idx] = fields[0]
+		cmd := ""
+		if len(fields) > 2 {
+			cmd = fields[2]
+		}
+		panes = append(panes, PaneInfo{Index: idx, Command: cmd})
+	}
+	if len(panes) == 0 {
+		return "", false
+	}
+	id, ok := ids[pickPane(panes)]
+	return id, ok
 }
 
 // ResolveWindowName maps a stored base window name to the window's CURRENT
@@ -239,7 +331,7 @@ func ResolveWindowName(session, base string) string {
 	}
 	for _, line := range strings.Split(out, "\n") {
 		name := strings.TrimSpace(line)
-		if name == base || strings.HasPrefix(name, base+" ") {
+		if matchesWindowName(name, base) {
 			return name
 		}
 	}

@@ -23,6 +23,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Window-side tmux target hardening (grove-116, 2026-07-18): worker
+      windows resolve by immutable `@N` id via `tmux.WindowID` — the old
+      `session:name` targets prefix-matched, so `repo · grove-1` could
+      silently hit sibling `repo · grove-10` (pause/untrack/done killed a
+      live worker mid-turn, `gv answer` steered the wrong agent, late
+      hooks re-badged the sibling's window); KillWindow/RenameWorker/
+      ClaudePane refuse missing windows, relay goes through
+      `ClaudePaneTarget` (`%N` pane id), grove-1/grove-10 scratch-server
+      regression fixtures in `internal/tmux/window_id_test.go`
 - [x] Orchestrator hotkeys (grove-105, 2026-07-18): `)` always opens the
       profile picker (default_profile dropped, lingering yaml key ignored);
       digits 1–8 spawn their bound profile directly, bound/unbound from the

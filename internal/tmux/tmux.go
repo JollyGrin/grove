@@ -193,19 +193,33 @@ func CreateWindow(session, name, workDir string) error {
 	return err
 }
 
-// KillWindow destroys a named window in the given session.
+// KillWindow destroys a named window in the given session. The window is
+// resolved by id, never by a name target (grove-116): worker window names
+// are prefixes of each other ("repo · grove-1" vs "repo · grove-10") and a
+// name target prefix-matches, so once grove-1's window was gone the same
+// target silently resolved to grove-10 — and killed the sibling's live
+// worker mid-turn. A window that doesn't match is an error, not a kill.
 func KillWindow(session, windowName string) error {
-	_, err := run("kill-window", "-t", Exact(session)+":"+windowName)
+	id, ok := WindowID(session, windowName)
+	if !ok {
+		return fmt.Errorf("no window matching %q in session %q", windowName, session)
+	}
+	_, err := run("kill-window", "-t", id)
 	return err
 }
 
 // AttachWindow attaches to (or switches to) a specific window in a session.
 // select-window first so the target window is active, then switch-client/attach.
+// The window is resolved by id (grove-116) so a dead window can never land
+// the operator on a prefix-extending sibling's window.
 func AttachWindow(session, windowName string) error {
-	target := Exact(session) + ":" + windowName
+	target, ok := WindowID(session, windowName)
+	if !ok {
+		return fmt.Errorf("no window matching %q in session %q", windowName, session)
+	}
 
 	// Select the window first — switch-client and attach-session only take
-	// a target-session, so they ignore the :window suffix.
+	// a target-session, so they ignore a window part.
 	if _, err := run("select-window", "-t", target); err != nil {
 		return fmt.Errorf("select-window %s: %w", target, err)
 	}

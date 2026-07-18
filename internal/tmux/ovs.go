@@ -26,10 +26,17 @@ type PaneInfo struct {
 // ClaudePane resolves which pane of a window holds the claude session.
 // Worker windows normally run claude in pane 1, but a window can lose its
 // split (observed live: DEV-4761) — then claude is the only pane, at index
-// 0. Falls back to the historical pane 1 when the window can't be listed,
-// so callers behave exactly as before this helper existed.
+// 0. Falls back to the historical pane 1 when the window can't be resolved,
+// so callers behave exactly as before this helper existed. The window is
+// resolved by id (grove-116): a raw name target prefix-matches, so this
+// used to list a prefix-extending SIBLING window's panes once the task's
+// own window was gone.
 func ClaudePane(session, window string) int {
-	out, err := run("list-panes", "-t", Exact(session)+":"+window,
+	id, ok := WindowID(session, window)
+	if !ok {
+		return 1
+	}
+	out, err := run("list-panes", "-t", id,
 		"-F", "#{pane_index} #{pane_current_command}")
 	if err != nil {
 		return 1
