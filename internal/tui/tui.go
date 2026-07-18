@@ -51,6 +51,12 @@ type refreshMsg struct {
 // loop) without adding a timer — the RAM constraint. Ad-hoc refreshCmd calls
 // now produce only a data-applying refreshMsg, never touching the clock.
 type tickMsg struct{}
+
+// prTickMsg is the PR-poll beat (grove-24 pattern, reapplied for grove-118):
+// one per 30s, re-armed ONLY by its own handler. Ad-hoc prsCmd calls (manual
+// 'r' refresh, post-action refreshes) produce only a data-applying prsMsg,
+// never a prTickMsg, so they can't multiply this loop.
+type prTickMsg struct{}
 type flashMsg string
 type prsMsg map[string]*github.PR
 type paneTailMsg string
@@ -158,7 +164,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery())
+	return tea.Batch(refreshCmd(m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
 }
 
 // --- commands ---
@@ -170,8 +176,12 @@ func tickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-func prTickEvery() tea.Cmd {
-	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return nil })
+// prTickEvery arms the single PR-poll beat. It carries no data — the handler
+// fans out to prsCmd — so it re-arms itself (via prTickMsg) without letting
+// ad-hoc prsMsg deliveries add another loop (grove-118, same class as
+// grove-24's tickEvery).
+func prTickEvery(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return prTickMsg{} })
 }
 
 func refreshCmd(stateDir, session string) tea.Cmd {
@@ -376,7 +386,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case prTickMsg:
+		// The single PR-poll beat (grove-118, grove-24 pattern): kick a poll
+		// AND re-arm ONLY this timer. Ad-hoc prsMsg deliveries (below) never
+		// re-arm, so 'r' and other ad-hoc refreshes can't multiply the loop.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), prTickEvery(30*time.Second))
+
 	case prsMsg:
+		// Data only — the poll loop lives on prTickMsg now (grove-118). This
+		// handler runs both on the beat and on ad-hoc refreshes ('r', detail
+		// entry); it must never re-arm a timer.
 		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
 		// short shimmer + footer flash. Detected by diffing old vs new — no new
 		// I/O. Gated to fxFull; the celebrations map is capped so a burst of
@@ -397,7 +416,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.prs = msg
-		return m, tea.Tick(30*time.Second, func(time.Time) tea.Msg { return prsCmd(m.cfg, m.stateDir, nil)() })
+		return m, nil
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
