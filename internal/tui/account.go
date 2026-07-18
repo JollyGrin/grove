@@ -12,6 +12,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
+	"github.com/JollyGrin/grove/internal/kimi"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/openrouter"
 	"github.com/JollyGrin/grove/internal/state"
@@ -53,6 +54,15 @@ type keyRow struct {
 	envVar   string
 	profiles []string // sorted profile names sharing this var
 	masked   string
+
+	// Kimi Code plan fuel (grove-133): fuelBase is the profile base_url
+	// when a profile on this row targets the plan endpoint ("" = not a
+	// kimi row). fuel holds the fetched quota windows; empty with a set
+	// fuelBase renders as a dash gauge (unset key, failed fetch, or an
+	// unrecognizable payload), with fuelHint as the dim reason.
+	fuelBase string
+	fuel     []kimi.Window
+	fuelHint string
 }
 
 // hasOpenRouter reports whether the OpenRouter extras (balance, runway,
@@ -95,7 +105,16 @@ func accountKeyRows(profiles map[string]*config.ModelProfile, resolve func(strin
 		if k := resolve(v); k != "" {
 			masked = openrouter.Mask(k)
 		}
-		rows = append(rows, keyRow{envVar: v, profiles: names, masked: masked})
+		// Kimi Code plan rows get fuel gauges (grove-133): first profile
+		// (sorted, so deterministic) whose base_url targets the plan wins.
+		base := ""
+		for _, n := range names {
+			if p := profiles[n]; p != nil && kimi.IsPlanBaseURL(p.BaseURL) {
+				base = p.BaseURL
+				break
+			}
+		}
+		rows = append(rows, keyRow{envVar: v, profiles: names, masked: masked, fuelBase: base})
 	}
 	return rows
 }
@@ -145,6 +164,25 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 			profiles = cfg.ModelProfiles
 		}
 		msg.keys = accountKeyRows(profiles, func(v string) string { return openrouter.Key(secrets, v) })
+
+		// Kimi Code plan fuel (grove-133): one-shot quota fetch per kimi
+		// row whose key resolves — same cadence as the OpenRouter calls,
+		// never polled. Any failure degrades to a dash gauge with a hint.
+		for i := range msg.keys {
+			r := &msg.keys[i]
+			if r.fuelBase == "" || r.masked == "" {
+				continue
+			}
+			ws, err := kimi.Usages(r.fuelBase, openrouter.Key(secrets, r.envVar))
+			if err != nil {
+				r.fuelHint = err.Error()
+				continue
+			}
+			if len(ws) == 0 {
+				r.fuelHint = "no usage data"
+			}
+			r.fuel = ws
+		}
 
 		// OpenRouter extras only apply to the OpenRouter row (or the
 		// zero-profile standalone view) — no balance API is assumed for
@@ -364,7 +402,8 @@ func (m Model) viewAccount() string {
 // viewKeyRows renders the key manager (grove-104): one selectable row per
 // distinct auth_token_env — var name, masked value (or an obvious unset
 // state), and the profiles that use it. Stars only: the full key never
-// renders, and non-OpenRouter rows assume no balance API.
+// renders, and non-OpenRouter rows assume no balance API. Kimi Code plan
+// rows carry fuel gauges underneath (grove-133).
 func (m Model) viewKeyRows(w int) string {
 	rows := []string{sPanelTitleFocus.Render("KEYS")}
 	for i, r := range m.account.keys {
@@ -378,8 +417,60 @@ func (m Model) viewKeyRows(w int) string {
 		}
 		line := cur + pad(r.envVar, 22) + val + sDim.Render(strings.Join(r.profiles, ", "))
 		rows = append(rows, truncPad(line, w))
+		if r.fuelBase != "" {
+			rows = append(rows, viewFuelRows(r, w)...)
+		}
 	}
 	return strings.Join(rows, "\n")
+}
+
+// --- kimi fuel gauges (grove-133) ---
+
+// fuelSpec turns one quota window into gauge terms: fraction of quota
+// left, runway-family severity by that fraction (≤10% alert, ≤30% warm),
+// and the percent caption. A zero limit carries no ratio — dim dash.
+func fuelSpec(fw kimi.Window) (frac float64, sev int, caption string) {
+	if fw.Limit <= 0 {
+		return 0, runwayDim, "—"
+	}
+	rem := fw.Limit - fw.Used
+	if rem < 0 {
+		rem = 0
+	}
+	frac = float64(rem) / float64(fw.Limit)
+	switch {
+	case frac <= 0.1:
+		sev = runwayAlert
+	case frac <= 0.3:
+		sev = runwayWarm
+	default:
+		sev = runwayNormal
+	}
+	return frac, sev, fmt.Sprintf("%.0f%% left", frac*100)
+}
+
+// viewFuelRows renders a kimi row's plan fuel under its KEYS line: one
+// gauge per window (`5h  ▓▓▓▓▓░░░  62% left · resets in 2h 20m`), or a
+// single dash line when nothing was fetched (unset key, failed fetch).
+func viewFuelRows(r keyRow, w int) []string {
+	if len(r.fuel) == 0 {
+		line := "    " + sChrome.Render(pad("fuel", 8)) + "—"
+		if r.fuelHint != "" {
+			line += "  " + sDim.Render(r.fuelHint)
+		}
+		return []string{truncPad(line, w)}
+	}
+	out := make([]string, 0, len(r.fuel))
+	for _, fw := range r.fuel {
+		frac, sev, caption := fuelSpec(fw)
+		line := "    " + sChrome.Render(pad(trunc(fw.Label, 7), 8)) +
+			runwayStyle(sev)(gaugeBar(frac, 16)) + "  " + caption
+		if fw.ResetHint != "" {
+			line += sDim.Render(" · " + fw.ResetHint)
+		}
+		out = append(out, truncPad(line, w))
+	}
+	return out
 }
 
 // viewConnectPrompt replaces BALANCE/RUNWAY when no key resolves: explain

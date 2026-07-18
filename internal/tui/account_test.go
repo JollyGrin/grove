@@ -9,6 +9,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
+	"github.com/JollyGrin/grove/internal/kimi"
 	"github.com/JollyGrin/grove/internal/openrouter"
 )
 
@@ -165,7 +166,8 @@ func TestViewAccountTankMode(t *testing.T) {
 func TestViewCostsTabsClampWidth(t *testing.T) {
 	snapshots := []accountMsg{
 		accountModel(0).account,
-		keyRowsModel(0).account, // grove-104: key-manager rows must clamp too
+		keyRowsModel(0).account,  // grove-104: key-manager rows must clamp too
+		kimiFuelModel(0).account, // grove-133: fuel gauges must clamp too
 		{fetched: true},
 		{},
 	}
@@ -361,6 +363,112 @@ func TestAccountKeyRowSelection(t *testing.T) {
 	model, _ := m.Update(accountMsg{fetched: true, keys: m.account.keys})
 	if got := model.(Model).accountSel; got != 0 {
 		t.Errorf("accountMsg with stale sel → %d, want reset to 0", got)
+	}
+}
+
+// --- grove-133: Kimi Code plan fuel gauges ---
+
+func TestAccountKeyRowsKimiBase(t *testing.T) {
+	profiles := map[string]*config.ModelProfile{
+		"kimi":           {AuthTokenEnv: "KIMI_CODE_API_KEY", BaseURL: "https://api.kimi.com/coding"},
+		"kimi-token":     {AuthTokenEnv: "MOONSHOT_API_KEY", BaseURL: "https://api.moonshot.ai/v1"},
+		"openrouter-glm": {AuthTokenEnv: "OPENROUTER_API_KEY", BaseURL: "https://openrouter.ai/api"},
+	}
+	rows := accountKeyRows(profiles, func(string) string { return "" })
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want 3", rows)
+	}
+	// Sorted by var: KIMI_CODE first (plan base), MOONSHOT (per-token, no
+	// quota API), OPENROUTER — only the plan row gets a fuelBase.
+	if rows[0].fuelBase != "https://api.kimi.com/coding" {
+		t.Errorf("kimi row fuelBase = %q", rows[0].fuelBase)
+	}
+	if rows[1].fuelBase != "" || rows[2].fuelBase != "" {
+		t.Errorf("non-plan rows got fuelBase: %+v", rows[1:])
+	}
+}
+
+func TestFuelSpec(t *testing.T) {
+	frac, sev, caption := fuelSpec(kimi.Window{Used: 304, Limit: 800})
+	if frac != 0.62 || sev != runwayNormal || caption != "62% left" {
+		t.Errorf("normal = %v %d %q", frac, sev, caption)
+	}
+	if _, sev, _ := fuelSpec(kimi.Window{Used: 75, Limit: 100}); sev != runwayWarm {
+		t.Errorf("25%% left sev = %d, want warm", sev)
+	}
+	if _, sev, _ := fuelSpec(kimi.Window{Used: 95, Limit: 100}); sev != runwayAlert {
+		t.Errorf("5%% left sev = %d, want alert", sev)
+	}
+	// Overdrawn clamps to empty; zero limit is a dim dash, never a ratio.
+	if frac, sev, caption := fuelSpec(kimi.Window{Used: 120, Limit: 100}); frac != 0 || sev != runwayAlert || caption != "0% left" {
+		t.Errorf("overdrawn = %v %d %q", frac, sev, caption)
+	}
+	if frac, sev, caption := fuelSpec(kimi.Window{Used: 5}); frac != 0 || sev != runwayDim || caption != "—" {
+		t.Errorf("no-limit = %v %d %q", frac, sev, caption)
+	}
+}
+
+// kimiFuelModel is keyRowsModel with the kimi row carrying a resolved key
+// and fetched fuel windows — the full grove-133 rendering surface.
+func kimiFuelModel(width int) Model {
+	m := keyRowsModel(width)
+	m.account.keys[0] = keyRow{
+		envVar: "KIMI_CODE_API_KEY", profiles: []string{"kimi"}, masked: "sk-kimi-abc1...f9a",
+		fuelBase: "https://api.kimi.com/coding",
+		fuel: []kimi.Window{
+			{Label: "5h", Used: 304, Limit: 800, ResetHint: "resets in 2h 20m"},
+			{Label: "weekly", Used: 250000, Limit: 1000000, ResetHint: "resets in 2d"},
+		},
+	}
+	return m
+}
+
+func TestViewAccountKimiFuel(t *testing.T) {
+	m := kimiFuelModel(100)
+	out := m.viewAccount()
+	for _, want := range []string{
+		"KIMI_CODE_API_KEY", "5h", "62% left", "resets in 2h 20m",
+		"weekly", "75% left", "resets in 2d", "▓", "░",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fuel view missing %q", want)
+		}
+	}
+
+	// Unset key (or failed fetch) → a single dash fuel line with the hint,
+	// never an error state.
+	m.account.keys[0].fuel = nil
+	m.account.keys[0].fuelHint = "kimi HTTP 401"
+	out = m.viewAccount()
+	if !strings.Contains(out, "fuel") || !strings.Contains(out, "kimi HTTP 401") {
+		t.Errorf("dash fuel line missing:\n%s", out)
+	}
+	if strings.Contains(out, "% left") {
+		t.Error("gauges rendered with no fuel data")
+	}
+
+	// Non-kimi rows never grow fuel lines.
+	plain := keyRowsModel(100)
+	if out := plain.viewAccount(); strings.Contains(out, "fuel") {
+		t.Error("non-kimi rows rendered a fuel line")
+	}
+}
+
+// grove-79 lesson generalized: the account view with fuel rows present
+// must render at every small pane size without panicking or exceeding
+// the width.
+func TestViewAccountKimiFuelHeightSweep(t *testing.T) {
+	for _, w := range []int{24, 40, 60} {
+		for h := 5; h <= 30; h++ {
+			m := kimiFuelModel(w)
+			m.height = h
+			out := m.View() // must not panic
+			for i, ln := range strings.Split(out, "\n") {
+				if lw := lipgloss.Width(ln); lw > m.width && !strings.Contains(ln, "\x1b]8;;") {
+					t.Errorf("w=%d h=%d: line %d is %d cells", w, h, i, lw)
+				}
+			}
+		}
 	}
 }
 
