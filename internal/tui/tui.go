@@ -246,7 +246,15 @@ func paneTailCmd(t *state.Task) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		out, _ := tmux.CapturePaneBottom(t.TmuxSession+":"+t.TmuxWindow+".1", 14)
+		// Pane resolved by id (grove-116): a name-built target can resolve
+		// to a prefix-extending sibling's window, scraping the WRONG
+		// agent's screen into the detail view. Also finds claude when the
+		// window lost its split (the old target hardcoded pane .1).
+		pane, err := tmux.ClaudePaneTarget(t.TmuxSession, t.TmuxWindow)
+		if err != nil {
+			return paneTailMsg("")
+		}
+		out, _ := tmux.CapturePaneBottom(pane, 14)
 		return paneTailMsg(out)
 	}
 }
@@ -611,8 +619,13 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		t := m.detail
-		pane := t.TmuxSession + ":" + t.TmuxWindow + ".1"
-		var err error
+		// Pane resolved by id (grove-116): a name-built target can hit a
+		// prefix-extending sibling's window and steer the wrong agent.
+		pane, err := tmux.ClaudePaneTarget(t.TmuxSession, t.TmuxWindow)
+		if err != nil {
+			m.flash = err.Error()
+			return m, nil
+		}
 		if len([]rune(text)) == 1 {
 			err = tmux.SendRawKey(pane, text) // option pickers: raw, no Enter
 		} else {

@@ -80,6 +80,24 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-18 · the WINDOW side of a `session:name` target
+  prefix-matches too — and worker names are prefixes of each other**
+  (grove-116, reproduced on an isolated `-L` server): `repo · grove-1` is
+  a prefix of `repo · grove-10`. With both windows live, targeting the
+  glyphed worker by its stored name erred "can't find window" (ambiguous
+  over two prefix matches → a live worker read as dead, `gv adopt`
+  offered a second claude on the same worktree); with grove-1's window
+  gone, the same target **silently resolved to grove-10** — `WindowLive`
+  lied true, so pause/untrack/done's `KillWindow` killed the sibling's
+  live worker mid-turn, `ClaudePane` pasted `gv answer` text into the
+  wrong agent, and a late hook re-badged the sibling's window. The
+  grove-78-era stance "window side stays prefix-tolerant for glyphs" is
+  retired: glyph tolerance now lives in `matchesWindowName`, and every
+  worker-window target resolves through `tmux.WindowID` (list-windows +
+  match → target by immutable `@N` id; `ClaudePaneTarget` returns the
+  `%N` pane id for relay). No call site may build a `session:windowName`
+  target from a task's stored window name. Regression: grove-1/grove-10
+  scratch-server fixtures in `internal/tmux/window_id_test.go`.
 - **2026-07-17 · `=`-anchoring is only valid where `-t` is a
   target-session** (grove-99, live repro on tmux 3.6a) — grove-78's blanket
   `Exact()` broke every cockpit build: commands whose `-t` is a

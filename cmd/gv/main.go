@@ -951,9 +951,13 @@ func cmdGrab(args []string) error {
 		return err
 	}
 	windowCreated = true
-	// Session side exact-anchored (grove-78); the window side stays
-	// prefix-tolerant so a later status glyph never hides the window.
-	windowTarget := tmux.Exact(sessionName) + ":" + windowName
+	// Target the fresh window by id (grove-116): a name-built target
+	// prefix-matches, so it could resolve to a sibling window whose name
+	// extends this one's ("repo · grove-1" vs "repo · grove-10").
+	windowTarget, ok := tmux.WindowID(sessionName, windowName)
+	if !ok {
+		return fmt.Errorf("window %q vanished right after creation in session %q", windowName, sessionName)
+	}
 	// Pin the ticket name: a worker window's name is the ticket, never
 	// whatever the claude pane's foreground process reports.
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
@@ -1910,9 +1914,14 @@ func cmdRelay(args []string, isAnswer bool) error {
 		return fmt.Errorf("empty %s — nothing sent", verb)
 	}
 
-	// Resolve the claude pane — usually .1, but a window that lost its
-	// split runs claude in its only pane (typing into .1 would miss).
-	pane := fmt.Sprintf("%s:%s.%d", t.TmuxSession, t.TmuxWindow, tmux.ClaudePane(t.TmuxSession, t.TmuxWindow))
+	// Resolve the claude pane by id — usually .1, but a window that lost
+	// its split runs claude in its only pane, and a name-built target can
+	// resolve to a prefix-extending sibling's window ("repo · grove-1" vs
+	// "repo · grove-10"), steering the wrong agent (grove-116).
+	pane, err := tmux.ClaudePaneTarget(t.TmuxSession, t.TmuxWindow)
+	if err != nil {
+		return fmt.Errorf("%s has no live worker window: %w", t.Ticket, err)
+	}
 	// Single character → raw key without Enter (option pickers / plan
 	// approval). Anything longer → bracketed paste + Enter.
 	if len([]rune(text)) == 1 {
@@ -1960,10 +1969,13 @@ func attachTask(t *state.Task) error {
 // not where claude lives: a window that lost its split would otherwise
 // get "nvim ." typed INTO the agent session.
 func maybeInjectEditor(session, window string) {
-	if tmux.ClaudePane(session, window) == 0 {
+	// Window resolved by id (grove-116) so the inject can never type into
+	// a prefix-extending sibling's shell pane.
+	id, ok := tmux.WindowID(session, window)
+	if !ok || tmux.ClaudePane(session, window) == 0 {
 		return
 	}
-	_ = tmux.SendKeys(session+":"+window+".0", "nvim .")
+	_ = tmux.SendKeys(id+".0", "nvim .")
 }
 
 // --- diff ---
@@ -2204,8 +2216,13 @@ func cmdAdopt(args []string) error {
 	if err := tmux.CreateWindow(sessionName, windowName, wtPath); err != nil {
 		return err
 	}
-	// Session side exact-anchored (grove-78); window side prefix-tolerant.
-	windowTarget := tmux.Exact(sessionName) + ":" + windowName
+	// Target the fresh window by id (grove-116): a name-built target
+	// prefix-matches, so it could resolve to a sibling window whose name
+	// extends this one's ("repo · grove-1" vs "repo · grove-10").
+	windowTarget, ok := tmux.WindowID(sessionName, windowName)
+	if !ok {
+		return fmt.Errorf("window %q vanished right after creation in session %q", windowName, sessionName)
+	}
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
