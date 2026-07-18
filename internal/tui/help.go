@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +28,8 @@ var (
 	}
 	helpSpawn = []helpEntry{
 		{"O", "new chat: spawn an orchestrator chat pane (0 works too)"},
-		{")", "profiled chat: orchestrator on a configured model profile"},
+		{")", "profiled chat: pick a model profile — a digit there binds it as a hotkey"},
+		{"1-8", "spawn the profile bound to that digit directly (bind in the ) picker)"},
 	}
 	helpGlobal = []helpEntry{
 		{"?", "this cheat sheet"},
@@ -44,10 +46,12 @@ var (
 		entries []helpEntry
 	}{
 		{"ROW — act on the selected task", helpRow},
-		{"SPAWN", helpSpawn},
+		{helpSpawnTitle, helpSpawn},
 		{"GLOBAL", helpGlobal},
 	}
 )
+
+const helpSpawnTitle = "SPAWN"
 
 func (m Model) handleHelpKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
@@ -70,6 +74,16 @@ func (m Model) viewHelp() string {
 		rows = append(rows, sPanelTitleFocus.Render(truncPad(s.title, w)))
 		for _, e := range s.entries {
 			rows = append(rows, truncPad("  "+sKey.Render(pad(e.key, 7))+sFoot.Render(e.desc), w))
+		}
+		// Current digit bindings (grove-105) live under SPAWN — the one
+		// dynamic bit of the sheet, read straight off the loaded config.
+		if s.title == helpSpawnTitle && m.cfg != nil {
+			for d := 1; d <= 8; d++ {
+				digit := strconv.Itoa(d)
+				if p := m.cfg.Orchestrator.Hotkeys[digit]; p != "" {
+					rows = append(rows, truncPad("  "+sKey.Render(pad(digit, 7))+sDim.Render("→ "+p), w))
+				}
+			}
 		}
 	}
 	// Same height discipline as the footer itself (grove-60): the overlay

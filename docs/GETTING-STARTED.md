@@ -146,8 +146,11 @@ Standard tmux keys work: **`ctrl-b z`** zooms the focused pane fullscreen,
 From the dashboard pane, press **`O`** (or **`0`** — same key, the glyph reads
 as a zero in some fonts). This splits a fresh orchestrator chat into the right
 column and focuses it, ready to type. **`)`** does the same on a configured
-**model profile** (e.g. an OpenRouter backend) — it picks the repo's
-`default_profile`, or offers a picker when several profiles exist. Use a
+**model profile** (e.g. an OpenRouter backend) — it always opens a picker over
+the configured profiles. In the picker, pressing a digit `1`–`8` binds the
+highlighted profile to that key (its own digit again unbinds); back on the
+dashboard, a bound digit spawns that profile's orchestrator in one keypress.
+Use a
 separate chat per parallel thread of work; for sequential unrelated topics,
 just `/clear` in one chat instead — a fresh spawn re-pays the ~50k-token
 session floor for nothing.

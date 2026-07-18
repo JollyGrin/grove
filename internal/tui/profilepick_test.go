@@ -23,23 +23,40 @@ func twoProfiles() Model {
 	return m
 }
 
-// ) with a single profile spawns immediately — no picker flicker.
-func TestBracketSingleProfileNoPicker(t *testing.T) {
+// ) with a single profile STILL opens the picker (grove-105): the choice is
+// always shown — no auto-spawn shortcut.
+func TestBracketSingleProfileOpensPicker(t *testing.T) {
 	cfg := &config.Config{ModelProfiles: map[string]*config.ModelProfile{
 		"openrouter-glm": {Opus: "z-ai/glm-5.2"},
 	}}
 	m := New(cfg, "", "")
 	next, cmd := m.handleKey(runeKey(")"))
 	nm := next.(Model)
-	if nm.mode != modeList {
-		t.Fatalf("single profile: mode = %d, want modeList (spawn immediately, no picker)", nm.mode)
+	if nm.mode != modeProfilePick {
+		t.Fatalf("single profile: mode = %d, want modeProfilePick (always the picker)", nm.mode)
 	}
-	if cmd == nil {
-		t.Fatal("single profile: expected a spawn command")
+	if cmd != nil {
+		t.Fatal("single profile: ) must not spawn anything")
+	}
+	if len(nm.pickProfiles) != 1 || nm.pickProfiles[0] != "openrouter-glm" {
+		t.Fatalf("pickProfiles = %v, want [openrouter-glm]", nm.pickProfiles)
 	}
 }
 
-// ) with ≥2 profiles and no default opens the picker over the sorted names.
+// ) with zero profiles flashes the hint.
+func TestBracketZeroProfilesHints(t *testing.T) {
+	m := New(&config.Config{}, "", "")
+	next, cmd := m.handleKey(runeKey(")"))
+	nm := next.(Model)
+	if nm.mode != modeList || cmd != nil {
+		t.Fatalf("zero profiles: mode = %d, cmd = %v; want modeList and no cmd", nm.mode, cmd)
+	}
+	if !strings.Contains(nm.flash, "no model_profiles") {
+		t.Fatalf("flash = %q, want the no-profiles hint", nm.flash)
+	}
+}
+
+// ) with ≥2 profiles opens the picker over the sorted names.
 func TestBracketManyProfilesOpensPicker(t *testing.T) {
 	m := twoProfiles()
 	next, cmd := m.handleKey(runeKey(")"))
@@ -129,3 +146,109 @@ func TestPickerEnterSpawns(t *testing.T) {
 }
 
 func mustModel(md tea.Model, cmd tea.Cmd) (Model, tea.Cmd) { return md.(Model), cmd }
+
+// stubSaveHotkey swaps the persist hook for an in-memory recorder.
+func stubSaveHotkey(t *testing.T) *[][2]string {
+	t.Helper()
+	orig := SaveHotkeyBinding
+	t.Cleanup(func() { SaveHotkeyBinding = orig })
+	var saves [][2]string
+	SaveHotkeyBinding = func(digit, profile string) error {
+		saves = append(saves, [2]string{digit, profile})
+		return nil
+	}
+	return &saves
+}
+
+// A digit in the picker binds the highlighted profile, persists it, keeps
+// the picker open; the row's own digit again unbinds; a taken digit is
+// stolen and a profile holds only one digit.
+func TestPickerDigitBindsUnbindsSteals(t *testing.T) {
+	saves := stubSaveHotkey(t)
+	m := twoProfiles()
+	next, _ := m.handleKey(runeKey(")"))
+	m = next.(Model)
+
+	// Bind 1 → openrouter-glm (row 0).
+	m, cmd := mustModel(m.handleProfilePickKey(runeKey("1")))
+	if m.mode != modeProfilePick {
+		t.Fatalf("bind: mode = %d, want picker still open", m.mode)
+	}
+	if cmd != nil {
+		t.Fatal("bind: must not spawn")
+	}
+	if got := m.cfg.Orchestrator.Hotkeys["1"]; got != "openrouter-glm" {
+		t.Fatalf("bind: hotkeys[1] = %q, want openrouter-glm", got)
+	}
+	if !strings.Contains(m.viewProfilePick(), "[1]") {
+		t.Error("picker view missing the [1] binding")
+	}
+
+	// Moving glm to 2 drops its old digit (one digit per profile).
+	m, _ = mustModel(m.handleProfilePickKey(runeKey("2")))
+	if hk := m.cfg.Orchestrator.Hotkeys; hk["2"] != "openrouter-glm" || hk["1"] != "" {
+		t.Fatalf("move: hotkeys = %v, want only 2→openrouter-glm", hk)
+	}
+
+	// Stealing: kimi (row 1) takes digit 2 from glm.
+	m, _ = mustModel(m.handleProfilePickKey(runeKey("j")))
+	m, _ = mustModel(m.handleProfilePickKey(runeKey("2")))
+	if hk := m.cfg.Orchestrator.Hotkeys; hk["2"] != "openrouter-kimi" || len(hk) != 1 {
+		t.Fatalf("steal: hotkeys = %v, want exactly 2→openrouter-kimi", hk)
+	}
+
+	// The row's own digit again unbinds it.
+	m, _ = mustModel(m.handleProfilePickKey(runeKey("2")))
+	if hk := m.cfg.Orchestrator.Hotkeys; len(hk) != 0 {
+		t.Fatalf("unbind: hotkeys = %v, want empty", hk)
+	}
+	if !strings.Contains(m.flash, "unbound") {
+		t.Fatalf("unbind flash = %q, want 'unbound'", m.flash)
+	}
+
+	want := [][2]string{
+		{"1", "openrouter-glm"}, {"2", "openrouter-glm"},
+		{"2", "openrouter-kimi"}, {"2", ""},
+	}
+	if len(*saves) != len(want) {
+		t.Fatalf("persisted saves = %v, want %v", *saves, want)
+	}
+	for i, w := range want {
+		if (*saves)[i] != w {
+			t.Fatalf("save %d = %v, want %v", i, (*saves)[i], w)
+		}
+	}
+}
+
+// In the fleet list a bound digit spawns that profile directly; an unbound
+// digit just flashes.
+func TestListDigitSpawnsBoundProfile(t *testing.T) {
+	orig := SpawnOrchestratorProfile
+	defer func() { SpawnOrchestratorProfile = orig }()
+	var got string
+	SpawnOrchestratorProfile = func(cfg *config.Config, profile string) (string, error) {
+		got = profile
+		return "", nil
+	}
+
+	m := twoProfiles()
+	m.cfg.Orchestrator.Hotkeys = map[string]string{"3": "openrouter-kimi"}
+
+	next, cmd := m.handleKey(runeKey("3"))
+	if cmd == nil {
+		t.Fatal("bound digit: expected a spawn command")
+	}
+	cmd()
+	if got != "openrouter-kimi" {
+		t.Fatalf("spawned = %q, want openrouter-kimi", got)
+	}
+
+	next, cmd = next.(Model).handleKey(runeKey("4"))
+	nm := next.(Model)
+	if cmd != nil {
+		t.Fatal("unbound digit: must not spawn")
+	}
+	if want := "4 unbound — bind it in the ) picker"; nm.flash != want {
+		t.Fatalf("unbound flash = %q, want %q", nm.flash, want)
+	}
+}

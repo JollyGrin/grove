@@ -288,6 +288,15 @@ func cmdDashboard() error {
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.AttachTask = attachTask
 	tui.CloseWorkspace = closeWorkspace
+	tui.SaveHotkeyBinding = func(digit, profile string) error {
+		// Workspace-scoped like the orchestrator block it lives in (LoadAt
+		// drops the global orchestrator section inside a workspace).
+		root := ""
+		if ambient.ws != nil {
+			root = ambient.ws.Root
+		}
+		return config.SaveHotkey(config.PathAt(root), digit, profile)
+	}
 	attachTo, farewell, err := tui.Run(cfg, stateDir(), wsLabel())
 	if err != nil {
 		return err

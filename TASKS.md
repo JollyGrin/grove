@@ -23,6 +23,11 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Orchestrator hotkeys (grove-105, 2026-07-18): `)` always opens the
+      profile picker (default_profile dropped, lingering yaml key ignored);
+      digits 1–8 spawn their bound profile directly, bound/unbound from the
+      picker and persisted to `orchestrator.hotkeys` in the workspace (or
+      global) config.yaml, comments preserved
 - [x] Workspace marker narrowed (grove-100, 2026-07-17): a `.grove/` is a
       workspace marker only when it holds substance — `config.yaml`,
       `state/`, or `orchestrator/`; a `.grove/` with only the markdown

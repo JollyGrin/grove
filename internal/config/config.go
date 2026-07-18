@@ -54,11 +54,13 @@ type Config struct {
 	ModelProfiles map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
 	Orchestrator  struct {
 		Dir string `yaml:"dir"`
-		// DefaultProfile is the model profile the cockpit's `)` hotkey opens
-		// an orchestrator on (grove-41). Empty = no configured default; `)`
-		// then falls back to the lone model_profiles entry, or shows a hint.
-		DefaultProfile string `yaml:"default_profile"`
-		Claude         string `yaml:"claude"`
+		// Hotkeys maps cockpit digit keys "1".."8" to model profile names
+		// (grove-105): pressing the digit spawns that profile's orchestrator
+		// directly. Bound/unbound from the `)` picker, persisted here.
+		// (The old default_profile key is gone; a lingering one in yaml is
+		// silently ignored like any unknown field.)
+		Hotkeys map[string]string `yaml:"hotkeys"`
+		Claude  string            `yaml:"claude"`
 	} `yaml:"orchestrator"`
 	Audit struct {
 		StaleDays int    `yaml:"stale_days"` // no-PR + dead/idle tasks older than this classify abandoned (default 7)
@@ -440,36 +442,32 @@ const (
 	// ProfileHint: zero profiles configured. The caller flashes a one-line
 	// hint; there is nothing to spawn or pick.
 	ProfileHint ProfileAction = iota
-	// ProfileSpawn: a single profile is resolved (a workspace default, or the
-	// sole configured profile). The caller spawns it immediately; name holds it.
-	ProfileSpawn
-	// ProfilePick: two or more profiles and no default. The caller opens a
-	// picker over candidates (sorted profile names).
+	// ProfilePick: at least one profile. The caller opens a picker over
+	// candidates (sorted profile names) — `)` never auto-spawns (grove-105):
+	// the choice is always shown, even for a lone profile.
 	ProfilePick
 )
 
 // ResolveOrchestratorProfile decides what the `)` hotkey does (grove-41,
-// grove-45), by four rules in order:
-//  1. orchestrator.default_profile set → ProfileSpawn on that name,
-//  2. else zero profiles → ProfileHint (caller shows a one-line hint),
-//  3. else exactly one profile → ProfileSpawn on that lone profile,
-//  4. else (≥2 profiles, no default) → ProfilePick over the sorted names.
-//
-// It does not validate that a named default exists in model_profiles; the
-// spawn path's ResolveProfile surfaces an unknown-profile error downstream.
-func (c *Config) ResolveOrchestratorProfile() (name string, candidates []string, action ProfileAction) {
-	if c.Orchestrator.DefaultProfile != "" {
-		return c.Orchestrator.DefaultProfile, nil, ProfileSpawn
+// grove-45, simplified in grove-105): zero profiles → ProfileHint (caller
+// shows a one-line hint); otherwise ProfilePick over the sorted names.
+// Direct spawns live on the digit hotkeys (Orchestrator.Hotkeys), not here.
+func (c *Config) ResolveOrchestratorProfile() (candidates []string, action ProfileAction) {
+	if len(c.ModelProfiles) == 0 {
+		return nil, ProfileHint
 	}
-	switch len(c.ModelProfiles) {
-	case 0:
-		return "", nil, ProfileHint
-	case 1:
-		for n := range c.ModelProfiles {
-			return n, nil, ProfileSpawn
+	return c.profileNames(), ProfilePick
+}
+
+// HotkeyFor returns the digit bound to profile in orchestrator.hotkeys,
+// or "" when unbound. Linear over ≤8 entries — display-path cheap.
+func (c *Config) HotkeyFor(profile string) string {
+	for d, p := range c.Orchestrator.Hotkeys {
+		if p == profile {
+			return d
 		}
 	}
-	return "", c.profileNames(), ProfilePick
+	return ""
 }
 
 func (c *Config) profileNames() []string {
