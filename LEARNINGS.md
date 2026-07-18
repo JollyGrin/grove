@@ -175,6 +175,26 @@
 
 ## Go / CLI
 
+- **2026-07-18 · a single re-arming bubbletea timer is a pattern, not a
+  one-off fix — it recurs per timer** (grove-118, farewell audit).
+  grove-24 fixed the cockpit's 1s beat by making `tickMsg` the sole
+  re-armer of `tickEvery`, so ad-hoc `refreshMsg` deliveries stay pure
+  data application. The PR-poll 30s timer was never migrated to the same
+  shape: its `prsMsg` handler unconditionally re-armed itself, so every
+  ad-hoc `prsCmd` call — including the one manual `r` (refresh) fires —
+  permanently added another self-perpetuating 30s poll loop, each fanning
+  out one `gh` subprocess per task. Five `r` presses in a session left six
+  concurrent loops running forever, unkillable without restarting the
+  cockpit. A vestigial `prTickEvery()` one-shot timer sat next to it whose
+  callback returned `nil` (bubbletea silently drops nil msgs) — dead code
+  that read as if the PR loop were bounded, when it wasn't. Fix mirrors
+  grove-24 exactly: a `prTickMsg` beat is the only re-armer; `prsMsg`
+  (fired by both the beat and every ad-hoc refresh) is data-only. Rule:
+  when introducing a second periodic `tea.Tick` loop in a bubbletea model,
+  give its own message type the sole re-arm responsibility from day one —
+  don't let a shared/generic message do double duty as both data payload
+  and re-armer, and audit every existing `tea.Tick` call for the same
+  shape before assuming the class is fixed once.
 - **2026-07-17 · a default backend's storage dir must never double as a
   scope marker** (grove-100). The workspace marker was "any `.grove/`
   dir" — but the markdown backend (grove's default) stores its tasks in

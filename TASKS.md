@@ -23,6 +23,13 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] PR-poll timer multiplication fix (grove-118, 2026-07-18): the
+      `prsMsg` handler unconditionally re-armed its own 30s tick, so every
+      ad-hoc `prsCmd` delivery — including manual `r` refresh — added
+      another self-perpetuating poll loop (grove-24's `refreshMsg` bug,
+      reintroduced for PRs); split into a `prTickMsg` beat that alone
+      re-arms, `prsMsg` now pure data application; vestigial one-shot
+      `prTickEvery()` (callback returned nil, dropped by bubbletea) removed
 - [x] Kimi Code plan fuel gauges (grove-133, 2026-07-18): ACCOUNT tab
       rows whose profile `base_url` targets `https://api.kimi.com/` show
       per-window quota gauges under the key line
