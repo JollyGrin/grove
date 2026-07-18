@@ -17,8 +17,9 @@ PR** — with a single inbox answering *"what can I act on right now?"*
 - **Right-sized models**: routes rote work to small models, reasoning to
   frontier ones, and escalates on failed gates — erring upward when unsure.
 - **Any Anthropic-compatible backend**: named model profiles run workers
-  *and* orchestrators on OpenRouter (or any compatible endpoint) per
-  dispatch — mix a GLM orchestrator with Claude workers or vice versa.
+  *and* orchestrators on OpenRouter, a Kimi Code plan, or any compatible
+  endpoint, per dispatch — mix a GLM orchestrator with Claude workers or
+  vice versa. A native Codex CLI lane (GPT subscription) is in progress.
 - **Self-configuring**: `gv init` detects the stack, wires connections
   (auth, hooks, worker environment), and notices when one goes missing.
 - **Compounding**: a layered, human-gated learnings system so grove grows
@@ -30,7 +31,7 @@ orchestrator field-tested on The Grid's real ticket flow. Team-specific
 setups (like the Grid's) become **packs** — versioned overlays of
 conventions, checks, and prompts — instead of hardcoding.
 
-## Status: live daily driver, dogfooding itself (2026-07-12)
+## Status: live daily driver, dogfooding itself (2026-07-18)
 
 The namespace split from overstory is done (P0.0, 2026-07-04) — the binary
 is safe to run and is the operator's daily driver. Grove now builds itself
@@ -47,14 +48,34 @@ proven live:
   session per workspace (window 0 = dashboard + orchestrator chats,
   windows 1+ = workers with live task-state glyphs), costs page with a
   persistent spend ledger, layout cycling, effects, a `?` help overlay.
-- **Model profiles** (below) — workers *and* orchestrators on OpenRouter
-  or any Anthropic-compatible backend, per dispatch.
+- **Model profiles** ([below](#model-access)) — workers *and* orchestrators
+  on OpenRouter, a Kimi Code plan, or any Anthropic-compatible backend,
+  per dispatch; ACCOUNT tab is a per-profile key manager with live fuel
+  gauges.
 - **Phase 2** (model routing/tiers) is parked — not worth it at solo
   scale; the cost ledger it would measure against already exists.
+- **Codex lane** (native GPT-subscription workers/orchestrators) is a
+  build-ready spec mid-flight as a 6-ticket merge train
+  ([issue #62](https://github.com/JollyGrin/grove/issues/62)) — not yet
+  live, tracked as "coming soon" in the model-access matrix below.
 
 See [TASKS.md](TASKS.md) for the live phase board and
 [CLAUDE.md](CLAUDE.md) for the one remaining coexistence caution
 (`gv hooks install` writes a shared settings file).
+
+## Model access
+
+| Backend | How | Status |
+|---|---|---|
+| Claude (Anthropic API) | native, default — no config needed | live |
+| Claude-protocol via OpenRouter (GLM, etc.) | model profile (`.grove/config.yaml`) | live |
+| Kimi Code plan (K3) | model profile, same Anthropic-protocol path | live |
+| Codex (GPT subscription) | native Codex CLI lane, own harness | coming soon — build-ready spec, [issue #62](https://github.com/JollyGrin/grove/issues/62) |
+
+Any orchestrator can dispatch to any worker on any live backend — mix and
+match per ticket. The `)` picker in the cockpit lists every configured
+profile (and will list Codex lanes once shipped) so switching backends is a
+keypress, not a config edit.
 
 ## Model profiles (OpenRouter etc.)
 

@@ -30,6 +30,13 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       reintroduced for PRs); split into a `prTickMsg` beat that alone
       re-arms, `prsMsg` now pure data application; vestigial one-shot
       `prTickEvery()` (callback returned nil, dropped by bubbletea) removed
+- [x] Cost cache eviction (grove-119, 2026-07-18): `cost.Cache.entriesFor`
+      kept every `(path, mtime, size)` generation forever — with the
+      costs page open, a live worker's continuously-mutating transcript
+      inserted a new full-parse entry every 1s refresh and never freed the
+      old ones, growing cockpit RAM (reserved for workers) unbounded. Added
+      a `path -> newest fileKey` index; on insert, the prior generation for
+      that path is evicted, so the cache holds exactly one entry per path.
 - [x] Kimi Code plan fuel gauges (grove-133, 2026-07-18): ACCOUNT tab
       rows whose profile `base_url` targets `https://api.kimi.com/` show
       per-window quota gauges under the key line

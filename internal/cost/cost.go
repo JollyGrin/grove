@@ -298,7 +298,8 @@ func Total(entries []transcript.UsageEntry) Totals {
 type Cache struct {
 	mu     sync.Mutex
 	byFile map[fileKey][]transcript.UsageEntry
-	parses int // test hook: how many files were actually parsed
+	latest map[string]fileKey // path -> newest key, so old generations can be evicted
+	parses int                // test hook: how many files were actually parsed
 }
 
 type fileKey struct {
@@ -307,7 +308,9 @@ type fileKey struct {
 	size  int64
 }
 
-func NewCache() *Cache { return &Cache{byFile: map[fileKey][]transcript.UsageEntry{}} }
+func NewCache() *Cache {
+	return &Cache{byFile: map[fileKey][]transcript.UsageEntry{}, latest: map[string]fileKey{}}
+}
 
 // ForTask aggregates every session + subagent transcript for a worktree
 // (cwd-scan discovery — grab/adopt/resume sessions all share the path).
@@ -356,7 +359,11 @@ func (c *Cache) entriesFor(path string) ([]transcript.UsageEntry, error) {
 	defer f.Close()
 	entries := transcript.ParseUsage(f)
 	c.mu.Lock()
+	if old, ok := c.latest[path]; ok && old != key {
+		delete(c.byFile, old)
+	}
 	c.byFile[key] = entries
+	c.latest[path] = key
 	c.parses++
 	c.mu.Unlock()
 	return entries, nil
