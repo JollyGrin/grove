@@ -77,6 +77,15 @@ notify:
 #     opus:   z-ai/glm-5.2
 #     sonnet: z-ai/glm-5.2
 #     haiku:  z-ai/glm-4.5-air
+#   kimi:
+#     base_url: https://api.kimi.com/coding
+#     auth_token_env: KIMI_CODE_API_KEY
+#     opus:   "k3[1m]"
+#     sonnet: "k3[1m]"
+#     haiku:  "k3[1m]"
+#     env:    # backend-specific vars beyond the six built-ins; built-ins win on collision
+#       CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
+#       ENABLE_TOOL_SEARCH: "false"
 
 cost:
   # stuck_turns: 30      # turns with no delivery movement before a stuck flag
