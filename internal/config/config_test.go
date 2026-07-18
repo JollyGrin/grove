@@ -459,6 +459,100 @@ func TestWrapProfileSlotSelection(t *testing.T) {
 	}
 }
 
+// grove-103: a profile's env: map exports before the built-in six, sorted
+// by key for deterministic output, and the built-ins win on collision so a
+// profile can never redirect ANTHROPIC_BASE_URL/AUTH_TOKEN via env:.
+func TestWrapProfileEnvOrderingAndPrecedence(t *testing.T) {
+	p := &ModelProfile{
+		BaseURL: "https://api.kimi.com/coding", AuthTokenEnv: "KIMI_CODE_API_KEY",
+		Opus: "k3[1m]", Sonnet: "k3[1m]", Haiku: "k3[1m]",
+		Env: map[string]string{
+			"ENABLE_TOOL_SEARCH":              "false",
+			"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1048576",
+			"ANTHROPIC_BASE_URL":              "https://evil.example.com",
+		},
+	}
+	got := WrapProfile("claude", p, "/s/.env")
+
+	iCompact := strings.Index(got, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=")
+	iEnable := strings.Index(got, "ENABLE_TOOL_SEARCH=")
+	iBuiltinBaseURL := strings.Index(got, "ANTHROPIC_BASE_URL='https://api.kimi.com/coding'")
+	if iCompact == -1 || iEnable == -1 || iBuiltinBaseURL == -1 {
+		t.Fatalf("expected vars missing from wrap: %s", got)
+	}
+	if !(iCompact < iEnable && iEnable < iBuiltinBaseURL) {
+		t.Errorf("expected sorted env: entries before built-ins (compact < enable < builtin base_url), got order in: %s", got)
+	}
+	// The colliding env: value is still textually present (shell `export A=1
+	// A=2` assigns left-to-right) but the built-in comes last on the line, so
+	// it's the one that actually takes effect — collision resolved by
+	// ordering, not by dropping the profile's key.
+	if iEvil := strings.Index(got, "https://evil.example.com"); iEvil == -1 || iEvil > iBuiltinBaseURL {
+		t.Errorf("profile env:'s colliding ANTHROPIC_BASE_URL must precede (and thus lose to) the built-in one, got: %s", got)
+	}
+	if !strings.Contains(got, "CLAUDE_CODE_AUTO_COMPACT_WINDOW='1048576'") {
+		t.Errorf("env value not shell-quoted: %s", got)
+	}
+}
+
+// grove-103: absent/empty env: must not change WrapProfile's output at all
+// — byte-identical to pre-grove-103 behavior.
+func TestWrapProfileNoEnvByteIdentical(t *testing.T) {
+	p := &ModelProfile{
+		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+	}
+	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/prompt.txt)"`
+	want := "( . '/home/x/.config/grove/.env' && export ANTHROPIC_BASE_URL='https://openrouter.ai/api' " +
+		`ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_MODEL='z-ai/glm-5.2' ` +
+		"ANTHROPIC_DEFAULT_OPUS_MODEL='z-ai/glm-5.2' ANTHROPIC_DEFAULT_SONNET_MODEL='z-ai/glm-5.2' " +
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL='z-ai/glm-4.5-air' && exec " + cmd + " )"
+
+	if got := WrapProfile(cmd, p, "/home/x/.config/grove/.env"); got != want {
+		t.Errorf("no env: output changed:\ngot:  %s\nwant: %s", got, want)
+	}
+
+	pEmpty := *p
+	pEmpty.Env = map[string]string{}
+	if got := WrapProfile(cmd, &pEmpty, "/home/x/.config/grove/.env"); got != want {
+		t.Errorf("empty env: map output changed:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+// grove-103: an invalid env: key is a config load error naming the profile
+// and the offending key — keys are interpolated unquoted into the wrap's
+// shell line, so they must be validated rather than quote-and-hoped.
+func TestLoadInvalidModelProfileEnvKey(t *testing.T) {
+	cases := []string{"FOO-BAR", "1X", ""}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			setHome(t)
+			writeGlobal(t, `
+model_profiles:
+  kimi:
+    base_url: https://api.kimi.com/coding
+    auth_token_env: KIMI_CODE_API_KEY
+    sonnet: "k3[1m]"
+    env:
+      `+yamlKey(key)+`: "x"
+`)
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected load error for invalid env key %q", key)
+			}
+			if !strings.Contains(err.Error(), "kimi") {
+				t.Errorf("error does not name the profile: %v", err)
+			}
+		})
+	}
+}
+
+// yamlKey quotes a YAML map key so an empty string still parses as a
+// (invalid) zero-length key rather than a YAML syntax error.
+func yamlKey(k string) string {
+	return `"` + k + `"`
+}
+
 func TestResolveProfile(t *testing.T) {
 	c := &Config{ModelProfiles: map[string]*ModelProfile{
 		"openrouter-glm": {BaseURL: "https://openrouter.ai/api"},

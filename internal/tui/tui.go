@@ -92,6 +92,7 @@ type Model struct {
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
 	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
 	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
+	accountSel int             // cursor into account.keys (grove-104 key manager)
 
 	flash string
 
@@ -343,12 +344,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountMsg:
 		m.account = msg
+		if m.accountSel >= len(msg.keys) {
+			m.accountSel = 0
+		}
 		return m, nil
 
 	case keySavedMsg:
-		// Paste flow succeeded (grove-87): the key is validated and saved in
-		// ~/.config/grove/.env — refetch so the connect prompt becomes data.
-		m.flash = "✓ key saved to ~/.config/grove/.env (" + msg.masked + ")"
+		// Paste flow succeeded (grove-87): the key is saved in
+		// ~/.config/grove/.env — refetch so the unset row becomes data.
+		m.flash = "✓ " + msg.varName + " saved to ~/.config/grove/.env (" + msg.masked + ")"
 		return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
 
 	case almanacMsg:

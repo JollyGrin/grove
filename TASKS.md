@@ -28,6 +28,25 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       digits 1–8 spawn their bound profile directly, bound/unbound from the
       picker and persisted to `orchestrator.hotkeys` in the workspace (or
       global) config.yaml, comments preserved
+- [x] ACCOUNT tab → per-profile key manager (grove-104, 2026-07-18):
+      one selectable KEYS row per distinct `auth_token_env` across
+      configured model_profiles (shared vars merge, profile names on the
+      row) — masked value when the key resolves, an explicit "not set —
+      enter to paste" state when it doesn't; enter (or p) opens the paste
+      flow for the selected row's var; `openrouter.Key`/`SaveKey` are
+      var-agnostic (same 0600 replace-in-place contract, other lines
+      byte-for-byte); OpenRouter row keeps balance/runway/top-up extras,
+      other rows are stars-only; zero profiles → grove-87's standalone
+      OpenRouter view unchanged
+- [x] Model profile per-profile env map (grove-103, 2026-07-18): `env:`
+      map on `ModelProfile` for backend-specific vars beyond the six
+      built-ins (Kimi Code's K3 endpoint needs
+      `CLAUDE_CODE_AUTO_COMPACT_WINDOW`/`ENABLE_TOOL_SEARCH`/etc.) —
+      exported sorted, before the built-in six, which win on collision so
+      `env:` can't redirect `base_url`/`auth_token_env`; keys validated at
+      config load (`^[A-Za-z_][A-Za-z0-9_]*$`) since they're interpolated
+      unquoted into the wrap's shell line. No `env:` → byte-identical
+      `WrapProfile` output.
 - [x] Workspace marker narrowed (grove-100, 2026-07-17): a `.grove/` is a
       workspace marker only when it holds substance — `config.yaml`,
       `state/`, or `orchestrator/`; a `.grove/` with only the markdown

@@ -165,6 +165,7 @@ func TestViewAccountTankMode(t *testing.T) {
 func TestViewCostsTabsClampWidth(t *testing.T) {
 	snapshots := []accountMsg{
 		accountModel(0).account,
+		keyRowsModel(0).account, // grove-104: key-manager rows must clamp too
 		{fetched: true},
 		{},
 	}
@@ -228,6 +229,138 @@ func TestCostsTabKeys(t *testing.T) {
 	m = next.(Model)
 	if m.mode != modeCosts || m.costsTab != costsTabSpend {
 		t.Errorf("$ → mode=%d tab=%d, want costs/SPEND", m.mode, m.costsTab)
+	}
+}
+
+// --- grove-104: per-profile key manager ---
+
+func TestAccountKeyRows(t *testing.T) {
+	profiles := map[string]*config.ModelProfile{
+		"kimi":           {AuthTokenEnv: "KIMI_API_KEY"},
+		"openrouter-glm": {AuthTokenEnv: "OPENROUTER_API_KEY"},
+		"openrouter-alt": {AuthTokenEnv: "OPENROUTER_API_KEY"}, // shared var → one row
+		"anthropic-ish":  {},                                   // no auth var → no row
+		"nil-profile":    nil,
+	}
+	rows := accountKeyRows(profiles, func(v string) string {
+		if v == "OPENROUTER_API_KEY" {
+			return "sk-or-v1-f9b1234567890abcdefa6a"
+		}
+		return ""
+	})
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v, want 2", rows)
+	}
+	// Sorted by var name: KIMI first.
+	if rows[0].envVar != "KIMI_API_KEY" || rows[0].masked != "" {
+		t.Errorf("row 0 = %+v, want unset KIMI_API_KEY", rows[0])
+	}
+	if got := strings.Join(rows[0].profiles, ","); got != "kimi" {
+		t.Errorf("row 0 profiles = %q", got)
+	}
+	if rows[1].envVar != "OPENROUTER_API_KEY" || rows[1].masked != "sk-or-v1-f9b...a6a" {
+		t.Errorf("row 1 = %+v, want masked OPENROUTER_API_KEY", rows[1])
+	}
+	// Shared var: both profile names, sorted.
+	if got := strings.Join(rows[1].profiles, ","); got != "openrouter-alt,openrouter-glm" {
+		t.Errorf("row 1 profiles = %q", got)
+	}
+
+	if got := accountKeyRows(nil, func(string) string { return "" }); len(got) != 0 {
+		t.Errorf("zero profiles → %+v, want zero rows", got)
+	}
+}
+
+func TestAccountHasOpenRouter(t *testing.T) {
+	if !(accountMsg{}).hasOpenRouter() {
+		t.Error("zero rows (zero profiles) must keep the standalone OpenRouter view")
+	}
+	or := accountMsg{keys: []keyRow{{envVar: openrouter.EnvVar}}}
+	if !or.hasOpenRouter() {
+		t.Error("an OPENROUTER_API_KEY row must keep the extras")
+	}
+	kimi := accountMsg{keys: []keyRow{{envVar: "KIMI_API_KEY"}}}
+	if kimi.hasOpenRouter() {
+		t.Error("non-OpenRouter-only rows must drop the OpenRouter extras")
+	}
+}
+
+// keyRowsModel is accountModel plus two key-manager rows: an unset kimi var
+// and the resolved OpenRouter var.
+func keyRowsModel(width int) Model {
+	m := accountModel(width)
+	m.account.keys = []keyRow{
+		{envVar: "KIMI_API_KEY", profiles: []string{"kimi"}},
+		{envVar: openrouter.EnvVar, profiles: []string{"openrouter-glm"}, masked: "sk-or-v1-f9b...a6a"},
+	}
+	return m
+}
+
+func TestViewAccountKeyRows(t *testing.T) {
+	m := keyRowsModel(100)
+	out := m.viewAccount()
+	for _, want := range []string{
+		"KEYS", "KIMI_API_KEY", "not set — enter to paste", "kimi",
+		"OPENROUTER_API_KEY", "sk-or-v1-f9b...a6a", "openrouter-glm",
+		// The OpenRouter row keeps its extras.
+		"BALANCE", "$12.81 remaining", "RUNWAY",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("key-rows view missing %q", want)
+		}
+	}
+	if strings.Contains(out, "CONNECT OPENROUTER") {
+		t.Error("connect prompt must not render when key rows exist")
+	}
+	if strings.Contains(out, "sk-or-v1-f9b1") {
+		t.Error("unmasked key rendered")
+	}
+	if !strings.Contains(m.viewAccountFooter(), "paste key") {
+		t.Error("footer missing the enter paste-key hint")
+	}
+
+	// An unset OpenRouter row drops BALANCE/RUNWAY but keeps the rows.
+	m.account.keyMasked = ""
+	if out := m.viewAccount(); strings.Contains(out, "BALANCE") || !strings.Contains(out, "KEYS") {
+		t.Error("unset OpenRouter key should drop BALANCE but keep KEYS")
+	}
+}
+
+func TestAccountKeyRowSelection(t *testing.T) {
+	m := keyRowsModel(100)
+	m.mode = modeCosts
+
+	// j moves down, clamped at the last row; k back up, clamped at 0.
+	next, _ := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(Model)
+	if m.accountSel != 1 {
+		t.Fatalf("j → sel=%d, want 1", m.accountSel)
+	}
+	next, _ = m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(Model)
+	if m.accountSel != 1 {
+		t.Fatalf("j at end → sel=%d, want clamp at 1", m.accountSel)
+	}
+	next, _ = m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = next.(Model)
+	if m.accountSel != 0 {
+		t.Fatalf("k → sel=%d, want 0", m.accountSel)
+	}
+
+	// enter on a row (set or unset) starts the paste flow.
+	if _, cmd := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("enter on a key row should start the paste flow")
+	}
+	// p mirrors enter when rows exist — even with a resolved OpenRouter key.
+	if _, cmd := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")}); cmd == nil {
+		t.Error("p with key rows should start the paste flow")
+	}
+
+	// A refetch that shrinks the rows clamps the cursor.
+	m.accountSel = 5
+	model, _ := m.Update(accountMsg{fetched: true, keys: m.account.keys})
+	if got := model.(Model).accountSel; got != 0 {
+		t.Errorf("accountMsg with stale sel → %d, want reset to 0", got)
 	}
 }
 

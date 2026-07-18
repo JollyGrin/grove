@@ -70,6 +70,17 @@ model_profiles:
     opus: z-ai/glm-5.2
     sonnet: z-ai/glm-5.2
     haiku: z-ai/glm-4.5-air
+  kimi:
+    base_url: https://api.kimi.com/coding
+    auth_token_env: KIMI_CODE_API_KEY
+    opus: "k3[1m]"
+    sonnet: "k3[1m]"
+    haiku: "k3[1m]"
+    env:   # backend-specific vars beyond the six built-ins; exported first, built-ins win on collision
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
+      ENABLE_TOOL_SEARCH: "false"
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "k3[1m]"
+      CLAUDE_CODE_SUBAGENT_MODEL: "k3[1m]"
 cost:
   pricing:
     z-ai/glm-5.2: {input: 0.42, output: 1.32}   # $/Mtok; dated API slugs prefix-match
