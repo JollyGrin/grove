@@ -755,9 +755,10 @@ func cmdGrab(args []string) error {
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
+	briefFlag := fs.String("brief", "", "ad-hoc operator instructions appended to the kickoff prompt as a final \"## Operator brief\" section")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name] [--brief text]")
 	}
 
 	cfg, err := loadCfg()
@@ -789,7 +790,7 @@ func cmdGrab(args []string) error {
 	}
 	if kind == "linear" {
 		if len(positionals) != 1 {
-			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name]")
+			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name] [--brief text]")
 		}
 		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
 			return err
@@ -862,6 +863,9 @@ func cmdGrab(args []string) error {
 	if profileName != "" {
 		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
 	}
+	if *briefFlag != "" {
+		fmt.Println("→ operator brief attached")
+	}
 
 	// Collapse into the workspace's single session (grove-<label>, or the
 	// global grove for a true legacy run); window 0 stays the reserved
@@ -922,7 +926,7 @@ func cmdGrab(args []string) error {
 	if *manual {
 		promptMode = kickoff.ModeManual
 	}
-	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode)
+	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode, *briefFlag)
 	if err != nil {
 		return err
 	}
@@ -2196,7 +2200,7 @@ func cmdAdopt(args []string) error {
 	if provErr == nil {
 		verbs = prov.Verbs()
 	}
-	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode)
+	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode, "")
 	if err != nil {
 		return err
 	}

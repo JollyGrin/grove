@@ -23,6 +23,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] `gv grab --brief "<text>"` (grove-146, 2026-07-29): ad-hoc operator
+      instructions at dispatch, so process context (release-scope
+      constraints, test-env guidance) no longer had to be written into
+      ticket descriptions before each grab. `kickoff.Render` gained a
+      `brief` param, appended verbatim as a final `## Operator brief`
+      section after all ticket-derived content when non-empty (works with
+      `--manual` too — the prompt file persists either way); empty/absent
+      stays byte-identical to today's renders. No new state/events — the
+      prompt file on disk is the record.
 - [x] Cockpit state I/O incremental (grove-126, 2026-07-29): the other
       half of the grove-149 hot path — the 1s beat parsed the append-only
       events.jsonl twice per tick (`state.Load` + `state.ReadEvents`) and

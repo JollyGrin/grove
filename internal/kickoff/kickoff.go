@@ -55,7 +55,10 @@ type data struct {
 // ("linear" keeps the ovs-era templates; anything else gets the generic
 // set). templatePath overrides the embedded default — for ModeDefault only:
 // manual and pickup are lifecycle-specific prompts, not repo-specific ones.
-func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode) (string, error) {
+// brief is ad-hoc operator text (grove-146); appended verbatim as a final
+// "## Operator brief" section after all ticket-derived content, for any
+// mode — empty means no section, keeping every existing caller byte-stable.
+func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode, brief string) (string, error) {
 	linearSet := kind == "linear"
 	var text string
 	switch mode {
@@ -89,6 +92,11 @@ func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string
 	var b strings.Builder
 	if err := t.Execute(&b, data{Task: task, Identifier: task.ID, Verbs: verbs}); err != nil {
 		return "", err
+	}
+	if brief != "" {
+		b.WriteString("\n\n## Operator brief\n\n")
+		b.WriteString(brief)
+		b.WriteString("\n")
 	}
 	return b.String(), nil
 }

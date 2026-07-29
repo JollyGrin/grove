@@ -227,6 +227,10 @@ gv grab DEV-123 --repo your-project     # ticket → worktree → autonomous wor
   task on Sonnet, a hard one on Opus) without editing config.
 - **`--manual`** sets the worktree up for you to drive by hand instead of
   autonomously.
+- **`--brief "<text>"`** appends ad-hoc operator instructions (release-scope
+  constraints, test-env guidance) to the kickoff prompt as a final
+  `## Operator brief` section — a way to hand the worker one-off context
+  without writing it into the ticket itself.
 
 What happens: grove cuts a fresh worktree, opens a tmux window, and launches a
 worker with a **kickoff prompt** built from the ticket. The worker investigates,

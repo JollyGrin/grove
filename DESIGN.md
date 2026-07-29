@@ -653,6 +653,7 @@ gv orchestrator new [label] # NEW: spawn a fresh orchestrator, stacking a chat p
                             #      else prompts (pick a session | create one for this repo).
 gv grab <task-id> [--repo]  # task → worktree → routed kickoff
 gv grab <id> --manual       # context-only, no autonomous kickoff
+gv grab <id> --brief "..."  # ad-hoc operator text appended to the kickoff prompt
 gv grab <id> --tier opus    # NEW: override the router for this grab
 gv grab                     # picker (provider List)
 gv ls [--json]              # fleet table (+ TIER column)
