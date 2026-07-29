@@ -268,9 +268,11 @@ say "gv untrack --rm --force (degraded: no remote to verify against)"
 tmux list-windows -t "$SESSION" > "$SCRATCH/windows2.out" 2>/dev/null || true
 grep -q task-001 "$SCRATCH/windows2.out" && fail "window survived untrack" || true
 
-say "re-grab after untrack"
-"$GV" grab task-001 >/dev/null
+say "re-grab after untrack (grove-146: --brief attaches an operator brief section)"
+"$GV" grab task-001 --brief "Only touch the staging config, do not deploy." >/dev/null
 ls -d "$WT"/task-001-* >/dev/null || fail "re-grab did not recreate the worktree"
+grep -q '## Operator brief' "$PROMPT" || fail "prompt missing the Operator brief section"
+grep -q 'Only touch the staging config, do not deploy.' "$PROMPT" || fail "prompt missing the brief text"
 
 say "gv done refuses without --force (no remote = no merge proof)"
 if "$GV" done task-001 >"$SCRATCH/done1.out" 2>&1; then fail "done should have refused"; fi

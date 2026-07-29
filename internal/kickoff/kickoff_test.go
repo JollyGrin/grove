@@ -52,7 +52,7 @@ func TestLinearGoldenParity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := Render(goldenTask, linearVerbs, "linear", "", mode)
+		got, err := Render(goldenTask, linearVerbs, "linear", "", mode, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +63,7 @@ func TestLinearGoldenParity(t *testing.T) {
 }
 
 func TestRenderDefaultUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault)
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,38 @@ func TestRenderDefaultUnchanged(t *testing.T) {
 	}
 }
 
+// grove-146: an empty brief must not alter existing renders (every other
+// call site in this file passes "" and depends on byte-identical output).
+func TestRenderNoBriefUnchanged(t *testing.T) {
+	withBrief, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withBrief, "Operator brief") {
+		t.Error("empty brief must not add an Operator brief section")
+	}
+}
+
+func TestRenderOperatorBrief(t *testing.T) {
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "Only touch the staging config, do not deploy.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "## Operator brief") {
+		t.Fatalf("brief render missing section header:\n%s", got)
+	}
+	if !strings.Contains(got, "Only touch the staging config, do not deploy.") {
+		t.Fatalf("brief render missing brief text:\n%s", got)
+	}
+	sentinelIdx := strings.Index(got, "STATUS: DONE")
+	briefIdx := strings.Index(got, "## Operator brief")
+	if sentinelIdx == -1 || briefIdx == -1 || briefIdx < sentinelIdx {
+		t.Errorf("operator brief must come after ticket-derived content, got:\n%s", got)
+	}
+}
+
 func TestRenderManualUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeManual)
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeManual, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +125,7 @@ func TestRenderManualUnchanged(t *testing.T) {
 }
 
 func TestRenderPickup(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModePickup)
+	got, err := Render(testTask, linearVerbs, "linear", "", ModePickup, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +151,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Render(testTask, linearVerbs, "linear", custom, ModeDefault)
+	got, err := Render(testTask, linearVerbs, "linear", custom, ModeDefault, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +160,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 	}
 
 	for _, mode := range []Mode{ModeManual, ModePickup} {
-		got, err := Render(testTask, linearVerbs, "linear", custom, mode)
+		got, err := Render(testTask, linearVerbs, "linear", custom, mode, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +181,7 @@ var mdTask = &provider.Task{
 }
 
 func TestRenderMarkdownDefault(t *testing.T) {
-	got, err := Render(mdTask, mdVerbs, "markdown", "", ModeDefault)
+	got, err := Render(mdTask, mdVerbs, "markdown", "", ModeDefault, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +208,7 @@ func TestRenderMarkdownDefault(t *testing.T) {
 }
 
 func TestRenderMarkdownManualAndPickup(t *testing.T) {
-	man, err := Render(mdTask, mdVerbs, "markdown", "", ModeManual)
+	man, err := Render(mdTask, mdVerbs, "markdown", "", ModeManual, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +216,7 @@ func TestRenderMarkdownManualAndPickup(t *testing.T) {
 		t.Errorf("markdown manual render wrong:\n%s", man)
 	}
 
-	pick, err := Render(mdTask, mdVerbs, "markdown", "", ModePickup)
+	pick, err := Render(mdTask, mdVerbs, "markdown", "", ModePickup, "")
 	if err != nil {
 		t.Fatal(err)
 	}

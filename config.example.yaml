@@ -7,6 +7,9 @@
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: claude --dangerously-skip-permissions)
 #   prompt:        kickoff template override (optional; embedded default otherwise)
+#                  for one-off ad-hoc instructions instead, use
+#                  `gv grab <id> --brief "<text>"` — appended as a final
+#                  "## Operator brief" section, no config edit needed
 #   provider:      per-repo task backend override (markdown|linear|github; default: global kind)
 #   model_profile: default model_profiles entry for this repo's workers (default: none = anthropic)
 #   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
