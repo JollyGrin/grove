@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 
 LOGS="$(mktemp -d /tmp/grove-e2e-all.XXXXXX)"
 fail=0
-for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh; do
+for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh relay.sh; do
   printf '\033[1m== e2e/%s ==\033[0m ' "$s"
   # Redirect to a file and test the suite's own exit status — never pipe it
   # (the piped-gate trap: a pipe reports the pipe's status, not the suite's).

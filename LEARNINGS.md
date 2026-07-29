@@ -80,6 +80,31 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-07-29 · `paste-buffer` then `send-keys Enter` back-to-back loses
+  the Enter — and "delivered" is not "submitted"** (grove-144, hit 3+
+  times in one fresh-install session): the relay pasted with
+  `paste-buffer -d` (no `-p`, despite a doc comment claiming bracketed
+  paste) and pressed Enter with zero settle. Claude's TUI can still be
+  ingesting the paste when the Enter arrives and swallows it into the
+  input, leaving an unsent `[Pasted text]` in the box — while `gv nudge`
+  printed ✓ and appended `EvAnswered`, so `gv ls` showed a stalled worker
+  as `working`. The silent success was the expensive half: the operator
+  only found out by attaching. Fixed by making the relay a
+  **deliver-then-verify** operation, not fire-and-forget: bracketed paste
+  (`-p`), a 250ms settle before Enter, then scrape the pane, retry Enter
+  once, and error out (recording nothing) if the text is still in the
+  input box. Two sub-traps found while building it: (1) `CapturePaneBottom`
+  reads the pane's bottom N **rows**, which are blank whenever the app
+  draws from the top — a verify built on it silently passed everything, so
+  the scrape takes the whole visible pane and finds the box itself
+  (bottom-most `╰`/`│` run, top border allowed to have scrolled off);
+  (2) the box wraps text at spaces *and* mid-word, so the comparison drops
+  every whitespace and box-drawing rune on both sides before matching a
+  24-rune probe. The scrape is deliberately permissive — unreadable pane or
+  no box ⇒ "landed" — because chrome changes under us and a false alarm
+  would strand a delivered answer. Regression: `pasteLanded`/`verifySubmit`
+  unit tests plus `e2e/relay.sh`, whose second leg runs a stub that
+  swallows the Enter and redraws the box.
 - **2026-07-18 · the WINDOW side of a `session:name` target
   prefix-matches too — and worker names are prefixes of each other**
   (grove-116, reproduced on an isolated `-L` server): `repo · grove-1` is
