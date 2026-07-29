@@ -75,9 +75,13 @@ type relayDoneMsg struct {
 type Model struct {
 	cfg      *config.Config
 	stateDir string
-	label    string // ambient workspace label; "" = legacy global fleet
-	width    int
-	height   int
+	// folder is the incremental events.jsonl reader (grove-126) — a pointer,
+	// shared across the value-copied Models, so consumed offsets and fold
+	// state survive every Update.
+	folder *state.Folder
+	label  string // ambient workspace label; "" = legacy global fleet
+	width  int
+	height int
 
 	tasks  []*state.Task
 	live   map[string]string
@@ -151,7 +155,7 @@ func New(cfg *config.Config, stateDir, label string) Model {
 	if cfg != nil {
 		fx = parseFx(cfg.Cockpit.Effects)
 	}
-	return Model{cfg: cfg, stateDir: stateDir, label: label, live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
+	return Model{cfg: cfg, stateDir: stateDir, label: label, folder: state.NewFolder(stateDir, feedTail), live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
 }
 
 // Run returns the attach target plus the A5 quit farewell — one styled line
@@ -171,7 +175,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
 }
 
 // --- commands ---
@@ -259,9 +263,16 @@ func liveStates(active []*state.Task, session string, snapFor func(string) *tmux
 	return live, focused
 }
 
-func refreshCmd(stateDir, session string) tea.Cmd {
+// feedTail is the activity-feed tail bound — the folder keeps this many
+// events resident, never the whole log (the cockpit RAM rule).
+const feedTail = 200
+
+func refreshCmd(folder *state.Folder, stateDir, session string) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := state.Load(stateDir)
+		// grove-126: one incremental pass answers both the task map and the
+		// feed tail — O(appended bytes) per tick, not two full-log scans —
+		// and tasks.json is rewritten only when the fold actually changed.
+		tasks, events, err := folder.Refresh()
 		if err != nil {
 			return refreshMsg{}
 		}
@@ -271,7 +282,6 @@ func refreshCmd(stateDir, session string) tea.Cmd {
 		// DetectLiveFrom).
 		live, focused := liveStates(active, session,
 			snapshotSessions(tmux.SnapshotSession), detect.DetectLiveFrom)
-		events, _ := state.ReadEvents(stateDir, 200)
 
 		// Piggyback the resource gauge on the existing 1s tick — no new poll
 		// loop or goroutine (grove-3). The read is a handful of sysctls; the
@@ -294,11 +304,10 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 			return prsMsg{}
 		}
 		if tasks == nil {
-			loaded, err := state.Load(stateDir)
-			if err != nil {
-				return prsMsg{}
-			}
-			tasks = state.Active(loaded)
+			// Read-only fallback (grove-126): the derived tasks.json is at
+			// most one changed tick stale, and reading it avoids re-folding
+			// the whole event log (and rewriting the view) on every 30s beat.
+			tasks = state.Active(state.ReadTasks(stateDir))
 		}
 		lookups := map[string][2]string{}
 		for _, t := range tasks {
@@ -349,7 +358,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		return m, tea.Batch(refreshCmd(m.stateDir, m.sessionName()), tickEvery(time.Second))
+		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName()), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -493,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ sent to " + msg.ticket
 		}
-		return m, refreshCmd(m.stateDir, m.sessionName())
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
 
 	case actionDoneMsg:
 		if msg.err != nil {
@@ -507,7 +516,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ done"
 		}
-		return m, refreshCmd(m.stateDir, m.sessionName())
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -663,7 +672,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "reviewing " + t.Ticket
 			}
-			return m, refreshCmd(m.stateDir, m.sessionName())
+			return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
 		}
 	case "d":
 		if t := m.selected(); t != nil {

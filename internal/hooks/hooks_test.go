@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
@@ -477,5 +478,51 @@ func TestNtfyBrokenRepoConfigStillPushes(t *testing.T) {
 	}
 	if got := config.NotifySettingsFrom(filepath.Join(dir, "missing.yaml")); got.Ntfy != "" {
 		t.Errorf("missing file should yield zero settings, got %+v", got)
+	}
+}
+
+// grove-126: a stop's stored message is bounded — events.jsonl is append-only
+// and folded every cockpit tick, so unbounded per-turn messages compound the
+// read cost forever. Classification still runs on the FULL text: a sentinel
+// past the cap must classify, only the stored message is truncated.
+func TestStopMessageCapped(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	stateDir := t.TempDir()
+	cwd := seedFleet(t, stateDir, "DEV-CAP", t.TempDir())
+
+	long := strings.Repeat("héllo wörld ", 1000) // 12k runes, multibyte
+	msg := long + "\nSTATUS: DONE — wrapped up despite the essay above"
+	if err := Receive(single(stateDir), "stop", strings.NewReader(stopPayload(cwd, msg))); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(stateDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var ev state.Event
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Data["sentinel"] != "done" {
+		t.Errorf("sentinel past the cap must still classify, got %q", ev.Data["sentinel"])
+	}
+	got := ev.Data["message"]
+	if n := utf8.RuneCountInString(got); n != messageCap+1 { // cap + ellipsis
+		t.Errorf("stored message = %d runes, want %d", n, messageCap+1)
+	}
+	if !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Errorf("cap must be rune-safe with an ellipsis marker, got tail %q", got[len(got)-12:])
+	}
+	if !strings.HasPrefix(got, "héllo") {
+		t.Errorf("cap must keep the head, got %q", got[:12])
+	}
+}
+
+func TestCapRunesShortMessageUntouched(t *testing.T) {
+	msg := "STATUS: DONE — short and sweet"
+	if got := capRunes(msg, messageCap); got != msg {
+		t.Errorf("under-cap message must pass through untouched, got %q", got)
 	}
 }
