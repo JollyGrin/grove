@@ -125,6 +125,42 @@ func DetectLive(sessionName, windowName string) LiveInfo {
 	}
 }
 
+// captureBottomKnown is the capture seam for DetectLiveFrom: tests swap it
+// to serve canned pane content and count captures without a tmux server.
+var captureBottomKnown = tmux.CapturePaneBottomKnown
+
+// DetectLiveFrom is DetectLive fed from a per-tick tmux.SessionSnapshot
+// (grove-149): window existence, claude-pane resolution, and pane height all
+// come from the snapshot's two session-wide reads, so the only tmux exec
+// here is the one capture-pane per live task — the dash's 1s refresh used to
+// spawn ~6 tmux processes per task per second through the stateless path.
+// base is the task's stored (glyph-less) window name; the snapshot matcher
+// carries the glyph tolerance, so no ResolveWindowName pre-pass is needed,
+// and the capture targets the immutable pane id (grove-116: a name-built
+// target could scrape a prefix-sibling's screen). Classification is
+// classifyPaneOutput, unchanged — the byte-comparable probe core.
+func DetectLiveFrom(snap *tmux.SessionSnapshot, base string) LiveInfo {
+	if !snap.WindowExists(base) {
+		return LiveInfo{}
+	}
+	pane, height, ok := snap.ClaudePane(base)
+	if !ok {
+		return LiveInfo{Exists: true}
+	}
+	output, err := captureBottomKnown(pane, height, 30)
+	if err != nil || output == "" {
+		return LiveInfo{Exists: true}
+	}
+
+	status, hasClaude := classifyPaneOutput(output)
+	return LiveInfo{
+		Exists:      true,
+		HasClaude:   hasClaude,
+		Status:      status,
+		PaneContent: output,
+	}
+}
+
 // bottomN returns the last n elements of a string slice.
 func bottomN(lines []string, n int) []string {
 	if len(lines) <= n {
