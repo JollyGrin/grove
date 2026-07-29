@@ -23,6 +23,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Dash refresh batched to O(1) tmux spawns (grove-149, 2026-07-29):
+      field report — `gv dash` pegged an external user's CPU at 5-6
+      workers; the 1s tick spawned ~6 tmux processes per task per second
+      (3× list-windows + list-panes + display-message + capture), and
+      per-spawn cost varies ~50× by environment (EDR scanning each exec,
+      WSL1). New `tmux.SessionSnapshot`: ONE list-windows + ONE
+      `list-panes -s` per tick answer every window/pane question for the
+      whole board (glyph tolerance + grove-116 sibling rules preserved);
+      `detect.DetectLiveFrom` reads it and only capture-pane stays
+      per-task — 6N+2 → ≈N+3 spawns/sec. Stateless `DetectLive` remains
+      for one-shot callers (`gv ls`).
 - [x] Wizard pre-selects autonomous worker command (grove-147, 2026-07-29):
       the worker-command select listed plain `claude` first while
       `config.Load`'s default (when the key is omitted) was already

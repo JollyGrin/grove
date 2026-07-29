@@ -490,3 +490,189 @@ func ClosePane(pane string) error {
 	_, err := run("kill-pane", "-t", pane)
 	return err
 }
+
+// --- grove-149: batched per-tick session snapshot ---
+//
+// The dash's 1s refresh used to ask tmux the same questions once per task:
+// 3× list-windows + a list-panes + a display-message every second for every
+// active worker (6N+2 process spawns/sec at the tick). On hosts where
+// process creation is expensive (EDR/antivirus scanning each exec, WSL1)
+// that pegged the CPU — the dash pays the fork/exec, the tmux server pays
+// the client-connect flood. Since grove-29 every worker shares the one
+// grove-<label> session, so the whole board is answerable from ONE
+// list-windows + ONE list-panes; only the per-pane capture stays per-task.
+
+// execTmux is the exec seam for the snapshot path: tests swap it to serve
+// canned output and count invocations without a tmux server.
+var execTmux = run
+
+// SessionSnapshot is one tick's view of a session — every window plus every
+// pane — taken with exactly two tmux invocations (SnapshotSession). Its
+// methods answer the questions the refresh loop used to re-exec tmux for,
+// with identical semantics: matchesWindowName glyph tolerance (grove-47)
+// and the grove-116 id-resolution rules (a dead window never resolves to a
+// prefix-extending sibling). A nil snapshot is valid and answers everything
+// as "session gone" — the same shape as the per-call error fallbacks it
+// replaces.
+type SessionSnapshot struct {
+	windows []snapWindow
+	panes   map[string][]snapPane // window id → its panes, list-panes order
+}
+
+type snapWindow struct {
+	id     string // "@N", immune to renames and prefix matching
+	name   string // current (possibly glyph-suffixed) window name
+	active bool
+}
+
+type snapPane struct {
+	id      string // "%N"
+	index   int
+	height  int
+	command string // pane_current_command
+}
+
+// SnapshotSession reads a whole session in two execs. Both -t targets are
+// target-sessions (list-windows, and list-panes -s — grove-99 table), so
+// the grove-78 Exact anchor applies. The free-text field of each format
+// (window name, pane command) comes LAST so parsing survives any content.
+// Errors (usually "session gone") bubble up; callers treat that as a nil
+// snapshot.
+func SnapshotSession(session string) (*SessionSnapshot, error) {
+	wout, err := execTmux("list-windows", "-t", Exact(session),
+		"-F", "#{window_id}\t#{window_active}\t#{window_name}")
+	if err != nil {
+		return nil, err
+	}
+	pout, err := execTmux("list-panes", "-s", "-t", Exact(session),
+		"-F", "#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_height}\t#{pane_current_command}")
+	if err != nil {
+		return nil, err
+	}
+	return ParseSessionSnapshot(wout, pout), nil
+}
+
+// ParseSessionSnapshot builds a snapshot from canned SnapshotSession output.
+// Exported so other packages' tests can construct snapshots without a tmux
+// server. Malformed lines are skipped, matching the tolerant parsing of the
+// per-call helpers this replaces.
+func ParseSessionSnapshot(windowsOut, panesOut string) *SessionSnapshot {
+	s := &SessionSnapshot{panes: map[string][]snapPane{}}
+	for _, line := range strings.Split(windowsOut, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		s.windows = append(s.windows, snapWindow{id: parts[0], active: parts[1] == "1", name: parts[2]})
+	}
+	for _, line := range strings.Split(panesOut, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 5)
+		if len(parts) != 5 {
+			continue
+		}
+		idx, err := strconv.Atoi(parts[2])
+		if err != nil {
+			continue
+		}
+		height, _ := strconv.Atoi(parts[3])
+		s.panes[parts[0]] = append(s.panes[parts[0]],
+			snapPane{id: parts[1], index: idx, height: height, command: parts[4]})
+	}
+	return s
+}
+
+// ActiveWindow is the snapshot twin of the package-level ActiveWindow: the
+// session's active window name, "" when none (or nil snapshot).
+func (s *SessionSnapshot) ActiveWindow() string {
+	if s == nil {
+		return ""
+	}
+	for _, w := range s.windows {
+		if w.active {
+			return w.name
+		}
+	}
+	return ""
+}
+
+// WindowID is the snapshot twin of the package-level WindowID — the same
+// grove-116 contract: glyph-tolerant match on the stored base name, sibling
+// prefix-extensions unhittable, immutable "@N" id out.
+func (s *SessionSnapshot) WindowID(base string) (string, bool) {
+	if s == nil || base == "" {
+		return "", false
+	}
+	for _, w := range s.windows {
+		if matchesWindowName(w.name, base) {
+			return w.id, true
+		}
+	}
+	return "", false
+}
+
+// WindowExists is the snapshot twin of the package-level WindowExists.
+func (s *SessionSnapshot) WindowExists(base string) bool {
+	_, ok := s.WindowID(base)
+	return ok
+}
+
+// ResolveWindowName is the snapshot twin of the package-level
+// ResolveWindowName: the window's current (possibly glyphed) full name for a
+// stored base, falling back to base when nothing matches.
+func (s *SessionSnapshot) ResolveWindowName(base string) string {
+	if s == nil {
+		return base
+	}
+	for _, w := range s.windows {
+		if matchesWindowName(w.name, base) {
+			return w.name
+		}
+	}
+	return base
+}
+
+// ClaudePane resolves the claude pane of base's window from the snapshot:
+// the pane's immutable "%N" id (a name-built target could scrape a sibling,
+// grove-116) plus its height, which lets the caller capture the pane bottom
+// without CapturePaneBottom's per-call display-message height query.
+// ok=false when the window is gone or has no panes.
+func (s *SessionSnapshot) ClaudePane(base string) (paneID string, height int, ok bool) {
+	id, ok := s.WindowID(base)
+	if !ok {
+		return "", 0, false
+	}
+	panes := s.panes[id]
+	if len(panes) == 0 {
+		return "", 0, false
+	}
+	infos := make([]PaneInfo, len(panes))
+	for i, p := range panes {
+		infos[i] = PaneInfo{Index: p.index, Command: p.command}
+	}
+	want := pickPane(infos)
+	for _, p := range panes {
+		if p.index == want {
+			return p.id, p.height, true
+		}
+	}
+	return "", 0, false
+}
+
+// CapturePaneBottomKnown is CapturePaneBottom for a caller that already
+// knows the pane's height (from a SessionSnapshot): the same bottom-N-lines
+// capture, minus the display-message height query. Same forgiving error
+// shape — a vanished pane returns "", nil.
+func CapturePaneBottomKnown(target string, height, lines int) (string, error) {
+	if height <= 0 {
+		return "", nil
+	}
+	start := 0
+	if height > lines {
+		start = height - lines
+	}
+	out, err := execTmux("capture-pane", "-p", "-J", "-S", strconv.Itoa(start), "-t", target)
+	if err != nil {
+		return "", nil
+	}
+	return out, nil
+}

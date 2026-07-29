@@ -212,6 +212,53 @@ func relayCmd(stateDir, ticket, pane, text string) tea.Cmd {
 	}
 }
 
+// snapshotSessions returns a memoized snapshot getter for ONE refresh
+// (grove-149): every worker shares the workspace session since grove-29, so
+// a whole tick costs one list-windows + one list-panes instead of 3-4 window
+// listings per task. fetch is tmux.SnapshotSession in production; a failed
+// fetch memoizes nil, which every snapshot method answers as "session gone"
+// — the same shape as the old per-call error fallbacks.
+func snapshotSessions(fetch func(string) (*tmux.SessionSnapshot, error)) func(string) *tmux.SessionSnapshot {
+	cache := map[string]*tmux.SessionSnapshot{}
+	return func(session string) *tmux.SessionSnapshot {
+		if snap, ok := cache[session]; ok {
+			return snap
+		}
+		snap, _ := fetch(session)
+		cache[session] = snap
+		return snap
+	}
+}
+
+// liveStates computes the per-ticket live map and the tmux-focused ticket
+// (grove-63 S2: the queen stands on whichever plot's window is focused) for
+// one refresh, reading tmux through one snapshot per session (grove-149).
+// The old shape re-ran window/pane queries per task per second — 6N+2
+// process spawns/sec, which pegged the CPU on hosts where spawning is
+// expensive (EDR scanning each exec, WSL1). snapFor and detectFrom are
+// injected so tests can count exactly what a refresh reads.
+func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo) (map[string]string, string) {
+	live := map[string]string{}
+	activeWindow := snapFor(session).ActiveWindow()
+	focused := ""
+	for _, t := range active {
+		snap := snapFor(t.TmuxSession)
+		info := detectFrom(snap, t.TmuxWindow)
+		if !info.Exists {
+			live[t.Ticket] = "gone"
+		} else {
+			live[t.Ticket] = info.Status.String()
+		}
+		// A P3 status glyph is a display suffix on the stable base; the
+		// snapshot resolves the current (possibly glyphed) name exec-free
+		// for the focus comparison.
+		if activeWindow != "" && snap.ResolveWindowName(t.TmuxWindow) == activeWindow {
+			focused = t.Ticket
+		}
+	}
+	return live, focused
+}
+
 func refreshCmd(stateDir, session string) tea.Cmd {
 	return func() tea.Msg {
 		tasks, err := state.Load(stateDir)
@@ -219,25 +266,11 @@ func refreshCmd(stateDir, session string) tea.Cmd {
 			return refreshMsg{}
 		}
 		active := state.Active(tasks)
-		live := map[string]string{}
-		// grove-63 S2: one read-only list-windows call per refresh; the queen
-		// stands on whichever plot's resolved window name matches it.
-		activeWindow := tmux.ActiveWindow(session)
-		focused := ""
-		for _, t := range active {
-			// Resolve the current window name — a P3 status glyph is a display
-			// suffix on the stable base, and the detect probe matches exactly.
-			resolved := tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow)
-			info := detect.DetectLive(t.TmuxSession, resolved)
-			if !info.Exists {
-				live[t.Ticket] = "gone"
-			} else {
-				live[t.Ticket] = info.Status.String()
-			}
-			if activeWindow != "" && resolved == activeWindow {
-				focused = t.Ticket
-			}
-		}
+		// grove-149: two session-wide reads answer every window/pane question
+		// for the whole board; only capture-pane stays per task (inside
+		// DetectLiveFrom).
+		live, focused := liveStates(active, session,
+			snapshotSessions(tmux.SnapshotSession), detect.DetectLiveFrom)
 		events, _ := state.ReadEvents(stateDir, 200)
 
 		// Piggyback the resource gauge on the existing 1s tick — no new poll
