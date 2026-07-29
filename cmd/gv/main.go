@@ -1930,6 +1930,9 @@ func cmdRelay(args []string, isAnswer bool) error {
 		err = tmux.PasteText(pane, text)
 	}
 	if err != nil {
+		// PasteText verifies the submit landed (grove-144), so a failure here
+		// means the agent never got the text — recording EvAnswered anyway is
+		// what made this bug silent: gv ls showed `working` on a dead worker.
 		return err
 	}
 	if err := state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket}); err != nil {

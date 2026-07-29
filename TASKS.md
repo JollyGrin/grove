@@ -31,6 +31,19 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       landing on the prompt and false dead/stalled reads. Reordered
       Options so autonomous is first, reworded the step copy to say
       autonomous is grove's expected mode and warn what manual breaks.
+- [x] Relay submit verification (grove-144, 2026-07-29): `gv nudge` /
+      `gv answer` / the TUI inline reply pasted text and pressed Enter
+      back-to-back with zero settle, so a TUI still ingesting the paste
+      swallowed the Enter — the text sat unsent as `[Pasted text]` while gv
+      printed ✓ and appended `EvAnswered` (`gv ls` showed a stalled worker
+      as `working`; biggest time-sink of Oleg's fresh-install session).
+      `tmux.PasteText` now pastes bracketed (`-p`, which the doc comment
+      had claimed for a year), settles 250ms, presses Enter, then verifies
+      by scraping the pane's input box: one retry Enter, then a non-zero
+      exit with a recovery command and NO recorded answer. Verify/retry
+      ladder extracted as `verifySubmit`/`pasteLanded` (unit-tested);
+      `e2e/relay.sh` proves both legs against paste-consuming stubs; the
+      TUI reply moved off the render loop into `relayCmd`.
 - [x] PR-poll timer multiplication fix (grove-118, 2026-07-18): the
       `prsMsg` handler unconditionally re-armed its own 30s tick, so every
       ad-hoc `prsCmd` delivery — including manual `r` refresh — added

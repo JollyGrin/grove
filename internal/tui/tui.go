@@ -65,6 +65,13 @@ type actionDoneMsg struct {
 	ticket string // for the J2 done ritual (grove-22)
 }
 
+// relayDoneMsg carries the outcome of an inline reply. Separate from
+// actionDoneMsg so a nudge never triggers the done ritual.
+type relayDoneMsg struct {
+	err    error
+	ticket string
+}
+
 type Model struct {
 	cfg      *config.Config
 	stateDir string
@@ -182,6 +189,27 @@ func tickEvery(d time.Duration) tea.Cmd {
 // grove-24's tickEvery).
 func prTickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return prTickMsg{} })
+}
+
+// relayCmd delivers an inline reply off the update loop. PasteText settles
+// before its Enter and then verifies the submit landed (grove-144), which can
+// take ~1s — far too long to block the render loop. EvAnswered is appended
+// only on a verified submit, so a swallowed Enter can no longer leave the
+// board claiming the agent is working.
+func relayCmd(stateDir, ticket, pane, text string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if len([]rune(text)) == 1 {
+			err = tmux.SendRawKey(pane, text) // option pickers: raw, no Enter
+		} else {
+			err = tmux.PasteText(pane, text)
+		}
+		if err != nil {
+			return relayDoneMsg{err: err, ticket: ticket}
+		}
+		_ = state.Append(stateDir, state.Event{Type: state.EvAnswered, Ticket: ticket})
+		return relayDoneMsg{ticket: ticket}
+	}
 }
 
 func refreshCmd(stateDir, session string) tea.Cmd {
@@ -426,6 +454,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = string(msg)
 		return m, nil
 
+	case relayDoneMsg:
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+		} else {
+			m.flash = "✓ sent to " + msg.ticket
+		}
+		return m, refreshCmd(m.stateDir, m.sessionName())
+
 	case actionDoneMsg:
 		if msg.err != nil {
 			m.flash = msg.err.Error()
@@ -645,21 +681,12 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = err.Error()
 			return m, nil
 		}
-		if len([]rune(text)) == 1 {
-			err = tmux.SendRawKey(pane, text) // option pickers: raw, no Enter
-		} else {
-			err = tmux.PasteText(pane, text)
-		}
-		if err != nil {
-			m.flash = err.Error()
-			return m, nil
-		}
-		_ = state.Append(m.stateDir, state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
-		m.flash = "✓ sent to " + t.Ticket
+		ticket := t.Ticket
+		m.flash = "sending to " + ticket + "…"
 		m.mode = modeList
 		m.detail = nil
 		m.input.Blur()
-		return m, refreshCmd(m.stateDir, m.sessionName())
+		return m, relayCmd(m.stateDir, ticket, pane, text)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)

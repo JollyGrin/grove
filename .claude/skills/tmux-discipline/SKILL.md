@@ -35,6 +35,19 @@ grove worker) silently targets the **real server** unless it clears
   raw, without Enter-wrapping.
 - tmux buffers are **server-global**. Use the `gv-relay` buffer name;
   never invent a generic name another tool could clobber mid-paste.
+- **Delivered is not submitted** (grove-144). `paste-buffer` immediately
+  followed by `send-keys Enter` loses the Enter: the receiving TUI is
+  still ingesting the paste and swallows it into the input, leaving an
+  unsent `[Pasted text]`. Paste **bracketed** (`-p`), settle ~250ms, press
+  Enter, then *verify* by scraping the pane's input box — retry Enter
+  once, then fail loudly. Never append an "answered"-class event off a
+  paste whose submit wasn't verified; a silent success costs far more
+  than a loud failure.
+- Scraping to verify reads the **whole visible pane**, never
+  `CapturePaneBottom`: that helper takes the pane's bottom N *rows*, which
+  are blank whenever the app draws from the top (it silently passed every
+  relay until `e2e/relay.sh` caught it). Keep the check permissive —
+  unreadable pane or no recognizable box counts as landed.
 
 ## 3. Finding things: resolve, never assume
 
