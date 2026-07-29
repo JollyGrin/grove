@@ -59,6 +59,9 @@ func TestBuildFreshRepoUsesDetection(t *testing.T) {
 	if got := step(t, steps, "worker").Value; got != "" {
 		t.Errorf("--yes must not invent a worker command, got %q", got)
 	}
+	if opts := step(t, steps, "worker").Options; len(opts) == 0 || opts[0] != "claude --dangerously-skip-permissions" {
+		t.Errorf("worker options = %v, want autonomous first", opts)
+	}
 	if step(t, steps, "agents-md").On {
 		t.Error("--yes must never auto-enable the paid agents-md run")
 	}
