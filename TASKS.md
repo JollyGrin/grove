@@ -23,6 +23,14 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Wizard pre-selects autonomous worker command (grove-147, 2026-07-29):
+      the worker-command select listed plain `claude` first while
+      `config.Load`'s default (when the key is omitted) was already
+      `claude --dangerously-skip-permissions` — manual-mode workers stall
+      on every permission prompt, which cascades into `gv nudge`/`answer`
+      landing on the prompt and false dead/stalled reads. Reordered
+      Options so autonomous is first, reworded the step copy to say
+      autonomous is grove's expected mode and warn what manual breaks.
 - [x] PR-poll timer multiplication fix (grove-118, 2026-07-18): the
       `prsMsg` handler unconditionally re-armed its own 30s tick, so every
       ad-hoc `prsCmd` delivery — including manual `r` refresh — added

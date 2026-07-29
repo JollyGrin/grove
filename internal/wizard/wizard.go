@@ -127,12 +127,13 @@ func Build(in Input) ([]Step, error) {
 		},
 		{
 			ID: "worker", Kind: KindSelect,
-			Title: "worker command (what runs in each task pane) — autonomy " +
-				"(--dangerously-skip-permissions) is YOUR call: without a safety-" +
-				"guard layer an autonomous worker edits and runs anything it likes",
+			Title: "worker command (what runs in each task pane) — autonomous " +
+				"is grove's expected mode; a manual-permission worker stalls on " +
+				"every permission prompt and breaks unattended steering (nudge/" +
+				"answer land on the prompt instead of the agent)",
 			Options: []string{
-				"claude",
 				"claude --dangerously-skip-permissions",
+				"claude",
 				"ccwork --dangerously-skip-permissions",
 			},
 			Current: curWorker,
