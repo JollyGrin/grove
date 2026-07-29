@@ -18,6 +18,11 @@
 > the *generic* entries only; each was verified live in ovs. Grid-specific
 > entries (Linear pipeline rules, monorepo deploy semantics, worktree:setup
 > codegen gap) stay with ovs and will move into the Grid pack's L5 layer.
+>
+> **Why-context lives in [docs/journal.md](docs/journal.md)** — the dated
+> narrative of why an era of work happened (arcs, not facts). Not loaded
+> into worker context; read it when an entry here or a TASKS.md row needs
+> its backstory.
 
 ## Claude Code behavior (verified in ovs)
 
@@ -303,6 +308,25 @@
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-07-29 · a polling TUI's perceived cost is `spawns/sec ×
+  cost-per-spawn`, and the second factor varies ~50x by environment** — an
+  external user's CPU pegged at 5–6 workers while Dean's larger fleet felt
+  nothing: EDR/antivirus scans every exec, WSL1 forks are slow, so the same
+  spawn rate reads "fine" on one machine and "pegged" on another. "Feels
+  fine on my machine" is not evidence for a 1s-beat hot path. Fix arc
+  (backstory: journal 2026-07-29): grove-149 batched the tick's tmux reads
+  into one `SessionSnapshot` (6N+2 → ~N+3 execs/sec), grove-126 made state
+  I/O O(new events) via the incremental `state.Folder`. What it changed:
+  every per-tick exec or full-file scan in beat code must justify itself at
+  write time — the beat multiplies it forever.
+- **2026-07-29 · verifying hot-path fixes live: mtime freeze is strong
+  evidence, ps-sampling is not** — a dirty-flagged derived file proves
+  itself in production by its mtime staying frozen under a running dash
+  (tasks.json sat untouched for the whole observation window; the old code
+  rewrote it every second). But ms-lived execs are effectively invisible to
+  `ps` sampling — 200 samples at 100ms caught zero transient tmux clients
+  even while ticks ran — so exec *counts* are pinned by seam-counting unit
+  tests, never claimed from sampling.
 - **2026-07-09 · throwaway builds for operator testing** — when a change
   needs the operator's manual verification before merge, build the branch
   to a scratch path (`go build -o /tmp/gv-<ticket> ./cmd/gv`) and hand
