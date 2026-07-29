@@ -23,6 +23,20 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Cockpit state I/O incremental (grove-126, 2026-07-29): the other
+      half of the grove-149 hot path — the 1s beat parsed the append-only
+      events.jsonl twice per tick (`state.Load` + `state.ReadEvents`) and
+      rewrote tasks.json every second, costs that grow with log age
+      forever. New `state.Folder` remembers byte offset + fold state:
+      each refresh parses only appended bytes and derives the task map
+      AND the 200-event feed tail from one pass (torn appends held back,
+      malformed lines skipped, shrunk log refolds, results returned as
+      copies); tasks.json rewritten only when the folded view's hash
+      changes; the 30s PR-poll fallback went read-only (`ReadTasks`).
+      Stop hooks cap stored messages at 2000 runes (classification still
+      on full text; reader-side truncation stays #123). `gv ls` on-disk
+      cost cache decided as defer — reasoning in the plan doc
+      (docs/plans/2026-07-29-grove-126-hot-path-state-io.md).
 - [x] Dash refresh batched to O(1) tmux spawns (grove-149, 2026-07-29):
       field report — `gv dash` pegged an external user's CPU at 5-6
       workers; the 1s tick spawned ~6 tmux processes per task per second

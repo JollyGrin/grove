@@ -82,6 +82,14 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	case "stop":
 		status, sentinel, question, message := classify(p.LastAssistantMessage)
+		// grove-126: events.jsonl is append-only and folded every cockpit
+		// tick, so an unbounded stored message compounds the read cost
+		// forever. Classification above ran on the full text; the head is
+		// enough for every display surface (the parsed sentinel/question
+		// fields carry the actionable tail). Reader-side truncation bugs
+		// are #123's territory — this cap guarantees new records stay far
+		// inside every reader's line buffer.
+		message = capRunes(message, messageCap)
 		glyphWorker(task, state.Glyph(status, sentinel))
 		if err := state.Append(stateDir, state.Event{
 			Type: state.EvAgentStatus, Ticket: task.Ticket,
@@ -153,6 +161,21 @@ func classify(msg string) (status, sentinel, question, message string) {
 	default: // DONE
 		return state.AgentIdle, "done", "", msg
 	}
+}
+
+// messageCap bounds what a stop event stores as data["message"], in runes —
+// roughly a detail-view screenful with margin. JSON-encoded that is at most
+// a few KB per turn instead of an entire unbounded assistant message.
+const messageCap = 2000
+
+// capRunes truncates to n runes with an ellipsis marker — rune-safe, never
+// mid-codepoint (grove-131 class).
+func capRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func firstLine(s string) string {
