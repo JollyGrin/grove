@@ -85,6 +85,23 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-08-17 · `tmux kill-window` does not kill the pane's process
+  tree** (grove-156, found 2026-08-16 as 3 cores pegged for ~4 days):
+  killing a window SIGHUPs the pane's foreground process group only.
+  Build/test children that daemonize or double-fork (jest-worker's
+  `processChild.js`) survive, reparent to launchd (ppid 1), and — in
+  jest's case — spin-wait forever on a parent that no longer exists,
+  invisibly to `gv ls` (task DONE, worktree even removed, ~2.4GB RSS
+  held). Signature-based orphan detection can't see them (no claude/mcp
+  in argv). The safe join is the one fact grove owns: **the worktree path
+  is unique per task and grove created it**, so any argv referencing it
+  belongs to that task by construction. Teardown now SIGTERMs argv
+  matches before removing the worktree; audit/sweep report/offer the rest
+  (done task or dir gone). Never pattern-match a generic `.worktrees/`
+  string — foreign worktrees (ovs, editors) are not grove's business.
+  Known gap: argv-less ownership (claude launched by cwd) needs an
+  lsof/pane join — split to #157.
+
 - **2026-07-29 · `paste-buffer` then `send-keys Enter` back-to-back loses
   the Enter — and "delivered" is not "submitted"** (grove-144, hit 3+
   times in one fresh-install session): the relay pasted with

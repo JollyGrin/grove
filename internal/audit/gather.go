@@ -45,8 +45,12 @@ type Report struct {
 	Tasks           []TaskResult    `json:"tasks"`
 	Orphans         []Orphan        `json:"orphans"`
 	OrphanProcesses []OrphanProcess `json:"orphan_processes"`
-	StalePrompts    []string        `json:"stale_prompts"`
-	EventsSizeBytes int64           `json:"events_size_bytes"`
+	// WorktreeProcesses (additive, grove-156): processes referencing a
+	// grove-created worktree path whose task is done or whose directory
+	// is gone.
+	WorktreeProcesses []WorktreeProcess `json:"worktree_processes"`
+	StalePrompts      []string          `json:"stale_prompts"`
+	EventsSizeBytes   int64             `json:"events_size_bytes"`
 }
 
 // Gather cross-checks every active task against reality and scans for
@@ -75,7 +79,7 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 
 	rep := Report{Tasks: rows}
 	rep.Orphans = scanOrphans(cfg, tasks)
-	rep.OrphanProcesses = scanOrphanProcesses()
+	rep.OrphanProcesses, rep.WorktreeProcesses = scanProcesses(tasks)
 	rep.StalePrompts = scanStalePrompts(stateDir, tasks)
 	if fi, err := os.Stat(filepath.Join(stateDir, "events.jsonl")); err == nil {
 		rep.EventsSizeBytes = fi.Size()

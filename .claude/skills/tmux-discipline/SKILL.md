@@ -86,6 +86,13 @@ grove worker) silently targets the **real server** unless it clears
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.
 
+- **`kill-window` kills the foreground process group, not the tree**
+  (grove-156): daemonizing children (jest-worker et al.) survive,
+  reparent to launchd, and can spin forever. Teardown that removes a
+  worktree must first SIGTERM every process whose argv references that
+  worktree path — and match only paths grove itself created (tasks.json
+  `worktree` fields), never a generic `.worktrees/` pattern.
+
 ## 4. Titles and detection
 
 - Claude Code clobbers pane titles on boot (OSC "✳ Claude Code").

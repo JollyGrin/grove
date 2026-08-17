@@ -53,8 +53,8 @@ payload under one named key.
 | Command | Payload key | Shape |
 |---|---|---|
 | `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`) |
-| `gv audit --json` | `report` | object — per-task classification + orphan worktrees + orphan processes |
-| `gv sweep --json` | `report` | object — `{items, orphan_processes, stale_prompts}` proposed-action dry-run |
+| `gv audit --json` | `report` | object — per-task classification + orphan worktrees + orphan/worktree processes |
+| `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
