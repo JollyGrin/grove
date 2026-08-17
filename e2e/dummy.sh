@@ -50,6 +50,8 @@ SESSION="grove-dummy"
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   kill "${ORPHAN_PID:-}" 2>/dev/null || true   # grove-92 seeded lookalike, if a fail left it running
+  # grove-156 seeded worktree-path sleepers, if a fail left them running
+  kill "${SLEEPER_PID:-}" "${SLEEPER2_PID:-}" "${ZOMBIE_PID:-}" 2>/dev/null || true
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
   rm -rf "$SCRATCH"
 }
@@ -195,7 +197,7 @@ STUBBIN="$SCRATCH/bin"
 mkdir -p "$STUBBIN"
 cat > "$STUBBIN/ps" <<'PSEOF'
 #!/bin/sh
-echo "  PID  PPID  %CPU ELAPSED ARGS"
+echo "  PID  PPID  %CPU    RSS ELAPSED ARGS"
 PSEOF
 chmod +x "$STUBBIN/ps"
 REAL_PATH="$PATH"
@@ -239,8 +241,8 @@ sleep 300 &
 ORPHAN_PID=$!
 cat > "$STUBBIN/ps" <<PSEOF
 #!/bin/sh
-echo "  PID  PPID  %CPU ELAPSED ARGS"
-echo "  $ORPHAN_PID     1   0.0   05:00 claude --resume orphan-e2e"
+echo "  PID  PPID  %CPU    RSS ELAPSED ARGS"
+echo "  $ORPHAN_PID     1   0.0   1024   05:00 claude --resume orphan-e2e"
 PSEOF
 "$GV" sweep --json > "$SCRATCH/sweep-orphan.json"
 grep -q '"pid": *'"$ORPHAN_PID" "$SCRATCH/sweep-orphan.json" || fail "sweep --json missing the orphan-process kill offer"
@@ -262,9 +264,19 @@ export PATH="$REAL_PATH"
 tmux list-windows -t "$SESSION" > "$SCRATCH/windows-readopt.out"
 grep -q task-001 "$SCRATCH/windows-readopt.out" || fail "adopt after sweep-pause did not rebuild the window"
 
-say "gv untrack --rm --force (degraded: no remote to verify against)"
+say "seed a daemonized build child: real sleeper with the worktree path in argv (grove-156)"
+# grove stores the worktree symlink-resolved; the argv must embed that
+# real path for the reap-time matcher to own it.
+WTDIR_REAL="$(cd "$WTDIR" && pwd -P)"
+perl -e 'sleep 300' -- "$WTDIR_REAL" &
+SLEEPER_PID=$!
+kill -0 "$SLEEPER_PID" 2>/dev/null || fail "sleeper did not start"
+
+say "gv untrack --rm --force (degraded: no remote to verify against) kills worktree children"
 "$GV" untrack task-001 --rm --force | tee "$SCRATCH/untrack.out"
 [ ! -d "$WTDIR" ] || fail "worktree survived untrack --rm"
+grep -q "pid $SLEEPER_PID terminated" "$SCRATCH/untrack.out" || fail "untrack --rm did not report killing the worktree child"
+kill -0 "$SLEEPER_PID" 2>/dev/null && fail "worktree child survived untrack --rm" || true
 tmux list-windows -t "$SESSION" > "$SCRATCH/windows2.out" 2>/dev/null || true
 grep -q task-001 "$SCRATCH/windows2.out" && fail "window survived untrack" || true
 
@@ -297,10 +309,17 @@ mkdir -p "$PROJ"
   printf '%s\n' '{"timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
 } > "$PROJ/e2e-session.jsonl"
 
-say "gv done --force cleans up"
+say "seed another daemonized build child for the done path (grove-156)"
+perl -e 'sleep 300' -- "$WTDIR2" &
+SLEEPER2_PID=$!
+kill -0 "$SLEEPER2_PID" 2>/dev/null || fail "second sleeper did not start"
+
+say "gv done --force cleans up (and kills worktree children)"
 "$GV" done task-001 --force | tee "$SCRATCH/done2.out"
 grep -q 'cleaned up' "$SCRATCH/done2.out" || fail "done --force failed"
 ls -d "$WT"/task-001-* 2>/dev/null && fail "worktree survived done" || true
+grep -q "pid $SLEEPER2_PID terminated" "$SCRATCH/done2.out" || fail "done did not report killing the worktree child"
+kill -0 "$SLEEPER2_PID" 2>/dev/null && fail "worktree child survived gv done" || true
 grep -q 'ledger: final snapshot recorded' "$SCRATCH/done2.out" || fail "done did not record a ledger row"
 
 say "spend ledger: final row exists with title + description + outcome"
@@ -319,6 +338,27 @@ rm -rf "$HOME/.claude/projects"
 grep -q 'task-001' "$SCRATCH/ledger.out" || fail "history lost after transcript deletion"
 grep -q 'Replace me' "$SCRATCH/ledger.out" || fail "history lost the title after transcript deletion"
 grep -q '0.03' "$SCRATCH/ledger.out" || fail "history lost the cost estimate (2k out tokens ≈ \$0.03)"
+
+say "worktree process of a DONE task: audit reports it, sweep offers the kill (grove-156)"
+# Same discipline as the orphan-lookalike above: stubbed ps so the row is
+# fully controlled, real sleep pid so the SIGTERM lands on something we own.
+sleep 300 &
+ZOMBIE_PID=$!
+cat > "$STUBBIN/ps" <<PSEOF
+#!/bin/sh
+echo "  PID  PPID  %CPU    RSS ELAPSED ARGS"
+echo "  $ZOMBIE_PID     1  99.0 819200   4-01:00:00 node $WTDIR2/node_modules/jest-worker/processChild.js"
+PSEOF
+export PATH="$STUBBIN:$PATH"
+"$GV" audit --json > "$SCRATCH/audit-zombie.json"
+grep -q '"worktree_processes"' "$SCRATCH/audit-zombie.json" || fail "audit --json missing the worktree_processes field"
+grep -q '"pid": *'"$ZOMBIE_PID" "$SCRATCH/audit-zombie.json" || fail "audit missing the done-task worktree process"
+grep -q '"ticket": *"task-001"' "$SCRATCH/audit-zombie.json" || fail "worktree process not attributed to its ticket"
+kill -0 "$ZOMBIE_PID" 2>/dev/null || fail "audit must not kill (pure read)"
+printf 'y\n' | "$GV" sweep > "$SCRATCH/sweep-zombie.out"
+grep -q "pid $ZOMBIE_PID terminated" "$SCRATCH/sweep-zombie.out" || fail "sweep did not SIGTERM the worktree process"
+kill -0 "$ZOMBIE_PID" 2>/dev/null && fail "worktree process survived confirmed sweep" || true
+export PATH="$REAL_PATH"
 
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null

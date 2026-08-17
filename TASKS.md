@@ -23,6 +23,20 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Worker reap kills the process tree by worktree path (grove-156,
+      2026-08-17): `tmux kill-window` only takes the pane's foreground
+      group — build/test children (jest-worker) daemonized, reparented to
+      launchd, and spun at 100% CPU for days after the task shipped. Both
+      teardown paths (`gv done` / `untrack --rm`) now SIGTERM every
+      process whose argv references the task's worktree path immediately
+      before worktree removal (2s wait, survivors reported, never
+      SIGKILL), and audit/sweep gained a `worktree_processes` class
+      (additive `--json` field, per-item confirmed SIGTERM in sweep) for
+      processes referencing a tracked worktree whose task is done or dir
+      is gone. Hard scoping: only tasks.json `worktree` paths — grove
+      created them, so ownership is by construction; never a generic
+      `.worktrees/` pattern. `orphan_processes` rows gained `rss_kb`.
+      Stale done-task claude processes (no path in argv) split to #157.
 - [x] `gv grab --brief "<text>"` (grove-146, 2026-07-29): ad-hoc operator
       instructions at dispatch, so process context (release-scope
       constraints, test-env guidance) no longer had to be written into

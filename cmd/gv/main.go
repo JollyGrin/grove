@@ -1600,6 +1600,13 @@ func cmdAudit(args []string) error {
 			fmt.Printf("    kill %d  (or confirm it via gv sweep)\n", p.PID)
 		}
 	}
+	if len(rep.WorktreeProcesses) > 0 {
+		fmt.Printf("\nWORKTREE PROCESSES (referencing a grove worktree whose task is done or dir is gone — report only, gv sweep offers the kill):\n")
+		for _, p := range rep.WorktreeProcesses {
+			fmt.Printf("  pid %-8d %-11s cpu %5.1f%%  rss %6.1f MB  elapsed %-10s %s\n",
+				p.PID, p.Ticket, p.CPUPct, float64(p.RSSKB)/1024, p.Elapsed, truncateLine(p.Args, 70))
+		}
+	}
 	if len(rep.StalePrompts) > 0 {
 		fmt.Printf("\n%d stale prompt file(s) for done tasks (gv sweep prunes them)\n", len(rep.StalePrompts))
 	}
@@ -2424,6 +2431,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}
+	killWorktreeProcesses(t)
 	if err := worktree.RemoveSafe(repo.Path, t.Worktree); err != nil {
 		if !force {
 			return fmt.Errorf("worktree remove: %w (dirty? retry with --force)", err)
@@ -2531,6 +2539,7 @@ func removeTaskArtifacts(cfg *config.Config, t *state.Task, rmRemote, force bool
 		_ = tmux.KillWindow(t.TmuxSession, t.TmuxWindow)
 		fmt.Println("→ killed tmux window")
 	}
+	killWorktreeProcesses(t)
 	if err := worktree.RemoveSafe(repo.Path, t.Worktree); err != nil {
 		if !force {
 			return fmt.Errorf("worktree remove: %w (retry with --force)", err)
@@ -2606,13 +2615,14 @@ func cmdSweep(args []string) error {
 
 	if *asJSON {
 		return emitJSON("report", struct {
-			Items           []audit.SweepOffer    `json:"items"`
-			OrphanProcesses []audit.OrphanProcess `json:"orphan_processes"`
-			StalePrompts    []string              `json:"stale_prompts"`
-		}{items, rep.OrphanProcesses, rep.StalePrompts})
+			Items             []audit.SweepOffer      `json:"items"`
+			OrphanProcesses   []audit.OrphanProcess   `json:"orphan_processes"`
+			WorktreeProcesses []audit.WorktreeProcess `json:"worktree_processes"`
+			StalePrompts      []string                `json:"stale_prompts"`
+		}{items, rep.OrphanProcesses, rep.WorktreeProcesses, rep.StalePrompts})
 	}
 
-	if len(items) == 0 && len(rep.OrphanProcesses) == 0 && len(rep.StalePrompts) == 0 {
+	if len(items) == 0 && len(rep.OrphanProcesses) == 0 && len(rep.WorktreeProcesses) == 0 && len(rep.StalePrompts) == 0 {
 		fmt.Println("nothing to sweep")
 		return nil
 	}
@@ -2628,6 +2638,10 @@ func cmdSweep(args []string) error {
 		for _, p := range rep.OrphanProcesses {
 			fmt.Printf("pid %d [orphan process] → kill (SIGTERM)  (cpu %.1f%%, up %s: %s)\n",
 				p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
+		}
+		for _, p := range rep.WorktreeProcesses {
+			fmt.Printf("pid %d [worktree process %s] → kill (SIGTERM)  (cpu %.1f%%, up %s: %s)\n",
+				p.PID, p.Ticket, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
 		}
 		fmt.Printf("%d stale prompt file(s) would be pruned\n", len(rep.StalePrompts))
 		return nil
@@ -2673,9 +2687,28 @@ func cmdSweep(args []string) error {
 	}
 
 	killed := 0
+	offered := map[int]bool{}
 	for _, p := range rep.OrphanProcesses {
+		offered[p.PID] = true
 		prompt := fmt.Sprintf("pid %d [orphan process] (cpu %.1f%%, up %s): %s — kill (SIGTERM)?",
 			p.PID, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
+		if !confirm(prompt) {
+			continue
+		}
+		if err := killOrphan(p.PID); err != nil {
+			fmt.Fprintf(os.Stderr, "  %v\n", err)
+			continue
+		}
+		killed++
+	}
+	for _, p := range rep.WorktreeProcesses {
+		// A pid can classify both ways (claude-shaped AND in a reapable
+		// worktree) — one offer is enough.
+		if offered[p.PID] {
+			continue
+		}
+		prompt := fmt.Sprintf("pid %d [worktree process %s] (cpu %.1f%%, up %s): %s — kill (SIGTERM)?",
+			p.PID, p.Ticket, p.CPUPct, p.Elapsed, truncateLine(p.Args, 60))
 		if !confirm(prompt) {
 			continue
 		}
@@ -2694,6 +2727,34 @@ func cmdSweep(args []string) error {
 	}
 	fmt.Printf("swept %d task(s), killed %d orphan process(es), pruned %d stale prompt file(s)\n", swept, killed, pruned)
 	return nil
+}
+
+// killWorktreeProcesses SIGTERMs every process whose argv references the
+// task's worktree path — build/test children daemonize out of the pane
+// and survive tmux kill-window (grove-156: jest-worker at 100% CPU for
+// days). Runs immediately before worktree removal in both teardown paths;
+// gv done / untrack --rm is itself the human's confirmation, so no
+// per-item prompt. Safe by construction: the path is grove-created and
+// unique to this task. Best-effort — a ps failure or a survivor never
+// blocks teardown (survivors are reported, never SIGKILLed).
+func killWorktreeProcesses(t *state.Task) {
+	if t.Worktree == "" {
+		return
+	}
+	psOut, err := exec.Command("ps", "-Ao", audit.PSFormat).Output()
+	if err != nil {
+		return
+	}
+	self := os.Getpid()
+	for _, p := range audit.DetectWorktreeProcesses(string(psOut), map[string]string{t.Worktree: t.Ticket}) {
+		if p.PID == self {
+			continue
+		}
+		fmt.Printf("→ killing pid %d still referencing the worktree: %s\n", p.PID, truncateLine(p.Args, 60))
+		if err := killOrphan(p.PID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+	}
 }
 
 // killOrphan SIGTERMs an orphaned claude/mcp process and waits briefly

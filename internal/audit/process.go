@@ -2,6 +2,7 @@ package audit
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -13,14 +14,32 @@ import (
 type OrphanProcess struct {
 	PID     int     `json:"pid"`
 	CPUPct  float64 `json:"cpu_pct"`
+	RSSKB   int64   `json:"rss_kb"`
 	Elapsed string  `json:"elapsed"`
 	Args    string  `json:"args"`
 }
 
-// process is one parsed row of `ps -Ao pid,ppid,pcpu,etime,args`.
+// WorktreeProcess is a process whose argv references a grove-created
+// worktree path — a build/test child that daemonized out of the worker's
+// pane (grove-156: jest-worker spinning for days after the task shipped).
+// Ownership is by construction: grove created the path and it is unique
+// per task, so anything referencing it belongs to that task. Report-only
+// here; killing is offered by sweep or done at reap.
+type WorktreeProcess struct {
+	PID      int     `json:"pid"`
+	CPUPct   float64 `json:"cpu_pct"`
+	RSSKB    int64   `json:"rss_kb"`
+	Elapsed  string  `json:"elapsed"`
+	Args     string  `json:"args"`
+	Ticket   string  `json:"ticket"`
+	Worktree string  `json:"worktree"`
+}
+
+// process is one parsed row of `ps -Ao pid,ppid,pcpu,rss,etime,args`.
 type process struct {
 	pid, ppid int
 	cpuPct    float64
+	rssKB     int64
 	elapsed   string
 	args      string
 }
@@ -34,7 +53,7 @@ var (
 	// grove worker gone orphan — so they're excluded outright regardless
 	// of any claude/mcp text elsewhere in argv.
 	appBundleRe = regexp.MustCompile(`(?i)\.app/Contents/`)
-	psLineRe    = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.*)$`)
+	psLineRe    = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.*)$`)
 )
 
 // DetectOrphanProcesses parses raw `ps` and `tmux list-panes` output and
@@ -47,7 +66,7 @@ var (
 // desktop app) are excluded outright: they're launchd-parented by design,
 // not a grove worker gone orphan.
 //
-// psOutput: lines of `ps -Ao pid,ppid,pcpu,etime,args` (a non-matching
+// psOutput: lines of `ps -Ao pid,ppid,pcpu,rss,etime,args` (a non-matching
 // header line, if present, is skipped).
 // panePIDsOutput: lines of `tmux list-panes -a -F '#{pane_pid}'`.
 func DetectOrphanProcesses(psOutput, panePIDsOutput string) []OrphanProcess {
@@ -59,9 +78,77 @@ func DetectOrphanProcesses(psOutput, panePIDsOutput string) []OrphanProcess {
 		if p.ppid != 1 || live[p.pid] || !isSuspectArgs(p.args) {
 			continue
 		}
-		orphans = append(orphans, OrphanProcess{PID: p.pid, CPUPct: p.cpuPct, Elapsed: p.elapsed, Args: p.args})
+		orphans = append(orphans, OrphanProcess{PID: p.pid, CPUPct: p.cpuPct, RSSKB: p.rssKB, Elapsed: p.elapsed, Args: p.args})
 	}
 	return orphans
+}
+
+// DetectWorktreeProcesses parses raw `ps` output and returns every process
+// whose argv references one of the given worktree paths. The map is
+// worktree path → ticket, and the caller decides which paths are fair
+// game — the hard scoping rule (grove-156) is that only paths grove
+// itself created (the `worktree` field of tasks.json rows) ever go in
+// here; never a generic `.worktrees/` pattern. A path match requires a
+// boundary after it (end, '/', or a non-filename byte) so the worktree
+// of grove-15 never claims a process working in grove-156. Results are
+// sorted by pid.
+//
+// psOutput: lines of `ps -Ao pid,ppid,pcpu,rss,etime,args` (a
+// non-matching header line, if present, is skipped).
+func DetectWorktreeProcesses(psOutput string, worktrees map[string]string) []WorktreeProcess {
+	paths := make([]string, 0, len(worktrees))
+	for p := range worktrees {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+
+	var out []WorktreeProcess
+	for _, p := range parsePS(psOutput) {
+		for _, path := range paths {
+			if !argsReferencePath(p.args, path) {
+				continue
+			}
+			out = append(out, WorktreeProcess{
+				PID: p.pid, CPUPct: p.cpuPct, RSSKB: p.rssKB, Elapsed: p.elapsed,
+				Args: p.args, Ticket: worktrees[path], Worktree: path,
+			})
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
+	return out
+}
+
+// argsReferencePath reports whether args contains path as a whole path —
+// followed by end-of-string, a '/', or any byte that cannot extend a
+// filename, so a path that is a string prefix of a sibling directory's
+// path does not match it.
+func argsReferencePath(args, path string) bool {
+	for i := 0; ; {
+		j := strings.Index(args[i:], path)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(path)
+		if end == len(args) || !isFilenameByte(args[end]) {
+			return true
+		}
+		i += j + 1
+	}
+}
+
+// isFilenameByte reports whether c can extend a path component: if the
+// byte right after a matched worktree path is one of these, the argv
+// actually references a longer sibling path that merely shares the
+// prefix (e.g. …/grove-15 vs …/grove-156-fix).
+func isFilenameByte(c byte) bool {
+	return c == '-' || c == '_' || c == '.' || c == '~' || c == '+' || c == '@' ||
+		('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
 func isSuspectArgs(args string) bool {
@@ -100,7 +187,8 @@ func parsePS(out string) []process {
 		}
 		ppid, _ := strconv.Atoi(m[2])
 		cpu, _ := strconv.ParseFloat(m[3], 64)
-		procs = append(procs, process{pid: pid, ppid: ppid, cpuPct: cpu, elapsed: m[4], args: m[5]})
+		rss, _ := strconv.ParseInt(m[4], 10, 64)
+		procs = append(procs, process{pid: pid, ppid: ppid, cpuPct: cpu, rssKB: rss, elapsed: m[5], args: m[6]})
 	}
 	return procs
 }
