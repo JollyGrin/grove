@@ -8,6 +8,16 @@
 <meta property="og:title" content="grove — feed it tickets, harvest PRs" />
 <meta property="og:description" content="A repo-agnostic orchestrator for autonomous Claude Code sessions. Drop it into your projects folder, hook it into your tasks, feed it tickets." />
 <meta property="og:type" content="website" />
+<meta property="og:url" content="https://jollygrin.github.io/grove/" />
+<meta property="og:image" content="https://jollygrin.github.io/grove/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="grove — feed it tickets, harvest PRs. A terminal showing gv grab turning a GitHub issue into a ready pull request." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="grove — feed it tickets, harvest PRs" />
+<meta name="twitter:description" content="Every ticket becomes an autonomous Claude Code worker — its own git worktree, tmux window, and pull request." />
+<meta name="twitter:image" content="https://jollygrin.github.io/grove/og-image.png" />
+<meta name="theme-color" content="#0a0f0b" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -692,15 +702,14 @@ footer {
         <div>
           <div class="beat-num">iii.</div>
           <h3>Hook into your tasks</h3>
-          <p>Point it at wherever your tickets already live — Linear, GitHub Issues,
-          or plain markdown files in the repo. Grove <em>reads</em> tickets;
+          <p>Point it at wherever your tickets already live — GitHub Issues by
+          default, Linear or plain markdown files as adapters. Grove <em>reads</em> tickets;
           it never closes them. That's your job, and it stays your job.</p>
         </div>
         <div class="mini-term"><span class="dd"># .grove/config.yaml</span>
 <span class="g">provider</span>:
-  <span class="a">kind</span>: linear        <span class="dd"># or github, or markdown</span>
-<span class="g">linear</span>:
-  <span class="a">team</span>: DEV</div>
+  <span class="a">kind</span>: github        <span class="dd"># or linear, or markdown</span>
+<span class="dd"># tickets are your issues: webapp-14 = issue #14</span></div>
       </div>
     </div>
   </div>
@@ -889,6 +898,12 @@ footer {
         burn tokens and what a <span class="gg">merged PR actually costs</span>.</p>
       </div>
     </div>
+
+    <p class="review-note rv"><strong>In the works — plugins.</strong> Grove's
+    <code>--json</code> output and append-only <code>events.jsonl</code> are a stable
+    contract, so new surfaces grow outside the core: a reMarkable e-ink fleet
+    dashboard already builds against it, and your Notion board or Discord bot
+    could be next.</p>
   </div>
 </section>
 
@@ -909,9 +924,22 @@ footer {
 <span class="p">$</span> <span class="g">gv</span> doctor                          <span class="dd"># preflight: tmux, gh, claude</span>
 <span class="p">$</span> <span class="g">cd</span> ~/projects/your-app <span class="d">&amp;&amp;</span> <span class="g">gv</span> init  <span class="dd"># 🌱 take root</span>
 <span class="p">$</span> <span class="g">gv</span>                                 <span class="dd"># open the cockpit</span>
+<span class="p">$</span> <span class="g">gv</span> update                          <span class="dd"># any time later: newest release, in place</span>
 
 <span class="dd"># or from source (Go 1.26+):</span>
 <span class="p">$</span> <span class="g">go</span> install github.com/JollyGrin/grove/cmd/gv@latest</div>
+    </div>
+
+    <div class="term rv" style="margin-top: 22px;">
+      <div class="term-bar">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="term-title">your first harvest — tickets are your GitHub issues</span>
+      </div>
+      <div class="term-body"><span class="p">$</span> <span class="g">gh</span> issue create --title <span class="a">"empty cart shows broken illustration"</span>
+<span class="d">→ created issue #14</span>
+<span class="p">$</span> <span class="g">gv</span> grab your-app-14 --repo your-app  <span class="dd"># worktree + worker + kickoff prompt</span>
+<span class="p">$</span> <span class="g">gv</span> ls                                <span class="dd"># … a coffee later:</span>
+<span class="d">  your-app-14</span>  <span class="g">✓ PR ready</span> <span class="dd">· CI green — review &amp; merge</span></div>
     </div>
 
     <div class="install-grid">

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>grove og image</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg:            #0a0f0b;
+  --bg-deep:       #070b08;
+  --surface:       #101812;
+  --surface-alt:   #0d130e;
+  --border:        #1c2a1e;
+  --border-bright: #2c4030;
+  --text:          #d6e2d6;
+  --text-dim:      #8fa392;
+  --text-dimmer:   #5c6f5e;
+  --green:         #7fbf7f;
+  --green-bright:  #a8e6a3;
+  --green-deep:    #4a7c59;
+  --amber:         #e0b458;
+  --ink:           #eef4ea;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --serif: "Fraunces", Georgia, serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1200px; height: 630px; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  position: relative;
+  -webkit-font-smoothing: antialiased;
+}
+/* grain */
+body::after {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+.glow {
+  position: absolute; left: 50%; top: -220px; transform: translateX(-50%);
+  width: 1000px; height: 560px;
+  background: radial-gradient(ellipse at center, rgba(127,191,127,0.10), transparent 65%);
+}
+.roots { position: absolute; inset: 0; overflow: hidden; }
+.roots svg { position: absolute; left: 50%; top: -40px; transform: translateX(-50%); width: 1400px; height: 700px; }
+.roots path { fill: none; stroke: var(--border-bright); stroke-width: 1.4; opacity: 0.55; }
+
+.stage {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center;
+  padding-bottom: 26px;
+}
+.brand {
+  display: flex; align-items: baseline; gap: 12px;
+  font-size: 26px; font-weight: 700;
+  margin-bottom: 30px;
+}
+.brand .name { color: var(--green-bright); }
+h1 {
+  font-family: var(--serif); font-weight: 600;
+  color: var(--ink);
+  font-size: 84px; line-height: 1.04;
+  letter-spacing: -0.01em;
+  margin-bottom: 30px;
+}
+h1 em { font-style: italic; color: var(--green-bright); }
+.sub {
+  color: var(--text-dim);
+  font-size: 22px; line-height: 1.55;
+  max-width: 760px;
+  margin-bottom: 40px;
+}
+.term {
+  background: var(--surface-alt);
+  border: 1px solid var(--border-bright);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px -24px rgba(0,0,0,0.7), 0 0 0 1px rgba(168,230,163,0.05);
+  text-align: left;
+  width: 700px;
+}
+.term-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.term-bar .dot { width: 12px; height: 12px; border-radius: 50%; }
+.dot-r { background: #4a3530; } .dot-y { background: #4a4230; } .dot-g { background: #2e4a34; }
+.term-body {
+  padding: 20px 24px;
+  font-size: 19px;
+  line-height: 1.9;
+  white-space: pre;
+}
+.p  { color: var(--green); }
+.g  { color: var(--green-bright); }
+.a  { color: var(--amber); }
+.d  { color: var(--text-dim); }
+.dd { color: var(--text-dimmer); }
+.footer {
+  position: absolute; left: 0; right: 0; bottom: 26px;
+  text-align: center;
+  font-size: 17px; color: var(--text-dimmer);
+}
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="roots">
+  <svg viewBox="0 0 1400 700">
+    <path d="M700,80 C700,220 560,260 430,340 C310,415 280,520 240,660" />
+    <path d="M700,80 C700,240 640,320 610,430 C585,520 600,600 570,700" />
+    <path d="M700,80 C702,230 770,300 820,400 C870,500 860,590 890,690" />
+    <path d="M700,80 C705,200 850,250 970,330 C1080,405 1110,520 1150,650" />
+    <path d="M700,80 C698,180 520,200 400,240 C270,285 200,360 130,420" />
+  </svg>
+</div>
+
+<div class="stage">
+  <div class="brand"><span>🌳</span><span class="name">grove</span></div>
+  <h1>Feed it <em>tickets.</em> Harvest <em>PRs.</em></h1>
+  <p class="sub">Every ticket becomes an autonomous Claude Code worker —
+its own git worktree, tmux window, and pull request.</p>
+  <div class="term">
+    <div class="term-bar">
+      <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+    </div>
+    <div class="term-body"><span class="p">$</span> <span class="g">gv grab</span> webapp-14 <span class="d">--repo webapp</span>
+<span class="d">  webapp-14</span>  <span class="g">✓ PR ready</span> <span class="dd">· CI green — review &amp; merge</span></div>
+  </div>
+</div>
+
+<div class="footer">jollygrin.github.io/grove</div>
+</body>
+</html>
