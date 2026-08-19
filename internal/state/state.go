@@ -4,6 +4,7 @@
 package state
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -119,7 +120,11 @@ func Append(stateDir string, ev Event) error {
 }
 
 // Load folds events.jsonl into the task map and refreshes the derived
-// tasks.json view.
+// tasks.json view. A complete-but-malformed line is skipped and folding
+// continues, matching Folder.consume — a crash-torn line buried mid-file
+// (not just at the end) must not silently drop every event after it. This
+// is a deliberate divergence from ovs's break-on-error Load; see
+// docs/seed-manifest.md.
 func Load(stateDir string) (map[string]*Task, error) {
 	f, err := os.Open(eventsPath(stateDir))
 	if err != nil {
@@ -131,14 +136,18 @@ func Load(stateDir string) (map[string]*Task, error) {
 	defer f.Close()
 
 	tasks := map[string]*Task{}
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		var ev Event
-		if err := dec.Decode(&ev); err != nil {
-			// A torn write can corrupt at most the final line; stop folding there.
+	r := bufio.NewReader(f)
+	for {
+		line, readErr := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var ev Event
+			if json.Unmarshal(line, &ev) == nil {
+				fold(tasks, ev)
+			}
+		}
+		if readErr != nil {
 			break
 		}
-		fold(tasks, ev)
 	}
 
 	if view, err := json.MarshalIndent(tasksSlice(tasks), "", "  "); err == nil {

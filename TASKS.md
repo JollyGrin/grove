@@ -34,6 +34,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       function change bounds every caller at once. Accepted trade: a call
       that would've succeeded past 15s now fails fast instead — error
       display honesty is #124, not this ticket.
+- [x] `state.Load` skips a malformed events.jsonl line and keeps folding
+      instead of stopping at the first decode error (grove-166,
+      2026-08-20): one crash-torn line buried mid-file was silently
+      dropping every later event for every CLI command, and the
+      `tasks.json` rewrite that follows `Load` persisted the truncated
+      fold — `gv ls`/`audit`/`sweep` lost tasks created after the torn
+      line until the log was hand-repaired. Now matches `Folder.consume`'s
+      skip-and-continue behavior exactly (deliberate divergence from the
+      ovs-byte-comparable copy, recorded in docs/seed-manifest.md).
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N
