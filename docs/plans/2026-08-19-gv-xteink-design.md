@@ -194,6 +194,70 @@ cache — no settings-UI surgery.
 **This fork is of CrossPoint, not grove.** Grove has a plugin system;
 CrossPoint doesn't, so the fork *is* the plugin shim on that side.
 
+## Development sandbox (no device required)
+
+Dean's X4 Pro hasn't arrived; nothing blocks on it. Each layer has a
+hardware-free dev loop, and they compose end to end:
+
+1. **Sidecar** — pure grove-plugin work: dummy-data pattern (scratch
+   `HOME`, `GROVE_STATE_DIR` override, repo `claude:` stubbed to
+   `echo`), copy `e2e/plugin.sh`. Seed fake fleets, assert baked
+   screens. No device concepts anywhere.
+2. **Screen protocol** — a throwaway local renderer (single HTML page
+   drawing screen JSON at 480×800, 1-bit) as the first "device". The
+   protocol's JSON fixtures live in gv-xteink and double as conformance
+   tests for both sides.
+3. **Firmware** — the **official
+   [crosspoint-simulator](https://github.com/crosspoint-reader/crosspoint-simulator)**:
+   compiles the firmware natively and renders the e-ink display in an
+   SDL2 window (macOS supported; `pio run -e simulator -t run_simulator`
+   in forks like CrossMux). GroveActivity develops against
+   `localhost` sidecar in the simulator — full pipeline (sidecar →
+   protocol → real activity render) with zero flashes.
+   *Spike:* verify the simulator shims the ESP HTTP client (its deps
+   include curl, suggesting yes); if not, put the fetch behind a
+   two-line interface with a native curl implementation.
+4. **Hardware** — only the last mile: real refresh behavior, ghosting,
+   touch feel, battery. By the time the device arrives, everything
+   above it is already tested.
+
+## Flashing & recovery (bricking safety)
+
+Short version: the X4 Pro is about as unbrickable as embedded devices
+get, and factory restore is a first-class supported flow.
+
+- **Why hard-bricking is ~impossible:** the ESP32-C3's first-stage
+  bootloader lives in mask ROM — it cannot be overwritten by any flash
+  write. As long as USB download mode is reachable (it's entered via
+  the boot strap pin, not firmware), the device can always be
+  re-flashed with esptool or the web flasher, no matter how broken the
+  flash contents are. Recovery risk is hardware damage, not bad code.
+- **Day-0 golden image (the one non-negotiable step):** before flashing
+  anything, take a **full flash backup** — the official web flasher at
+  crosspointreader.com/#flash-tools offers this in-browser and produces
+  a 16 MB `.bin` that is a byte-exact copy of the factory state
+  (equivalently: `esptool read_flash 0 ALL factory-x4pro.bin`). Store
+  it in two places. Factory restore = the flasher's "Write full flash
+  from file" with that image — exact prior state, including stock
+  firmware and activation.
+- **Stock-firmware fallback:** independent of the golden image,
+  official CrossPoint releases (and Xteink stock, on units bought from
+  the official site — they ship unlocked) are flashable from the same
+  web tool or via esptool with the merged release binary. So there are
+  two restore paths: byte-exact personal backup, and clean official
+  images.
+- **Dev loop flashing:** day-to-day iteration is `pio run -t upload` —
+  it rewrites only the app partition; bootloader and partition table
+  are rarely touched. Books/config live on the SD card, untouched by
+  flash cycles. CrossPoint's OTA (GitHub releases) covers plain
+  upstream updates, not dev builds.
+- **X4 Pro-specific checks before first flash:** confirm the web
+  flasher lists the X4 Pro (touch) variant, and verify the actual flash
+  size with `esptool flash_id` before trusting the 16 MB assumption —
+  the Pro is new hardware and guides above were written for X3/X4.
+- gv-xteink's README carries the recovery runbook: golden-image
+  location, restore steps, download-mode button combo.
+
 ## Staying current with upstream CrossPoint
 
 Because the firmware is a dumb renderer behind a stable protocol, it
@@ -241,3 +305,9 @@ cadences; gv-xteink pins a firmware tag.
 - Does the X4 Pro CrossPoint build expose partial-refresh control to
   activities, or is refresh policy global? (Determines how live the
   board can feel; needs a spike on real hardware.)
+- Does crosspoint-simulator shim the ESP HTTP client so GroveActivity
+  can hit a localhost sidecar? (Spike; fallback is a small fetch
+  interface with a native curl impl.)
+- Which simulator base: official crosspoint-simulator vs the CrossMux
+  fork's in-tree `-e simulator` env — whichever tracks upstream with
+  less glue.
