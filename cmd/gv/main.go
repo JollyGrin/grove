@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -45,8 +46,13 @@ import (
 	"golang.org/x/term"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<tag>"
+// (see .github/workflows/release.yml); a plain `go build` leaves it "dev".
+var version = "dev"
+
 const usage = `gv — grove
 
+  gv version | gv --version                    print the build version
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)
@@ -196,6 +202,9 @@ func main() {
 		return
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "--version" {
+		cmd = "version"
+	}
 
 	// Hook receiver: always exit 0, never break a session.
 	if cmd == "hook" {
@@ -209,6 +218,8 @@ func main() {
 
 	var err error
 	switch cmd {
+	case "version":
+		cmdVersion()
 	case "init":
 		err = cmdInit(args)
 	case "grab":
@@ -274,6 +285,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gv:", err)
 		os.Exit(1)
 	}
+}
+
+// cmdVersion prints the stamped build version (`gv version` / `gv --version`).
+func cmdVersion() {
+	fmt.Printf("gv %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 }
 
 // cmdDashboard runs the TUI. Attach is handled after the tea loop exits
