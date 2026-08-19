@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # v0.1.0, v0.2.1, …
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -ldflags="-s -w" -o "gv_${GOOS}_${GOARCH}" ./cmd/gv
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gv_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: gv_*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: binaries/*
+          generate_release_notes: true

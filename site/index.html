@@ -514,17 +514,6 @@ nav {
 .feat p .gg { color: var(--green-bright); }
 
 /* ───────────────────────── install ───────────────────────── */
-.install-note {
-  display: flex; gap: 12px; align-items: baseline;
-  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
-  background: color-mix(in srgb, var(--amber) 6%, var(--surface-alt));
-  border-radius: 10px;
-  padding: 14px 18px;
-  font-size: 12.8px; color: var(--text-dim);
-  margin: 26px 0 40px;
-}
-.install-note .sig { color: var(--amber); }
-
 .install-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 22px; margin-top: 44px; align-items: start; }
 .prereqs { display: grid; gap: 12px; }
 .prereq {
@@ -911,23 +900,18 @@ footer {
       <h2>Install<em>.</em></h2>
     </div>
 
-    <div class="install-note rv">
-      <span class="sig">⚠</span>
-      <span><strong style="color: var(--amber); font-weight: 500;">Private beta.</strong>
-      The repo is private while grove finishes its parity gate. Homebrew tap and prebuilt
-      binaries land with the public release — for now, access is by invitation.</span>
-    </div>
-
-    <div class="term rv">
+    <div class="term rv" style="margin-top: 44px;">
       <div class="term-bar">
         <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
-        <span class="term-title">from source (Go 1.24+)</span>
+        <span class="term-title">one line — prebuilt binaries, macOS &amp; Linux</span>
       </div>
-      <div class="term-body"><span class="p">$</span> <span class="g">git</span> clone https://github.com/JollyGrin/grove <span class="d">&amp;&amp;</span> <span class="g">cd</span> grove
-<span class="p">$</span> <span class="g">go</span> install ./cmd/gv                <span class="dd"># builds ~/go/bin/gv</span>
+      <div class="term-body"><span class="p">$</span> <span class="g">curl</span> -fsSL https://raw.githubusercontent.com/JollyGrin/grove/main/install.sh <span class="d">|</span> <span class="g">bash</span>
 <span class="p">$</span> <span class="g">gv</span> doctor                          <span class="dd"># preflight: tmux, gh, claude</span>
 <span class="p">$</span> <span class="g">cd</span> ~/projects/your-app <span class="d">&amp;&amp;</span> <span class="g">gv</span> init  <span class="dd"># 🌱 take root</span>
-<span class="p">$</span> <span class="g">gv</span>                                 <span class="dd"># open the cockpit</span></div>
+<span class="p">$</span> <span class="g">gv</span>                                 <span class="dd"># open the cockpit</span>
+
+<span class="dd"># or from source (Go 1.26+):</span>
+<span class="p">$</span> <span class="g">go</span> install github.com/JollyGrin/grove/cmd/gv@latest</div>
     </div>
 
     <div class="install-grid">
@@ -949,7 +933,7 @@ footer {
           <div class="prereq"><span class="star">✳</span><div><div class="pname">tmux</div><div class="pwhy">cockpit + every worker live here</div></div></div>
           <div class="prereq"><span class="star">✳</span><div><div class="pname">gh</div><div class="pwhy">PR &amp; CI state — merges checked via GitHub, never git ancestry</div></div></div>
           <div class="prereq"><span class="star">✳</span><div><div class="pname">claude</div><div class="pwhy">Claude Code CLI, logged in</div></div></div>
-          <div class="prereq"><span class="star">✳</span><div><div class="pname">Go 1.24+</div><div class="pwhy">to build from source</div></div></div>
+          <div class="prereq"><span class="star">✳</span><div><div class="pname">Go 1.26+</div><div class="pwhy">only if building from source — the installer ships prebuilt binaries</div></div></div>
         </div>
       </div>
     </div>
