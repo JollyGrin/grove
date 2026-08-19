@@ -23,6 +23,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] `gv update` — self-update from the latest GitHub release (grove-160,
+      2026-08-19): fetches `releases/latest` unauthenticated, compares the
+      tag to the stamped version, prints `gv vX → vY` and confirms y/N
+      (`--yes` skips; `dev` builds refused, `--force` overrides). Replace
+      is atomic: temp file in the target's own directory → chmod 0755 →
+      rename over `os.Executable()` (symlinks resolved); any failure
+      leaves the old binary byte-identical; verified by exec'ing
+      `<path> version`. Decision logic in `internal/update` (injectable
+      API base, httptest integration incl. the test binary updating
+      itself). Later: checksums.txt verification, doctor "update
+      available" hint.
 - [x] `gv version` / `gv --version` stamped at release build (grove-159,
       2026-08-19): `main.version` (ldflags `-X main.version=<tag>`, default
       `"dev"`) printed as `gv <version> (<GOOS>/<GOARCH>)`; release.yml's

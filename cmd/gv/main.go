@@ -37,6 +37,7 @@ import (
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/tui"
+	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/wizard"
 	"github.com/JollyGrin/grove/internal/workspace"
 	"github.com/JollyGrin/grove/internal/worktree"
@@ -53,6 +54,7 @@ var version = "dev"
 const usage = `gv — grove
 
   gv version | gv --version                    print the build version
+  gv update [--yes] [--force]                 self-update from the latest GitHub release
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)
@@ -220,6 +222,8 @@ func main() {
 	switch cmd {
 	case "version":
 		cmdVersion()
+	case "update":
+		err = cmdUpdate(args)
 	case "init":
 		err = cmdInit(args)
 	case "grab":
@@ -290,6 +294,28 @@ func main() {
 // cmdVersion prints the stamped build version (`gv version` / `gv --version`).
 func cmdVersion() {
 	fmt.Printf("gv %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+}
+
+// cmdUpdate replaces the running binary with the latest GitHub release
+// (grove-160). Propose-then-dispose: prints old → new and asks before
+// touching anything; --yes skips the prompt, --force allows replacing a
+// dev (source) build. All decision logic lives in internal/update.
+func cmdUpdate(args []string) error {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	yes := fs.Bool("yes", false, "skip the confirmation prompt")
+	force := fs.Bool("force", false, "replace even a dev (source) build")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	opts := update.Options{Current: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Force: *force}
+	if !*yes {
+		sc := bufio.NewScanner(os.Stdin)
+		opts.Confirm = func(_, _ string) bool {
+			fmt.Print("replace the installed binary? [y/N] ")
+			return sc.Scan() && strings.ToLower(strings.TrimSpace(sc.Text())) == "y"
+		}
+	}
+	return update.Run(opts)
 }
 
 // cmdDashboard runs the TUI. Attach is handled after the tea loop exits
