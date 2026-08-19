@@ -12,16 +12,21 @@ the task backend.
 
 ## 1. Install
 
-Grove is a Go CLI. Clone the repo and install the binary:
+One line — prebuilt binaries for macOS and Linux (amd64/arm64):
 
 ```sh
-git clone https://github.com/JollyGrin/grove.git
-cd grove
-go install ./cmd/gv      # builds ~/go/bin/gv
+curl -fsSL https://raw.githubusercontent.com/JollyGrin/grove/main/install.sh | bash
 ```
 
-Make sure `~/go/bin` is on your `PATH` (add `export PATH="$HOME/go/bin:$PATH"`
-to your `~/.zshrc` if `gv help` doesn't resolve).
+This installs `~/.local/bin/gv`; the script tells you if that directory
+isn't on your `PATH` yet. Later, `gv update` pulls the latest release in
+place — no re-running the installer.
+
+Or build from source (Go 1.26+):
+
+```sh
+go install github.com/JollyGrin/grove/cmd/gv@latest   # builds ~/go/bin/gv
+```
 
 You'll also want:
 

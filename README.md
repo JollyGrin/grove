@@ -31,6 +31,27 @@ orchestrator field-tested on The Grid's real ticket flow. Team-specific
 setups (like the Grid's) become **packs** — versioned overlays of
 conventions, checks, and prompts — instead of hardcoding.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JollyGrin/grove/main/install.sh | bash
+```
+
+Prebuilt binaries for macOS and Linux (amd64/arm64), installed to
+`~/.local/bin/gv`. Every merge to main auto-releases a patch version;
+update any time with `gv update`. Or build from source:
+`go install github.com/JollyGrin/grove/cmd/gv@latest` (Go 1.26+).
+
+Then:
+
+```sh
+gv doctor                            # preflight: tmux, gh, claude
+cd ~/projects/your-app && gv init    # 🌱 take root
+gv                                   # open the cockpit
+```
+
+Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+
 ## Status: live daily driver, dogfooding itself (2026-07-18)
 
 The namespace split from overstory is done (P0.0, 2026-07-04) — the binary
