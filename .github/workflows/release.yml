@@ -75,8 +75,9 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
+          VERSION: ${{ needs.version.outputs.tag }}
         run: |
-          go build -trimpath -ldflags="-s -w" -o "gv_${GOOS}_${GOARCH}" ./cmd/gv
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "gv_${GOOS}_${GOARCH}" ./cmd/gv
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

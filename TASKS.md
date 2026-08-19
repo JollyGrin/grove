@@ -23,6 +23,11 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] `gv version` / `gv --version` stamped at release build (grove-159,
+      2026-08-19): `main.version` (ldflags `-X main.version=<tag>`, default
+      `"dev"`) printed as `gv <version> (<GOOS>/<GOARCH>)`; release.yml's
+      build job now takes the version job's computed tag as `VERSION` env
+      and stamps it in. Prerequisite for `gv update`.
 - [x] Worker reap kills the process tree by worktree path (grove-156,
       2026-08-17): `tmux kill-window` only takes the pane's foreground
       group — build/test children (jest-worker) daemonized, reparented to
