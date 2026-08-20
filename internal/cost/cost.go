@@ -323,14 +323,30 @@ func (c *Cache) ForTask(worktreePath string) (Totals, error) {
 }
 
 // UsageForTask returns the deduped usage entries behind ForTask — the
-// timestamped form the spend chart buckets.
+// timestamped form the spend chart buckets. Per-task callers (gv audit's
+// goroutines, gv cost) use this form; it never evicts anything.
 func (c *Cache) UsageForTask(worktreePath string) ([]transcript.UsageEntry, error) {
+	return c.usageForTask(worktreePath, nil)
+}
+
+// UsageForTaskCollect is UsageForTask plus sweep bookkeeping: every session
+// file discovered for the worktree is added to seen. A full-fleet sweep
+// calls this once per task, then Retain(seen) once, so the cache only holds
+// paths the current fleet can still ask about.
+func (c *Cache) UsageForTaskCollect(worktreePath string, seen map[string]struct{}) ([]transcript.UsageEntry, error) {
+	return c.usageForTask(worktreePath, seen)
+}
+
+func (c *Cache) usageForTask(worktreePath string, seen map[string]struct{}) ([]transcript.UsageEntry, error) {
 	files, err := transcript.SessionFiles(worktreePath)
 	if err != nil {
 		return nil, err
 	}
 	var all []transcript.UsageEntry
 	for _, path := range files {
+		if seen != nil {
+			seen[path] = struct{}{}
+		}
 		entries, err := c.entriesFor(path)
 		if err != nil {
 			continue // unreadable file degrades that file, not the ticket
@@ -338,6 +354,28 @@ func (c *Cache) UsageForTask(worktreePath string) ([]transcript.UsageEntry, erro
 		all = append(all, entries...)
 	}
 	return Dedup(all), nil
+}
+
+// Retain drops every cached entry whose path is not in keep — the eviction
+// half of the sweep contract. Without it, transcripts of done/untracked
+// tickets (and files removed by Claude's ~30-day pruning) stay cached for
+// the life of the cockpit process. Call it exactly once per full-fleet
+// sweep, with the union of paths that sweep touched. Per-task callers must
+// never call it: each sees a single task's files, so retaining there would
+// evict every sibling and re-parse the whole fleet on the next pass.
+func (c *Cache) Retain(keep map[string]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.byFile {
+		if _, ok := keep[key.path]; !ok {
+			delete(c.byFile, key)
+		}
+	}
+	for path := range c.latest {
+		if _, ok := keep[path]; !ok {
+			delete(c.latest, path)
+		}
+	}
 }
 
 func (c *Cache) entriesFor(path string) ([]transcript.UsageEntry, error) {
