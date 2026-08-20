@@ -405,6 +405,165 @@ func SetPaneProfile(pane, profile string) error {
 	return err
 }
 
+// MarkDashPane tags a pane as the cockpit's dashboard in a pane USER OPTION
+// (@grove_dash) — the SetPaneProfile mechanism: a pane title would be
+// clobbered by the foreground program's own OSC title writes, and
+// pane_current_command can't answer "is the dash gone?" (a quit dash may
+// leave a plain shell pane behind, or no pane at all). The tag is what lets a
+// later bare `gv` (openCockpit's attach path) tell a live cockpit from one
+// whose dash quit (grove-163).
+func MarkDashPane(pane string) error {
+	_, err := run("set-option", "-p", "-t", pane, "@grove_dash", "1")
+	return err
+}
+
+// DashStatus classifies a cockpit window's dashboard pane. A quit dash has
+// TWO shapes (verified live 2026-08-20): `q` returns the pane to its shell
+// (pane and tag survive, dash process gone — DashIdle), and exiting that
+// shell (or kill-pane) removes the pane and its tag entirely (DashMissing).
+// Each state maps to a different repair, so a bool can't carry this.
+type DashStatus int
+
+const (
+	// DashLive — a pane is running the dash binary; nothing to repair.
+	DashLive DashStatus = iota
+	// DashIdle — the tagged dash pane survives but sits at a bare shell
+	// (the TUI was quit with q). Repair: re-type the dash command into
+	// that same pane — no split, no re-tile, every pane id unchanged.
+	DashIdle
+	// DashMissing — no tagged pane and nothing running the dash (the pane
+	// was killed or its shell exited). Repair: RespawnDash.
+	DashMissing
+	// DashUnknown — the tagged pane runs something that is neither the
+	// dash nor a bare shell (the operator repurposed it), or the window
+	// couldn't be listed. Typing into it or splitting a duplicate could
+	// both be wrong — leave the window alone.
+	DashUnknown
+)
+
+// DashPane classifies windowID's dash pane and returns its id ("%N") where
+// one is identifiable ("" for DashMissing/list failure). The window is
+// targeted by its immutable "@N" id and panes resolve to "%N" ids
+// (grove-116).
+func DashPane(windowID string) (string, DashStatus) {
+	out, err := run("list-panes", "-t", windowID, "-F",
+		"#{pane_id}\t#{@grove_dash}\t#{pane_current_command}")
+	if err != nil {
+		return "", DashUnknown
+	}
+	return classifyDash(out)
+}
+
+// classifyDash is DashPane's pure classifier, split from the exec so the
+// rules are testable without a tmux server. Liveness is a gv-ish
+// pane_current_command (the dash binary's basename — "gv", or a throwaway
+// "gv-<ticket>") on ANY pane, tagged or not: the untagged match is the
+// MIGRATION path — a cockpit built before grove-163 has a live dash but no
+// tag, and without it bare `gv` would stack a second dash onto it. The
+// @grove_dash tag then tells a quit-to-shell dash pane (DashIdle, reusable)
+// apart from a fully gone one (DashMissing).
+func classifyDash(out string) (string, DashStatus) {
+	taggedID, taggedCmd := "", ""
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if strings.HasPrefix(parts[2], "gv") {
+			return parts[0], DashLive
+		}
+		if parts[1] != "" && taggedID == "" {
+			taggedID, taggedCmd = parts[0], parts[2]
+		}
+	}
+	if taggedID == "" {
+		return "", DashMissing
+	}
+	if isShell(taggedCmd) {
+		return taggedID, DashIdle
+	}
+	return taggedID, DashUnknown
+}
+
+// isShell reports whether a pane_current_command is a bare interactive
+// shell — the state a quit dash leaves its pane in. Login-shell "-" prefix
+// tolerated.
+func isShell(cmd string) bool {
+	switch strings.TrimPrefix(cmd, "-") {
+	case "zsh", "bash", "sh", "fish", "ksh", "tcsh", "csh", "dash", "nu":
+		return true
+	}
+	return false
+}
+
+// RespawnDash rebuilds a cockpit window's missing dashboard pane (grove-163):
+// quitting the dash TUI closes its pane, but the session — and its
+// @grove_cockpit ready mark — survive, so the next bare `gv` would attach
+// into a window of orchestrator chats only. Splits a fresh pane BEFORE the
+// window's first pane (-b, so the dash reclaims the leftmost/main slot after
+// the re-tile), rooted at dir, types cmd into it (single line — the
+// sanctioned send-keys use), tags it, and re-tiles to the session's stored
+// layout. Existing chat panes keep their ids untouched. The cockpit window
+// is selected first: SelectLayout targets the session's ACTIVE window, which
+// on the attach path may be a worker window — and bare `gv` means "show me
+// the cockpit" anyway.
+func RespawnDash(session, windowID, dir, cmd string) error {
+	first, ok := firstPane(windowID)
+	if !ok {
+		return fmt.Errorf("no panes in cockpit window %s", windowID)
+	}
+	if err := SelectWindow(windowID); err != nil {
+		return err
+	}
+	paneID, err := run("split-window", "-h", "-b", "-t", first, "-c", dir, "-P", "-F", "#{pane_id}")
+	if err != nil {
+		return err
+	}
+	paneID = strings.TrimSpace(paneID)
+	if err := MarkDashPane(paneID); err != nil {
+		return err
+	}
+	if err := SendKeys(paneID, cmd); err != nil {
+		return err
+	}
+	layout := CockpitLayout(session)
+	if layout == "" {
+		layout = defaultCockpitLayout
+	}
+	return SelectLayout(session, layout)
+}
+
+// firstPane resolves the id of windowID's lowest-index pane — the split
+// anchor that makes a -b (before) split land at pane position 0.
+func firstPane(windowID string) (string, bool) {
+	out, err := run("list-panes", "-t", windowID, "-F", "#{pane_id}\t#{pane_index}")
+	if err != nil {
+		return "", false
+	}
+	return parseFirstPane(out)
+}
+
+// parseFirstPane is firstPane's pure parser: the pane id with the lowest
+// index, order-independent (list-panes order is index order today, but the
+// min scan keeps that an implementation detail, not a dependency).
+func parseFirstPane(out string) (string, bool) {
+	best, bestIdx := "", -1
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		idx, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			continue
+		}
+		if bestIdx == -1 || idx < bestIdx {
+			best, bestIdx = parts[0], idx
+		}
+	}
+	return best, bestIdx != -1
+}
+
 // paneBorderFormat renders each pane's index plus, when the pane carries a
 // @grove_profile user option (SetPaneProfile), a "⚡ <profile>" tag; otherwise
 // it falls back to whatever title the pane's foreground program set. So a

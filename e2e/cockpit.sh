@@ -79,4 +79,35 @@ PANES_AFTER=$(tmux list-panes -t grove | wc -l)
 say "layout is main-vertical (TUI pane spans full height)"
 tmux list-panes -t grove -F '#{pane_id} #{pane_width}x#{pane_height}' | head -3
 
-say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works"
+say "grove-163: fresh build tags exactly one dash pane"
+BUILT_TAGGED="$(tmux list-panes -t grove -F '#{@grove_dash}' | grep -c '^1$' || true)"
+[ "$BUILT_TAGGED" -eq 1 ] || fail "expected exactly one dash-tagged pane after build, got $BUILT_TAGGED"
+
+say "grove-163: dash quit with q (pane survives as shell) → bare gv relaunches in place"
+DASH="$(tmux list-panes -t grove -F '#{pane_id} #{@grove_dash}' | awk '$2=="1"{print $1}')"
+tmux send-keys -t "$DASH" q   # raw single char to the TUI — no Enter wrap
+sleep 1
+[ "$(tmux display-message -p -t "$DASH" '#{pane_current_command}')" = "gv" ] && fail "dash still running after q"
+"$GV" >/dev/null 2>&1 || true   # attach fails headless — the repair runs before it
+sleep 2
+[ "$(tmux display-message -p -t "$DASH" '#{pane_current_command}')" = "gv" ] || fail "dash not relaunched in its surviving pane $DASH"
+TAGGED="$(tmux list-panes -t grove -F '#{@grove_dash}' | grep -c '^1$' || true)"
+[ "$TAGGED" -eq 1 ] || fail "expected exactly one dash-tagged pane after in-place relaunch, got $TAGGED"
+
+say "grove-163: dash pane killed → bare gv respawns it on attach"
+CHATS_BEFORE="$(tmux list-panes -t grove -F '#{pane_id}' | grep -v "^$DASH\$" | sort)"
+tmux kill-pane -t "$DASH"
+"$GV" >/dev/null 2>&1 || true   # attach fails headless — the respawn runs before it
+sleep 2
+TAGGED="$(tmux list-panes -t grove -F '#{@grove_dash}' | grep -c '^1$' || true)"
+[ "$TAGGED" -eq 1 ] || fail "expected exactly one dash-tagged pane after respawn, got $TAGGED"
+NEWDASH="$(tmux list-panes -t grove -F '#{pane_id} #{@grove_dash}' | awk '$2=="1"{print $1}')"
+CHATS_AFTER="$(tmux list-panes -t grove -F '#{pane_id}' | grep -v "^$NEWDASH\$" | sort)"
+[ "$CHATS_BEFORE" = "$CHATS_AFTER" ] || fail "chat pane ids changed: [$CHATS_BEFORE] → [$CHATS_AFTER]"
+[ "$(tmux display-message -p -t "$NEWDASH" '#{pane_left}')" = "0" ] || fail "respawned dash is not the leftmost pane"
+# The respawned pane must be a LIVE dash, not just a tagged shell.
+RCAP="$(tmux capture-pane -p -S -300 -t "$NEWDASH")"
+echo "$RCAP" | grep -q 'AGENTS' || fail "respawned dash pane does not render AGENTS:
+$RCAP"
+
+say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, dash respawns on attach"

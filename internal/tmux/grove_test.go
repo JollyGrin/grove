@@ -92,6 +92,73 @@ func TestWorkerWindowProfile(t *testing.T) {
 	}
 }
 
+func TestClassifyDash(t *testing.T) {
+	cases := []struct {
+		name  string
+		out   string
+		id    string
+		state DashStatus
+	}{
+		{"running dash among chats — live",
+			"%1\t\tclaude\n%0\t1\tgv\n%2\t\tzsh", "%0", DashLive},
+		// The q-quit shape (verified live): pane and tag survive, the dash
+		// process is gone — reuse that exact pane.
+		{"quit dash left its tagged shell pane — idle",
+			"%1\t\tclaude\n%0\t1\tzsh", "%0", DashIdle},
+		{"idle tolerates login-shell dash prefix",
+			"%0\t1\t-bash\n%1\t\tclaude", "%0", DashIdle},
+		{"dash pane gone entirely — missing",
+			"%1\t\tclaude", "", DashMissing},
+		{"empty output — missing", "", "", DashMissing},
+		// Migration: a cockpit built before grove-163 has a live dash but
+		// no tag — the running gv command must count, or bare `gv` stacks
+		// a second dash onto it.
+		{"untagged live dash matched by command",
+			"%0\t\tgv\n%1\t\tclaude", "%0", DashLive},
+		{"throwaway build basename matched",
+			"%0\t\tgv-163\n%1\t\tclaude", "%0", DashLive},
+		// A pre-163 cockpit whose dash quit has no tag AND nothing gv-ish:
+		// its leftover shell pane is indistinguishable from a chat shell,
+		// so the safe repair is a fresh split.
+		{"untagged quit dash — missing",
+			"%0\t\tzsh\n%1\t\tclaude", "", DashMissing},
+		// Operator repurposed the dash pane — never type into or duplicate it.
+		{"tagged pane running something else — unknown",
+			"%0\t1\thtop\n%1\t\tclaude", "%0", DashUnknown},
+	}
+	for _, tc := range cases {
+		id, state := classifyDash(tc.out)
+		if id != tc.id || state != tc.state {
+			t.Errorf("%s: classifyDash(%q) = (%q, %v), want (%q, %v)",
+				tc.name, tc.out, id, state, tc.id, tc.state)
+		}
+	}
+}
+
+func TestParseFirstPane(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		id   string
+		ok   bool
+	}{
+		{"single pane", "%5\t0", "%5", true},
+		{"lowest index wins regardless of order", "%9\t2\n%4\t1\n%7\t3", "%4", true},
+		// A dash-less cockpit's panes may start above 0 (pane 0 died with
+		// the dash) — the survivor with the lowest index is the anchor.
+		{"indexes need not start at zero", "%9\t1\n%7\t2", "%9", true},
+		{"empty output", "", "", false},
+		{"garbage skipped", "not-a-pane\n%3\tx\n%2\t0", "%2", true},
+	}
+	for _, tc := range cases {
+		id, ok := parseFirstPane(tc.out)
+		if id != tc.id || ok != tc.ok {
+			t.Errorf("%s: parseFirstPane(%q) = (%q, %v), want (%q, %v)",
+				tc.name, tc.out, id, ok, tc.id, tc.ok)
+		}
+	}
+}
+
 func TestPaneBorderFormat(t *testing.T) {
 	// The profiled pane's tag must live in the @grove_profile user option —
 	// the OSC-title-proof carrier (grove-36 T1) — and fall back to the pane
