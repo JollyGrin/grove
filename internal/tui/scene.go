@@ -649,7 +649,9 @@ func fairyTrailRune(tick uint64) rune {
 const fairyWindow = 45 * time.Second
 
 // latestAnswered maps ticket -> time of its most recent EvAnswered event.
-// events is oldest-first, so the last write per ticket wins.
+// events is oldest-first, so the last write per ticket wins. Built at most
+// once per frame in View and passed down (grove-167) — don't call it from
+// render helpers.
 func latestAnswered(events []state.Event) map[string]time.Time {
 	out := map[string]time.Time{}
 	for _, ev := range events {
@@ -673,11 +675,12 @@ func findLayout(layouts []plotLayout, ticket string) (plotLayout, bool) {
 
 // applyCast overlays the pawn(s), the queen, walk-off pawns, and the fairy
 // onto the ground/sky grids — fxFull only, purely derived from tasks/
-// events/celebrations/focused, no new state beyond the existing capped map.
+// answered/celebrations/focused, no new state beyond the existing capped
+// map. answered is the latestAnswered map, built once per frame in View.
 // Figures stand on the GROUND row beside the trunk base at every tier
 // (grove-71: grove-66's strip-tier fallback is now the universal rule — the
 // old trunk-row placement is gone); the fairy stays sky-only.
-func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, events []state.Event, celebrations map[string]int, tick uint64, focused string, groundGrid, skyGrid *sceneGrid) {
+func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*state.Task, answered map[string]time.Time, celebrations map[string]int, tick uint64, focused string, groundGrid, skyGrid *sceneGrid) {
 	for _, t := range tasks {
 		if t.Agent != state.AgentWorking {
 			continue
@@ -714,7 +717,7 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 	}
 
 	now := time.Now()
-	for ticket, at := range latestAnswered(events) {
+	for ticket, at := range answered {
 		if now.Sub(at) >= fairyWindow || now.Sub(at) < 0 {
 			continue
 		}
@@ -737,7 +740,7 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 // lines, each truncPad-ed to width. fx<fxCalm renders a blank scene (the
 // caller never invokes it there since sceneRows is 0 at fxOff, but staying
 // total here costs nothing).
-func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel, focused string) []string {
+func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, answered map[string]time.Time, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel, focused string) []string {
 	if rows <= 0 {
 		return nil
 	}
@@ -798,7 +801,7 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 		col += pw
 	}
 	if fx >= fxFull {
-		applyCast(layouts, ticketCol, pw, tasks, events, celebrations, tick, focused, plantGrids[0], skyGrid)
+		applyCast(layouts, ticketCol, pw, tasks, answered, celebrations, tick, focused, plantGrids[0], skyGrid)
 	}
 	// S3: the day-cycle sky accent is the lowest-priority sky glyph — it
 	// never overwrites a QUESTION/BLOCKED marker or the fairy. grove-71 sky
@@ -842,7 +845,7 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 // fairy inside its answer window (grove-66). rowBudgets uses this to decide
 // whether the scene's floor is worth raising above strip tier — no life
 // means the trunk row would sit empty anyway.
-func sceneHasLife(tasks []*state.Task, events []state.Event, celebrations map[string]int, focused string) bool {
+func sceneHasLife(tasks []*state.Task, answered map[string]time.Time, celebrations map[string]int, focused string) bool {
 	for _, t := range tasks {
 		if t.Agent == state.AgentWorking {
 			return true
@@ -855,7 +858,7 @@ func sceneHasLife(tasks []*state.Task, events []state.Event, celebrations map[st
 		return true
 	}
 	now := time.Now()
-	for _, at := range latestAnswered(events) {
+	for _, at := range answered {
 		if now.Sub(at) < fairyWindow && now.Sub(at) >= 0 {
 			return true
 		}
@@ -871,13 +874,14 @@ func sceneHasLife(tasks []*state.Task, events []state.Event, celebrations map[st
 // fxFull-gated), the floor rises from strip (3) to compact (6) so the
 // trunk row exists, as long as ACTIVITY can still keep its own 4-row floor
 // (leftover >= 10). No life, or fxCalm, leaves the floor at strip.
-func (m Model) rowBudgets() (activityRows, sceneRows int) {
+// feedLen is len(feedItems(m.events)) and answered the latestAnswered map,
+// both computed once per frame in View (grove-167).
+func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityRows, sceneRows int) {
 	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
 	if leftover < 0 {
 		leftover = 0
 	}
-	items := len(feedItems(m.events))
-	activityRows = items
+	activityRows = feedLen
 	if activityRows > leftover {
 		activityRows = leftover
 	}
@@ -887,7 +891,7 @@ func (m Model) rowBudgets() (activityRows, sceneRows int) {
 	sceneRows = leftover - activityRows
 
 	floor := 3
-	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.tasks, m.events, m.celebrations, m.focused) {
+	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.tasks, answered, m.celebrations, m.focused) {
 		floor = 6
 	}
 	if sceneRows < floor && leftover >= floor+4 {
@@ -901,7 +905,8 @@ func (m Model) rowBudgets() (activityRows, sceneRows int) {
 }
 
 // viewScene renders the scene for the row budget rowBudgets handed it.
-func (m Model) viewScene(rows int) string {
-	lines := sceneLines(m.tasks, m.prs, m.events, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
+// answered is View's once-per-frame latestAnswered map (grove-167).
+func (m Model) viewScene(rows int, answered map[string]time.Time) string {
+	lines := sceneLines(m.tasks, m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
 	return strings.Join(lines, "\n")
 }
