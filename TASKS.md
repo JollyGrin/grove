@@ -23,6 +23,23 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] Cockpit dash repaired on attach (grove-163, 2026-08-20): a quit
+      dashboard left a session whose `@grove_cockpit ready` mark sent the
+      next bare `gv` down the attach path into a cockpit with no dash —
+      read as "cockpit broken". The dash pane is now tagged at build with
+      a `@grove_dash` pane user option (OSC-title-proof, like
+      `@grove_profile`); on attach, `openCockpit` classifies the cockpit
+      window's dash (window resolved via `tmux.WindowID`, panes by `%id`):
+      quit-with-`q` leaves the tagged pane at a shell → the absolute
+      `gv dash` is re-typed into that same pane (all pane ids unchanged);
+      pane fully gone → a fresh pane is split before the first pane
+      (`-b`, reclaiming the leftmost slot), typed, re-tagged, and re-tiled
+      from `@grove_layout` — chat panes untouched. A pre-grove-163 cockpit
+      (live dash, no tag) is matched by its gv-ish `pane_current_command`
+      so upgrades don't stack a second dash; a tagged pane running
+      something else entirely is left alone. `e2e/cockpit.sh` covers
+      build-tag, q-quit → in-place relaunch, kill-pane → respawn, and
+      chat-pane-id stability.
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N

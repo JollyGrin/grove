@@ -385,8 +385,37 @@ func openCockpit(ws *workspace.Workspace) error {
 		if err := buildCockpit(ws, cfg); err != nil {
 			return err
 		}
+	} else if err := ensureDashPane(ws, cfg, session); err != nil {
+		return err
 	}
 	return tmux.AttachSession(session)
+}
+
+// ensureDashPane repairs the attach path's dash hole (grove-163): quitting
+// the dashboard TUI ends the dash, but the session — and @grove_cockpit
+// ready — survive, so a bare `gv` attaches into a cockpit window with no
+// dash running and the cockpit reads as broken. Before attaching, classify
+// the cockpit window's @grove_dash pane: quit-to-shell gets the dash
+// re-typed into its own surviving pane; a killed pane gets respawned and the
+// layout re-tiled. Killing the session to force a rebuild would take the
+// orchestrator chats down with it; this touches nothing but the dash.
+func ensureDashPane(ws *workspace.Workspace, cfg *config.Config, session string) error {
+	winID, ok := tmux.WindowID(session, "cockpit")
+	if !ok {
+		return nil // no cockpit window to repair — attach as-is
+	}
+	pane, status := tmux.DashPane(winID)
+	if status != tmux.DashIdle && status != tmux.DashMissing {
+		return nil
+	}
+	dash := "gv dash"
+	if exe, err := os.Executable(); err == nil {
+		dash = exe + " dash"
+	}
+	if status == tmux.DashIdle {
+		return tmux.SendKeys(pane, dash)
+	}
+	return tmux.RespawnDash(session, winID, workspaceRoot(ws, orchestratorDirFor(ws, cfg)), dash)
 }
 
 // cockpitSessionFor: grove-<label> per workspace; legacy = grove.
@@ -507,6 +536,12 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 		dash = exe + " dash"
 	}
 	if err := tmux.SendKeys(cockpitWin+".0", dash); err != nil {
+		return err
+	}
+	// Tag the dash pane (user option, OSC-title-proof) so openCockpit's
+	// attach path can tell a live cockpit from one whose dash quit
+	// (grove-163) and respawn only what's missing.
+	if err := tmux.MarkDashPane(cockpitWin + ".0"); err != nil {
 		return err
 	}
 	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
