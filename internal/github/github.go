@@ -4,6 +4,7 @@ package github
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -11,6 +12,12 @@ import (
 	"strings"
 	"time"
 )
+
+// ghTimeout bounds every gh invocation so a wedged gh (offline, stalled
+// network) fails fast instead of hanging callers forever — see grove-164.
+// Var (not const) so tests can shrink it instead of waiting out the real
+// default.
+var ghTimeout = 15 * time.Second
 
 type PR struct {
 	Number     int    `json:"number"`
@@ -22,7 +29,9 @@ type PR struct {
 }
 
 func gh(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("gh", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), ghTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

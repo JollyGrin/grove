@@ -23,6 +23,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       Obsidian live board (issue #9, design paused at REVISE), remote PC
       fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
       virtualization)
+- [x] `gh()` timeout (grove-164, 2026-08-20): `internal/github.gh()` ran
+      every `PRForBranch`/`PreviewURL`/`Merged` call via plain
+      `exec.Command(...).Run()` with no deadline — a wedged `gh` (offline,
+      stalled network) hung the caller forever, and the cockpit's 30s PR
+      poll beat stacked another batch of hung children each cycle after
+      its own 6s `FetchAll` timeout walked away. Mirrored the existing
+      `runGH` pattern (`internal/provider/github.go`): `exec.CommandContext`
+      with a 15s deadline (package var `ghTimeout`, test-overridable). One
+      function change bounds every caller at once. Accepted trade: a call
+      that would've succeeded past 15s now fails fast instead — error
+      display honesty is #124, not this ticket.
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N
