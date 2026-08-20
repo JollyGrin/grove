@@ -168,6 +168,37 @@ func TestFoldSurvivesTornFinalLine(t *testing.T) {
 	}
 }
 
+func TestLoadSkipsMalformedLineMidFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "DEV-4", Data: map[string]string{"title": "before"}}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A complete but corrupt line buried mid-file (e.g. a crash-torn write
+	// later padded out by a subsequent append), not the final line.
+	if _, err := f.WriteString("{not valid json}\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "DEV-5", Data: map[string]string{"title": "after"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks["DEV-4"] == nil {
+		t.Error("event before the torn line should fold")
+	}
+	if tasks["DEV-5"] == nil {
+		t.Error("event after the torn line should still fold — Load must skip-and-continue like Folder.consume")
+	}
+}
+
 func TestFindByCwdRealpath(t *testing.T) {
 	dir := t.TempDir()
 	wt := filepath.Join(dir, "wt")
