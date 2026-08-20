@@ -31,6 +31,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Hostile tmux config mode (grove-168): GROVE_E2E_TMUX_CONF=hostile boots the
+# isolated server with the common dotfiles pair base-index 1 +
+# pane-base-index 1, which turned every literal ".0"/".1" pane target into a
+# fresh-install failure. The scratch HOME means suites never load a real
+# tmux.conf, so without this mode that whole class is structurally invisible
+# here. -f only applies at server boot, so start the server now (exit-empty
+# off keeps it alive with no sessions) and every later gv tmux call joins it
+# with the hostile options already global.
+if [ "${GROVE_E2E_TMUX_CONF:-}" = "hostile" ]; then
+  say "hostile tmux conf (base-index 1, pane-base-index 1)"
+  cat > "$SCRATCH/hostile.conf" <<'EOF'
+set -g base-index 1
+set -g pane-base-index 1
+set -g renumber-windows on
+set -g allow-rename on
+set -g exit-empty off
+EOF
+  tmux -f "$SCRATCH/hostile.conf" start-server
+fi
+
 say "seed config + fleet events"
 cat > "$HOME/.config/grove/config.yaml" <<EOF
 provider: {kind: markdown}

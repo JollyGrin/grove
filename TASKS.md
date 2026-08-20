@@ -60,6 +60,18 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       200-event tail (~3x/frame) and the answered map (~3x/frame). Pure
       render-path refactor: no new model fields or caches, byte-identical
       output (existing scene/view/footer tests as oracle).
+- [x] Pane targeting survives `pane-base-index ≠ 0` (grove-168,
+      2026-08-20): fresh installs with the common `base-index 1` +
+      `pane-base-index 1` dotfiles died at the cockpit build and the grab
+      placeholder hint, and grab's `.1` claude launch landed in the
+      worktree shell. Panes are now targeted like windows (grove-116):
+      immutable `%N` ids — `SplitVerticalWindow` returns the split's id,
+      new `tmux.FirstPaneID` resolves "the window's first pane" for
+      hint/dash/nvim/mobile, `closablePane` protects the lowest-index
+      pane rather than `index == 0`. Guardrail: `GROVE_E2E_TMUX_CONF=hostile`
+      boots the isolated e2e server with the hostile conf; `e2e/all.sh`
+      runs cockpit.sh + workspace.sh in both modes. Grove never
+      normalizes the user's numbering.
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N

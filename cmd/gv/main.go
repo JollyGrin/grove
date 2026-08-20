@@ -506,7 +506,14 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if exe, err := os.Executable(); err == nil {
 		dash = exe + " dash"
 	}
-	if err := tmux.SendKeys(cockpitWin+".0", dash); err != nil {
+	// The placeholder pane's index depends on the user's pane-base-index —
+	// a literal ".0" target broke the cockpit build on fresh installs with
+	// `pane-base-index 1` (grove-168). Resolve the pane id instead.
+	dashPane, err := tmux.FirstPaneID(cockpitWin)
+	if err != nil {
+		return err
+	}
+	if err := tmux.SendKeys(dashPane, dash); err != nil {
 		return err
 	}
 	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
@@ -752,7 +759,13 @@ func cmdMobile() error {
 		if err := tmux.CreateSession(session, home); err != nil {
 			return err
 		}
-		if err := tmux.SendKeys(session+".0", "gv"); err != nil {
+		// Resolve the fresh session's single pane by id — under
+		// `pane-base-index 1` a ".0" target doesn't exist (grove-168).
+		pane, err := tmux.FirstPaneID(tmux.ExactActive(session))
+		if err != nil {
+			return err
+		}
+		if err := tmux.SendKeys(pane, "gv"); err != nil {
 			return err
 		}
 	}
@@ -1009,11 +1022,15 @@ func cmdGrab(args []string) error {
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
-	if err := tmux.SplitVerticalWindow(windowTarget, wt.Path); err != nil {
+	// The split's "%N" id is captured at creation (grove-168): its numeric
+	// index depends on the user's pane-base-index, so a literal ".1" target
+	// could land the claude command in the worktree SHELL pane instead.
+	claudePane, err := tmux.SplitVerticalWindow(windowTarget, wt.Path)
+	if err != nil {
 		return err
 	}
 
-	// Pane 1: (serialized setup) && claude with the prompt as argv via
+	// Claude pane: (serialized setup) && claude with the prompt as argv via
 	// command substitution — single line, no send-keys mangling, and the
 	// pane returns to a shell if claude exits.
 	claudeBin := config.WithModel(repo.Claude, *modelFlag)
@@ -1027,7 +1044,7 @@ func cmdGrab(args []string) error {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
 	}
-	if err := tmux.SendKeys(windowTarget+".1", claudeCmd); err != nil {
+	if err := tmux.SendKeys(claudePane, claudeCmd); err != nil {
 		return err
 	}
 
@@ -2020,18 +2037,29 @@ func attachTask(t *state.Task) error {
 	return tmux.AttachWindow(t.TmuxSession, t.TmuxWindow)
 }
 
-// maybeInjectEditor lazily starts nvim in pane 0 on first attach (10
-// headless worktrees × tsserver is real RAM) — but only when pane 0 is
-// not where claude lives: a window that lost its split would otherwise
-// get "nvim ." typed INTO the agent session.
+// maybeInjectEditor lazily starts nvim in the window's first (shell) pane
+// on first attach (10 headless worktrees × tsserver is real RAM) — but only
+// when that pane is not where claude lives: a window that lost its split
+// would otherwise get "nvim ." typed INTO the agent session. Both panes are
+// resolved to "%N" ids (grove-168): the first pane's numeric index depends
+// on the user's pane-base-index, so neither a ".0" target nor an `== 0`
+// lost-split check survives `pane-base-index 1`.
 func maybeInjectEditor(session, window string) {
 	// Window resolved by id (grove-116) so the inject can never type into
 	// a prefix-extending sibling's shell pane.
 	id, ok := tmux.WindowID(session, window)
-	if !ok || tmux.ClaudePane(session, window) == 0 {
+	if !ok {
 		return
 	}
-	_ = tmux.SendKeys(id+".0", "nvim .")
+	shellPane, err := tmux.FirstPaneID(id)
+	if err != nil {
+		return
+	}
+	claudePane, err := tmux.ClaudePaneTarget(session, window)
+	if err != nil || claudePane == shellPane {
+		return // lost split: claude is the first pane — don't type into it
+	}
+	_ = tmux.SendKeys(shellPane, "nvim .")
 }
 
 // --- diff ---
@@ -2282,7 +2310,10 @@ func cmdAdopt(args []string) error {
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
-	if err := tmux.SplitVerticalWindow(windowTarget, wtPath); err != nil {
+	// Capture the split's "%N" id at creation (grove-168): a literal ".1"
+	// index only names this pane under the default pane-base-index.
+	claudePane, err := tmux.SplitVerticalWindow(windowTarget, wtPath)
+	if err != nil {
 		return err
 	}
 
@@ -2327,7 +2358,7 @@ func cmdAdopt(args []string) error {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
 	}
-	if err := tmux.SendKeys(windowTarget+".1", claudeCmd); err != nil {
+	if err := tmux.SendKeys(claudePane, claudeCmd); err != nil {
 		return err
 	}
 

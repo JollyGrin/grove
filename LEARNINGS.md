@@ -85,6 +85,27 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-08-20 · pane indices depend on `pane-base-index` — never write a
+  literal `.0`/`.1` target** (grove-168, fresh-install cockpit failure):
+  the common dotfiles pair `base-index 1` + `pane-base-index 1` makes the
+  first pane `.1`, so every hardcoded `.0`/`.1` pane target either errors
+  ("can't find pane: 0" — killed `gv grab` at the placeholder hint and the
+  cockpit build at the dash launch) or silently hits the WRONG pane (grab's
+  `.1` claude launch landed in the worktree shell; `closablePane`'s
+  `index == 0` guard stopped protecting the dashboard, which now sat at
+  index 1). Window targeting was already config-proof (`@N` ids,
+  grove-116); panes now follow the same rule: resolve the `%N` id at
+  creation (`split-window -P -F '#{pane_id}'` — `SplitVerticalWindow`,
+  `SpawnPane`) or via list-panes (`FirstPaneID` for "the window's first
+  pane", `ClaudePaneTarget` for claude); "first pane" checks compare
+  against the window's lowest live index, never `== 0`. The e2e suites
+  structurally could not catch this — scratch `HOME` means the isolated
+  servers never load a user's tmux.conf — so `GROVE_E2E_TMUX_CONF=hostile`
+  boots them with the hostile pair (`tmux -f`, applied at server start
+  only) and `e2e/all.sh` runs cockpit.sh + workspace.sh in both modes.
+  Non-goal, on purpose: grove never normalizes the user's numbering
+  (`set-option base-index 0`) — it works under the user's config, not
+  against it.
 - **2026-08-17 · `tmux kill-window` does not kill the pane's process
   tree** (grove-156, found 2026-08-16 as 3 cores pegged for ~4 days):
   killing a window SIGHUPs the pane's foreground process group only.
