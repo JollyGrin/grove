@@ -16,9 +16,13 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 )
 
-// Supported lists the verbs that pass through today. Later tickets in the
-// train add adopt/untrack; anything else is "not supported yet".
-var Supported = map[string]bool{"grab": true, "ls": true}
+// Supported lists the verbs that pass through today (grove-177 added
+// adopt + handoff for the remote half of `gv handoff`); anything else is
+// "not supported yet".
+var Supported = map[string]bool{"grab": true, "ls": true, "adopt": true, "handoff": true}
+
+// SupportedList is the human-readable form for error messages.
+const SupportedList = "grab, ls, adopt, handoff"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -73,7 +77,7 @@ func quote(s string) string {
 // returned as err.
 func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io.Writer) (int, error) {
 	if !Supported[verb] {
-		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: grab, ls)", verb)
+		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: %s)", verb, SupportedList)
 	}
 	h, err := cfg.Host(host)
 	if err != nil {

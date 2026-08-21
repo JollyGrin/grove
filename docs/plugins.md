@@ -52,7 +52,7 @@ payload under one named key.
 
 | Command | Payload key | Shape |
 |---|---|---|
-| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`) |
+| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
 | `gv audit --json` | `report` | object — per-task classification + orphan worktrees + orphan/worktree processes |
 | `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
@@ -86,7 +86,9 @@ a timer). One record per line:
 
 Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
-`task_done`, `task_untracked`, `task_adopted`, `task_paused`.
+`task_done`, `task_untracked`, `task_adopted`, `task_paused`,
+`task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
+a forwarding pointer to the remote grove host).
 Workspace-scoped (empty `ticket`): `workspace_parked`,
 `orchestrator_closed`. New types will appear over time — skip what you
 don't know.

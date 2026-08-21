@@ -60,6 +60,29 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       200-event tail (~3x/frame) and the answered map (~3x/frame). Pure
       render-path refactor: no new model fields or caches, byte-identical
       output (existing scene/view/footer tests as oracle).
+- [x] `gv handoff grove-N --to/--from <host>` (grove-177, 2026-08-22, part
+      2 of the remote-overflow train on `feature/remote`): moves a running
+      task between hosts by composing existing verbs — guard (mid-turn /
+      untracked / no branch) → checkpoint nudge with the context-rot
+      handoff template + idle wait (hooks are truth; default 10 min,
+      `--timeout`) → verify via git/gh (branch on origin, local == remote
+      head, clean worktree, open PR whose body has the five headings or
+      >200 chars) → dry-run plan + confirm (`--yes`) → `gv untrack` (+
+      window close; `--rm` for the full teardown) → `ssh <host> gv adopt
+      --repo --branch` → tombstone. `internal/handoff` is the sequencer
+      over a Runner seam (fake-runner tests: every guard aborts before
+      any mutation, verify failure before untrack, remote-adopt failure
+      leaves NO tombstone and prints the retry). Tombstone = additive
+      `task_handed_off` event → `Task.HandedOffTo`; `gv ls --json` rows
+      carry `handed_off_to` (+ `live: handed-off`), the table prints a
+      `→ host` pointer line; it also drops the stored session id so a
+      pull-back is a cold pickup-prompt adopt (the transcript never
+      travels — the PR body is the carrier; `gv cost` rows split across
+      hosts, documented not solved). `--from` = remote `ls --json` +
+      remote `handoff --release --release-to <self>` over ssh + local
+      cold adopt. `remote.Supported` gains adopt/handoff. `e2e/handoff.sh`
+      (fake `ssh`/`gh` on PATH, second state dir + second isolated tmux
+      server) proves both directions; `e2e/plugin.sh` green.
 - [x] Remote hosts: `hosts:` config + `--host` passthrough for grab/ls
       (grove-176, 2026-08-22, part 1 of the remote-overflow train on
       `feature/remote`): `config.Host{ssh, gv}` (ssh required, gv defaults

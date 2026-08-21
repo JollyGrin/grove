@@ -30,6 +30,11 @@ const (
 	EvTaskUntracked  = "task_untracked"
 	EvTaskAdopted    = "task_adopted"
 	EvTaskPaused     = "task_paused"
+	// EvTaskHandedOff (grove-177) is the forwarding tombstone `gv handoff`
+	// writes after the remote adopt succeeded: data {host, branch}, the
+	// event time is `at`. Folds like an untrack (leaves Active) but keeps
+	// the host on the task so `gv ls --json` can show handed_off_to.
+	EvTaskHandedOff = "task_handed_off"
 )
 
 // Human states (the `human` dimension): "" (untouched) · reviewing ·
@@ -87,9 +92,14 @@ type Task struct {
 	// all survive — `gv adopt` resumes the stored session and clears the
 	// flag. A bookmark, never trash: paused tasks stay in Active().
 	// Additive & optional: events predating the field fold to false.
-	Paused  bool      `json:"paused,omitempty"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
+	Paused bool `json:"paused,omitempty"`
+	// HandedOffTo (grove-177) names the remote grove host this task was
+	// handed to — a forwarding tombstone. Set by task_handed_off (which
+	// also untracks), cleared by a local task_created/task_adopted (the
+	// task came back). Additive & optional.
+	HandedOffTo string    `json:"handed_off_to,omitempty"`
+	Created     time.Time `json:"created"`
+	Updated     time.Time `json:"updated"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -202,6 +212,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
+		t.HandedOffTo = ""
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
@@ -228,6 +239,16 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Done = true
 	case EvTaskUntracked:
 		t.Done = true // leaves Active(); the event type keeps the distinction in history
+	case EvTaskHandedOff:
+		t.Done = true // untracked here; the host carries the forwarding pointer
+		t.HandedOffTo = d["host"]
+		// The transcript is stale the moment another host works the
+		// branch: a later local adopt must start from the PR handoff, not
+		// resume a session that never saw the remote's commits.
+		t.SessionID = ""
+		if b := d["branch"]; b != "" {
+			t.Branch = b
+		}
 	case EvTaskPaused:
 		// Deliberate park (grove-90). Agent normalizes to idle so a paused
 		// worker never ghosts the working counts — the window kill that
@@ -263,6 +284,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 		t.Done = false
 		t.Paused = false
+		t.HandedOffTo = ""
 		t.Agent = AgentSetup
 		t.Sentinel, t.Question = "", ""
 	}
@@ -342,6 +364,20 @@ func (t *Task) SortRank() int {
 }
 
 // Active returns non-done tasks, actionability-sorted.
+// HandedOff returns the forwarding tombstones (grove-177): tasks that left
+// Active() via task_handed_off and have not been re-tracked locally since.
+// Sorted by Updated (the handoff time) so the newest handoff lists last.
+func HandedOff(tasks map[string]*Task) []*Task {
+	var out []*Task
+	for _, t := range tasks {
+		if t.Done && t.HandedOffTo != "" {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Updated.Before(out[j].Updated) })
+	return out
+}
+
 func Active(tasks map[string]*Task) []*Task {
 	var out []*Task
 	for _, t := range tasks {
