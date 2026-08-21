@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // gv pause (grove-90): task_paused bookmarks a deliberately parked worker;
@@ -370,5 +371,62 @@ func TestEventCounts(t *testing.T) {
 	}
 	if counts["DEV-20"] != 2 || counts["DEV-21"] != 1 {
 		t.Errorf("counts = %v", counts)
+	}
+}
+
+// grove-178: task_handed_off is a forwarding tombstone — the task leaves
+// Active() but stays listed by HandedOff() until a local re-adopt.
+func TestHandedOffTombstone(t *testing.T) {
+	tasks := map[string]*Task{}
+	at := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	fold(tasks, Event{Type: EvTaskCreated, Ticket: "gr-1", Time: at.Add(-time.Hour),
+		Data: map[string]string{"branch": "gr-1-work", "repo": "grove"}})
+	fold(tasks, Event{Type: EvTaskCreated, Ticket: "gr-2", Time: at.Add(-time.Hour)})
+	fold(tasks, Event{Type: EvTaskUntracked, Ticket: "gr-1", Time: at})
+	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-1", Time: at,
+		Data: map[string]string{"host": "grove-host"}})
+
+	task := tasks["gr-1"]
+	if !task.Done || task.HandedOffTo == nil {
+		t.Fatalf("tombstone not folded: %+v", task)
+	}
+	if task.HandedOffTo.Host != "grove-host" || task.HandedOffTo.Branch != "gr-1-work" || !task.HandedOffTo.At.Equal(at) {
+		t.Fatalf("tombstone fields: %+v", task.HandedOffTo)
+	}
+	if a := Active(tasks); len(a) != 1 || a[0].Ticket != "gr-2" {
+		t.Fatalf("handed-off task still active: %v", a)
+	}
+	if h := HandedOff(tasks); len(h) != 1 || h[0].Ticket != "gr-1" {
+		t.Fatalf("HandedOff = %v", h)
+	}
+
+	// Tombstone for an unknown task is ignored (fold's unknown-task rule).
+	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-9", Data: map[string]string{"host": "x"}})
+	if _, ok := tasks["gr-9"]; ok {
+		t.Fatal("tombstone created a task")
+	}
+
+	// A local re-adopt clears the tombstone and the task is active again.
+	fold(tasks, Event{Type: EvTaskAdopted, Ticket: "gr-1", Time: at.Add(time.Hour),
+		Data: map[string]string{"branch": "gr-1-work"}})
+	if task.HandedOffTo != nil || task.Done {
+		t.Fatalf("adopt did not clear the tombstone: %+v", task)
+	}
+	if len(HandedOff(tasks)) != 0 {
+		t.Fatal("HandedOff still lists a re-adopted task")
+	}
+}
+
+func TestHandedOffOrder(t *testing.T) {
+	tasks := map[string]*Task{}
+	base := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	for i, tk := range []string{"gr-1", "gr-2", "gr-3"} {
+		fold(tasks, Event{Type: EvTaskCreated, Ticket: tk, Time: base})
+		fold(tasks, Event{Type: EvTaskHandedOff, Ticket: tk, Time: base.Add(time.Duration(i) * time.Minute),
+			Data: map[string]string{"host": "h"}})
+	}
+	h := HandedOff(tasks)
+	if len(h) != 3 || h[0].Ticket != "gr-3" || h[2].Ticket != "gr-1" {
+		t.Fatalf("newest-first order broken: %v", []string{h[0].Ticket, h[1].Ticket, h[2].Ticket})
 	}
 }

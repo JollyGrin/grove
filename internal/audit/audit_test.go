@@ -63,10 +63,30 @@ func TestSuggestion(t *testing.T) {
 		Disconnected: "gv adopt",
 		Abandoned:    "gv untrack --rm",
 		Drifted:      "gv adopt (or gv untrack)",
+		HandedOff:    "gv ls --remote",
 	}
 	for class, want := range cases {
 		if got := Suggestion(class); got != want {
 			t.Errorf("Suggestion(%s) = %q, want %q", class, got, want)
 		}
+	}
+}
+
+// grove-178: a forwarding tombstone is its own report-only class — never
+// abandoned, never probed, suggested action is the remote fleet view.
+func TestHandedOffRows(t *testing.T) {
+	at := time.Now().Add(-2 * time.Hour)
+	tasks := map[string]*state.Task{
+		"gr-1": {Ticket: "gr-1", Repo: "grove", Branch: "gr-1-work", Done: true, Agent: state.AgentDead, Updated: at,
+			HandedOffTo: &state.Handoff{Host: "vps", Branch: "gr-1-work", At: at}},
+		"gr-2": {Ticket: "gr-2", Repo: "grove", Done: true, Updated: at}, // plain done/untracked: not a tombstone
+	}
+	rows := handedOffRows(tasks)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	r := rows[0]
+	if r.Ticket != "gr-1" || r.Class != HandedOff || r.Suggestion != "gv ls --remote" || r.Branch != "gr-1-work" {
+		t.Fatalf("row = %+v", r)
 	}
 }
