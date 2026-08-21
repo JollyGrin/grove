@@ -29,6 +29,15 @@ linear:
   api_key_env: LINEAR_API_KEY
   team: DEV
 
+# Optional remote grove hosts (grove-176): `gv grab <task> --host <name>` /
+# `gv ls --host <name>` ssh to the host and run its gv with the flags passed
+# through verbatim. No state sync — the host keeps its own config/state,
+# GitHub is the only shared layer. `gv doctor` probes each one.
+# hosts:
+#   grove-host:
+#     ssh: dean@grove-host        # any ssh target; Tailscale MagicDNS in practice
+#     gv: /home/dean/go/bin/gv    # absolute path on the host (default: gv)
+
 repos:
   myapp:
     path: ~/git/myapp

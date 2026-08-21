@@ -60,6 +60,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       200-event tail (~3x/frame) and the answered map (~3x/frame). Pure
       render-path refactor: no new model fields or caches, byte-identical
       output (existing scene/view/footer tests as oracle).
+- [x] Remote hosts: `hosts:` config + `--host` passthrough for grab/ls
+      (grove-176, 2026-08-22, part 1 of the remote-overflow train on
+      `feature/remote`): `config.Host{ssh, gv}` (ssh required, gv defaults
+      to `gv`, unknown name errors listing configured hosts); new
+      `internal/remote` builds `ssh -o BatchMode=yes <target> -- <gv>
+      <verb> <args…>` with every passthrough arg single-quoted (`--brief
+      "with spaces"` survives) and propagates the remote exit code;
+      `main()` intercepts `--host` before dispatch, other verbs get "not
+      supported yet". Output is the remote's own envelope — no contract
+      change. `gv doctor` gains a warn-severity `host:<name>` row (ssh
+      reachability + remote `gv --version`, 8s bound). No state sync.
 - [x] Pane targeting survives `pane-base-index ≠ 0` (grove-168,
       2026-08-20): fresh installs with the common `base-index 1` +
       `pane-base-index 1` dotfiles died at the cockpit build and the grab

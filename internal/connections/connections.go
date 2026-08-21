@@ -49,6 +49,7 @@ const (
 	KindAgentPlugins  = "agent-plugins"
 	KindHooks         = "hooks"
 	KindMCPAuth       = "mcp-auth"
+	KindRemoteHost    = "remote-host"
 )
 
 // Status is one evaluated check result.
@@ -88,6 +89,7 @@ type Env struct {
 	Stat              func(name string) (os.FileInfo, error)
 	ReadFile          func(name string) ([]byte, error)
 	Run               func(timeout time.Duration, name string, args ...string) error
+	Output            func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
 	HooksInstalled    func(paths []string) map[string]map[string]bool
 	HookSettingsPaths func(workers []string) []string
 	GOOS              string
@@ -105,6 +107,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Stat:              os.Stat,
 		ReadFile:          os.ReadFile,
 		Run:               run,
+		Output:            output,
 		HooksInstalled:    hooks.Installed,
 		HookSettingsPaths: hooks.SettingsPaths,
 		GOOS:              runtime.GOOS,
@@ -120,6 +123,18 @@ func run(timeout time.Duration, name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).Run()
+}
+
+// remoteProbeTimeout bounds the per-host ssh probe (grove-176): a
+// Tailscale hop plus a remote `gv --version` comfortably fits, and a
+// host that is down costs doctor at most this long — never a hang.
+const remoteProbeTimeout = 8 * time.Second
+
+func output(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	return string(out), err
 }
 
 // EvaluateAll evaluates every declared connection in render order: core
@@ -174,6 +189,29 @@ func checkCLIAuth(name string, args ...string) func(Env) Status {
 			return Status{State: StateMissing}
 		}
 		return Status{State: StateOK}
+	}
+}
+
+// checkRemoteHost probes a configured remote grove host (grove-176):
+// ssh reachability in BatchMode (no password prompts) plus the remote
+// `<gv> --version`, whose first line lands in Info. Best-effort: the
+// row is warn-severity, so an unreachable overflow box never blocks
+// local work.
+func checkRemoteHost(h *config.Host) func(Env) Status {
+	return func(e Env) Status {
+		if e.Output == nil {
+			return Status{State: StateMissing, Info: "no probe"}
+		}
+		out, err := e.Output(remoteProbeTimeout, "ssh",
+			"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", h.SSH, "--", h.GV, "--version")
+		if err != nil {
+			return Status{State: StateMissing, Info: "ssh " + h.SSH + ": " + err.Error()}
+		}
+		ver := strings.TrimSpace(out)
+		if i := strings.IndexByte(ver, '\n'); i >= 0 {
+			ver = ver[:i]
+		}
+		return Status{State: StateOK, Info: ver}
 	}
 }
 
