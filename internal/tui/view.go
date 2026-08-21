@@ -30,18 +30,30 @@ func (m Model) View() string {
 		return m.viewAlmanac()
 	}
 
+	// grove-167: the feed tail and the answered map are pure functions of
+	// m.events — build each at most once per frame here and hand them down,
+	// instead of letting rowBudgets/viewActivity/applyCast rebuild them.
+	items := feedItems(m.events)
+	var answered map[string]time.Time
+	if m.fx >= fxFull {
+		// Only the fxFull cast reads it (sceneHasLife's floor raise and
+		// applyCast's fairy); lower fx never built it before, so don't now.
+		answered = latestAnswered(m.events)
+	}
+	activityRows, sceneRows := m.rowBudgets(len(items), answered)
+
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
 	b.WriteString("\n")
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
-	b.WriteString(m.viewActivity())
+	b.WriteString(m.viewActivity(items, activityRows))
 	// The living grove (grove-63): the scene fills exactly the rows ACTIVITY
 	// yielded to it (rowBudgets), between the feed and the footer, no
 	// border — open air. fxOff never yields any (byte-identical to today).
-	if _, sceneRows := m.rowBudgets(); sceneRows > 0 {
+	if sceneRows > 0 {
 		b.WriteString("\n")
-		b.WriteString(m.viewScene(sceneRows))
+		b.WriteString(m.viewScene(sceneRows, answered))
 	}
 	b.WriteString("\n")
 	b.WriteString(m.viewFooter())
@@ -228,16 +240,16 @@ func (m Model) viewAgents() string {
 
 // viewActivity renders the newest-first swarm history — the objective
 // record of what happened, including while you were away (cockpit §3).
-func (m Model) viewActivity() string {
+// items is the feed tail and avail the ACTIVITY row budget, both computed
+// once per frame in View (grove-167) — avail comes from the same rowBudgets
+// split the scene uses, so both panels agree on the same total.
+func (m Model) viewActivity(items []feedItem, avail int) string {
 	w := m.width - 4
-	items := feedItems(m.events)
 
 	// Fill the space between the agents panel and the footer. The footer may
 	// wrap onto several real lines (grove-60) — ACTIVITY yields exactly that
 	// many rows, or the total render exceeds m.height and scrolls the
-	// alt-screen. At fxCalm+ the scene shares this leftover (rowBudgets);
-	// the split lives there so both panels agree on the same total.
-	avail, _ := m.rowBudgets()
+	// alt-screen. At fxCalm+ the scene shares this leftover (rowBudgets).
 	// rowBudgets hands ACTIVITY the whole leftover when the scene can't make
 	// its floor — which can exceed the feed's length (grove-79: the first
 	// frame renders before events load, and items[:avail] on the empty feed

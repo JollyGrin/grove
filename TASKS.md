@@ -52,6 +52,14 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       `UsageForTask` and can never evict — no sibling-eviction re-parse
       churn. Closes the cockpit RAM ratchet from done/untracked tickets
       and Claude's ~30-day transcript pruning.
+- [x] Cockpit computes the feed tail once per frame (grove-167,
+      2026-08-20): `View()` now builds `feedItems` and the
+      `latestAnswered` map (fxFull only — lower fx never built it) once
+      and passes them down to `rowBudgets`/`viewActivity`/`viewScene`→
+      `applyCast` as arguments, instead of each helper rebuilding the
+      200-event tail (~3x/frame) and the answered map (~3x/frame). Pure
+      render-path refactor: no new model fields or caches, byte-identical
+      output (existing scene/view/footer tests as oracle).
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N
