@@ -43,6 +43,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       line until the log was hand-repaired. Now matches `Folder.consume`'s
       skip-and-continue behavior exactly (deliberate divergence from the
       ovs-byte-comparable copy, recorded in docs/seed-manifest.md).
+- [x] cost.Cache evicts dead transcript paths on the fleet sweep
+      (grove-165, 2026-08-20): `(*Cache).Retain(keep)` drops every
+      `byFile`/`latest` entry whose path isn't in keep; the TUI costs page
+      sweep (`costsCmd`, the one full-fleet enumeration) collects the
+      union of session files via `UsageForTaskCollect` and Retains once
+      per sweep. Per-task callers (audit goroutines, `gv cost`) still use
+      `UsageForTask` and can never evict — no sibling-eviction re-parse
+      churn. Closes the cockpit RAM ratchet from done/untracked tickets
+      and Claude's ~30-day transcript pruning.
 - [x] `gv update` — self-update from the latest GitHub release (grove-160,
       2026-08-19): fetches `releases/latest` unauthenticated, compares the
       tag to the stamped version, prints `gv vX → vY` and confirms y/N

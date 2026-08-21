@@ -46,10 +46,11 @@ func costsCmd(cfg *config.Config, stateDir string, tasks []*state.Task, prs map[
 		var rows []costsRow
 		live := map[string]bool{}
 		active := map[string]bool{}
+		seen := map[string]struct{}{}
 		var points []cost.Point
 		for _, t := range tasks {
 			active[t.Ticket] = true
-			entries, err := cache.UsageForTask(t.Worktree)
+			entries, err := cache.UsageForTaskCollect(t.Worktree, seen)
 			if err != nil || len(entries) == 0 {
 				continue
 			}
@@ -74,6 +75,10 @@ func costsCmd(cfg *config.Config, stateDir string, tasks []*state.Task, prs map[
 				})
 			}
 		}
+		// grove-165: this loop is the full-fleet sweep, so evict here — once,
+		// with the union of every session file the fleet can still ask about.
+		// Per-task callers (audit) must never Retain: they'd evict siblings.
+		cache.Retain(seen)
 		sort.Slice(rows, func(i, j int) bool { return rows[i].tot.USD > rows[j].tot.USD })
 
 		all, _ := ledger.Read(stateDir)

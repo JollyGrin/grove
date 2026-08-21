@@ -332,6 +332,105 @@ func TestEntriesForCachesDistinctPathsIndependently(t *testing.T) {
 	}
 }
 
+// writeSession drops one single-entry session file for wt into its
+// transcript project dir and returns the file's path.
+func writeSession(t *testing.T, wt, name, reqID string) string {
+	t.Helper()
+	projDir := transcript.ProjectDir(wt)
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","requestId":"` + reqID + `","message":{"id":"m-` + reqID + `","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	path := filepath.Join(projDir, name)
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRetainEvictsUnkeptPathsOnly(t *testing.T) {
+	// grove-165: entries for two worktrees, Retain with only one's files →
+	// internal maps hold exactly the retained path, and a later fetch of the
+	// evicted path re-parses cleanly.
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", t.TempDir())
+	wtA, wtB := t.TempDir(), t.TempDir()
+	pathA := writeSession(t, wtA, "sess-a.jsonl", "ra")
+	pathB := writeSession(t, wtB, "sess-b.jsonl", "rb")
+
+	c := NewCache()
+	seen := map[string]struct{}{}
+	if _, err := c.UsageForTaskCollect(wtA, seen); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UsageForTaskCollect(wtB, seen); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := seen[pathA]; !ok {
+		t.Errorf("sweep did not collect %s", pathA)
+	}
+	if _, ok := seen[pathB]; !ok {
+		t.Errorf("sweep did not collect %s", pathB)
+	}
+
+	c.Retain(map[string]struct{}{pathA: {}})
+	if len(c.byFile) != 1 || len(c.latest) != 1 {
+		t.Fatalf("after Retain: byFile=%d latest=%d, want 1/1", len(c.byFile), len(c.latest))
+	}
+	if _, ok := c.latest[pathA]; !ok {
+		t.Fatalf("retained path %s missing from latest", pathA)
+	}
+	for key := range c.byFile {
+		if key.path != pathA {
+			t.Fatalf("byFile holds evicted path %s", key.path)
+		}
+	}
+
+	// The evicted path re-parses cleanly on the next ask.
+	parsesBefore := c.parses
+	tot, err := c.ForTask(wtB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tot.Input != 100 || tot.Turns != 1 {
+		t.Errorf("re-parse after eviction wrong: %+v", tot)
+	}
+	if c.parses != parsesBefore+1 {
+		t.Errorf("parses = %d, want %d (evicted file must re-parse)", c.parses, parsesBefore+1)
+	}
+}
+
+func TestPerTaskCallersNeverEvict(t *testing.T) {
+	// grove-165: audit's per-task goroutines go through ForTask/UsageForTask,
+	// which must never evict — only a full-fleet sweep's explicit Retain may.
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", t.TempDir())
+	wtA, wtB := t.TempDir(), t.TempDir()
+	writeSession(t, wtA, "sess-a.jsonl", "ra")
+	writeSession(t, wtB, "sess-b.jsonl", "rb")
+
+	c := NewCache()
+	if _, err := c.ForTask(wtA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ForTask(wtB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-asking about one task must leave the sibling's entries cached.
+	parsesBefore := c.parses
+	if _, err := c.ForTask(wtA); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.byFile) != 2 || len(c.latest) != 2 {
+		t.Errorf("per-task call evicted a sibling: byFile=%d latest=%d, want 2/2", len(c.byFile), len(c.latest))
+	}
+	if _, err := c.ForTask(wtB); err != nil {
+		t.Fatal(err)
+	}
+	if c.parses != parsesBefore {
+		t.Errorf("per-task churn reparsed files: %d → %d", parsesBefore, c.parses)
+	}
+}
+
 func TestStuckFlag(t *testing.T) {
 	if !StuckFlag(35, 30, false) {
 		t.Error("over-threshold turns with no delivery should flag")
