@@ -165,3 +165,26 @@ func FetchAll(lookups map[string][2]string) map[string]*PR {
 	}
 	return out
 }
+
+// OpenPRBody returns number, url, and body of the open PR whose head is
+// branch (drafts included); number 0 when none. `gv handoff` reads it to
+// check the worker wrote its handoff before the task leaves this host.
+func OpenPRBody(repoDir, branch string) (number int, url, body string, err error) {
+	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
+		"--json", "number,url,body")
+	if err != nil {
+		return 0, "", "", err
+	}
+	var prs []struct {
+		Number int    `json:"number"`
+		URL    string `json:"url"`
+		Body   string `json:"body"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return 0, "", "", err
+	}
+	if len(prs) == 0 {
+		return 0, "", "", nil
+	}
+	return prs[0].Number, prs[0].URL, prs[0].Body, nil
+}

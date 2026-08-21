@@ -85,6 +85,7 @@ func Core(env Env) []Connection {
 		conns = append(conns, providerConnections(env)...)
 		conns = append(conns, workerConnections(env)...)
 		conns = append(conns, agentsMdConnections(env)...)
+		conns = append(conns, remoteHostConnections(env)...)
 	}
 
 	// One row per worker-profile settings.json — hooks only fire for the
@@ -199,6 +200,25 @@ func workerConnections(env Env) []Connection {
 			Title:       "worker command `" + tok + "` resolves",
 			Fix:         "add to ~/.zshrc: alias " + tok + "='CLAUDE_CONFIG_DIR=$HOME/.cc-work claude'",
 			Check:       checkWorkerCommand(r.Claude),
+		})
+	}
+	return conns
+}
+
+// remoteHostConnections adds one warn row per configured remote host
+// (grove-176): reachable + remote gv version.
+func remoteHostConnections(env Env) []Connection {
+	var conns []Connection
+	for _, name := range env.Cfg.HostNames() {
+		h := env.Cfg.Hosts[name]
+		conns = append(conns, Connection{
+			ID:          "host:" + name,
+			Kind:        KindRemoteHost,
+			Severity:    SeverityWarn,
+			RequiredFor: []string{"grab --host", "ls --host"},
+			Title:       "remote host " + name + " (" + h.SSH + ")",
+			Fix:         "ssh " + h.SSH + " -- " + h.GV + " --version   # check Tailscale / keys / gv install",
+			Check:       checkRemoteHost(h),
 		})
 	}
 	return conns

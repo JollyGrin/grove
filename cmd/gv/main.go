@@ -32,6 +32,7 @@ import (
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
+	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
@@ -62,6 +63,9 @@ const usage = `gv — grove
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
+      … --host <name>                         grab/ls/adopt on a configured remote host (hosts: in config.yaml)
+  gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
+  gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
   gv cost --ledger | --record on|off          recorded spend history · persistence toggle
@@ -218,6 +222,19 @@ func main() {
 		return
 	}
 
+	// --host <name> (grove-176): run the verb on a remote grove host over
+	// ssh, flags passed through verbatim, output printed unchanged, exit
+	// code propagated. Intercepted before dispatch so the local verb never
+	// touches local state for a remote task.
+	if host, rest := remote.ExtractHost(args); host != "" {
+		code, err := runRemote(host, cmd, rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		os.Exit(code)
+	}
+
 	var err error
 	switch cmd {
 	case "version":
@@ -250,6 +267,8 @@ func main() {
 		err = cmdDone(args)
 	case "untrack":
 		err = cmdUntrack(args)
+	case "handoff":
+		err = cmdHandoff(args)
 	case "sweep":
 		err = cmdSweep(args)
 	case "park", "close":
@@ -289,6 +308,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gv:", err)
 		os.Exit(1)
 	}
+}
+
+// runRemote resolves the host from config and passes the verb through.
+// Config load errors surface here even for verbs that tolerate a broken
+// config locally — without config there is no host to reach.
+func runRemote(host, verb string, args []string) (int, error) {
+	if !remote.Supported[verb] {
+		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: %s)", verb, remote.SupportedList)
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return 0, err
+	}
+	return remote.Run(cfg, host, verb, args, os.Stdout, os.Stderr)
 }
 
 // cmdVersion prints the stamped build version (`gv version` / `gv --version`).
@@ -1500,12 +1533,21 @@ func cmdLs(args []string) error {
 		}
 		rows = append(rows, row)
 	}
+	// Forwarding tombstones (grove-177): a handed-off task is untracked
+	// here but `gv ls --json` still carries it with handed_off_to set, so
+	// a merged fleet view (#178) can follow the pointer. Additive only:
+	// the row shape is unchanged, these rows just have done=true.
+	tombstones := state.HandedOff(tasks)
+	for _, t := range tombstones {
+		rows = append(rows, lsRow{Task: t, Live: "handed-off"})
+	}
 
 	if *asJSON {
 		return emitJSON("tasks", rows)
 	}
+	rows = rows[:len(rows)-len(tombstones)]
 
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(tombstones) == 0 {
 		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
 	}
@@ -1564,6 +1606,10 @@ func cmdLs(args []string) error {
 		if r.Agent == state.AgentBlocked && r.Question != "" {
 			fmt.Printf("  ⚠ %s\n", truncateLine(r.Question, 90))
 		}
+	}
+	for _, t := range tombstones {
+		fmt.Printf("%-11s %-11s → %s (handed off %s; gv ls --host %s · gv adopt %s to take it back)\n",
+			t.Ticket, t.Repo, t.HandedOffTo, age(t.Updated), t.HandedOffTo, t.Ticket)
 	}
 	return nil
 }
@@ -1983,7 +2029,17 @@ func cmdRelay(args []string, isAnswer bool) error {
 	if text == "" {
 		return fmt.Errorf("empty %s — nothing sent", verb)
 	}
+	if err := relayText(t, text); err != nil {
+		return err
+	}
+	fmt.Printf("✓ sent to %s\n", t.Ticket)
+	return nil
+}
 
+// relayText is the shared send path of answer/nudge (and handoff's
+// checkpoint nudge): paste into the claude pane, then record EvAnswered
+// only once the submit verifiably landed.
+func relayText(t *state.Task, text string) error {
 	// Resolve the claude pane by id — usually .1, but a window that lost
 	// its split runs claude in its only pane, and a name-built target can
 	// resolve to a prefix-extending sibling's window ("repo · grove-1" vs
@@ -2005,11 +2061,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 		// what made this bug silent: gv ls showed `working` on a dead worker.
 		return err
 	}
-	if err := state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket}); err != nil {
-		return err
-	}
-	fmt.Printf("✓ sent to %s\n", t.Ticket)
-	return nil
+	return state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
 }
 
 // --- attach ---
