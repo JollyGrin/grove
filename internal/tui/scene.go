@@ -891,7 +891,7 @@ func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityR
 	sceneRows = leftover - activityRows
 
 	floor := 3
-	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.tasks, answered, m.celebrations, m.focused) {
+	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.liveTasks(), answered, m.celebrations, m.focused) {
 		floor = 6
 	}
 	if sceneRows < floor && leftover >= floor+4 {
@@ -907,6 +907,6 @@ func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityR
 // viewScene renders the scene for the row budget rowBudgets handed it.
 // answered is View's once-per-frame latestAnswered map (grove-167).
 func (m Model) viewScene(rows int, answered map[string]time.Time) string {
-	lines := sceneLines(m.tasks, m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
+	lines := sceneLines(m.liveTasks(), m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
 	return strings.Join(lines, "\n")
 }

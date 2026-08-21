@@ -30,6 +30,12 @@ const (
 	EvTaskUntracked  = "task_untracked"
 	EvTaskAdopted    = "task_adopted"
 	EvTaskPaused     = "task_paused"
+	// EvTaskHandedOff is the forwarding tombstone `gv handoff` writes after
+	// untracking a task that now runs on another grove host (grove-177;
+	// read by grove-178). Data: host, branch. The task leaves Active() but
+	// keeps a HandedOffTo pointer so the fleet view can show it as
+	// "elsewhere"; a later task_created/task_adopted clears it.
+	EvTaskHandedOff = "task_handed_off"
 )
 
 // Human states (the `human` dimension): "" (untouched) · reviewing ·
@@ -87,9 +93,24 @@ type Task struct {
 	// all survive — `gv adopt` resumes the stored session and clears the
 	// flag. A bookmark, never trash: paused tasks stay in Active().
 	// Additive & optional: events predating the field fold to false.
-	Paused  bool      `json:"paused,omitempty"`
+	Paused bool `json:"paused,omitempty"`
+	// HandedOffTo is the forwarding tombstone (grove-177/178): set by
+	// task_handed_off, cleared by task_created/task_adopted. A handed-off
+	// task is Done (gone from Active) but listed by HandedOff().
+	HandedOffTo *Handoff `json:"handed_off_to,omitempty"`
+	// Host tags a row that came from another grove host's `gv ls --json`
+	// (grove-178 `--remote` merge). Never set by fold — local tasks read
+	// "" here; `gv ls --json` stamps "local" on output.
+	Host    string    `json:"host,omitempty"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
+}
+
+// Handoff is where a handed-off task went (grove-177 tombstone).
+type Handoff struct {
+	Host   string    `json:"host"`
+	Branch string    `json:"branch"`
+	At     time.Time `json:"at"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -202,6 +223,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
+		t.HandedOffTo = nil
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
@@ -235,6 +257,18 @@ func fold(tasks map[string]*Task, ev Event) {
 		// Sentinel/question/last_message survive: paused is a bookmark.
 		t.Paused = true
 		t.Agent = AgentIdle
+	case EvTaskHandedOff:
+		// Forwarding tombstone (grove-177): the task now runs elsewhere.
+		// Done so it leaves Active(); HandedOffTo keeps it visible as
+		// "elsewhere" in gv ls / the cockpit (grove-178).
+		t.Done = true
+		t.Paused = false
+		t.Agent = AgentIdle // never ghosts the working counts (the gv pause rule)
+		branch := d["branch"]
+		if branch == "" {
+			branch = t.Branch
+		}
+		t.HandedOffTo = &Handoff{Host: d["host"], Branch: branch, At: ev.Time}
 	case EvTaskAdopted:
 		// Refresh only the fields the event carries — an adopt may reuse
 		// the existing worktree/window, and title/url/repo survive from
@@ -263,6 +297,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 		t.Done = false
 		t.Paused = false
+		t.HandedOffTo = nil
 		t.Agent = AgentSetup
 		t.Sentinel, t.Question = "", ""
 	}
@@ -271,6 +306,8 @@ func fold(tasks map[string]*Task, ev Event) {
 // Label is the single most-actionable status string for table rows.
 func (t *Task) Label() string {
 	switch {
+	case t.HandedOffTo != nil:
+		return "elsewhere"
 	case t.Done:
 		return "done"
 	case t.Paused:
@@ -339,6 +376,25 @@ func (t *Task) SortRank() int {
 	default: // working
 		return 5
 	}
+}
+
+// HandedOff returns the forwarding tombstones (grove-178): tasks that
+// left this host via gv handoff and were not re-adopted here, newest
+// handoff first.
+func HandedOff(tasks map[string]*Task) []*Task {
+	var out []*Task
+	for _, t := range tasks {
+		if t.HandedOffTo != nil {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].HandedOffTo.At.Equal(out[j].HandedOffTo.At) {
+			return out[i].HandedOffTo.At.After(out[j].HandedOffTo.At)
+		}
+		return out[i].Ticket < out[j].Ticket
+	})
+	return out
 }
 
 // Active returns non-done tasks, actionability-sorted.

@@ -39,6 +39,7 @@ var (
 		{"g", "gardens: the almanac — one garden per day, h/l walk days"},
 		{"X", "park: stop workers + orchestrator + cockpit; state stays on disk"},
 		{"r", "refresh PR states now (also polled every 30s)"},
+		{"R", "remote: fold every configured host's fleet in (one ssh per host per press; rows tagged @host)"},
 		{"q", "quit the cockpit — workers keep running"},
 	}
 	helpSections = []struct {

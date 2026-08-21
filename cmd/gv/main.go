@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/doctor"
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/git"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/hooks"
@@ -1468,12 +1470,9 @@ func cmdRunSetup(args []string) error {
 
 // --- ls ---
 
-type lsRow struct {
-	*state.Task
-	Live string       `json:"live"`
-	PR   *github.PR   `json:"pr,omitempty"`
-	Cost *cost.Totals `json:"cost,omitempty"`
-}
+// lsRow is one `gv ls --json` row; the type lives in internal/fleet so the
+// remote merge (grove-178) and the cockpit share it.
+type lsRow = fleet.Row
 
 // emitJSON prints a --json payload in the plugin-contract envelope
 // (docs/plugins.md): a top-level object with schema_version plus the
@@ -1490,6 +1489,7 @@ func cmdLs(args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	noPR := fs.Bool("no-pr", false, "skip gh PR lookups (faster)")
 	noCost := fs.Bool("no-cost", false, "skip transcript scanning for the COST column (faster)")
+	withRemote := fs.Bool("remote", false, "fold every configured host's fleet in (ssh, 5s per host, failures warn)")
 	parseAnywhere(fs, args)
 
 	cfg, cfgErr := loadCfg()
@@ -1498,6 +1498,7 @@ func cmdLs(args []string) error {
 		return err
 	}
 	active := state.Active(tasks)
+	handedOff := state.HandedOff(tasks)
 
 	prs := map[string]*github.PR{}
 	if !*noPR && cfgErr == nil {
@@ -1530,13 +1531,57 @@ func cmdLs(args []string) error {
 		rows = append(rows, row)
 	}
 
+	// grove-178: one fleet. Remote hosts are asked in parallel (5s each),
+	// a failure is one warning line and never a non-zero exit; local rows
+	// carry host "local", remote rows their host name, and the handed-off
+	// tombstones trail the live rows (replaced when a host reports the
+	// task live, marked `?` when the named host answered without it).
+	var results []fleet.Result
+	if *withRemote {
+		switch {
+		case cfgErr != nil:
+			fmt.Fprintln(os.Stderr, "gv ls: --remote: config:", cfgErr)
+		case len(cfg.Hosts) == 0:
+			fmt.Fprintln(os.Stderr, "gv ls: --remote: no hosts configured (add a hosts: map to config.yaml)")
+		default:
+			results = fleet.Fetch(context.Background(), cfg, cfg.HostNames(), nil)
+		}
+	}
+	rows, warnings := fleet.Merge(rows, handedOff, results)
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "gv ls: warning:", w)
+	}
+
 	if *asJSON {
 		return emitJSON("tasks", rows)
 	}
 
+	live := rows[:0] // in-place filter, order kept
+	var elsewhere []lsRow
+	for _, r := range rows {
+		if r.HandedOffTo != nil {
+			elsewhere = append(elsewhere, r)
+		} else {
+			live = append(live, r)
+		}
+	}
+	rows = live
+	defer func() {
+		for _, r := range elsewhere {
+			fmt.Println(dim(fleet.Elsewhere(r, age)))
+		}
+	}()
+
 	if len(rows) == 0 {
 		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
+	}
+	anyRemote := false
+	for _, r := range rows {
+		if r.Host != fleet.LocalHost {
+			anyRemote = true
+			break
+		}
 	}
 	// The PROFILE column collapses entirely when no active task is profiled,
 	// so the default (all-Anthropic) fleet's table is byte-identical to today
@@ -1552,6 +1597,9 @@ func cmdLs(args []string) error {
 		"TICKET", "REPO", "STATUS", "LIVE", "PR", "CI", "PREVIEW", "COST", "AGE")
 	if anyProfile {
 		header += "  PROFILE"
+	}
+	if anyRemote {
+		header += "  HOST"
 	}
 	fmt.Println(header)
 	for _, r := range rows {
@@ -1586,6 +1634,9 @@ func cmdLs(args []string) error {
 			}
 			line += "  " + prof
 		}
+		if anyRemote {
+			line += "  " + r.Host
+		}
 		fmt.Println(line)
 		if r.Agent == state.AgentWaiting && r.Question != "" {
 			fmt.Printf("  ◆ %s\n", truncateLine(r.Question, 90))
@@ -1595,6 +1646,15 @@ func cmdLs(args []string) error {
 		}
 	}
 	return nil
+}
+
+// dim wraps a line in the ANSI faint attribute when stdout is a terminal —
+// the "elsewhere" bucket reads as background, not as a live row.
+func dim(s string) string {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return s
+	}
+	return "\x1b[2m" + s + "\x1b[0m"
 }
 
 // fmtUSD renders an estimate compactly: "$4.20", "$123" — "~" prefix when

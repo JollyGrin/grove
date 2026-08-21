@@ -71,6 +71,25 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       supported yet". Output is the remote's own envelope — no contract
       change. `gv doctor` gains a warn-severity `host:<name>` row (ssh
       reachability + remote `gv --version`, 8s bound). No state sync.
+- [x] One-fleet view: handed-off tombstones + `--remote` merge (grove-178,
+      2026-08-22, part 3 of the remote-overflow train on `feature/remote`,
+      read-only): a `task_handed_off` event (written by #177's `gv
+      handoff`; data `host`, `branch`) folds to `Task.HandedOffTo` — the
+      task leaves Active() but `state.HandedOff` lists it, label
+      "elsewhere". `gv ls` prints tombstones dim after the live rows
+      (`grove-142 ⇢ grove-host  <branch>  handed off 2h ago`); `gv ls
+      --remote` runs `gv ls --json --no-pr` on every configured host in
+      parallel (new `internal/fleet`: 5s per host, a failure is one
+      warning line and never a non-zero exit), rows carry `host`
+      ("local" / the host name), a tombstone the host reports live is
+      replaced by the live row, one the named host answered without
+      renders `⇢ host?`. Cockpit: `R` toggles the merge — one fetch per
+      press, no poll/goroutine, board rebuilt in Update (never per
+      frame), remote rows tagged `@host`, remote/tombstone rows are
+      read-only (enter/n/a/v/d flash where the task lives). `gv audit`
+      classes tombstones `handed_off` (report-only, suggests `gv ls
+      --remote`; never abandoned, never a sweep offer). Contract: `host`
+      and `handed_off_to` are additive row fields; docs/plugins.md.
 - [x] Pane targeting survives `pane-base-index ≠ 0` (grove-168,
       2026-08-20): fresh installs with the common `base-index 1` +
       `pane-base-index 1` dotfiles died at the cockpit build and the grab
