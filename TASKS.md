@@ -20,9 +20,14 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Phase 5: learnings system first cut (below)
 - [ ] Phase 6: OSS polish → Grid pack → parity gate → ovs retirement
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
-      Obsidian live board (issue #9, design paused at REVISE), remote PC
-      fleet host (docs/pc-remote-host-setup.md, blocked on BIOS
-      virtualization)
+      Obsidian live board (issue #9, design paused at REVISE), remote
+      overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] VPS grove-host runbook (grove-179, 2026-08-22): `docs/pc-remote-host-setup.md`
+      (WSL2 PC, blocked on BIOS) rewritten as `docs/remote-host-setup.md` —
+      Ubuntu VPS over Tailscale SSH as overflow for the Mac-is-home topology
+      (#176 hosts/--host, #177 handoff, #178 fleet view): sizing, stack,
+      Mac-side `hosts:` block, headless gotchas, phone access; WSL2 kept as
+      an appendix, old path reduced to a redirect line.
 - [x] `gh()` timeout (grove-164, 2026-08-20): `internal/github.gh()` ran
       every `PRForBranch`/`PreviewURL`/`Merged` call via plain
       `exec.Command(...).Run()` with no deadline — a wedged `gh` (offline,

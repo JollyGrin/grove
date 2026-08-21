@@ -75,6 +75,10 @@ backend — zero setup, fine for trying the loop. Two remote backends exist:
   merge closes them.
 - **Linear** — the rest of this section.
 
+(Remote *backends* are about where tasks live. Running workers on a remote
+*machine* — a Tailscale-reachable VPS as overflow for your laptop — is
+[docs/remote-host-setup.md](remote-host-setup.md).)
+
 To switch to **Linear**, two things need to be true — get your API key, then
 point grove's config at Linear. Ask your LLM:
 
