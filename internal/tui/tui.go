@@ -6,6 +6,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
@@ -35,13 +37,16 @@ const (
 )
 
 type refreshMsg struct {
-	tasks   []*state.Task
-	live    map[string]string
-	events  []state.Event
-	mem     resource.Mem
-	workers int
-	ok      bool   // state.Load succeeded — a zero msg (load error) stays false
-	focused string // grove-63: ticket at the tmux-focused window, "" if none
+	tasks []*state.Task
+	// handedOff is the forwarding-tombstone list (grove-178) — only folded
+	// into the board while the R remote merge is on.
+	handedOff []*state.Task
+	live      map[string]string
+	events    []state.Event
+	mem       resource.Mem
+	workers   int
+	ok        bool   // state.Load succeeded — a zero msg (load error) stays false
+	focused   string // grove-63: ticket at the tmux-focused window, "" if none
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -58,6 +63,14 @@ type tickMsg struct{}
 // never a prTickMsg, so they can't multiply this loop.
 type prTickMsg struct{}
 type flashMsg string
+
+// remoteMsg is the one-shot answer to an R keypress (grove-178): every
+// configured host's `gv ls --json --no-pr` over ssh. Never re-fired by a
+// tick — the cockpit RAM rule (no new goroutine/poll); a fresh fetch is
+// one more R.
+type remoteMsg struct {
+	results []fleet.Result
+}
 type prsMsg map[string]*github.PR
 type paneTailMsg string
 type actionDoneMsg struct {
@@ -133,6 +146,18 @@ type Model struct {
 	// the browsed day.
 	almSel  int
 	almanac almanacMsg
+
+	// Remote fleet merge (grove-178). remote is the R toggle; localTasks +
+	// handedOff are the last refresh's local view, kept so the merged
+	// board (m.tasks) can be rebuilt on either a refresh or a remote
+	// answer — in Update, never per frame. remoteResults is the last R
+	// answer, held until R toggles off. nLive is the count of non-tombstone
+	// rows at the head of m.tasks: the scene slices m.tasks[:nLive].
+	remote        bool
+	localTasks    []*state.Task
+	handedOff     []*state.Task
+	remoteResults []fleet.Result
+	nLive         int
 
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
@@ -277,6 +302,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string) tea.Cmd {
 			return refreshMsg{}
 		}
 		active := state.Active(tasks)
+		handedOff := state.HandedOff(tasks)
 		// grove-149: two session-wide reads answer every window/pane question
 		// for the whole board; only capture-pane stays per task (inside
 		// DetectLiveFrom).
@@ -294,8 +320,77 @@ func refreshCmd(folder *state.Folder, stateDir, session string) tea.Cmd {
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, live: live, events: events, mem: mem, workers: workers, ok: true, focused: focused}
+		return refreshMsg{tasks: active, handedOff: handedOff, live: live, events: events, mem: mem, workers: workers, ok: true, focused: focused}
 	}
+}
+
+// remoteCmd asks every configured host once (fleet.Fetch: parallel, 5s per
+// host). Fired ONLY by the R key — never by a tick (grove-178).
+func remoteCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		if cfg == nil || len(cfg.Hosts) == 0 {
+			return remoteMsg{}
+		}
+		return remoteMsg{results: fleet.Fetch(context.Background(), cfg, cfg.HostNames(), nil)}
+	}
+}
+
+// assemble rebuilds the board from the last local refresh plus, while R is
+// on, the last remote answer and the handed-off tombstones. Called from
+// Update on each refreshMsg/remoteMsg — the per-second cost is one slice
+// on the existing beat, and View never rebuilds. With R off the board is
+// the local Active list untouched (byte-identical to pre-178).
+func (m *Model) assemble() {
+	if !m.remote {
+		m.tasks = m.localTasks
+		m.nLive = len(m.tasks)
+		return
+	}
+	local := make([]fleet.Row, 0, len(m.localTasks))
+	for _, t := range m.localTasks {
+		local = append(local, fleet.Row{Task: t, Live: m.live[t.Ticket]})
+	}
+	rows, _ := fleet.Merge(local, m.handedOff, m.remoteResults)
+	tasks := make([]*state.Task, 0, len(rows))
+	nLive := 0
+	for _, r := range rows {
+		tasks = append(tasks, r.Task)
+		if r.HandedOffTo == "" {
+			nLive++
+		}
+		if fleet.IsRemote(r.Task) || r.HandedOffTo != "" {
+			m.live[r.Ticket] = r.Live
+		}
+	}
+	m.tasks, m.nLive = tasks, nLive
+}
+
+// liveTasks is the board minus the trailing tombstones — what the scene
+// plants. A re-slice, never a copy (with R off it is m.tasks itself).
+func (m Model) liveTasks() []*state.Task {
+	if !m.remote || m.nLive > len(m.tasks) {
+		return m.tasks
+	}
+	return m.tasks[:m.nLive]
+}
+
+// remoteFlash is the footer line after an R answer: host failures verbatim
+// (one per host), else the merged count.
+func remoteFlash(results []fleet.Result) string {
+	rows, hosts := 0, 0
+	var warn []string
+	for _, r := range results {
+		if r.Err != nil {
+			warn = append(warn, r.Host+": "+r.Err.Error())
+			continue
+		}
+		hosts++
+		rows += len(r.Rows)
+	}
+	if len(warn) > 0 {
+		return "remote: " + strings.Join(warn, " · ")
+	}
+	return fmt.Sprintf("remote fleet: %d row(s) from %d host(s)", rows, hosts)
 }
 
 func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
@@ -403,8 +498,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.celebrations[walkKey(tk)] = walkTicks
 				}
 			}
-			m.tasks = msg.tasks
+			m.localTasks, m.handedOff = msg.tasks, msg.handedOff
 			m.live = msg.live
+			m.assemble()
 			m.events = msg.events
 			m.focused = msg.focused
 			if m.detail != nil { // keep detail pointed at fresh data
@@ -428,6 +524,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case costsMsg:
 		m.costs = msg
+		return m, nil
+
+	case remoteMsg:
+		// Data only (grove-178): no timer, no re-fire. A stale answer after
+		// R was toggled off is dropped.
+		if !m.remote {
+			return m, nil
+		}
+		m.remoteResults = msg.results
+		m.assemble()
+		m.flash = remoteFlash(msg.results)
 		return m, nil
 
 	case accountMsg:
@@ -547,9 +654,35 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAlmanacKey(k)
 	}
 
+	// grove-178: a remote or handed-off row is read-only here — steering
+	// lives on the host that runs it (`gv answer --host` is a later ticket).
+	if t := m.selected(); t != nil && (fleet.IsRemote(t) || t.HandedOffTo != "") {
+		switch k.String() {
+		case "enter", "n", "a", "v", "d":
+			m.flash = elsewhereFlash(t)
+			return m, nil
+		}
+	}
+
 	switch k.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "R": // remote fleet merge (grove-178): one fetch per press, never polled
+		m.remote = !m.remote
+		if !m.remote {
+			m.remoteResults = nil
+			m.assemble()
+			m.flash = "remote fleet: off"
+			return m, nil
+		}
+		if m.cfg == nil || len(m.cfg.Hosts) == 0 {
+			m.remote = false
+			m.flash = "remote fleet: no hosts configured (hosts: map in config.yaml)"
+			return m, nil
+		}
+		m.assemble() // tombstones show at once; live remote rows land with the answer
+		m.flash = fmt.Sprintf("asking %d host(s)…", len(m.cfg.Hosts))
+		return m, remoteCmd(m.cfg)
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
@@ -924,6 +1057,14 @@ func (m Model) selected() *state.Task {
 		return nil
 	}
 	return m.tasks[min(m.sel, len(m.tasks)-1)]
+}
+
+// elsewhereFlash names where a non-local row lives.
+func elsewhereFlash(t *state.Task) string {
+	if t.HandedOffTo != "" {
+		return t.Ticket + " was handed off to " + t.HandedOffTo + " — take back: gv handoff " + t.Ticket + " --from " + t.HandedOffTo
+	}
+	return t.Ticket + " runs on " + t.Host + " — steer it there (ssh " + t.Host + ")"
 }
 
 func (m Model) openPreview(t *state.Task) string {

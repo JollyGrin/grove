@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/resource"
 )
 
@@ -165,6 +166,16 @@ func (m Model) viewAgents() string {
 		rows = append(rows, line)
 	}
 	for i, t := range m.tasks {
+		if t.HandedOffTo != "" {
+			// grove-178 tombstone: a dim "elsewhere" line after the live rows.
+			cursor := " "
+			if i == m.sel {
+				cursor = sSelected.Render("▸")
+			}
+			line := cursor + sDim.Render("⇢ "+fleet.Elsewhere(fleet.Row{Task: t, Live: m.live[t.Ticket]}, age))
+			rows = append(rows, truncPad(line, w))
+			continue
+		}
 		label := t.Label()
 		st := statusStyle(label)
 		pr, ci, preview := "—", "—", "—"
@@ -228,7 +239,17 @@ func (m Model) viewAgents() string {
 		// Dimmed task-title hint in the leftover width — additive, never a
 		// formal column. Omit entirely on narrow panes rather than cramp.
 		consumed := 3 + tw + 11 + 11 + 8 + 8 + 4 + 9 + ageColW
-		if remaining := w - consumed; remaining >= 6 && t.Title != "" {
+		remaining := w - consumed
+		if fleet.IsRemote(t) {
+			// grove-178: the host tag leads the hint area so a merged board
+			// reads which rows are elsewhere without a new column.
+			tag := "@" + t.Host + " "
+			if remaining >= len([]rune(tag)) {
+				line += sDelivery.Render(tag)
+				remaining -= len([]rune(tag))
+			}
+		}
+		if remaining >= 6 && t.Title != "" {
 			line += sChrome.Render(trunc(t.Title, remaining))
 		}
 		rows = append(rows, truncPad(line, w))

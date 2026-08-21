@@ -35,7 +35,9 @@ append-only JSONL log, one record per line:
 `{"time", "type", "ticket", "data"{...}, "v"}`. Records without `v` are
 v1. Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
-`task_done`, `task_untracked`, `task_adopted`, `task_paused`;
+`task_done`, `task_untracked`, `task_adopted`, `task_paused`,
+`task_handed_off` (a task moved to another grove host — its `gv ls --json`
+row then carries `handed_off_to`; live rows carry `host`);
 workspace-scoped (empty ticket): `workspace_parked`, `orchestrator_closed`.
 Skip unknown types and lines that fail to parse (the last line may be
 torn mid-write).

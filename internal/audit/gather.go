@@ -76,6 +76,7 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 		}(i, t)
 	}
 	wg.Wait()
+	rows = append(rows, handedOffRows(tasks)...)
 
 	rep := Report{Tasks: rows}
 	rep.Orphans = scanOrphans(cfg, tasks)
@@ -85,6 +86,22 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 		rep.EventsSizeBytes = fi.Size()
 	}
 	return rep
+}
+
+// handedOffRows lists the forwarding tombstones (grove-178) as class
+// handed_off — pure report, no tmux/gh/worktree probes: the task lives on
+// the named host now and `gv ls --remote` is where to look.
+func handedOffRows(tasks map[string]*state.Task) []TaskResult {
+	var out []TaskResult
+	for _, t := range state.HandedOff(tasks) {
+		out = append(out, TaskResult{
+			Ticket: t.Ticket, Repo: t.Repo, Branch: t.Branch, Worktree: t.Worktree,
+			Class: HandedOff, Suggestion: Suggestion(HandedOff),
+			Facts:   Facts{Agent: t.Agent, Age: time.Since(t.Updated)},
+			Updated: t.Updated,
+		})
+	}
+	return out
 }
 
 func auditTask(cfg *config.Config, t *state.Task, staleAfter, idleAfter time.Duration, costCache *cost.Cache, parked bool) TaskResult {

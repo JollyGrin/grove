@@ -52,8 +52,8 @@ payload under one named key.
 
 | Command | Payload key | Shape |
 |---|---|---|
-| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
-| `gv audit --json` | `report` | object — per-task classification + orphan worktrees + orphan/worktree processes |
+| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`, `host`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
+| `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes |
 | `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |
@@ -72,6 +72,21 @@ $ gv ls --json --no-pr --no-cost
 Flags that matter to plugins: `gv ls --json --no-pr --no-cost` skips the
 `gh` and transcript scans (fast enough to poll); with them on you also get
 PR state and cost estimates per row.
+
+Since grove-178 (the remote-overflow train) two additive row fields:
+
+- `host` — where the row's task runs: `"local"` for this grove, a host
+  name from `config.yaml`'s `hosts:` map for rows merged in by
+  `gv ls --json --remote` (every configured host asked over ssh, 5s each;
+  an unreachable host is one `gv ls: warning:` line on stderr and never a
+  non-zero exit). Without `--remote` every live row is `"local"`.
+- `handed_off_to` — the remote host's name on a **tombstone** row: a task
+  `gv handoff` moved to another host (grove-177). Tombstones trail the
+  live rows, have `done: true`, and `live` is `"handed-off"` (or
+  `"handed-off?"` when `--remote` asked the named host and it no longer
+  lists the task). With `--remote`, a tombstone whose task the host
+  reports live is replaced by that live row (`host` = that host).
+  Plugins that only want runnable rows: skip rows with `handed_off_to`.
 
 ## React: tail `events.jsonl`
 
