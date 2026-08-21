@@ -32,6 +32,7 @@ import (
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
+	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
@@ -62,6 +63,7 @@ const usage = `gv — grove
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
+      … --host <name>                         grab/ls on a configured remote host (hosts: in config.yaml)
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
   gv cost --ledger | --record on|off          recorded spend history · persistence toggle
@@ -218,6 +220,19 @@ func main() {
 		return
 	}
 
+	// --host <name> (grove-176): run the verb on a remote grove host over
+	// ssh, flags passed through verbatim, output printed unchanged, exit
+	// code propagated. Intercepted before dispatch so the local verb never
+	// touches local state for a remote task.
+	if host, rest := remote.ExtractHost(args); host != "" {
+		code, err := runRemote(host, cmd, rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		os.Exit(code)
+	}
+
 	var err error
 	switch cmd {
 	case "version":
@@ -289,6 +304,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gv:", err)
 		os.Exit(1)
 	}
+}
+
+// runRemote resolves the host from config and passes the verb through.
+// Config load errors surface here even for verbs that tolerate a broken
+// config locally — without config there is no host to reach.
+func runRemote(host, verb string, args []string) (int, error) {
+	if !remote.Supported[verb] {
+		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: grab, ls)", verb)
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return 0, err
+	}
+	return remote.Run(cfg, host, verb, args, os.Stdout, os.Stderr)
 }
 
 // cmdVersion prints the stamped build version (`gv version` / `gv --version`).

@@ -515,3 +515,42 @@ func TestProviderConnectionsMixedFleet(t *testing.T) {
 		}
 	}
 }
+
+// grove-176: one warn row per configured host; reachable → ok + version,
+// unreachable → warn with the ssh error, never an error-severity block.
+func TestRemoteHostRows(t *testing.T) {
+	cfg := &config.Config{Hosts: map[string]*config.Host{
+		"vps":  {SSH: "dean@vps", GV: "/home/dean/go/bin/gv"},
+		"down": {SSH: "nobody@down", GV: "gv"},
+	}}
+	env := Env{Cfg: cfg, Output: func(_ time.Duration, name string, args ...string) (string, error) {
+		if name != "ssh" || args[len(args)-1] != "--version" {
+			t.Fatalf("probe = %s %v", name, args)
+		}
+		if args[len(args)-4] == "dean@vps" {
+			if args[len(args)-2] != "/home/dean/go/bin/gv" {
+				t.Errorf("vps probe uses %q, want configured gv path", args[len(args)-2])
+			}
+			return "gv v1.2.3\n", nil
+		}
+		return "", errors.New("exit status 255")
+	}}
+	conns := remoteHostConnections(env)
+	if len(conns) != 2 || conns[0].ID != "host:down" || conns[1].ID != "host:vps" {
+		t.Fatalf("rows = %+v", conns)
+	}
+	for _, c := range conns {
+		if c.Severity != SeverityWarn || c.Kind != KindRemoteHost {
+			t.Errorf("%s: severity %s kind %s, want warn remote-host", c.ID, c.Severity, c.Kind)
+		}
+	}
+	if st := conns[1].Check(env); st.State != StateOK || st.Info != "gv v1.2.3" {
+		t.Errorf("vps = %+v", st)
+	}
+	if st := conns[0].Check(env); st.State != StateMissing || !strings.Contains(st.Info, "255") {
+		t.Errorf("down = %+v", st)
+	}
+	if st := conns[0].Check(Env{Cfg: cfg}); st.State != StateMissing {
+		t.Errorf("nil Output seam = %+v, want missing", st)
+	}
+}

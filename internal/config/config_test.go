@@ -680,3 +680,54 @@ cockpit:
 		t.Errorf("cockpit.effects = %q, want calm inherited from global", c.Cockpit.Effects)
 	}
 }
+
+// grove-176: hosts: parse, defaults, validation, and the lookup error.
+func TestHostsParse(t *testing.T) {
+	c, err := parse([]byte(`
+hosts:
+  grove-host:
+    ssh: dean@grove-host
+    gv: /home/dean/go/bin/gv
+  bare:
+    ssh: bare.example
+`), "test.yaml")
+	if err != nil {
+		t.Fatalf("parse hosts: %v", err)
+	}
+	h, err := c.Host("grove-host")
+	if err != nil {
+		t.Fatalf("Host(grove-host): %v", err)
+	}
+	if h.SSH != "dean@grove-host" || h.GV != "/home/dean/go/bin/gv" {
+		t.Errorf("grove-host = %+v", *h)
+	}
+	if b, _ := c.Host("bare"); b == nil || b.GV != "gv" {
+		t.Errorf("bare host gv default: got %+v, want gv", b)
+	}
+	if got := c.HostNames(); !reflect.DeepEqual(got, []string{"bare", "grove-host"}) {
+		t.Errorf("HostNames = %v", got)
+	}
+	_, err = c.Host("nope")
+	if err == nil || !strings.Contains(err.Error(), "bare, grove-host") {
+		t.Errorf("unknown host error = %v, want list of configured hosts", err)
+	}
+}
+
+func TestHostsValidation(t *testing.T) {
+	for _, raw := range []string{
+		"hosts:\n  h:\n    gv: /x/gv\n",
+		"hosts:\n  h:\n    ssh: \"  \"\n",
+		"hosts:\n  h:\n",
+	} {
+		if _, err := parse([]byte(raw), "test.yaml"); err == nil || !strings.Contains(err.Error(), `host "h"`) {
+			t.Errorf("parse(%q) err = %v, want host \"h\" ssh error", raw, err)
+		}
+	}
+	c, err := parse([]byte("repos: {}\n"), "test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Host("h"); err == nil || !strings.Contains(err.Error(), "no hosts configured") {
+		t.Errorf("no-hosts lookup err = %v", err)
+	}
+}
