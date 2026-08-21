@@ -32,6 +32,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Hostile tmux config mode (grove-168): GROVE_E2E_TMUX_CONF=hostile boots the
+# isolated server with base-index 1 + pane-base-index 1 — the common dotfiles
+# pair that turned literal ".0"/".1" pane targets into fresh-install failures.
+# -f only applies at server boot, so start the server now (exit-empty off
+# keeps it alive with no sessions); every later gv tmux call joins it with
+# the hostile options already global.
+if [ "${GROVE_E2E_TMUX_CONF:-}" = "hostile" ]; then
+  say "hostile tmux conf (base-index 1, pane-base-index 1)"
+  cat > "$SCRATCH/hostile.conf" <<'EOF'
+set -g base-index 1
+set -g pane-base-index 1
+set -g renumber-windows on
+set -g allow-rename on
+set -g exit-empty off
+EOF
+  tmux -f "$SCRATCH/hostile.conf" start-server
+fi
+
 mkrepo() { # dir
   mkdir -p "$1" && git -C "$1" init -qb main . 2>/dev/null || git -C "$1" init -qb main
   git -C "$1" config user.email e2e@x && git -C "$1" config user.name e2e

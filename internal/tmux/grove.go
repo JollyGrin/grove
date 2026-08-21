@@ -166,7 +166,14 @@ func EnsureWorkspaceSession(session, dir string) error {
 		if err := DisableAutoRename(Exact(session) + ":cockpit"); err != nil {
 			return err
 		}
-		return SendKeys(Exact(session)+":cockpit.0", cockpitHint)
+		// Resolve the pane id — a literal ".0" only exists under the
+		// default pane-base-index; a fresh install with `pane-base-index 1`
+		// killed gv grab right here (grove-168).
+		pane, err := FirstPaneID(Exact(session) + ":cockpit")
+		if err != nil {
+			return err
+		}
+		return SendKeys(pane, cockpitHint)
 	}
 	// Session exists but predates the reserved slot (or was built cockpit-
 	// first without one): make sure a cockpit window is present so worker
@@ -178,6 +185,48 @@ func EnsureWorkspaceSession(session, dir string) error {
 		return DisableAutoRename(Exact(session) + ":cockpit")
 	}
 	return nil
+}
+
+// FirstPaneID resolves a window's lowest-index pane to its immutable "%N"
+// id. Pane indices depend on the user's pane-base-index (grove-168): under
+// the common dotfiles pair `base-index 1` + `pane-base-index 1` the first
+// pane is ".1" and a literal ".0" target errors — so "the window's first
+// pane" (dashboard, placeholder hint, worktree shell) is always resolved
+// via list-panes, never assumed at an index. windowTarget must already be
+// a safe window target: an immutable "@N" id, or an exact-anchored
+// "=session:window" / ExactActive form (list-panes -t is a target-window,
+// grove-99 table).
+func FirstPaneID(windowTarget string) (string, error) {
+	out, err := run("list-panes", "-t", windowTarget, "-F", "#{pane_id} #{pane_index}")
+	if err != nil {
+		return "", err
+	}
+	id, ok := firstPaneID(out)
+	if !ok {
+		return "", fmt.Errorf("no panes in window %q", windowTarget)
+	}
+	return id, nil
+}
+
+// firstPaneID parses list-panes "#{pane_id} #{pane_index}" output and picks
+// the lowest-index pane's id — split from the exec so the selection is
+// testable without a tmux server.
+func firstPaneID(out string) (string, bool) {
+	best, bestIdx := "", -1
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		idx, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		if bestIdx == -1 || idx < bestIdx {
+			best, bestIdx = fields[0], idx
+		}
+	}
+	return best, best != ""
 }
 
 // SelectWindow makes the given window the session's active one.
@@ -437,29 +486,37 @@ func DisableAutoRename(target string) error {
 
 // closablePane is the pure guard for self-close: a pane may only be killed
 // when it lives in a grove cockpit session (grove / grove-<label>) and is
-// not pane 0 — pane 0 is the dashboard, and the cockpit's whole point is
-// that it survives. Keeps a mis-wired orchestrator from euthanizing the
-// dashboard or a pane in some unrelated tmux session.
+// not the window's FIRST (lowest-index) pane — that pane is the dashboard,
+// and the cockpit's whole point is that it survives. "First", not "index
+// 0": pane numbering starts at the user's pane-base-index, so under the
+// common `pane-base-index 1` the dashboard sits at index 1 and a literal
+// `index == 0` check silently stopped protecting it (grove-168). Keeps a
+// mis-wired orchestrator from euthanizing the dashboard or a pane in some
+// unrelated tmux session.
 //
 // Since the workspace collapse (grove-29 P2) worker windows also live in
 // grove-<label>, so they now pass the session check too — but this guard is
 // only ever invoked for an orchestrator's self-dismissal (PaneClosable with
 // its own $TMUX_PANE, in the cockpit window), and every worker window's
-// pane 0 is the protected worktree shell, so no worker pane is ever at risk.
-func closablePane(session string, index int) error {
+// first pane is the protected worktree shell, so no worker pane is ever at
+// risk.
+func closablePane(session string, index, first int) error {
 	if session != "grove" && !strings.HasPrefix(session, "grove-") {
 		return fmt.Errorf("pane is in session %q, not a grove cockpit — refusing to close", session)
 	}
-	if index == 0 {
-		return fmt.Errorf("pane 0 is the dashboard — refusing to close it")
+	if index == first {
+		return fmt.Errorf("pane %d is the window's first pane — the dashboard — refusing to close it", index)
 	}
 	return nil
 }
 
 // PaneClosable reports whether pane (e.g. "%23") is a cockpit orchestrator
-// pane safe to kill — queries its session/index and runs closablePane.
-// Callers check this BEFORE any irreversible side effect (e.g. logging the
-// dismissal) so a guard rejection never leaves a half-done record.
+// pane safe to kill — queries its session/index plus its window's lowest
+// pane index and runs closablePane. Fails closed: if the window's panes
+// can't be listed, the guard refuses rather than guessing which pane is
+// the dashboard. Callers check this BEFORE any irreversible side effect
+// (e.g. logging the dismissal) so a guard rejection never leaves a
+// half-done record.
 func PaneClosable(pane string) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
@@ -476,7 +533,33 @@ func PaneClosable(pane string) error {
 	if err != nil {
 		return fmt.Errorf("parse pane index %q: %w", parts[1], err)
 	}
-	return closablePane(parts[0], index)
+	// list-panes -t is a target-window; a "%N" pane id resolves to its
+	// containing window, so this lists the pane's siblings.
+	out, err := run("list-panes", "-t", pane, "-F", "#{pane_index}")
+	if err != nil {
+		return err
+	}
+	first, ok := lowestPaneIndex(out)
+	if !ok {
+		return fmt.Errorf("cannot list panes of %s's window — refusing to close", pane)
+	}
+	return closablePane(parts[0], index, first)
+}
+
+// lowestPaneIndex parses list-panes "#{pane_index}" output and returns the
+// window's lowest live index — the dashboard slot under any pane-base-index.
+func lowestPaneIndex(out string) (int, bool) {
+	lowest, ok := 0, false
+	for _, line := range strings.Split(out, "\n") {
+		idx, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			continue
+		}
+		if !ok || idx < lowest {
+			lowest, ok = idx, true
+		}
+	}
+	return lowest, ok
 }
 
 // ClosePane kills a cockpit orchestrator pane by id after re-checking

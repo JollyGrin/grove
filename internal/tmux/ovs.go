@@ -13,11 +13,18 @@ import (
 )
 
 // SplitVerticalWindow splits a specific window (not the session's current
-// one) horizontally, side-by-side. Needed because grab creates detached
-// windows that are never the active window.
-func SplitVerticalWindow(windowTarget, workDir string) error {
-	_, err := run("split-window", "-h", "-t", windowTarget, "-c", workDir)
-	return err
+// one) horizontally, side-by-side, and returns the new pane's immutable
+// "%N" id. Needed because grab creates detached windows that are never the
+// active window. Callers send the worker command to the returned id, never
+// to a numeric ".1" — pane indices depend on the user's pane-base-index
+// (grove-168: under the common `pane-base-index 1` a ".1" target is the
+// FIRST pane, the worktree shell, not this split).
+func SplitVerticalWindow(windowTarget, workDir string) (string, error) {
+	out, err := run("split-window", "-h", "-t", windowTarget, "-c", workDir, "-P", "-F", "#{pane_id}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // PaneInfo is one pane's index and foreground command.
@@ -27,13 +34,16 @@ type PaneInfo struct {
 }
 
 // ClaudePane resolves which pane of a window holds the claude session.
-// Worker windows normally run claude in pane 1, but a window can lose its
-// split (observed live: DEV-4761) — then claude is the only pane, at index
-// 0. Falls back to the historical pane 1 when the window can't be resolved,
-// so callers behave exactly as before this helper existed. The window is
-// resolved by id (grove-116): a raw name target prefix-matches, so this
-// used to list a prefix-extending SIBLING window's panes once the task's
-// own window was gone.
+// Worker windows normally run claude in the split (second) pane, but a
+// window can lose its split (observed live: DEV-4761) — then claude is the
+// only pane. Every successful path returns a REAL index straight from
+// list-panes, so the result is correct under any pane-base-index
+// (grove-168); the historical literal-1 fallback fires only when the
+// window is unlistable, where any composed target fails anyway, so it
+// stays for behavior compatibility — never add new literal indices. The
+// window is resolved by id (grove-116): a raw name target prefix-matches,
+// so this used to list a prefix-extending SIBLING window's panes once the
+// task's own window was gone.
 func ClaudePane(session, window string) int {
 	id, ok := WindowID(session, window)
 	if !ok {

@@ -54,6 +54,19 @@ grove worker) silently targets the **real server** unless it clears
 - Claude's pane is **resolved, never assumed** — windows lose splits,
   panes renumber, and Claude's process title is its bare version string.
   All relay/detector/editor-inject paths go through `tmux.ClaudePane`.
+- **Pane indices depend on the user's `pane-base-index` — never write a
+  literal `.0`/`.1` target** (grove-168: the common `base-index 1` +
+  `pane-base-index 1` dotfiles pair made fresh installs die at the cockpit
+  build, and sent grab's claude command into the worktree shell). Resolve
+  the `%N` id at creation (`split-window -P -F '#{pane_id}'` —
+  `SplitVerticalWindow`/`SpawnPane` return it) or via list-panes
+  (`tmux.FirstPaneID` for "the window's first pane", `ClaudePaneTarget`
+  for claude); "is this the first pane" compares against the window's
+  lowest live index, never `== 0`. Never fight the user's numbering with
+  `set-option base-index 0` either — grove works under their config. The
+  guardrail: `GROVE_E2E_TMUX_CONF=hostile` makes cockpit.sh/workspace.sh
+  boot their isolated server with the hostile conf; `e2e/all.sh` runs both
+  modes (the default scratch-HOME servers can never catch this class).
 - Window names drift (trailing dashes, glyph changes), so never rely on
   exact window-name equality; re-derive and re-store on adopt. But tmux's
   window-side **prefix matching is a trap, not the answer** (grove-116):

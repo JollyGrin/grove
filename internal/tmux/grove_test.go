@@ -114,22 +114,71 @@ func TestClosablePane(t *testing.T) {
 		name    string
 		session string
 		index   int
+		first   int
 		ok      bool
 	}{
-		{"legacy cockpit orchestrator pane", "grove", 1, true},
-		{"workspace cockpit orchestrator pane", "grove-unbrewed", 2, true},
-		{"dashboard pane refused", "grove", 0, false},
-		{"workspace dashboard pane refused", "grove-unbrewed", 0, false},
-		{"non-cockpit session refused", "pr-unbrewed-p2p", 1, false},
-		{"lookalike session refused", "grovething", 1, false},
+		{"legacy cockpit orchestrator pane", "grove", 1, 0, true},
+		{"workspace cockpit orchestrator pane", "grove-unbrewed", 2, 0, true},
+		{"dashboard pane refused", "grove", 0, 0, false},
+		{"workspace dashboard pane refused", "grove-unbrewed", 0, 0, false},
+		// pane-base-index 1 (grove-168): the dashboard sits at index 1 —
+		// the old `index == 0` guard silently stopped protecting it.
+		{"dashboard at pane-base-index 1 refused", "grove", 1, 1, false},
+		{"orchestrator above a base-1 dashboard allowed", "grove-unbrewed", 2, 1, true},
+		{"non-cockpit session refused", "pr-unbrewed-p2p", 1, 0, false},
+		{"lookalike session refused", "grovething", 1, 0, false},
 	}
 	for _, tc := range cases {
-		err := closablePane(tc.session, tc.index)
+		err := closablePane(tc.session, tc.index, tc.first)
 		if tc.ok && err != nil {
-			t.Errorf("%s: closablePane(%q, %d) = %v, want nil", tc.name, tc.session, tc.index, err)
+			t.Errorf("%s: closablePane(%q, %d, %d) = %v, want nil", tc.name, tc.session, tc.index, tc.first, err)
 		}
 		if !tc.ok && err == nil {
-			t.Errorf("%s: closablePane(%q, %d) = nil, want error", tc.name, tc.session, tc.index)
+			t.Errorf("%s: closablePane(%q, %d, %d) = nil, want error", tc.name, tc.session, tc.index, tc.first)
+		}
+	}
+}
+
+func TestLowestPaneIndex(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want int
+		ok   bool
+	}{
+		{"default base", "0\n1\n2\n", 0, true},
+		{"pane-base-index 1", "1\n2\n", 1, true},
+		{"unordered output", "3\n1\n2\n", 1, true},
+		{"garbage skipped", "x\n2\n", 2, true},
+		{"empty", "\n", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := lowestPaneIndex(tc.out)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: lowestPaneIndex(%q) = (%d, %v), want (%d, %v)", tc.name, tc.out, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestFirstPaneID(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+		ok   bool
+	}{
+		{"default base", "%4 0\n%7 1\n", "%4", true},
+		// pane-base-index 1: the first pane is index 1 — the literal-".0"
+		// assumption this helper replaces (grove-168).
+		{"pane-base-index 1", "%4 1\n%7 2\n", "%4", true},
+		{"unordered output", "%7 2\n%4 1\n", "%4", true},
+		{"malformed lines skipped", "garbage\n%9 3\n", "%9", true},
+		{"no panes", "\n", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := firstPaneID(tc.out)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: firstPaneID(%q) = (%q, %v), want (%q, %v)", tc.name, tc.out, got, ok, tc.want, tc.ok)
 		}
 	}
 }
