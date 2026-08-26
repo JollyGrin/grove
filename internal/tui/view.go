@@ -61,7 +61,9 @@ func (m Model) View() string {
 }
 
 func (m Model) viewHeader() string {
-	working, mail, review := countWorking(m.tasks), len(m.mailRows()), len(m.reviewRows())
+	// Counters feed on the LOCAL tasks: a waiting remote row is not mail a
+	// local key can answer, and a tombstone's PR is not this host's review.
+	working, mail, review := countWorking(m.localTasks), len(m.mailRows()), len(m.reviewRows())
 	scope := "· the canopy"
 	if m.label != "" {
 		scope = "· " + m.label
@@ -128,8 +130,8 @@ func (m Model) memGauge() string {
 // one huge id can't push every other column off a narrow screen.
 func (m Model) ticketColWidth() int {
 	w := 10
-	for _, t := range m.tasks {
-		if n := len([]rune(t.Ticket)); n > w {
+	for _, r := range m.board {
+		if n := len([]rune(r.Ticket)); n > w {
 			w = n
 		}
 	}
@@ -152,7 +154,7 @@ func (m Model) viewAgents() string {
 		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + pad("AGE", ageColW) + "TASK"
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
-	if len(m.tasks) == 0 {
+	if len(m.board) == 0 {
 		empty := "  no active tasks — gv grab <ticket> plants one"
 		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
 			empty = emptyAgentsLine(nowHour())
@@ -164,7 +166,20 @@ func (m Model) viewAgents() string {
 		}
 		rows = append(rows, line)
 	}
-	for i, t := range m.tasks {
+	for i, r := range m.board {
+		t := r.Task
+		if r.HandedOffTo != "" {
+			// grove-178 tombstone: a dim "elsewhere" line after the live
+			// rows. The line itself was built in assemble (grove-167
+			// compute-once) — the frame only styles it.
+			cursor := " "
+			if i == m.sel {
+				cursor = sSelected.Render("▸")
+			}
+			line := cursor + sDim.Render("⇢ "+r.elsewhere)
+			rows = append(rows, truncPad(line, w))
+			continue
+		}
 		label := t.Label()
 		st := statusStyle(label)
 		pr, ci, preview := "—", "—", "—"
@@ -215,7 +230,7 @@ func (m Model) viewAgents() string {
 				glyphStyle = knockStyle(m.tick)
 			}
 		}
-		live := m.live[t.Ticket]
+		live := r.Live
 		line := cursor + glyphStyle.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
 			pad(trunc(t.Repo, 10), 11) +
@@ -228,7 +243,15 @@ func (m Model) viewAgents() string {
 		// Dimmed task-title hint in the leftover width — additive, never a
 		// formal column. Omit entirely on narrow panes rather than cramp.
 		consumed := 3 + tw + 11 + 11 + 8 + 8 + 4 + 9 + ageColW
-		if remaining := w - consumed; remaining >= 6 && t.Title != "" {
+		remaining := w - consumed
+		if r.hostTag != "" && remaining >= r.tagW {
+			// grove-178: the host tag leads the hint area so a merged board
+			// reads which rows are elsewhere without a new column. Tag and
+			// width precomputed in assemble — no per-frame building.
+			line += sDelivery.Render(r.hostTag)
+			remaining -= r.tagW
+		}
+		if remaining >= 6 && t.Title != "" {
 			line += sChrome.Render(trunc(t.Title, remaining))
 		}
 		rows = append(rows, truncPad(line, w))
@@ -302,7 +325,7 @@ func (m Model) viewFooter() string {
 		// workers + orchestrator + this cockpit stop, that state is saved,
 		// and how to bring it back (grove-33).
 		prompt := fmt.Sprintf("park %s? stops %d worker(s) + orchestrator + cockpit · state saved on disk · resume: gv, then gv adopt <ticket> ",
-			m.sessionName(), len(m.tasks))
+			m.sessionName(), len(m.localTasks))
 		line := " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
@@ -311,7 +334,7 @@ func (m Model) viewFooter() string {
 	// so footerHeight is a constant 1. The flash is the only surface errors
 	// have — when it doesn't fit beside the included hints, optional hints
 	// yield (never the O/)/? trio), then the flash truncates as last resort.
-	hasTasks := len(m.tasks) > 0
+	hasTasks := len(m.board) > 0
 	line := footerLegend(m.width, hasTasks)
 	if m.flash != "" {
 		flashW := len([]rune(m.flash))

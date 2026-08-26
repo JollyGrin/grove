@@ -34,7 +34,7 @@ func TestRefreshCmdOkAtZeroActive(t *testing.T) {
 		}
 	}
 
-	msg, ok := refreshCmd(state.NewFolder(dir, feedTail), dir, "grove-nonexistent-test-session")().(refreshMsg)
+	msg, ok := refreshCmd(state.NewFolder(dir, feedTail), dir, "grove-nonexistent-test-session", false)().(refreshMsg)
 	if !ok {
 		t.Fatalf("refreshCmd returned %T, want refreshMsg", msg)
 	}
@@ -51,7 +51,7 @@ func TestRefreshCmdOkAtZeroActive(t *testing.T) {
 
 // A healthy refresh at zero active tasks (tasks: nil, ok: true) must still
 // land the events — the orchard/strip/feed all read off m.events, not
-// m.tasks, once every task is done.
+// the board, once every task is done.
 func TestRefreshAppliesOnOkEvenWithNilTasks(t *testing.T) {
 	m := fixtureModel(t)
 	events := []state.Event{
@@ -67,8 +67,8 @@ func TestRefreshAppliesOnOkEvenWithNilTasks(t *testing.T) {
 	if n := countDone(got.events); n != 2 {
 		t.Errorf("countDone off the retained events = %d, want 2", n)
 	}
-	if got.tasks != nil {
-		t.Errorf("empty fleet should clear stale tasks, got %v", got.tasks)
+	if len(got.board) != 0 {
+		t.Errorf("empty fleet should clear stale board, got %v", got.board)
 	}
 }
 
@@ -84,8 +84,8 @@ func TestRefreshErrorMsgRetainsPriorState(t *testing.T) {
 	next, _ = populated.Update(refreshMsg{})
 	got := next.(Model)
 
-	if len(got.tasks) != 1 || got.tasks[0].Ticket != "grove-18" {
-		t.Errorf("load-error refresh clobbered tasks: %v", got.tasks)
+	if len(got.board) != 1 || got.board[0].Ticket != "grove-18" {
+		t.Errorf("load-error refresh clobbered the board: %v", got.board)
 	}
 	if len(got.events) != 1 {
 		t.Errorf("load-error refresh clobbered events: %v", got.events)

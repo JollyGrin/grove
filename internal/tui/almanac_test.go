@@ -199,7 +199,7 @@ func TestOpenAlmanacFromList(t *testing.T) {
 	}
 
 	// The refresh tick must NOT re-fire almanacCmd (unlike costs).
-	next, _ = m.Update(refreshMsg{tasks: m.tasks, ok: true})
+	next, _ = m.Update(refreshMsg{tasks: m.localTasks, ok: true})
 	m = next.(Model)
 	_ = m
 }

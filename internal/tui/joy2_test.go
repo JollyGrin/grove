@@ -228,7 +228,8 @@ func TestKnockStyleAlternates(t *testing.T) {
 func TestKnockDetectionInUpdate(t *testing.T) {
 	m := fixtureModel(t)
 	m.fx = fxFull
-	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
+	m.localTasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
+	m.assemble()
 	next, _ := m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}, ok: true})
 	got := next.(Model)
 	if got.celebrations[knockKey("grove-9")] != knockTicks {
@@ -240,7 +241,8 @@ func TestKnockDetectionInUpdate(t *testing.T) {
 
 	m = fixtureModel(t)
 	m.fx = fxCalm
-	m.tasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
+	m.localTasks = []*state.Task{{Ticket: "grove-9", Agent: state.AgentWorking}}
+	m.assemble()
 	next, _ = m.Update(refreshMsg{tasks: []*state.Task{{Ticket: "grove-9", Agent: state.AgentWaiting}}, ok: true})
 	if got := next.(Model); len(got.celebrations) != 0 {
 		t.Errorf("calm must not seed knocks: %v", got.celebrations)
@@ -288,14 +290,14 @@ func TestFirstLight(t *testing.T) {
 func TestFirstLightGreetsOnce(t *testing.T) {
 	m := fixtureModel(t) // pins nowHour to 10
 	m.fx = fxCalm
-	next, _ := m.Update(refreshMsg{tasks: m.tasks, ok: true})
+	next, _ := m.Update(refreshMsg{tasks: m.localTasks, ok: true})
 	got := next.(Model)
-	if want := firstLight(10, len(m.tasks)); got.flash != want {
+	if want := firstLight(10, len(m.localTasks)); got.flash != want {
 		t.Errorf("first refresh flash = %q, want %q", got.flash, want)
 	}
 	// A later refresh (flash since cleared) must not greet again.
 	got.flash = ""
-	next, _ = got.Update(refreshMsg{tasks: m.tasks, ok: true})
+	next, _ = got.Update(refreshMsg{tasks: m.localTasks, ok: true})
 	if again := next.(Model); again.flash != "" {
 		t.Errorf("second refresh re-greeted: %q", again.flash)
 	}
@@ -309,7 +311,7 @@ func TestFirstLightGreetsOnce(t *testing.T) {
 	if bad.flash != "" || bad.greeted {
 		t.Errorf("error refresh greeted: flash %q greeted %v", bad.flash, bad.greeted)
 	}
-	next, _ = bad.Update(refreshMsg{tasks: m.tasks, ok: true})
+	next, _ = bad.Update(refreshMsg{tasks: m.localTasks, ok: true})
 	if got := next.(Model); got.flash == "" {
 		t.Error("the first good refresh after an error one should still greet")
 	}
@@ -317,7 +319,7 @@ func TestFirstLightGreetsOnce(t *testing.T) {
 	// off: silent, but still latched (toggling fx later must not greet).
 	m = fixtureModel(t)
 	m.fx = fxOff
-	next, _ = m.Update(refreshMsg{tasks: m.tasks, ok: true})
+	next, _ = m.Update(refreshMsg{tasks: m.localTasks, ok: true})
 	if got := next.(Model); got.flash != "" || !got.greeted {
 		t.Errorf("off greeting: flash %q greeted %v, want silent + latched", got.flash, got.greeted)
 	}
@@ -384,9 +386,10 @@ func TestFireflyRendersAtNightOnly(t *testing.T) {
 func TestOffIsStaticJoyV2(t *testing.T) {
 	base := fixtureModel(t)
 	base.fx = fxOff
-	base.tasks = append(base.tasks, &state.Task{
+	base.localTasks = append(base.localTasks, &state.Task{
 		Ticket: "grove-19", Repo: "grove", Agent: state.AgentWaiting, Created: time.Now(),
 	})
+	base.assemble()
 	base.events = []state.Event{
 		{Type: state.EvTaskDone, Ticket: "grove-17", Time: time.Now().Add(-time.Hour)},
 		{Type: state.EvTaskDone, Ticket: "grove-18", Time: time.Now().Add(-time.Hour)},

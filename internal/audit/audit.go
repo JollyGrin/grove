@@ -22,6 +22,10 @@ const (
 	Disconnected Class = "disconnected"
 	Abandoned    Class = "abandoned"
 	Drifted      Class = "drifted"
+	// HandedOff (grove-178) is a forwarding tombstone: the task was moved to
+	// another grove host by gv handoff. Report-only — never abandoned, no
+	// probes; the live row is on the other host (`gv ls --remote`).
+	HandedOff Class = "handed_off"
 )
 
 func (c Class) String() string { return string(c) }
@@ -103,6 +107,8 @@ func Suggestion(c Class) string {
 		return "gv untrack --rm"
 	case Drifted:
 		return "gv adopt (or gv untrack)"
+	case HandedOff:
+		return "gv ls --remote"
 	default:
 		return ""
 	}

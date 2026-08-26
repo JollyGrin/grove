@@ -179,7 +179,8 @@ func fixtureModel(t *testing.T) Model {
 	pinHour(t, 10)
 	m := New(nil, "", "")
 	m.width, m.height = 120, 40
-	m.tasks = []*state.Task{{Ticket: "grove-18", Title: "joy", Repo: "grove", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-18", Title: "joy", Repo: "grove", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	m.live = map[string]string{"grove-18": "working"}
 	m.prs = map[string]*github.PR{"grove-18": {Number: 18, State: "MERGED", CI: "pass"}}
 	m.mem = resource.Mem{AvailBytes: 8 << 30, TotalBytes: 16 << 30}
