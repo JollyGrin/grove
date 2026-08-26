@@ -22,6 +22,12 @@ say "build gv"
 GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
+# Real-server canary (tmux-discipline, tapes/run.sh pattern): snapshot the
+# machine's REAL tmux session list now, compare at the end — if this suite
+# ever leaks onto the real server, fail loudly instead of silently.
+real_tmux() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR tmux list-sessions -F '#{session_name}' 2>/dev/null | sort; true; }
+REAL_TMUX_BEFORE="$(real_tmux)"
+
 export HOME="$SCRATCH/home"
 export GROVE_STATE_DIR="$SCRATCH/state-local"
 REMOTE_STATE="$SCRATCH/state-remote"
@@ -40,11 +46,24 @@ cleanup() {
 trap cleanup EXIT
 
 say "fake ssh + gh on PATH"
-# ssh: drop options, run the trailing command string on the "remote".
+# ssh: parse like the real thing — skip options, take the first bare word
+# as the TARGET and everything after -- as the command. The target must be
+# the host's configured `ssh:` value (findings 8/9 escaped review because
+# the old fake ignored it: gv could print/dial the config KEY, or a wrong
+# name entirely, and this suite stayed green).
 cat > "$SCRATCH/bin/ssh" <<EOF
 #!/usr/bin/env bash
-cmd=""
-for a in "\$@"; do cmd="\$a"; done
+target=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -o) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) if [ -z "\$target" ]; then target="\$1"; shift; else break; fi ;;
+  esac
+done
+[ "\$target" = "localhost" ] || { echo "fake ssh: target '\$target' is not the configured hosts.pc.ssh value (localhost)" >&2; exit 42; }
+cmd="\$*"
 echo "[fake ssh] \$cmd" >&2
 exec env GROVE_STATE_DIR="$REMOTE_STATE" TMUX_TMPDIR="$REMOTE_TMUX" sh -c "\$cmd"
 EOF
@@ -108,7 +127,9 @@ STOP_PID=$!
 cat "$SCRATCH/handoff.out"
 grep -q 'nudging task-001' "$SCRATCH/handoff.out" || fail "checkpoint nudge missing"
 grep -q 'task-001 → pc' "$SCRATCH/handoff.out" || fail "follow line missing"
-grep -q 'ssh pc -t tmux attach -t =grove-dummy' "$SCRATCH/handoff.out" || fail "follow line has the wrong session"
+# The follow command must dial hosts.pc.ssh (localhost), never the config
+# key, and resolve the window via the remote's own gv attach.
+grep -q "ssh localhost -t $GV attach task-001" "$SCRATCH/handoff.out" || fail "follow line must be 'ssh <hosts.pc.ssh> -t <hosts.pc.gv> attach task-001'"
 
 say "local: untracked + tombstone; window closed; worktree kept"
 grep -q '"type":"task_untracked"' "$GROVE_STATE_DIR/events.jsonl" || fail "no task_untracked locally"
@@ -131,17 +152,37 @@ GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls
 grep -q '"task-001"' "$SCRATCH/ls-remote.json" || fail "remote ls missing task"
 grep -q 'handed_off_to' "$SCRATCH/ls-remote.json" && fail "remote must carry no tombstone" || true
 
-say "gv handoff task-001 --from pc --yes --no-checkpoint (the mirror)"
-"$GV" handoff task-001 --from pc --yes --no-checkpoint > "$SCRATCH/from.out" 2>&1 || { cat "$SCRATCH/from.out"; fail "handoff --from failed"; }
+say "gv handoff task-001 --from pc --as mac --yes --no-checkpoint (the mirror)"
+"$GV" handoff task-001 --from pc --as mac --yes --no-checkpoint > "$SCRATCH/from.out" 2>&1 || { cat "$SCRATCH/from.out"; fail "handoff --from failed"; }
 cat "$SCRATCH/from.out"
 grep -q 'released' "$SCRATCH/from.out" || fail "remote release missing"
 grep -q 'adopted (pickup prompt)' "$SCRATCH/from.out" || fail "pull-back must be a cold adopt (pickup prompt, no stale --resume)"
 grep -q '"type":"task_untracked"' "$REMOTE_STATE/events.jsonl" || fail "remote not untracked"
-grep -q '"type":"task_handed_off"' "$REMOTE_STATE/events.jsonl" || fail "remote tombstone missing"
+grep -q '"host":"mac"' "$REMOTE_STATE/events.jsonl" || fail "remote tombstone must carry the --as name"
+# Tombstone ordering on a pull too: it lands on the remote via the
+# post-adopt call-back, so it must be the LAST event written there.
+tail -1 "$REMOTE_STATE/events.jsonl" | grep -q '"type":"task_handed_off"' || fail "remote tombstone must be the last write (post-adopt call-back)"
 "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-back.json"
 grep -q '"task-001"' "$SCRATCH/ls-back.json" || fail "task not back locally"
 grep -q '"handed_off_to"' "$SCRATCH/ls-back.json" && fail "local tombstone must clear on re-adopt" || true
 tmux list-windows -t "=$SESSION" > "$SCRATCH/windows-back.out"
 grep -q task-001 "$SCRATCH/windows-back.out" || fail "local worker window not rebuilt"
+
+say "relay free text mentioning --host is relayed, not intercepted"
+# --host is only parsed for verbs that support it (grab/ls/adopt/handoff):
+# a nudge whose text mentions it must reach the pane as text, never
+# reroute (or error) the whole command.
+"$GV" nudge task-001 "when idle, compare with gv ls --host pc" > "$SCRATCH/nudge-host.out" 2>&1 || { cat "$SCRATCH/nudge-host.out"; fail "nudge with '--host' in its free text was intercepted"; }
+
+say "tombstone terminal path: gv untrack drops the remote's pointer"
+GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-tomb.json"
+grep -q '"handed_off_to": *"mac"' "$SCRATCH/ls-remote-tomb.json" || fail "remote pointer missing before untrack"
+GROVE_STATE_DIR="$REMOTE_STATE" "$GV" untrack task-001 > "$SCRATCH/untrack-tomb.out"
+grep -q 'pointer dropped' "$SCRATCH/untrack-tomb.out" || { cat "$SCRATCH/untrack-tomb.out"; fail "untrack on a tombstone row must drop the pointer"; }
+GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-after.json"
+grep -q 'handed_off_to' "$SCRATCH/ls-remote-after.json" && fail "pointer must clear after untrack" || true
+
+say "real tmux server untouched (canary)"
+[ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "the REAL tmux server's session list changed — the suite leaked out of isolation"
 
 printf '\n\033[32mhandoff e2e green\033[0m\n'

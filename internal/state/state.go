@@ -136,6 +136,20 @@ func Append(stateDir string, ev Event) error {
 // is a deliberate divergence from ovs's break-on-error Load; see
 // docs/seed-manifest.md.
 func Load(stateDir string) (map[string]*Task, error) {
+	tasks, err := Peek(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if view, err := json.MarshalIndent(tasksSlice(tasks), "", "  "); err == nil {
+		_ = os.WriteFile(filepath.Join(stateDir, "tasks.json"), view, 0o644)
+	}
+	return tasks, nil
+}
+
+// Peek folds events.jsonl like Load but never rewrites the derived
+// tasks.json view — for polling loops (gv handoff's idle wait) that would
+// otherwise rewrite the same bytes every tick.
+func Peek(stateDir string) (map[string]*Task, error) {
 	f, err := os.Open(eventsPath(stateDir))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -158,10 +172,6 @@ func Load(stateDir string) (map[string]*Task, error) {
 		if readErr != nil {
 			break
 		}
-	}
-
-	if view, err := json.MarshalIndent(tasksSlice(tasks), "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(stateDir, "tasks.json"), view, 0o644)
 	}
 	return tasks, nil
 }
@@ -239,6 +249,9 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Done = true
 	case EvTaskUntracked:
 		t.Done = true // leaves Active(); the event type keeps the distinction in history
+		// Also the tombstone's terminal path: `gv untrack` on a handed-off
+		// row drops the forwarding pointer without resurrecting a worker.
+		t.HandedOffTo = ""
 	case EvTaskHandedOff:
 		t.Done = true // untracked here; the host carries the forwarding pointer
 		t.HandedOffTo = d["host"]
@@ -246,6 +259,11 @@ func fold(tasks map[string]*Task, ev Event) {
 		// branch: a later local adopt must start from the PR handoff, not
 		// resume a session that never saw the remote's commits.
 		t.SessionID = ""
+		// The tombstone row still shows in `gv ls --json`: a phantom open
+		// question or working glyph would point orchestrators at a task
+		// `gv answer` can no longer reach.
+		t.Agent = AgentIdle
+		t.Sentinel, t.Question = "", ""
 		if b := d["branch"]; b != "" {
 			t.Branch = b
 		}
@@ -363,7 +381,6 @@ func (t *Task) SortRank() int {
 	}
 }
 
-// Active returns non-done tasks, actionability-sorted.
 // HandedOff returns the forwarding tombstones (grove-177): tasks that left
 // Active() via task_handed_off and have not been re-tracked locally since.
 // Sorted by Updated (the handoff time) so the newest handoff lists last.
@@ -378,6 +395,7 @@ func HandedOff(tasks map[string]*Task) []*Task {
 	return out
 }
 
+// Active returns non-done tasks, actionability-sorted.
 func Active(tasks map[string]*Task) []*Task {
 	var out []*Task
 	for _, t := range tasks {

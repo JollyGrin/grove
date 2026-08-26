@@ -381,10 +381,14 @@ func TestFoldHandedOff(t *testing.T) {
 		"title": "Move me", "repo": "dummy", "branch": "gr-1-move",
 	}})
 	fold(tasks, Event{Type: EvSessionStarted, Ticket: "gr-1", Data: map[string]string{"session_id": "s-1"}})
+	fold(tasks, Event{Type: EvAgentStatus, Ticket: "gr-1", Data: map[string]string{"status": AgentWaiting, "sentinel": "question", "question": "which db?"}})
 	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-1", Data: map[string]string{"host": "pc", "branch": "gr-1-move"}})
 	task := tasks["gr-1"]
 	if task.SessionID != "" {
 		t.Error("handoff must drop the stored session id (the transcript goes stale on the other host)")
+	}
+	if task.Question != "" || task.Agent != AgentIdle {
+		t.Errorf("handoff must clear the live-agent fields (Agent=%q Question=%q) — a tombstone row cannot carry a question gv answer can no longer reach", task.Agent, task.Question)
 	}
 	if !task.Done || task.HandedOffTo != "pc" {
 		t.Fatalf("handed off: Done=%v HandedOffTo=%q", task.Done, task.HandedOffTo)
@@ -401,5 +405,13 @@ func TestFoldHandedOff(t *testing.T) {
 	}
 	if len(HandedOff(tasks)) != 0 {
 		t.Error("re-adopted task still listed as handed off")
+	}
+	// The tombstone's terminal path: untrack drops the pointer for good
+	// (after the remote finished and the PR merged, the → host row must
+	// not linger forever).
+	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-1", Data: map[string]string{"host": "pc"}})
+	fold(tasks, Event{Type: EvTaskUntracked, Ticket: "gr-1"})
+	if !task.Done || task.HandedOffTo != "" {
+		t.Errorf("task_untracked must clear the tombstone pointer: %+v", task)
 	}
 }

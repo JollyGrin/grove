@@ -88,7 +88,8 @@ Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
-a forwarding pointer to the remote grove host).
+a forwarding pointer to the remote grove host; a later `task_untracked`
+for the same ticket drops the pointer for good).
 Workspace-scoped (empty `ticket`): `workspace_parked`,
 `orchestrator_closed`. New types will appear over time — skip what you
 don't know.

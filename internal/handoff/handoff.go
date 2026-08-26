@@ -96,12 +96,15 @@ type Options struct {
 	Timeout      time.Duration // idle wait bound (default 10 min)
 	Poll         time.Duration // idle poll interval (default 2s)
 	// Release stops after the local untrack — the remote half of
-	// `gv handoff --from`, run over ssh. The caller does the cold adopt;
-	// Host (if set) is the caller's name and becomes the tombstone.
+	// `gv handoff --from`, run over ssh. The caller does the cold adopt
+	// and, once that succeeds, calls back for the tombstone: the LAST
+	// write stays tied to the adopt's outcome, exactly like --to.
 	Release bool
-	// Label names the remote cockpit session (grove-<label>) for the
-	// follow line; Window is the worker window name on the remote.
-	Label, Window string
+	// SSH and GV are the host's config values (hosts.<name>.ssh / .gv)
+	// so the follow line prints a command that actually connects; Window
+	// is the worker window name on the remote (best effort — same naming
+	// inputs, so it matches unless the remote maps the repo differently).
+	SSH, GV, Window string
 }
 
 // Step names the abort point an error belongs to.
@@ -200,20 +203,18 @@ func Run(r Runner, o Options, out io.Writer) error {
 		return fail(StepUntrack, err)
 	}
 	if o.Release {
-		if o.Host != "" {
-			if err := r.Tombstone(info.Ticket, o.Host, info.Branch); err != nil {
-				return fail(StepUntrack, err)
-			}
-		}
+		// NO tombstone here: the puller writes it back (--tombstone-to)
+		// only after its local adopt succeeds, keeping "tombstone is the
+		// LAST write" true on this side of a --from as well.
 		fmt.Fprintf(out, "✓ %s released — untracked here; the caller adopts it\n", info.Ticket)
 		return nil
 	}
 
 	// 6. Remote cold adopt. On failure: leave untracked, no tombstone,
 	// print the exact retry.
-	fmt.Fprintf(out, "→ ssh %s: gv adopt %s --repo %s --branch %s\n", o.Host, info.Ticket, info.Repo, info.Branch)
+	fmt.Fprintf(out, "→ ssh %s: gv adopt %s --repo %s --branch %s --sync\n", o.Host, info.Ticket, info.Repo, info.Branch)
 	if err := r.RemoteAdopt(o.Host, info.Ticket, info.Repo, info.Branch); err != nil {
-		return fail(StepRemoteAdopt, fmt.Errorf("%w\n%s is now untracked here and NOT running on %s (no tombstone written).\n  retry remote:  gv adopt %s --repo %s --branch %s --host %s\n  or re-track locally:  gv adopt %s",
+		return fail(StepRemoteAdopt, fmt.Errorf("%w\n%s is now untracked here and NOT running on %s (no tombstone written).\n  retry remote:  gv adopt %s --repo %s --branch %s --sync --host %s\n  or re-track locally:  gv adopt %s",
 			err, info.Ticket, o.Host, info.Ticket, info.Repo, info.Branch, o.Host, info.Ticket))
 	}
 	if err := r.Tombstone(info.Ticket, o.Host, info.Branch); err != nil {
@@ -225,9 +226,12 @@ func Run(r Runner, o Options, out io.Writer) error {
 	return nil
 }
 
-// waitIdle polls the agent state until the worker leaves `working` (the
-// nudge flips it to working; the Stop hook flips it back). A dead window
-// aborts; the timeout aborts with the retry hint from the spec.
+// waitIdle polls the agent state until the worker goes idle (the nudge
+// flips it to working; the Stop hook flips it back). Only a clean idle
+// counts as "checkpoint finished": a worker that stops on a question
+// (waiting/blocked) or dies mid-turn aborts with the state named —
+// otherwise verify would wave the handoff through on any pre-existing
+// PR body while the checkpoint never happened.
 func waitIdle(r Runner, ticket string, o Options) error {
 	deadline := time.Duration(0)
 	for {
@@ -238,8 +242,15 @@ func waitIdle(r Runner, ticket string, o Options) error {
 		if !live {
 			return fmt.Errorf("%s's window died while checkpointing — `gv adopt %s` to revive it, then retry", ticket, ticket)
 		}
-		if agent != "working" && agent != "setup" {
+		switch agent {
+		case "idle":
 			return nil
+		case "working", "setup":
+			// still on the checkpoint turn — keep waiting below
+		case "waiting", "blocked":
+			return fmt.Errorf("%s stopped %s (it asked a question instead of checkpointing) — `gv answer %s ...`, then retry", ticket, agent, ticket)
+		default:
+			return fmt.Errorf("%s went %s during the checkpoint instead of idle — `gv adopt %s` to revive it, then retry", ticket, agent, ticket)
 		}
 		if deadline >= o.Timeout {
 			return fmt.Errorf("%s is still working after %s — retry when it is idle (or pass --timeout)", ticket, o.Timeout)
@@ -273,7 +284,7 @@ func Problems(v *Verified) []string {
 func Plan(info *Info, v *Verified, o Options) string {
 	var b strings.Builder
 	if o.Release {
-		fmt.Fprintf(&b, "\nrelease %s (to %s)\n", info.Ticket, orUnknown(o.Host))
+		fmt.Fprintf(&b, "\nrelease %s — untrack here; the calling host adopts it\n", info.Ticket)
 	} else {
 		fmt.Fprintf(&b, "\nhandoff %s → %s\n", info.Ticket, o.Host)
 	}
@@ -288,30 +299,31 @@ func Plan(info *Info, v *Verified, o Options) string {
 	if o.Release {
 		fmt.Fprintf(&b, "  then      the caller runs the cold adopt locally\n")
 	} else {
-		fmt.Fprintf(&b, "  then      ssh %s -- gv adopt %s --repo %s --branch %s\n", o.Host, info.Ticket, info.Repo, info.Branch)
+		fmt.Fprintf(&b, "  then      ssh %s -- gv adopt %s --repo %s --branch %s --sync\n", o.Host, info.Ticket, info.Repo, info.Branch)
 	}
 	fmt.Fprintf(&b, "  note      the session transcript stays here; the PR body is the carrier\n")
 	return b.String()
 }
 
-// FollowLine is the closing line of a successful handoff.
+// FollowLine is the closing line of a successful handoff. The follow
+// command is the host's real ssh target + its gv resolving the window
+// (`gv attach`): the config KEY is not an ssh destination, and the
+// remote's cockpit session label is the remote's business — guessing
+// `tmux attach -t =grove-<local label>` printed a command that failed
+// whenever the labels differed.
 func FollowLine(ticket string, o Options) string {
 	where := o.Host
 	if o.Window != "" {
 		where += fmt.Sprintf(" (window %s)", o.Window)
 	}
-	session := "grove"
-	if o.Label != "" {
-		session = "grove-" + o.Label
+	ssh, gv := o.SSH, o.GV
+	if ssh == "" {
+		ssh = o.Host
 	}
-	return fmt.Sprintf("✓ %s → %s. Follow: ssh %s -t tmux attach -t =%s\n", ticket, where, o.Host, session)
-}
-
-func orUnknown(s string) string {
-	if s == "" {
-		return "the calling host"
+	if gv == "" {
+		gv = "gv"
 	}
-	return s
+	return fmt.Sprintf("✓ %s → %s. Follow: ssh %s -t %s attach %s\n", ticket, where, ssh, gv, ticket)
 }
 
 func short(sha string) string {

@@ -14,6 +14,7 @@ import (
 	"github.com/JollyGrin/grove/internal/git"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/handoff"
+	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -24,44 +25,57 @@ import (
 //	gv handoff <ticket> --to <host>    checkpoint → verify → untrack → ssh adopt
 //	gv handoff <ticket> --from <host>  the mirror: remote release, local adopt
 //
-// --release is the remote half of --from (steps 1–5 only, run over ssh by
-// the pulling host); --release-to names the puller for the tombstone.
+// --release is the remote half of --from (guard → checkpoint → verify →
+// untrack, NO tombstone), run over ssh by the pulling host;
+// --tombstone-to is the puller's call-back that writes the tombstone only
+// AFTER its local adopt succeeded — the last write on either side.
 func cmdHandoff(args []string) error {
 	echoWorkspace()
 	fs := flag.NewFlagSet("handoff", flag.ExitOnError)
 	to := fs.String("to", "", "hand the task to this configured host")
 	from := fs.String("from", "", "pull the task from this configured host")
+	as := fs.String("as", "", "with --from: the name THIS host goes by in the remote's hosts: config (tombstone pointer; default: os.Hostname())")
 	rm := fs.Bool("rm", false, "also remove the local window, worktree, and branch (default: keep the worktree as your hand-edit checkout)")
 	yes := fs.Bool("yes", false, "skip the confirm prompt")
 	noCheckpoint := fs.Bool("no-checkpoint", false, "skip the checkpoint nudge (the worker already wrote its handoff)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for the worker to go idle after the checkpoint nudge")
-	release := fs.Bool("release", false, "remote half of --from: checkpoint, verify, untrack — no adopt")
-	releaseTo := fs.String("release-to", "", "with --release: the pulling host's name (written as the tombstone)")
+	release := fs.Bool("release", false, "remote half of --from: checkpoint, verify, untrack — no adopt, no tombstone")
+	tombstoneTo := fs.String("tombstone-to", "", "record that this (already released) task now runs on the named host — the puller's post-adopt call-back")
 	positionals := parseAnywhere(fs, args)
-	if len(positionals) != 1 || (!*release && (*to == "") == (*from == "")) {
-		return fmt.Errorf("usage: gv handoff <ticket> --to <host> | --from <host>  [--rm] [--yes] [--no-checkpoint] [--timeout 10m]")
+	oneMode := 0
+	for _, set := range []bool{*release, *tombstoneTo != "", *to != "", *from != ""} {
+		if set {
+			oneMode++
+		}
+	}
+	if len(positionals) != 1 || oneMode != 1 {
+		return fmt.Errorf("usage: gv handoff <ticket> --to <host> | --from <host>  [--as name] [--rm] [--yes] [--no-checkpoint] [--timeout 10m]")
 	}
 	cfg, err := loadCfg()
 	if err != nil {
 		return err
 	}
 	switch {
+	case *tombstoneTo != "":
+		return handoffTombstone(positionals[0], *tombstoneTo)
 	case *release:
 		r := &localHandoff{cfg: cfg}
 		return handoff.Run(r, handoff.Options{
-			Task: positionals[0], Host: *releaseTo, Rm: *rm, Yes: *yes,
+			Task: positionals[0], Rm: *rm, Yes: *yes,
 			NoCheckpoint: *noCheckpoint, Timeout: *timeout, Release: true,
 		}, os.Stdout)
 	case *from != "":
-		return handoffFrom(cfg, positionals[0], *from, *rm, *yes, *noCheckpoint, *timeout)
+		return handoffFrom(cfg, positionals[0], *from, *as, *rm, *yes, *noCheckpoint, *timeout)
 	default:
-		if _, err := cfg.Host(*to); err != nil {
+		h, err := cfg.Host(*to)
+		if err != nil {
 			return err
 		}
 		r := &localHandoff{cfg: cfg}
 		o := handoff.Options{
 			Task: positionals[0], Host: *to, Rm: *rm, Yes: *yes,
-			NoCheckpoint: *noCheckpoint, Timeout: *timeout, Label: wsLabel(),
+			NoCheckpoint: *noCheckpoint, Timeout: *timeout,
+			SSH: h.SSH, GV: h.GV,
 		}
 		if t, err := findTask(positionals[0]); err == nil {
 			// Best-effort window name for the follow line: the remote
@@ -72,12 +86,54 @@ func cmdHandoff(args []string) error {
 	}
 }
 
+// handoffTombstone appends the forwarding tombstone for a task that was
+// already released (untracked) here — the puller calls it over ssh after
+// its local adopt succeeds, so a failed pull leaves no pointer. The
+// branch comes from folded state: untrack keeps it.
+func handoffTombstone(task, host string) error {
+	tasks, err := state.Load(stateDir())
+	if err != nil {
+		return err
+	}
+	var t *state.Task
+	for _, cand := range provider.IDCandidates(task) {
+		if hit, ok := tasks[cand]; ok {
+			t = hit
+			break
+		}
+	}
+	if t == nil {
+		return fmt.Errorf("%s has never been tracked here — nothing to tombstone", task)
+	}
+	if !t.Done {
+		return fmt.Errorf("%s is still tracked here — release it first (gv handoff %s --release)", t.Ticket, t.Ticket)
+	}
+	if err := state.Append(stateDir(), state.Event{
+		Type: state.EvTaskHandedOff, Ticket: t.Ticket,
+		Data: map[string]string{"host": host, "branch": t.Branch},
+	}); err != nil {
+		return err
+	}
+	fmt.Printf("✓ %s → %s recorded (gv ls keeps the pointer)\n", t.Ticket, host)
+	return nil
+}
+
 // handoffFrom pulls a task from host: `ls --json` there to learn repo +
 // branch, `handoff --release` there (streamed; its confirm prompt reads
-// our stdin), then a local cold adopt.
-func handoffFrom(cfg *config.Config, task, host string, rm, yes, noCheckpoint bool, timeout time.Duration) error {
+// our stdin), a local cold adopt, then the tombstone call-back — written
+// on the remote only once the adopt here succeeded.
+func handoffFrom(cfg *config.Config, task, host, as string, rm, yes, noCheckpoint bool, timeout time.Duration) error {
 	if _, err := cfg.Host(host); err != nil {
 		return err
+	}
+	// The tombstone must name THIS host as the remote's config knows it,
+	// or every command the remote's `gv ls` row suggests will error. A
+	// raw hostname is the fallback; --as overrides it.
+	if as == "" {
+		as, _ = os.Hostname()
+	}
+	if as == "" {
+		return fmt.Errorf("cannot determine this host's name for the remote tombstone — pass --as <name>")
 	}
 	var buf bytes.Buffer
 	code, err := remote.Run(cfg, host, "ls", []string{"--json", "--no-pr", "--no-cost"}, &buf, os.Stderr)
@@ -106,8 +162,7 @@ func handoffFrom(cfg *config.Config, task, host string, rm, yes, noCheckpoint bo
 	if branch == "" {
 		return fmt.Errorf("%s is not tracked on %s (gv ls --host %s)", task, host, host)
 	}
-	self, _ := os.Hostname()
-	relArgs := []string{task, "--release", "--release-to", self, "--timeout", timeout.String()}
+	relArgs := []string{task, "--release", "--timeout", timeout.String()}
 	if rm {
 		relArgs = append(relArgs, "--rm")
 	}
@@ -125,16 +180,26 @@ func handoffFrom(cfg *config.Config, task, host string, rm, yes, noCheckpoint bo
 		return fmt.Errorf("%s was not released by %s (exit %d) — nothing changed here", task, host, code)
 	}
 	fmt.Printf("→ adopting %s here (repo %s, branch %s)\n", task, repo, branch)
-	if err := cmdAdopt([]string{task, "--repo", repo, "--branch", branch}); err != nil {
-		return fmt.Errorf("%w\n%s is released on %s but not running here — retry: gv adopt %s --repo %s --branch %s", err, task, host, task, repo, branch)
+	if err := cmdAdopt([]string{task, "--repo", repo, "--branch", branch, "--sync"}); err != nil {
+		return fmt.Errorf("%w\n%s is released on %s but not running here (no tombstone written there) — retry: gv adopt %s --repo %s --branch %s --sync", err, task, host, task, repo, branch)
+	}
+	// Tombstone call-back — the remote's LAST write, only now that the
+	// task verifiably runs here. Best-effort: the task is safe either
+	// way, the remote just loses its forwarding row.
+	if code, err = remote.Run(cfg, host, "handoff", []string{task, "--tombstone-to", as}, os.Stdout, os.Stderr); err != nil || code != 0 {
+		fmt.Fprintf(os.Stderr, "warning: %s runs here, but recording the pointer on %s failed (%v, exit %d) — retry: gv handoff %s --tombstone-to %s --host %s\n",
+			task, host, err, code, task, as, host)
 	}
 	return nil
 }
 
 // localHandoff is the real handoff.Runner: each method is the existing
 // verb's code path (findTask, relayText, untrack event, remote adopt).
+// Lookup caches the task row — tmux/window identity is stable across the
+// sequence, so later steps skip re-folding events.jsonl.
 type localHandoff struct {
 	cfg *config.Config
+	t   *state.Task
 }
 
 func (l *localHandoff) Lookup(task string) (*handoff.Info, error) {
@@ -142,6 +207,7 @@ func (l *localHandoff) Lookup(task string) (*handoff.Info, error) {
 	if err != nil {
 		return nil, err
 	}
+	l.t = t
 	return &handoff.Info{
 		Ticket: t.Ticket, Repo: t.Repo, Branch: t.Branch, Worktree: t.Worktree,
 		Agent: t.Agent, Paused: t.Paused,
@@ -150,7 +216,9 @@ func (l *localHandoff) Lookup(task string) (*handoff.Info, error) {
 }
 
 func (l *localHandoff) Agent(ticket string) (string, bool, error) {
-	tasks, err := state.Load(stateDir())
+	// Peek, not Load: this runs every poll tick and only the agent field
+	// moves — no point rewriting the derived tasks.json each time.
+	tasks, err := state.Peek(stateDir())
 	if err != nil {
 		return "", false, err
 	}
@@ -161,12 +229,8 @@ func (l *localHandoff) Agent(ticket string) (string, bool, error) {
 	return t.Agent, tmux.WindowLive(t.TmuxSession, t.TmuxWindow), nil
 }
 
-func (l *localHandoff) Nudge(ticket, text string) error {
-	t, err := findTask(ticket)
-	if err != nil {
-		return err
-	}
-	return relayText(t, text)
+func (l *localHandoff) Nudge(_ string, text string) error {
+	return relayText(l.t, text)
 }
 
 func (l *localHandoff) Verify(info *handoff.Info) (*handoff.Verified, error) {
@@ -211,10 +275,7 @@ func (l *localHandoff) Confirm(string) (bool, error) {
 // remote's fresh pickup) is exactly the split-brain a handoff exists to
 // avoid. Same kill as gv pause — worktree, branch, transcript survive.
 func (l *localHandoff) Untrack(ticket string, rm bool) error {
-	t, err := findTask(ticket)
-	if err != nil {
-		return err
-	}
+	t := l.t
 	args := []string{ticket}
 	if rm {
 		args = append(args, "--rm")
@@ -232,7 +293,9 @@ func (l *localHandoff) Untrack(ticket string, rm bool) error {
 }
 
 func (l *localHandoff) RemoteAdopt(host, ticket, repo, branch string) error {
-	code, err := remote.Run(l.cfg, host, "adopt", []string{ticket, "--repo", repo, "--branch", branch}, os.Stdout, os.Stderr)
+	// --sync: the remote may hold a stale worktree/branch from an earlier
+	// stint on this task — fetch + hard-reset to origin before the pickup.
+	code, err := remote.Run(l.cfg, host, "adopt", []string{ticket, "--repo", repo, "--branch", branch, "--sync"}, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
 	}

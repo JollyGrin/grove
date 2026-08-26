@@ -28,6 +28,15 @@ func BaseRef(root, base string) (string, error) {
 	return "", fmt.Errorf("base branch %q not found (neither origin/%s nor a local branch) — check the repo's `base:` in config", base, base)
 }
 
+// ResetHard force-resets a worktree (checkout + its branch ref) to ref.
+// The handoff pickup path (`gv adopt --sync`): another host worked the
+// branch, so a surviving local checkout or branch ref is stale until
+// reset to origin. Callers guard against uncommitted changes first.
+func ResetHard(path, ref string) error {
+	_, err := run(path, "reset", "--hard", ref)
+	return err
+}
+
 // Head returns the full sha of HEAD in path (a worktree or repo root).
 func Head(path string) (string, error) {
 	return run(path, "rev-parse", "HEAD")

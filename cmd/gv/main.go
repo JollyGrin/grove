@@ -225,14 +225,19 @@ func main() {
 	// --host <name> (grove-176): run the verb on a remote grove host over
 	// ssh, flags passed through verbatim, output printed unchanged, exit
 	// code propagated. Intercepted before dispatch so the local verb never
-	// touches local state for a remote task.
-	if host, rest := remote.ExtractHost(args); host != "" {
-		code, err := runRemote(host, cmd, rest)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "gv:", err)
-			os.Exit(1)
+	// touches local state for a remote task. Only verbs that support
+	// --host are scanned at all: a relay's free text may legitimately
+	// contain "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
+	// string-scanning every argv would hijack it.
+	if remote.Supported[cmd] {
+		if host, rest := remote.ExtractHost(args); host != "" {
+			code, err := runRemote(host, cmd, rest)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "gv:", err)
+				os.Exit(1)
+			}
+			os.Exit(code)
 		}
-		os.Exit(code)
 	}
 
 	var err error
@@ -1607,9 +1612,13 @@ func cmdLs(args []string) error {
 			fmt.Printf("  ⚠ %s\n", truncateLine(r.Question, 90))
 		}
 	}
+	// The take-it-back hint must be the handoff mirror, not a plain adopt:
+	// `gv adopt` here would start a second live worker on the branch while
+	// the remote still runs its own (the split-brain handoff exists to
+	// avoid). `gv untrack` is the pointer's terminal path.
 	for _, t := range tombstones {
-		fmt.Printf("%-11s %-11s → %s (handed off %s; gv ls --host %s · gv adopt %s to take it back)\n",
-			t.Ticket, t.Repo, t.HandedOffTo, age(t.Updated), t.HandedOffTo, t.Ticket)
+		fmt.Printf("%-11s %-11s → %s (handed off %s; take back: gv handoff %s --from %s · drop row: gv untrack %s)\n",
+			t.Ticket, t.Repo, t.HandedOffTo, age(t.Updated), t.Ticket, t.HandedOffTo, t.Ticket)
 	}
 	return nil
 }
@@ -2165,9 +2174,10 @@ func cmdAdopt(args []string) error {
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (default: the profile it was grabbed with; 'anthropic' strips it)")
+	syncFlag := fs.Bool("sync", false, "fetch and hard-reset the worktree to origin/<branch> first (handoff pickup: another host worked the branch, so any surviving local checkout/branch ref is stale)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name] [--sync]")
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -2297,6 +2307,16 @@ func cmdAdopt(args []string) error {
 		fmt.Printf("→ model profile %s\n", profileName)
 	}
 
+	// --sync (grove-177, handoff pickup): make origin the source of truth
+	// BEFORE the worktree exists — AddExisting would otherwise re-create
+	// it from a stale surviving local branch ref, and a kept checkout is
+	// frozen at the sha it was handed off with.
+	if *syncFlag {
+		if err := git.Fetch(repo.Path, "origin", branch); err != nil {
+			return fmt.Errorf("--sync: fetch origin %s: %w", branch, err)
+		}
+	}
+
 	// Worktree: reuse as-is when present (never touch dirty files), else
 	// re-create from the existing branch.
 	wtPath := worktree.DefaultPath(repo.Path, branch)
@@ -2318,6 +2338,21 @@ func cmdAdopt(args []string) error {
 		fmt.Printf("→ worktree %s\n", wtPath)
 	} else {
 		fmt.Printf("→ reusing worktree %s\n", wtPath)
+	}
+
+	// The reset applies to fresh worktrees too: AddExisting creates from
+	// the LOCAL branch ref when one survives, and that ref is exactly
+	// what went stale while the other host worked the branch.
+	if *syncFlag {
+		if dirty, derr := git.IsDirty(wtPath); derr != nil {
+			return derr
+		} else if dirty {
+			return fmt.Errorf("%s: worktree %s has uncommitted changes — --sync would discard them; commit or stash first, or adopt without --sync", id, wtPath)
+		}
+		if err := git.ResetHard(wtPath, "origin/"+branch); err != nil {
+			return fmt.Errorf("--sync: reset to origin/%s: %w", branch, err)
+		}
+		fmt.Printf("→ synced to origin/%s\n", branch)
 	}
 
 	// Pickup (or manual) prompt — also the fallback when resume fails.
@@ -2603,6 +2638,26 @@ func cmdUntrack(args []string) error {
 	}
 	t, err := findTask(positionals[0])
 	if err != nil {
+		// Handed-off tombstones (grove-177) are already untracked;
+		// untrack is their terminal path — the fold clears the pointer
+		// without resurrecting a worker onto the branch. --rm still
+		// removes the kept hand-edit checkout.
+		if ts, terr := findTombstone(positionals[0]); terr == nil {
+			if *rm {
+				cfg, err := loadCfg()
+				if err != nil {
+					return err
+				}
+				if err := removeTaskArtifacts(cfg, ts, *rmRemote, *force); err != nil {
+					return err
+				}
+			}
+			if err := state.Append(stateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: ts.Ticket}); err != nil {
+				return err
+			}
+			fmt.Printf("✓ %s handoff pointer dropped (the task itself stays on %s)\n", ts.Ticket, ts.HandedOffTo)
+			return nil
+		}
 		return err
 	}
 
@@ -2991,6 +3046,21 @@ func cmdHooks(args []string) error {
 // id-shape normalization — per-repo providers mean DEV-1234 and task-001
 // coexist in one fleet, so the tracked state (not the global provider
 // kind) is the arbiter.
+// findTombstone resolves an id to a handed-off forwarding row (grove-177)
+// — a task findTask deliberately skips because it is Done here.
+func findTombstone(idOrURL string) (*state.Task, error) {
+	tasks, err := state.Load(stateDir())
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range provider.IDCandidates(idOrURL) {
+		if t, ok := tasks[id]; ok && t.Done && t.HandedOffTo != "" {
+			return t, nil
+		}
+	}
+	return nil, fmt.Errorf("no handed-off task %s", idOrURL)
+}
+
 func findTask(idOrURL string) (*state.Task, error) {
 	tasks, err := state.Load(stateDir())
 	if err != nil {

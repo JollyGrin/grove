@@ -84,8 +84,11 @@ func stepOf(t *testing.T, err error) Step {
 
 func TestHappyPath(t *testing.T) {
 	f := ready()
+	o := opts()
+	o.SSH = "pc.tail"
+	o.GV = "/opt/gv"
 	var out strings.Builder
-	if err := Run(f, opts(), &out); err != nil {
+	if err := Run(f, o, &out); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"nudge", "untrack rm=false", "adopt pc grove-7 grove grove-7-x", "tombstone pc"}
@@ -98,26 +101,41 @@ func TestHappyPath(t *testing.T) {
 	if f.slept != 2*time.Second {
 		t.Errorf("slept %s, want 2s (two working polls)", f.slept)
 	}
-	if !strings.Contains(out.String(), "grove-7 → pc. Follow: ssh pc -t tmux attach -t =grove") {
+	// The follow command must use the host's real ssh target + gv path
+	// (the config KEY is not an ssh destination) and resolve the window
+	// remotely via `gv attach` — never a guessed local session label.
+	if !strings.Contains(out.String(), "grove-7 → pc. Follow: ssh pc.tail -t /opt/gv attach grove-7") {
 		t.Errorf("missing follow line:\n%s", out.String())
 	}
-	if !strings.Contains(f.planned, "ssh pc -- gv adopt grove-7 --repo grove --branch grove-7-x") {
+	if !strings.Contains(f.planned, "ssh pc -- gv adopt grove-7 --repo grove --branch grove-7-x --sync") {
 		t.Errorf("plan missing the adopt command:\n%s", f.planned)
 	}
 }
 
 func TestGuardsAbortBeforeAnyMutation(t *testing.T) {
-	cases := map[string]func(*fake){
-		"untracked":   func(f *fake) { f.info, f.lookupErr = nil, errors.New("no active task grove-7") },
-		"mid-turn":    func(f *fake) { f.info.Agent = "working" },
-		"no branch":   func(f *fake) { f.info.Branch = ""; f.info.Paused = true; f.info.WindowLive = false },
-		"window died": func(f *fake) { f.live = false },
-		"timeout":     func(f *fake) { f.agents = []string{"working"} },
+	cases := map[string]struct {
+		mut  func(*fake)
+		step Step
+		msg  string
+	}{
+		"untracked": {func(f *fake) { f.info, f.lookupErr = nil, errors.New("no active task grove-7") }, StepGuard, ""},
+		"mid-turn":  {func(f *fake) { f.info.Agent = "working" }, StepGuard, ""},
+		"no branch": {func(f *fake) { f.info.Branch = ""; f.info.Paused = true; f.info.WindowLive = false }, StepGuard, ""},
+		// Checkpoint outcomes that are NOT a finished checkpoint: only a
+		// clean idle may proceed — waiting means the worker asked a
+		// question instead, dead means the session died mid-turn, and
+		// treating either as done would hand off with the checkpoint
+		// never written (verify passes on any pre-existing PR body).
+		"window died":            {func(f *fake) { f.live = false }, StepCheckpoint, ""},
+		"timeout":                {func(f *fake) { f.agents = []string{"working"} }, StepCheckpoint, "still working"},
+		"waiting mid-checkpoint": {func(f *fake) { f.agents = []string{"working", "waiting"} }, StepCheckpoint, "waiting"},
+		"blocked mid-checkpoint": {func(f *fake) { f.agents = []string{"working", "blocked"} }, StepCheckpoint, "blocked"},
+		"dead mid-checkpoint":    {func(f *fake) { f.agents = []string{"working", "dead"} }, StepCheckpoint, "dead"},
 	}
-	for name, mut := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := ready()
-			mut(f)
+			tc.mut(f)
 			err := Run(f, opts(), &strings.Builder{})
 			if err == nil {
 				t.Fatal("want abort")
@@ -127,16 +145,11 @@ func TestGuardsAbortBeforeAnyMutation(t *testing.T) {
 					t.Errorf("mutation %q happened after a guard failure", c)
 				}
 			}
-			step := stepOf(t, err)
-			if name == "timeout" || name == "window died" {
-				if step != StepCheckpoint {
-					t.Errorf("step = %s, want checkpoint", step)
-				}
-				if name == "timeout" && !strings.Contains(err.Error(), "still working") {
-					t.Errorf("timeout message: %v", err)
-				}
-			} else if step != StepGuard {
-				t.Errorf("step = %s, want guard", step)
+			if step := stepOf(t, err); step != tc.step {
+				t.Errorf("step = %s, want %s", step, tc.step)
+			}
+			if tc.msg != "" && !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("message %q missing from: %v", tc.msg, err)
 			}
 		})
 	}
@@ -206,7 +219,7 @@ func TestRemoteAdoptFailureLeavesNoTombstone(t *testing.T) {
 		t.Error("task should have been untracked before the remote adopt")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "gv adopt grove-7 --repo grove --branch grove-7-x --host pc") || !strings.Contains(msg, "untracked") {
+	if !strings.Contains(msg, "gv adopt grove-7 --repo grove --branch grove-7-x --sync --host pc") || !strings.Contains(msg, "untracked") {
 		t.Errorf("retry hint missing:\n%s", msg)
 	}
 }
@@ -229,7 +242,11 @@ func TestReleaseStopsAfterUntrack(t *testing.T) {
 	if err := Run(f, o, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(f.calls, ";") != "nudge;untrack rm=true;tombstone pc" {
+	// NO tombstone on release: the puller writes it back (--tombstone-to)
+	// only after its local adopt succeeds — otherwise a failed pull
+	// strands the task untracked everywhere while this host claims it
+	// moved (review finding 3).
+	if strings.Join(f.calls, ";") != "nudge;untrack rm=true" {
 		t.Errorf("calls = %v", f.calls)
 	}
 }
