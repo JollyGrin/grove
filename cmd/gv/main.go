@@ -63,7 +63,9 @@ const usage = `gv — grove
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
-      … --host <name>                         grab/ls on a configured remote host (hosts: in config.yaml)
+      … --host <name>                         grab/ls/adopt on a configured remote host (hosts: in config.yaml)
+  gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
+  gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
   gv cost --ledger | --record on|off          recorded spend history · persistence toggle
@@ -223,14 +225,28 @@ func main() {
 	// --host <name> (grove-176): run the verb on a remote grove host over
 	// ssh, flags passed through verbatim, output printed unchanged, exit
 	// code propagated. Intercepted before dispatch so the local verb never
-	// touches local state for a remote task.
-	if host, rest := remote.ExtractHost(args); host != "" {
-		code, err := runRemote(host, cmd, rest)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "gv:", err)
+	// touches local state for a remote task. Only verbs that support
+	// --host are scanned at all: a relay's free text may legitimately
+	// contain "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
+	// string-scanning every argv would hijack it.
+	if remote.Supported[cmd] {
+		if host, rest := remote.ExtractHost(args); host != "" {
+			code, err := runRemote(host, cmd, rest)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "gv:", err)
+				os.Exit(1)
+			}
+			os.Exit(code)
+		}
+	} else if cmd != "nudge" && cmd != "answer" {
+		// A real --host on an unsupported verb gets the friendly
+		// supported-list error, not a flag-parse death. The relay verbs
+		// stay exempt from scanning entirely: their free text may
+		// legitimately contain "--host".
+		if host, _ := remote.ExtractHost(args); host != "" {
+			fmt.Fprintf(os.Stderr, "gv: --host is not supported for `gv %s` yet (supported: %s)\n", cmd, remote.SupportedList)
 			os.Exit(1)
 		}
-		os.Exit(code)
 	}
 
 	var err error
@@ -265,6 +281,8 @@ func main() {
 		err = cmdDone(args)
 	case "untrack":
 		err = cmdUntrack(args)
+	case "handoff":
+		err = cmdHandoff(args)
 	case "sweep":
 		err = cmdSweep(args)
 	case "park", "close":
@@ -311,7 +329,7 @@ func main() {
 // config locally — without config there is no host to reach.
 func runRemote(host, verb string, args []string) (int, error) {
 	if !remote.Supported[verb] {
-		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: grab, ls)", verb)
+		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: %s)", verb, remote.SupportedList)
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -1529,12 +1547,21 @@ func cmdLs(args []string) error {
 		}
 		rows = append(rows, row)
 	}
+	// Forwarding tombstones (grove-177): a handed-off task is untracked
+	// here but `gv ls --json` still carries it with handed_off_to set, so
+	// a merged fleet view (#178) can follow the pointer. Additive only:
+	// the row shape is unchanged, these rows just have done=true.
+	tombstones := state.HandedOff(tasks)
+	for _, t := range tombstones {
+		rows = append(rows, lsRow{Task: t, Live: "handed-off"})
+	}
 
 	if *asJSON {
 		return emitJSON("tasks", rows)
 	}
+	rows = rows[:len(rows)-len(tombstones)]
 
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(tombstones) == 0 {
 		fmt.Println("no active tasks — `gv grab <ticket>` to start one")
 		return nil
 	}
@@ -1593,6 +1620,14 @@ func cmdLs(args []string) error {
 		if r.Agent == state.AgentBlocked && r.Question != "" {
 			fmt.Printf("  ⚠ %s\n", truncateLine(r.Question, 90))
 		}
+	}
+	// The take-it-back hint must be the handoff mirror, not a plain adopt:
+	// `gv adopt` here would start a second live worker on the branch while
+	// the remote still runs its own (the split-brain handoff exists to
+	// avoid). `gv untrack` is the pointer's terminal path.
+	for _, t := range tombstones {
+		fmt.Printf("%-11s %-11s → %s (handed off %s; take back: gv handoff %s --from %s · drop row: gv untrack %s)\n",
+			t.Ticket, t.Repo, t.HandedOffTo, age(t.Updated), t.Ticket, t.HandedOffTo, t.Ticket)
 	}
 	return nil
 }
@@ -2012,7 +2047,17 @@ func cmdRelay(args []string, isAnswer bool) error {
 	if text == "" {
 		return fmt.Errorf("empty %s — nothing sent", verb)
 	}
+	if err := relayText(t, text); err != nil {
+		return err
+	}
+	fmt.Printf("✓ sent to %s\n", t.Ticket)
+	return nil
+}
 
+// relayText is the shared send path of answer/nudge (and handoff's
+// checkpoint nudge): paste into the claude pane, then record EvAnswered
+// only once the submit verifiably landed.
+func relayText(t *state.Task, text string) error {
 	// Resolve the claude pane by id — usually .1, but a window that lost
 	// its split runs claude in its only pane, and a name-built target can
 	// resolve to a prefix-extending sibling's window ("repo · grove-1" vs
@@ -2034,11 +2079,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 		// what made this bug silent: gv ls showed `working` on a dead worker.
 		return err
 	}
-	if err := state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket}); err != nil {
-		return err
-	}
-	fmt.Printf("✓ sent to %s\n", t.Ticket)
-	return nil
+	return state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
 }
 
 // --- attach ---
@@ -2142,9 +2183,10 @@ func cmdAdopt(args []string) error {
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (default: the profile it was grabbed with; 'anthropic' strips it)")
+	syncFlag := fs.Bool("sync", false, "fetch and hard-reset the worktree to origin/<branch> first (handoff pickup: another host worked the branch, so any surviving local checkout/branch ref is stale)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name] [--sync]")
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -2274,6 +2316,16 @@ func cmdAdopt(args []string) error {
 		fmt.Printf("→ model profile %s\n", profileName)
 	}
 
+	// --sync (grove-177, handoff pickup): make origin the source of truth
+	// BEFORE the worktree exists — AddExisting would otherwise re-create
+	// it from a stale surviving local branch ref, and a kept checkout is
+	// frozen at the sha it was handed off with.
+	if *syncFlag {
+		if err := git.Fetch(repo.Path, "origin", branch); err != nil {
+			return fmt.Errorf("--sync: fetch origin %s: %w", branch, err)
+		}
+	}
+
 	// Worktree: reuse as-is when present (never touch dirty files), else
 	// re-create from the existing branch.
 	wtPath := worktree.DefaultPath(repo.Path, branch)
@@ -2295,6 +2347,29 @@ func cmdAdopt(args []string) error {
 		fmt.Printf("→ worktree %s\n", wtPath)
 	} else {
 		fmt.Printf("→ reusing worktree %s\n", wtPath)
+	}
+
+	// The reset applies to fresh worktrees too: AddExisting creates from
+	// the LOCAL branch ref when one survives, and that ref is exactly
+	// what went stale while the other host worked the branch.
+	if *syncFlag {
+		if dirty, derr := git.IsDirty(wtPath); derr != nil {
+			return derr
+		} else if dirty {
+			return fmt.Errorf("%s: worktree %s has uncommitted changes — --sync would discard them; commit or stash first, or adopt without --sync", id, wtPath)
+		}
+		// The dirty guard can't see committed-but-unpushed work; refuse
+		// unless HEAD is an ancestor of origin so the reset drops nothing.
+		if ahead, aerr := git.AheadCommits(wtPath, "origin/"+branch); aerr != nil {
+			return fmt.Errorf("--sync: comparing with origin/%s: %w", branch, aerr)
+		} else if len(ahead) > 0 {
+			return fmt.Errorf("%s: worktree %s has %d local commit(s) not on origin/%s:\n  %s\n--sync refuses to discard them — push the branch (or reset it by hand), then retry",
+				id, wtPath, len(ahead), branch, strings.Join(ahead, "\n  "))
+		}
+		if err := git.ResetHard(wtPath, "origin/"+branch); err != nil {
+			return fmt.Errorf("--sync: reset to origin/%s: %w", branch, err)
+		}
+		fmt.Printf("→ synced to origin/%s\n", branch)
 	}
 
 	// Pickup (or manual) prompt — also the fallback when resume fails.
@@ -2580,6 +2655,26 @@ func cmdUntrack(args []string) error {
 	}
 	t, err := findTask(positionals[0])
 	if err != nil {
+		// Handed-off tombstones (grove-177) are already untracked;
+		// untrack is their terminal path — the fold clears the pointer
+		// without resurrecting a worker onto the branch. --rm still
+		// removes the kept hand-edit checkout.
+		if ts, terr := findTombstone(positionals[0]); terr == nil {
+			if *rm {
+				cfg, err := loadCfg()
+				if err != nil {
+					return err
+				}
+				if err := removeTaskArtifacts(cfg, ts, *rmRemote, *force); err != nil {
+					return err
+				}
+			}
+			if err := state.Append(stateDir(), state.Event{Type: state.EvTaskUntracked, Ticket: ts.Ticket}); err != nil {
+				return err
+			}
+			fmt.Printf("✓ %s handoff pointer dropped (the task itself stays on %s)\n", ts.Ticket, ts.HandedOffTo)
+			return nil
+		}
 		return err
 	}
 
@@ -2968,6 +3063,21 @@ func cmdHooks(args []string) error {
 // id-shape normalization — per-repo providers mean DEV-1234 and task-001
 // coexist in one fleet, so the tracked state (not the global provider
 // kind) is the arbiter.
+// findTombstone resolves an id to a handed-off forwarding row (grove-177)
+// — a task findTask deliberately skips because it is Done here.
+func findTombstone(idOrURL string) (*state.Task, error) {
+	tasks, err := state.Load(stateDir())
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range provider.IDCandidates(idOrURL) {
+		if t, ok := tasks[id]; ok && t.Done && t.HandedOffTo != "" {
+			return t, nil
+		}
+	}
+	return nil, fmt.Errorf("no handed-off task %s", idOrURL)
+}
+
 func findTask(idOrURL string) (*state.Task, error) {
 	tasks, err := state.Load(stateDir())
 	if err != nil {

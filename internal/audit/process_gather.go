@@ -35,6 +35,12 @@ func scanProcesses(tasks map[string]*state.Task) ([]OrphanProcess, []WorktreePro
 		if t.Worktree == "" {
 			continue
 		}
+		if t.HandedOffTo != "" {
+			// Handed-off tombstone (grove-177): the worktree was kept as
+			// the operator's hand-edit checkout — their editor and dev
+			// servers in it are not reapable.
+			continue
+		}
 		if t.Done {
 			reapable[t.Worktree] = t.Ticket
 			continue
