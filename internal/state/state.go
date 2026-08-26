@@ -97,14 +97,9 @@ type Task struct {
 	// handed to — a forwarding tombstone. Set by task_handed_off (which
 	// also untracks), cleared by a local task_created/task_adopted (the
 	// task came back). Additive & optional.
-	HandedOffTo string `json:"handed_off_to,omitempty"`
-	// Host tags a row that came from another grove host's `gv ls --json`
-	// (grove-178 `--remote` merge). Never set by fold — local tasks read
-	// "" here; the merge stamps "local" on output copies only, so
-	// events.jsonl and tasks.json never carry it.
-	Host    string    `json:"host,omitempty"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
+	HandedOffTo string    `json:"handed_off_to,omitempty"`
+	Created     time.Time `json:"created"`
+	Updated     time.Time `json:"updated"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }

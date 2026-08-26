@@ -43,29 +43,27 @@ func TestMergeLocalOnlyStampsHostAndListsTombstones(t *testing.T) {
 	if rows[1].HandedOffTo == "" {
 		t.Fatal("tombstone row lost its handed_off_to pointer")
 	}
-	if IsRemote(rows[0].Task) || IsRemote(rows[1].Task) {
+	if IsRemote(rows[0]) || IsRemote(rows[1]) {
 		t.Fatal("local/tombstone rows read as remote")
 	}
 }
 
-func TestMergeDoesNotMutateCallerTasks(t *testing.T) {
+func TestMergeStampsTheRowNeverTheTask(t *testing.T) {
+	// Host is merge-output display data: it lands on the Row, and the
+	// caller's Task pointer rides through untouched (the persisted type
+	// has no host field to leak into tasks.json).
 	local := task("gr-1")
 	rows, _ := Merge([]Row{{Task: local, Live: "working"}}, nil, nil)
-	if local.Host != "" {
-		t.Fatalf("Merge stamped the caller's task: %q", local.Host)
-	}
-	if rows[0].Host != LocalHost || rows[0].Task == local {
-		t.Fatal("output row is not a stamped copy")
+	if rows[0].Host != LocalHost || rows[0].Task != local {
+		t.Fatalf("row = host %q task-ptr-same %v", rows[0].Host, rows[0].Task == local)
 	}
 }
 
 func TestMergeTombstoneReplacedByLiveRemoteRow(t *testing.T) {
-	remote := task("gr-2")
-	remote.Host = "vps"
 	rows, warn := Merge(
 		[]Row{{Task: task("gr-1"), Live: "working"}},
 		[]*state.Task{tomb("gr-2", "vps")},
-		[]Result{{Host: "vps", Rows: []Row{{Task: remote, Live: "working"}}}},
+		[]Result{{Host: "vps", Rows: []Row{{Task: task("gr-2"), Host: "vps", Live: "working"}}}},
 	)
 	if len(warn) != 0 {
 		t.Fatalf("unexpected warnings %v", warn)
@@ -78,11 +76,30 @@ func TestMergeTombstoneReplacedByLiveRemoteRow(t *testing.T) {
 	}
 }
 
+func TestMergeLocalRowWinsOverStaleRemoteDuplicate(t *testing.T) {
+	// After a `--from` take-back the task runs locally again while a cached
+	// remote answer still lists it: the live local row is the truth, and
+	// the stale remote copy must not appear as a second row (nor shadow a
+	// dead local worker with the remote's old 'working').
+	rows, warn := Merge(
+		[]Row{{Task: task("gr-1"), Live: "gone"}},
+		nil,
+		[]Result{{Host: "vps", Rows: []Row{
+			{Task: task("gr-1"), Host: "vps", Live: "working"},
+			{Task: task("gr-4"), Host: "vps", Live: "working"},
+		}}},
+	)
+	if len(warn) != 0 {
+		t.Fatalf("unexpected warnings %v", warn)
+	}
+	if got := tickets(rows); got != "gr-1@local/gone gr-4@vps/working" {
+		t.Fatalf("rows = %q", got)
+	}
+}
+
 func TestMergeStaleTombstoneWhenNamedHostAnswersWithoutIt(t *testing.T) {
-	other := task("gr-7")
-	other.Host = "vps"
 	rows, _ := Merge(nil, []*state.Task{tomb("gr-2", "vps"), tomb("gr-3", "pc")},
-		[]Result{{Host: "vps", Rows: []Row{{Task: other, Live: "idle"}}}})
+		[]Result{{Host: "vps", Rows: []Row{{Task: task("gr-7"), Host: "vps", Live: "idle"}}}})
 	// gr-2: vps answered without it → stale. gr-3: pc was not asked → plain handed-off.
 	if got := tickets(rows); got != "gr-7@vps/idle gr-2@/handed-off? gr-3@/handed-off" {
 		t.Fatalf("rows = %q", got)

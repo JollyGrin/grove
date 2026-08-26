@@ -32,9 +32,12 @@ import (
 )
 
 // Row is one `gv ls --json` row: the task plus its live/PR/cost columns.
-// The host tag rides on Task.Host (json "host").
+// Host lives HERE, not on state.Task: it is merge-output display data, and
+// keeping it off the persisted type means a Task reaching tasks.json can
+// never round-trip a host tag by construction.
 type Row struct {
 	*state.Task
+	Host string       `json:"host,omitempty"`
 	Live string       `json:"live"`
 	PR   *github.PR   `json:"pr,omitempty"`
 	Cost *cost.Totals `json:"cost,omitempty"`
@@ -70,16 +73,19 @@ func SSHRunner(ctx context.Context, h *config.Host) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	if err == nil {
+		// A run that completed keeps its rows even if it finished at the
+		// deadline's edge — only a FAILED run reads the ctx to decide
+		// whether the cause was the timeout.
+		return stdout.Bytes(), nil
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("timed out after %s", Timeout)
 	}
-	if err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return nil, fmt.Errorf("%s", lastLine(msg))
-		}
-		return nil, err
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		return nil, fmt.Errorf("%s", lastLine(msg))
 	}
-	return stdout.Bytes(), nil
+	return nil, err
 }
 
 func lastLine(s string) string {
@@ -142,8 +148,8 @@ func Decode(host string, raw []byte) ([]Row, error) {
 }
 
 // IsRemote reports whether a merged row came from another host.
-func IsRemote(t *state.Task) bool {
-	return t != nil && t.Host != "" && t.Host != LocalHost
+func IsRemote(r Row) bool {
+	return r.Host != "" && r.Host != LocalHost
 }
 
 // Tombstone builds the "elsewhere" row for a handed-off task.
@@ -154,22 +160,24 @@ func Tombstone(t *state.Task) Row {
 // Merge folds local live rows, local tombstones and the remote results into
 // one list: local live, then each reachable host's rows in host order, then
 // the tombstones that no host replaced. Warnings carry one line per failed
-// host. Local rows are stamped LocalHost; tombstones keep Host "" + their
+// host. Local rows are stamped LocalHost on the ROW (never on the Task —
+// the persisted type stays host-free); tombstones keep Host "" + their
 // HandedOffTo pointer (the row's `live` says handed-off / handed-off?).
+// Live rows dedup by ticket, local first: after a `--from` take-back the
+// local worker is the fresh truth, and a stale remote answer still listing
+// the ticket must not shadow it with a second row.
 func Merge(local []Row, tombstones []*state.Task, results []Result) (rows []Row, warnings []string) {
 	rows = make([]Row, 0, len(local)+len(tombstones))
+	seen := map[string]bool{} // tickets already live on the board (local wins, then host order)
 	for _, r := range local {
 		if r.Task != nil && r.Host == "" {
-			// Stamp a copy: the caller's tasks (the cockpit's folded map,
-			// which is what tasks.json is written from) must not pick up
-			// the output-only host tag.
-			cp := *r.Task
-			cp.Host = LocalHost
-			r.Task = &cp
+			r.Host = LocalHost
+		}
+		if r.Task != nil {
+			seen[r.Ticket] = true
 		}
 		rows = append(rows, r)
 	}
-	seen := map[string]bool{} // ticket live on some reachable host
 	answered := map[string]bool{}
 	for _, res := range results {
 		if res.Err != nil {
@@ -178,13 +186,16 @@ func Merge(local []Row, tombstones []*state.Task, results []Result) (rows []Row,
 		}
 		answered[res.Host] = true
 		for _, r := range res.Rows {
+			if r.Task == nil || seen[r.Ticket] {
+				continue
+			}
 			seen[r.Ticket] = true
 			rows = append(rows, r)
 		}
 	}
 	for _, t := range tombstones {
 		if seen[t.Ticket] {
-			continue // replaced by the live remote row
+			continue // replaced by a live row (remote, or re-adopted locally)
 		}
 		row := Tombstone(t)
 		if answered[t.HandedOffTo] {

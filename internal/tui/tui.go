@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -96,10 +97,20 @@ type Model struct {
 	width  int
 	height int
 
-	tasks  []*state.Task
-	live   map[string]string
-	prs    map[string]*github.PR
-	events []state.Event
+	// board is what AGENTS renders: local rows, then (with R on) remote
+	// rows and the trailing tombstones. Rebuilt only in assemble() — every
+	// per-row derivation (host tag, tombstone line) is precomputed there so
+	// View never allocates for it (grove-167 compute-once). The backing
+	// array is reused across refreshes.
+	board []boardRow
+	// scene is the live-task prefix of the board for the garden: with R
+	// off it IS localTasks (no copy); with R on it is sceneBuf, rebuilt in
+	// assemble.
+	scene    []*state.Task
+	sceneBuf []*state.Task
+	live     map[string]string
+	prs      map[string]*github.PR
+	events   []state.Event
 
 	mem     resource.Mem // last memory reading (gauge)
 	workers int          // live worker count at that reading
@@ -148,16 +159,17 @@ type Model struct {
 	almanac almanacMsg
 
 	// Remote fleet merge (grove-178). remote is the R toggle; localTasks +
-	// handedOff are the last refresh's local view, kept so the merged
-	// board (m.tasks) can be rebuilt on either a refresh or a remote
-	// answer — in Update, never per frame. remoteResults is the last R
-	// answer, held until R toggles off. nLive is the count of non-tombstone
-	// rows at the head of m.tasks: the scene slices m.tasks[:nLive].
+	// handedOff are the last refresh's local view, kept so the board can
+	// be rebuilt on either a refresh or a remote answer — in Update, never
+	// per frame. handedOff is only computed while R is on (refreshCmd
+	// gates the scan). remoteResults is the last R answer, held until R
+	// toggles off. Everything that meters, polls, or steers (costs, PRs,
+	// header counts, detail) feeds on localTasks — the merged board is a
+	// VIEW, never a data source.
 	remote        bool
 	localTasks    []*state.Task
 	handedOff     []*state.Task
 	remoteResults []fleet.Result
-	nLive         int
 
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
@@ -192,7 +204,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 		return nil, "", err
 	}
 	m := out.(Model)
-	farewell := farewellLine(m.fx, countWorking(m.tasks), nowHour())
+	farewell := farewellLine(m.fx, countWorking(m.localTasks), nowHour())
 	if farewell != "" {
 		farewell = sChrome.Render(farewell)
 	}
@@ -200,7 +212,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName()), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
 }
 
 // --- commands ---
@@ -292,7 +304,10 @@ func liveStates(active []*state.Task, session string, snapFor func(string) *tmux
 // events resident, never the whole log (the cockpit RAM rule).
 const feedTail = 200
 
-func refreshCmd(folder *state.Folder, stateDir, session string) tea.Cmd {
+// refreshCmd reads one cockpit beat's worth of data. withTombstones gates
+// the state.HandedOff scan on the R toggle (grove-178 fix round): with R
+// off — the default — the beat does zero tombstone work.
+func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones bool) tea.Cmd {
 	return func() tea.Msg {
 		// grove-126: one incremental pass answers both the task map and the
 		// feed tail — O(appended bytes) per tick, not two full-log scans —
@@ -302,7 +317,10 @@ func refreshCmd(folder *state.Folder, stateDir, session string) tea.Cmd {
 			return refreshMsg{}
 		}
 		active := state.Active(tasks)
-		handedOff := state.HandedOff(tasks)
+		var handedOff []*state.Task
+		if withTombstones {
+			handedOff = state.HandedOff(tasks)
+		}
 		// grove-149: two session-wide reads answer every window/pane question
 		// for the whole board; only capture-pane stays per task (inside
 		// DetectLiveFrom).
@@ -335,15 +353,35 @@ func remoteCmd(cfg *config.Config) tea.Cmd {
 	}
 }
 
+// boardRow is one rendered AGENTS row: the fleet row plus everything the
+// frame would otherwise re-derive (grove-167 compute-once). Kind is read
+// off the row itself — remote via fleet.IsRemote, tombstone via
+// HandedOffTo — so the board carries no positional invariant.
+type boardRow struct {
+	fleet.Row
+	// elsewhere is the precomputed tombstone line ("" on live rows);
+	// hostTag/tagW the precomputed "@host " hint prefix ("" / 0 on local
+	// rows). Built once per assemble, never per frame.
+	elsewhere string
+	hostTag   string
+	tagW      int
+}
+
 // assemble rebuilds the board from the last local refresh plus, while R is
 // on, the last remote answer and the handed-off tombstones. Called from
-// Update on each refreshMsg/remoteMsg — the per-second cost is one slice
-// on the existing beat, and View never rebuilds. With R off the board is
-// the local Active list untouched (byte-identical to pre-178).
+// Update on each refreshMsg/remoteMsg — never per frame — and it reuses
+// the board/scene backing arrays, so the steady-state beat allocates
+// nothing (the cockpit RAM rule). It also clamps the cursor: a board that
+// shrank under the selection (R off, a host answer replacing rows) must
+// never leave enter/d acting on a row the user can't see selected.
 func (m *Model) assemble() {
+	m.board = m.board[:0]
 	if !m.remote {
-		m.tasks = m.localTasks
-		m.nLive = len(m.tasks)
+		for _, t := range m.localTasks {
+			m.board = append(m.board, boardRow{Row: fleet.Row{Task: t, Host: fleet.LocalHost, Live: m.live[t.Ticket]}})
+		}
+		m.scene = m.localTasks
+		m.clampSel()
 		return
 	}
 	local := make([]fleet.Row, 0, len(m.localTasks))
@@ -351,27 +389,33 @@ func (m *Model) assemble() {
 		local = append(local, fleet.Row{Task: t, Live: m.live[t.Ticket]})
 	}
 	rows, _ := fleet.Merge(local, m.handedOff, m.remoteResults)
-	tasks := make([]*state.Task, 0, len(rows))
-	nLive := 0
+	m.sceneBuf = m.sceneBuf[:0]
 	for _, r := range rows {
-		tasks = append(tasks, r.Task)
-		if r.HandedOffTo == "" {
-			nLive++
+		br := boardRow{Row: r}
+		if r.HandedOffTo != "" {
+			br.elsewhere = fleet.Elsewhere(r, age)
+		} else {
+			m.sceneBuf = append(m.sceneBuf, r.Task)
+			if fleet.IsRemote(r) {
+				br.hostTag = "@" + r.Host + " "
+				br.tagW = utf8.RuneCountInString(br.hostTag)
+			}
 		}
-		if fleet.IsRemote(r.Task) || r.HandedOffTo != "" {
-			m.live[r.Ticket] = r.Live
-		}
+		m.board = append(m.board, br)
 	}
-	m.tasks, m.nLive = tasks, nLive
+	m.scene = m.sceneBuf
+	m.clampSel()
 }
 
-// liveTasks is the board minus the trailing tombstones — what the scene
-// plants. A re-slice, never a copy (with R off it is m.tasks itself).
-func (m Model) liveTasks() []*state.Task {
-	if !m.remote || m.nLive > len(m.tasks) {
-		return m.tasks
+// clampSel keeps the cursor on a real row after the board shrinks.
+func (m *Model) clampSel() {
+	if n := len(m.board); m.sel >= n {
+		if n == 0 {
+			m.sel = 0
+		} else {
+			m.sel = n - 1
+		}
 	}
-	return m.tasks[:m.nLive]
 }
 
 // remoteFlash is the footer line after an R answer: host failures verbatim
@@ -417,7 +461,12 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 func paneTailCmd(t *state.Task) tea.Cmd {
 	// A paused worker has no pane to scrape (grove-90) — the detail view
 	// renders the stored last_message plus the gv adopt hint instead.
-	if t.Paused {
+	// A handed-off task has no LOCAL pane at all: its window coordinates
+	// describe the remote host's session, and every host names sessions
+	// grove-<label>, so a target built from them can resolve to a
+	// different local worker's pane (grove-116 class). Refuse here, not
+	// just at the call sites.
+	if t.Paused || t.HandedOffTo != "" {
 		return nil
 	}
 	return func() tea.Msg {
@@ -453,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName()), tickEvery(time.Second))
+		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -482,7 +531,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// few ticks of glyph pulse. Same diff-in-Update move as J1, same
 			// capped celebrations map under a prefixed key (grove-56).
 			if m.fx >= fxFull {
-				for _, tk := range freshQuestions(m.tasks, msg.tasks) {
+				for _, tk := range freshQuestions(m.localTasks, msg.tasks) {
 					if len(m.celebrations) >= maxCelebrations {
 						break
 					}
@@ -491,7 +540,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// S2 walk-off: a pawn whose task just left AgentWorking lingers
 				// a few ticks, walking off its plot (grove-63). Same capped,
 				// prefixed-key pattern as the knock, so it can never collide.
-				for _, tk := range walkedOff(m.tasks, msg.tasks) {
+				for _, tk := range walkedOff(m.localTasks, msg.tasks) {
 					if len(m.celebrations) >= maxCelebrations {
 						break
 					}
@@ -503,11 +552,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.assemble()
 			m.events = msg.events
 			m.focused = msg.focused
-			if m.detail != nil { // keep detail pointed at fresh data
-				for _, t := range m.tasks {
+			if m.detail != nil {
+				// Repoint detail at fresh data — over the LOCAL list only,
+				// never the merged board: a remote row shares its window
+				// name with local workers, and a target built from it would
+				// steer the wrong agent's pane (grove-116 class). A ticket
+				// that left the local fleet (done, untracked, handed off)
+				// drops detail entirely instead of steering a recycled name.
+				var fresh *state.Task
+				for _, t := range m.localTasks {
 					if t.Ticket == m.detail.Ticket {
-						m.detail = t
+						fresh = t
+						break
 					}
+				}
+				m.detail = fresh
+				if fresh == nil && (m.mode == modeDetail || m.mode == modeConfirmDone) {
+					m.mode = modeList
+					m.input.Blur()
 				}
 			}
 		}
@@ -517,8 +579,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeCosts {
 			// Live refresh, no snapshot: the parse cache makes this cheap,
-			// and only page-open/toggle-on append ledger rows.
-			cmds = append(cmds, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, false))
+			// and only page-open/toggle-on append ledger rows. Local tasks
+			// only — a merged board must never feed the cost meter.
+			cmds = append(cmds, costsCmd(m.cfg, m.stateDir, m.localTasks, m.prs, m.costCache, false))
 		}
 		return m, tea.Batch(cmds...)
 
@@ -548,7 +611,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Paste flow succeeded (grove-87): the key is saved in
 		// ~/.config/grove/.env — refetch so the unset row becomes data.
 		m.flash = "✓ " + msg.varName + " saved to ~/.config/grove/.env (" + msg.masked + ")"
-		return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+		return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
 
 	case almanacMsg:
 		// A one-shot snapshot (grove-63 S4) — never re-fired by the 1s tick,
@@ -609,7 +672,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ sent to " + msg.ticket
 		}
-		return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
 
 	case actionDoneMsg:
 		if msg.err != nil {
@@ -623,7 +686,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ done"
 		}
-		return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -656,10 +719,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// grove-178: a remote or handed-off row is read-only here — steering
 	// lives on the host that runs it (`gv answer --host` is a later ticket).
-	if t := m.selected(); t != nil && (fleet.IsRemote(t) || t.HandedOffTo != "") {
+	if r, ok := m.selectedRow(); ok && (fleet.IsRemote(r.Row) || r.HandedOffTo != "") {
 		switch k.String() {
 		case "enter", "n", "a", "v", "d":
-			m.flash = elsewhereFlash(t)
+			m.flash = elsewhereFlash(r)
 			return m, nil
 		}
 	}
@@ -680,9 +743,11 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = "remote fleet: no hosts configured (hosts: map in config.yaml)"
 			return m, nil
 		}
-		m.assemble() // tombstones show at once; live remote rows land with the answer
+		m.assemble()
 		m.flash = fmt.Sprintf("asking %d host(s)…", len(m.cfg.Hosts))
-		return m, remoteCmd(m.cfg)
+		// The ad-hoc refresh brings the tombstones in (their scan is gated
+		// on R being on); live remote rows land with the ssh answer.
+		return m, tea.Batch(remoteCmd(m.cfg), refreshCmd(m.folder, m.stateDir, m.sessionName(), true))
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
@@ -805,7 +870,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "reviewing " + t.Ticket
 			}
-			return m, refreshCmd(m.folder, m.stateDir, m.sessionName())
+			return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
 		}
 	case "d":
 		if t := m.selected(); t != nil {
@@ -815,8 +880,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "X": // park the whole workspace (grove-33) — workspace-level, no row needed
 		m.mode = modeConfirmClose
 	case "r":
+		// Local tasks only: PRs polled off a merged board would land a
+		// tombstone's handoff PR in m.prs and inflate the review count.
 		m.flash = "refreshing PRs…"
-		return m, prsCmd(m.cfg, m.stateDir, m.tasks)
+		return m, prsCmd(m.cfg, m.stateDir, m.localTasks)
 	case "?": // the cheat-sheet overlay (grove-60) — esc/? closes
 		m.mode = modeHelp
 		m.flash = ""
@@ -826,8 +893,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs
-		// and the final gv done row.
-		return m, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, true)
+		// and the final gv done row. Local tasks ONLY: a merged board here
+		// would write durable ledger rows for handed-off tasks that the
+		// remote host is already metering (double-counted spend).
+		return m, costsCmd(m.cfg, m.stateDir, m.localTasks, m.prs, m.costCache, true)
 	case "g": // THE ALMANAC (grove-63): one garden per day, browsable history
 		m.mode = modeAlmanac
 		m.flash = "leafing through the almanac…"
@@ -849,6 +918,17 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		t := m.detail
+		// Same refusal as paneTailCmd: never build a tmux target for a
+		// task without a local pane — the coordinates may resolve to a
+		// DIFFERENT local worker (grove-116 class). detail only ever binds
+		// to local rows, but the relay is where a miss steers an agent, so
+		// it re-checks.
+		if t == nil || t.HandedOffTo != "" {
+			m.mode = modeList
+			m.detail = nil
+			m.input.Blur()
+			return m, nil
+		}
 		// Pane resolved by id (grove-116): a name-built target can hit a
 		// prefix-extending sibling's window and steer the wrong agent.
 		pane, err := tmux.ClaudePaneTarget(t.TmuxSession, t.TmuxWindow)
@@ -1045,26 +1125,34 @@ var AttachTask = func(t *state.Task) error {
 }
 
 func (m *Model) move(delta int) {
-	rows := len(m.tasks)
+	rows := len(m.board)
 	if rows == 0 {
 		return
 	}
 	m.sel = (m.sel + delta + rows) % rows
 }
 
+func (m Model) selectedRow() (boardRow, bool) {
+	if len(m.board) == 0 {
+		return boardRow{}, false
+	}
+	return m.board[min(m.sel, len(m.board)-1)], true
+}
+
 func (m Model) selected() *state.Task {
-	if len(m.tasks) == 0 {
+	r, ok := m.selectedRow()
+	if !ok {
 		return nil
 	}
-	return m.tasks[min(m.sel, len(m.tasks)-1)]
+	return r.Task
 }
 
 // elsewhereFlash names where a non-local row lives.
-func elsewhereFlash(t *state.Task) string {
-	if t.HandedOffTo != "" {
-		return t.Ticket + " was handed off to " + t.HandedOffTo + " — take back: gv handoff " + t.Ticket + " --from " + t.HandedOffTo
+func elsewhereFlash(r boardRow) string {
+	if r.HandedOffTo != "" {
+		return r.Ticket + " was handed off to " + r.HandedOffTo + " — take back: gv handoff " + r.Ticket + " --from " + r.HandedOffTo
 	}
-	return t.Ticket + " runs on " + t.Host + " — steer it there (ssh " + t.Host + ")"
+	return r.Ticket + " runs on " + r.Host + " — steer it there (ssh " + r.Host + ")"
 }
 
 func (m Model) openPreview(t *state.Task) string {
@@ -1100,10 +1188,11 @@ func openURL(url string) string {
 }
 
 // mailRows: tasks demanding a human decision. A paused task never is one —
-// its idle/dead shape is deliberate (grove-90), not a stall.
+// its idle/dead shape is deliberate (grove-90), not a stall. Local tasks
+// only: a waiting REMOTE row is not mail — no local key can answer it.
 func (m Model) mailRows() []*state.Task {
 	var rows []*state.Task
-	for _, t := range m.tasks {
+	for _, t := range m.localTasks {
 		if t.Paused {
 			continue
 		}
@@ -1117,10 +1206,11 @@ func (m Model) mailRows() []*state.Task {
 
 // reviewRows: delivery output ready for human eyes — fresh first, then
 // rows already marked reviewing. A row leaves the queue when the PR merges
-// (press d) or when feedback sends the agent back to work.
+// (press d) or when feedback sends the agent back to work. Local tasks
+// only — the remote host's review queue is its own cockpit's.
 func (m Model) reviewRows() []*state.Task {
 	var fresh, marked []*state.Task
-	for _, t := range m.tasks {
+	for _, t := range m.localTasks {
 		pr := m.prs[t.Ticket]
 		if (t.Sentinel == "done") || (pr != nil && pr.State != "CLOSED") {
 			if t.Human == state.HumanReviewing {

@@ -877,7 +877,7 @@ func sceneHasLife(tasks []*state.Task, answered map[string]time.Time, celebratio
 // feedLen is len(feedItems(m.events)) and answered the latestAnswered map,
 // both computed once per frame in View (grove-167).
 func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityRows, sceneRows int) {
-	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
 	if leftover < 0 {
 		leftover = 0
 	}
@@ -891,7 +891,7 @@ func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityR
 	sceneRows = leftover - activityRows
 
 	floor := 3
-	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.liveTasks(), answered, m.celebrations, m.focused) {
+	if m.fx >= fxFull && leftover >= 10 && sceneHasLife(m.scene, answered, m.celebrations, m.focused) {
 		floor = 6
 	}
 	if sceneRows < floor && leftover >= floor+4 {
@@ -907,6 +907,6 @@ func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityR
 // viewScene renders the scene for the row budget rowBudgets handed it.
 // answered is View's once-per-frame latestAnswered map (grove-167).
 func (m Model) viewScene(rows int, answered map[string]time.Time) string {
-	lines := sceneLines(m.liveTasks(), m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
+	lines := sceneLines(m.scene, m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
 	return strings.Join(lines, "\n")
 }

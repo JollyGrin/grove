@@ -85,8 +85,11 @@ Since grove-178 (the remote-overflow train) two additive row fields:
   live rows, have `done: true`, and `live` is `"handed-off"` (or
   `"handed-off?"` when `--remote` asked the named host and it no longer
   lists the task). With `--remote`, a tombstone whose task the host
-  reports live is replaced by that live row (`host` = that host).
-  Plugins that only want runnable rows: skip rows with `handed_off_to`.
+  reports live is replaced by that live row (`host` = that host). Live
+  rows are unique per ticket: a locally live task wins over a remote row
+  with the same ticket (a stale answer after a take-back never shows
+  twice). Plugins that only want runnable rows: skip rows with
+  `handed_off_to`.
 
 ## React: tail `events.jsonl`
 

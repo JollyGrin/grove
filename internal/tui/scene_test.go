@@ -244,7 +244,8 @@ func TestRowBudgetsOffStaysZero(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 40
 	m.fx = fxOff
-	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	m.events = []state.Event{{Type: state.EvTaskCreated, Ticket: "grove-1", Time: time.Now()}}
 	_, sceneRows := m.rowBudgets(len(feedItems(m.events)), latestAnswered(m.events))
 	if sceneRows != 0 {
@@ -269,8 +270,9 @@ func TestRowBudgetsSplitsLeftover(t *testing.T) {
 			m.width, m.height = 120, c.height
 			m.fx = fxFull
 			for i := 0; i < c.tasks; i++ {
-				m.tasks = append(m.tasks, &state.Task{Ticket: string(rune('a' + i)), Agent: state.AgentWorking, Created: time.Now()})
+				m.localTasks = append(m.localTasks, &state.Task{Ticket: string(rune('a' + i)), Agent: state.AgentWorking, Created: time.Now()})
 			}
+			m.assemble()
 			for i := 0; i < c.events; i++ {
 				m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 			}
@@ -634,11 +636,12 @@ func TestRowBudgetsRaisesFloorForLife(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 25
 	m.fx = fxFull
-	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	for i := 0; i < 200; i++ {
 		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 	}
-	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
 	if leftover < 10 {
 		t.Fatalf("test setup: leftover=%d, need >=10 for the floor raise to be eligible", leftover)
 	}
@@ -654,7 +657,7 @@ func TestRowBudgetsRaisesFloorForLife(t *testing.T) {
 		t.Errorf("ACTIVITY should keep its own floor of >=4 rows, got %d", activityRows)
 	}
 
-	lines := sceneLines(m.tasks, nil, m.events, latestAnswered(m.events), m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
+	lines := sceneLines(m.scene, nil, m.events, latestAnswered(m.events), m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
 	if !strings.Contains(strings.Join(lines, "\n"), "♟") {
 		t.Errorf("compact-tier scene with a working agent should show the pawn on the trunk row")
 	}
@@ -667,7 +670,7 @@ func TestRowBudgetsBusyFeedNoLifeStaysStrip(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 	}
-	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
 	if leftover < 10 {
 		t.Fatalf("test setup: leftover=%d, need >=10 to prove the floor stays put without life", leftover)
 	}
@@ -685,11 +688,12 @@ func TestRowBudgetsFloorNotRaisedAtCalm(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 25
 	m.fx = fxCalm
-	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	for i := 0; i < 200; i++ {
 		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 	}
-	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
 	if leftover < 10 {
 		t.Fatalf("test setup: leftover=%d, need >=10 to prove fxCalm doesn't raise the floor", leftover)
 	}
@@ -732,11 +736,12 @@ func TestForcedStripTierRendersPawnOnGroundRow(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 20
 	m.fx = fxFull
-	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	for i := 0; i < 50; i++ {
 		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 	}
-	leftover := m.height - (len(m.tasks) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
 	if leftover < 0 || leftover >= 10 {
 		t.Fatalf("test setup: leftover=%d, need [0,10) to force strip tier despite life", leftover)
 	}
@@ -746,7 +751,7 @@ func TestForcedStripTierRendersPawnOnGroundRow(t *testing.T) {
 		t.Fatalf("test setup: sceneRows=%d is tier %v, want a nonzero strip tier", sceneRows, sceneTierFor(sceneRows))
 	}
 
-	lines := sceneLines(m.tasks, nil, m.events, latestAnswered(m.events), m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
+	lines := sceneLines(m.scene, nil, m.events, latestAnswered(m.events), m.celebrations, m.tick, m.width, sceneRows, 10, m.fx, m.focused)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "♟") {
 		t.Fatalf("strip tier with a working agent should still stand a pawn on the ground row, got:\n%s", joined)
@@ -1076,7 +1081,8 @@ func TestRowBudgetsOffStaysZeroWithLife(t *testing.T) {
 	m := New(nil, "", "")
 	m.width, m.height = 120, 25
 	m.fx = fxOff
-	m.tasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-1", Agent: state.AgentWorking, Created: time.Now()}}
+	m.assemble()
 	for i := 0; i < 200; i++ {
 		m.events = append(m.events, state.Event{Type: state.EvTaskCreated, Ticket: "x", Time: time.Now()})
 	}

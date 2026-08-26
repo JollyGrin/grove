@@ -145,7 +145,8 @@ func TestFooterLegendZeroTasks(t *testing.T) {
 // and viewFooter emits exactly one line within the pane at every width.
 func TestFooterHeightAlwaysOne(t *testing.T) {
 	m := New(nil, "", "")
-	m.tasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.localTasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.assemble()
 	for _, width := range []int{12, 40, 60, 80, 120, 200} {
 		m.width = width
 		if got := m.footerHeight(); got != 1 {
@@ -161,7 +162,7 @@ func TestFooterHeightAlwaysOne(t *testing.T) {
 	}
 	m.width = 60
 	m.mode = modeConfirmDone
-	m.detail = m.tasks[0]
+	m.detail = m.localTasks[0]
 	if m.footerHeight() != 1 {
 		t.Errorf("confirm-done footerHeight = %d, want 1", m.footerHeight())
 	}
@@ -182,7 +183,8 @@ func TestFooterHeightAlwaysOne(t *testing.T) {
 // O/)/? trio), and the flash itself truncates only as last resort.
 func TestFooterFlashEvictsOptionalHints(t *testing.T) {
 	m := New(nil, "", "")
-	m.tasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.localTasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.assemble()
 	m.flash = "error: worktree missing"
 	for width := 21; width <= 220; width++ {
 		m.width = width
@@ -223,7 +225,8 @@ func TestFooterFlashEvictsOptionalHints(t *testing.T) {
 // budget holds while a flash is up.
 func TestFooterFlashKeepsHeight(t *testing.T) {
 	m := New(nil, "", "")
-	m.tasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.localTasks = []*state.Task{{Ticket: "grove-72", Repo: "grove"}}
+	m.assemble()
 	for _, width := range []int{40, 60, 200} {
 		m.width = width
 		m.flash = "⬢ grove-72 merged — the canopy grows and this flash is quite long"
@@ -241,7 +244,8 @@ func TestFooterFlashKeepsHeight(t *testing.T) {
 // line, ACTIVITY/scene absorb the freed rows without overflowing.
 func TestViewHeightBudget(t *testing.T) {
 	m := New(nil, "", "")
-	m.tasks = []*state.Task{{Ticket: "grove-72", Repo: "grove", Created: time.Now()}}
+	m.localTasks = []*state.Task{{Ticket: "grove-72", Repo: "grove", Created: time.Now()}}
+	m.assemble()
 	for i := 0; i < 50; i++ {
 		m.events = append(m.events, state.Event{
 			Type: state.EvAnswered, Ticket: "grove-72", Time: time.Now(),

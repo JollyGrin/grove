@@ -59,11 +59,12 @@ func TestViewRendersNarrowPanesWithSparseFeed(t *testing.T) {
 // pane is narrow.
 func TestViewAgentsTitleHint(t *testing.T) {
 	m := New(nil, "", "")
-	m.tasks = []*state.Task{{
+	m.localTasks = []*state.Task{{
 		Ticket: "grove-18",
 		Title:  "show a tiny task title after AGE",
 		Repo:   "grove",
 	}}
+	m.assemble()
 
 	// Wide: the title (or its truncated head) rides after AGE.
 	m.width = 120
@@ -134,7 +135,8 @@ func TestPausedRowDetailAndGlyph(t *testing.T) {
 		t.Errorf("paused detail missing the stored last_message:\n%s", out)
 	}
 
-	m.tasks = []*state.Task{paused}
+	m.localTasks = []*state.Task{paused}
+	m.assemble()
 	if agents := m.viewAgents(); !strings.Contains(agents, "⏸") {
 		t.Errorf("AGENTS row missing the ⏸ paused glyph:\n%s", agents)
 	}

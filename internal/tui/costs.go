@@ -107,7 +107,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.costsTab == costsTabAccount {
 			// One-shot fetch on tab open (the costsCmd pattern) — the 1s tick
 			// never re-fires it; r refetches manually.
-			return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
 		}
 		return m, nil
 	case "o":
@@ -156,7 +156,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if m.costsTab == costsTabAccount {
 			m.flash = "refreshing account…"
-			return m, accountCmd(m.cfg, m.stateDir, m.tasks, m.costCache)
+			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
 		}
 		on := !m.costs.recording
 		if err := ledger.SetRecording(m.stateDir, on); err != nil {
@@ -166,7 +166,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.costs.recording = on
 		if on {
 			m.flash = "recording on — snapshotting active tickets"
-			return m, costsCmd(m.cfg, m.stateDir, m.tasks, m.prs, m.costCache, true)
+			return m, costsCmd(m.cfg, m.stateDir, m.localTasks, m.prs, m.costCache, true)
 		}
 		m.flash = "recording off"
 		return m, nil
