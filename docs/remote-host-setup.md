@@ -83,6 +83,30 @@ passed through verbatim and resolved by the host's own config, so
 `gv grab grove-N --repo grove --host grove-host` finds `~/git/grove` here
 regardless of where the Mac keeps its checkout.
 
+Two rules learned live (2026-08-26 shakedown — LEARNINGS §Remote):
+
+- **The host is GLOBAL-layer only.** Every `--host` verb runs over ssh at
+  the login dir — no workspace marker, so the host's gv resolves
+  `~/.config/grove/config.yaml` and the global state dir. That file must
+  carry **both** the `repos:` map (paths under this host's home) **and**
+  `provider: kind: github` — the provider otherwise defaults to markdown
+  and remote `adopt`/`grab` fail (`task not found in .grove/tasks`). Do
+  NOT mirror the Mac's workspace `.grove/config.yaml` layout here; it is
+  invisible to passthrough.
+- **Burn the first-run dialogs at provisioning time.** The first session
+  in a fresh `~/.claude` profile shows the folder-trust dialog and the
+  bypass-permissions acceptance — and they eat the adopt/grab kickoff
+  prompt, leaving the task stuck in `setup` with an empty input. After
+  `claude` login, start claude once with the worker flags from the
+  worktrees parent (`cd ~/git && claude --dangerously-skip-permissions`),
+  accept both prompts (trust: Enter; bypass: `2` then Enter), and exit.
+  If it happens anyway: answer the dialogs in the pane, then re-send the
+  instructions with `gv nudge`.
+
+Updating the host later: `gv update` is a GitHub-releases self-updater
+and errors on a private source install — use
+`ssh <host> 'cd ~/git/grove && git pull --ff-only && go install ./cmd/gv'`.
+
 ## Mac side
 
 Add the host to the Mac's config.yaml (#176):

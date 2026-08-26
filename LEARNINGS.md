@@ -361,6 +361,45 @@
 
 ## Remote / attach architecture (verified against t3code source)
 
+- **2026-08-26 · live handoff shakedown (grove-187, Mac ↔ Frankfurt VPS):
+  a remote host is GLOBAL-layer only — repos AND `provider:` must live in
+  its `~/.config/grove/config.yaml`** — every `--host` verb runs over ssh
+  at the login dir, where no workspace marker exists, so the remote gv
+  resolves the global config and global state dir. Mirroring the Mac's
+  workspace-config layout on the host breaks passthrough twice over:
+  `adopt --host` died with `unknown repo "grove" (configured: )` (global
+  config had no repos), and after adding repos it died again resolving
+  the default **markdown** provider (`task grove-187 not found in
+  .grove/tasks`) because `provider: kind: github` had also lived only in
+  the workspace layer. The runbook's single-layer model is load-bearing,
+  not a simplification. Bonus verified: the failed remote adopt left the
+  task untracked with NO tombstone and a working retry hint — the
+  #183-fix-round failure semantics observed live.
+- **2026-08-26 · first-run Claude dialogs eat the pickup prompt on a
+  fresh host** — the first adopt on a new `~/.claude` profile hit the
+  folder-trust dialog AND the bypass-permissions acceptance before the
+  pickup prompt's send-keys arrived; the prompt was consumed by the
+  dialogs and the task sat in `setup` indefinitely with an empty input.
+  Symptom signature: `agent=setup` stuck + pane showing "Do you trust
+  this folder?". Recovery: answer both dialogs (trust defaults to Yes —
+  Enter; bypass defaults to No — needs `2` then Enter), then re-send the
+  instructions via `gv nudge`. Prevention (now in the runbook): burn the
+  dialogs at provisioning time — after `claude` login, start claude once
+  with the worker flags in the worktrees parent and accept both. Same
+  family as the #186 delivery-window evidence: send-keys into a
+  booting/compacting/dialog pane reports ✓ and delivers nothing.
+- **2026-08-26 · pane-scrape verification needs `capture-pane -J` —
+  narrow panes wrap text mid-word and defeat grep** — a 39-column worker
+  pane wrapped every nudge across lines, so grepping the capture for a
+  delivery marker returned 0 even though three nudges HAD landed (the
+  worker deduped the retries gracefully: "nothing to redo"). `-J` joins
+  wrapped lines before matching. Without it, delivery checks produce
+  false negatives and cause exactly the duplicate sends #186's op-ids
+  exist to make safe.
+- **2026-08-26 · `gv update` is a GitHub-releases self-updater — a
+  private source install updates via `git pull --ff-only && go install
+  ./cmd/gv` over ssh** (no releases exist on a private repo; the verb
+  errors). The runbook's update path for a VPS host is the git one.
 - **2026-08-26 · t3code's "first-class remote" is attach, not sync — it
   synchronizes nothing between machines** — read during the #176–#179
   remote-train review: [pingdotgg/t3code](https://github.com/pingdotgg/t3code)
