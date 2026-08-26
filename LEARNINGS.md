@@ -344,6 +344,29 @@
   reads at 0.1×, 5-minute cache writes at 1.25×, 1-hour at 2×. Costs are
   ESTIMATES of relative effort, never billing.
 
+## Remote / attach architecture (verified against t3code source)
+
+- **2026-08-26 · t3code's "first-class remote" is attach, not sync — it
+  synchronizes nothing between machines** — read during the #176–#179
+  remote-train review: [pingdotgg/t3code](https://github.com/pingdotgg/t3code)
+  has no CRDT, no cloud session DB, no event replication. One machine's
+  server owns everything (agent processes, PTYs, an event-sourced SQLite
+  store); every other device is a thin client on an authed WebSocket;
+  host off = sessions unreachable. This validates grove's sync-free bet
+  (per-host state, ssh passthrough, on-demand fleet merge) from the
+  strongest possible reference — and t3code entirely punts on the one
+  case grove covers: *moving* a task between machines (`gv handoff`).
+  The transferable pieces, ranked with grove touchpoints, live in
+  [docs/remote-attach-architecture.md](docs/remote-attach-architecture.md):
+  client-minted command IDs + receipts (idempotent remote
+  answer/nudge/grab), access-vs-launch orthogonality (ssh as a launch
+  helper, never a special host type; never kill a server you didn't
+  start), snapshot-then-stream terminal attach + pairing-token→short-
+  lived-ticket auth (the `gv serve` blueprint for mobile cockpit v2),
+  and cached-views-never-overwrite-live. What it changed: the remote
+  train's architecture is confirmed, not revised; future remote work
+  starts from that doc instead of re-deriving.
+
 ## Field notes (ovs, kept for judgment)
 
 - **2026-07-29 · a polling TUI's perceived cost is `spawns/sec ×
