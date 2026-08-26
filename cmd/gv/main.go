@@ -238,6 +238,15 @@ func main() {
 			}
 			os.Exit(code)
 		}
+	} else if cmd != "nudge" && cmd != "answer" {
+		// A real --host on an unsupported verb gets the friendly
+		// supported-list error, not a flag-parse death. The relay verbs
+		// stay exempt from scanning entirely: their free text may
+		// legitimately contain "--host".
+		if host, _ := remote.ExtractHost(args); host != "" {
+			fmt.Fprintf(os.Stderr, "gv: --host is not supported for `gv %s` yet (supported: %s)\n", cmd, remote.SupportedList)
+			os.Exit(1)
+		}
 	}
 
 	var err error
@@ -2348,6 +2357,14 @@ func cmdAdopt(args []string) error {
 			return derr
 		} else if dirty {
 			return fmt.Errorf("%s: worktree %s has uncommitted changes — --sync would discard them; commit or stash first, or adopt without --sync", id, wtPath)
+		}
+		// The dirty guard can't see committed-but-unpushed work; refuse
+		// unless HEAD is an ancestor of origin so the reset drops nothing.
+		if ahead, aerr := git.AheadCommits(wtPath, "origin/"+branch); aerr != nil {
+			return fmt.Errorf("--sync: comparing with origin/%s: %w", branch, aerr)
+		} else if len(ahead) > 0 {
+			return fmt.Errorf("%s: worktree %s has %d local commit(s) not on origin/%s:\n  %s\n--sync refuses to discard them — push the branch (or reset it by hand), then retry",
+				id, wtPath, len(ahead), branch, strings.Join(ahead, "\n  "))
 		}
 		if err := git.ResetHard(wtPath, "origin/"+branch); err != nil {
 			return fmt.Errorf("--sync: reset to origin/%s: %w", branch, err)

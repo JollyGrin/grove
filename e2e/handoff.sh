@@ -152,6 +152,17 @@ GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls
 grep -q '"task-001"' "$SCRATCH/ls-remote.json" || fail "remote ls missing task"
 grep -q 'handed_off_to' "$SCRATCH/ls-remote.json" && fail "remote must carry no tombstone" || true
 
+say "adopt --sync refuses to discard committed-but-unpushed local work"
+# The kept hand-edit checkout gains a local commit; --sync's dirty guard
+# can't see it, so the ancestor check must refuse before the hard reset.
+echo "hand edit" >> "$WTDIR/README.md"
+git -C "$WTDIR" commit -qam "local-only hand edit"
+("$GV" adopt task-001 --repo dummy --branch "$BRANCH" --sync 2>&1 || true) > "$SCRATCH/sync-ahead.out"
+grep -q 'refuses to discard' "$SCRATCH/sync-ahead.out" || { cat "$SCRATCH/sync-ahead.out"; fail "adopt --sync must refuse when local commits are ahead of origin"; }
+grep -q 'local-only hand edit' "$SCRATCH/sync-ahead.out" || fail "the refusal must name the ahead commit(s)"
+git -C "$WTDIR" log --oneline -1 | grep -q 'local-only hand edit' || fail "the ahead commit must survive the refusal"
+git -C "$WTDIR" reset -q --hard "origin/$BRANCH"   # undo the hand edit so the pull-back below is unchanged
+
 say "gv handoff task-001 --from pc --as mac --yes --no-checkpoint (the mirror)"
 "$GV" handoff task-001 --from pc --as mac --yes --no-checkpoint > "$SCRATCH/from.out" 2>&1 || { cat "$SCRATCH/from.out"; fail "handoff --from failed"; }
 cat "$SCRATCH/from.out"
@@ -173,6 +184,10 @@ say "relay free text mentioning --host is relayed, not intercepted"
 # a nudge whose text mentions it must reach the pane as text, never
 # reroute (or error) the whole command.
 "$GV" nudge task-001 "when idle, compare with gv ls --host pc" > "$SCRATCH/nudge-host.out" 2>&1 || { cat "$SCRATCH/nudge-host.out"; fail "nudge with '--host' in its free text was intercepted"; }
+# ...while a REAL --host flag on an unsupported verb gets the friendly
+# supported-list error, not a flag-parse death.
+("$GV" done task-001 --host pc 2>&1 || true) > "$SCRATCH/done-host.out"
+grep -q 'supported: grab, ls, adopt, handoff' "$SCRATCH/done-host.out" || { cat "$SCRATCH/done-host.out"; fail "gv done --host must return the friendly supported-list error"; }
 
 say "tombstone terminal path: gv untrack drops the remote's pointer"
 GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-tomb.json"

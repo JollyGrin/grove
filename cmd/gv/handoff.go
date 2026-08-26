@@ -35,7 +35,7 @@ func cmdHandoff(args []string) error {
 	to := fs.String("to", "", "hand the task to this configured host")
 	from := fs.String("from", "", "pull the task from this configured host")
 	as := fs.String("as", "", "with --from: the name THIS host goes by in the remote's hosts: config (tombstone pointer; default: os.Hostname())")
-	rm := fs.Bool("rm", false, "also remove the local window, worktree, and branch (default: keep the worktree as your hand-edit checkout)")
+	rm := fs.Bool("rm", false, "also remove the releasing side's window, worktree, and branch — local with --to, REMOTE with --from (default: keep that worktree as a hand-edit checkout)")
 	yes := fs.Bool("yes", false, "skip the confirm prompt")
 	noCheckpoint := fs.Bool("no-checkpoint", false, "skip the checkpoint nudge (the worker already wrote its handoff)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for the worker to go idle after the checkpoint nudge")
@@ -161,6 +161,12 @@ func handoffFrom(cfg *config.Config, task, host, as string, rm, yes, noCheckpoin
 	}
 	if branch == "" {
 		return fmt.Errorf("%s is not tracked on %s (gv ls --host %s)", task, host, host)
+	}
+	// Preflight the LOCAL half before touching the remote: releasing a
+	// task we then can't adopt (repo missing from this host's config)
+	// would strand it untracked everywhere.
+	if _, ok := cfg.Repos[repo]; !ok {
+		return fmt.Errorf("repo %q (which %s runs %s under) is not in this host's config — add it to config.yaml first; nothing was released", repo, host, task)
 	}
 	relArgs := []string{task, "--release", "--timeout", timeout.String()}
 	if rm {
