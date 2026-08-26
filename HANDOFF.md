@@ -21,6 +21,25 @@
 > distilled into `.claude/skills/` (tmux-discipline, shipping-gates,
 > claude-code-facts) — workers load them automatically; read them before
 > touching tmux, the test gate, or hook/session code.
+>
+> **Update 2026-08-27: the remote train is SHIPPED and field-proven.**
+> The #176–#179 train (hosts config + `--host` ssh passthrough, `gv
+> handoff --to/--from`, one-fleet `gv ls --remote` / cockpit `R`, VPS
+> runbook) is merged to main — every code PR went through review → fix
+> round → independent verification → full gate (`e2e/all.sh`). A live
+> host exists: **groveremote**, a prepaid-host.com VPS (4 vCPU/16GB,
+> Frankfurt) reached via Tailscale SSH (`ssh dean@groveremote`), fully
+> provisioned per `docs/remote-host-setup.md` and wired into the Mac's
+> global `hosts:` config. A three-leg scratch handoff (Mac → VPS → Mac,
+> issue #187/PR #188, both closed) proved the whole loop, including
+> `adopt --sync`'s stale-worktree fast-forward. Architecture rationale:
+> `docs/remote-attach-architecture.md` (the t3code study — attach beats
+> sync); field surprises: LEARNINGS.md §Remote (global-layer host
+> config, first-run dialogs eating kickoff prompts, `capture-pane -J`).
+> **Next up:** the #184–#186 follow-up mini-train — #184 (rote: extend
+> passthrough verbs), #185 (cockpit acts on @host rows), #186
+> (idempotent relays + delivery confirmation; its comments carry live
+> evidence of five swallowed-prompt incidents from 2026-08-26/27).
 
 ## What this repo is
 
