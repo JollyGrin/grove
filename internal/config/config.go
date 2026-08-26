@@ -44,6 +44,17 @@ type ModelProfile struct {
 	Env map[string]string `yaml:"env"`
 }
 
+// Host is one named remote grove host (grove-176, the remote-overflow
+// train). `gv <verb> --host <name>` ssh-es to SSH and runs GV there with the
+// verb's flags passed through verbatim — no state sync, GitHub is the only
+// shared layer. GV is an absolute path on the remote (hooks use absolute
+// paths for the same reason: a non-interactive ssh shell has no PATH
+// guarantees); it defaults to a bare "gv" when omitted.
+type Host struct {
+	SSH string `yaml:"ssh"` // any ssh target; Tailscale MagicDNS in practice
+	GV  string `yaml:"gv"`  // remote gv binary (default "gv")
+}
+
 type Config struct {
 	Provider struct {
 		Kind     string `yaml:"kind"` // markdown (default) | linear | github
@@ -57,6 +68,7 @@ type Config struct {
 	} `yaml:"linear"`
 	Repos         map[string]*Repo         `yaml:"repos"`
 	ModelProfiles map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
+	Hosts         map[string]*Host         `yaml:"hosts"`          // grove-176: named remote grove hosts for --host passthrough
 	Orchestrator  struct {
 		Dir string `yaml:"dir"`
 		// Hotkeys maps cockpit digit keys "1".."8" to model profile names
@@ -244,6 +256,14 @@ func parse(raw []byte, src string) (*Config, error) {
 			}
 		}
 	}
+	for name, h := range c.Hosts {
+		if h == nil || strings.TrimSpace(h.SSH) == "" {
+			return nil, fmt.Errorf("host %q: ssh target is required", name)
+		}
+		if h.GV == "" {
+			h.GV = "gv"
+		}
+	}
 	if c.Orchestrator.Dir == "" {
 		c.Orchestrator.Dir = filepath.Join(Dir(), "orchestrator")
 	} else {
@@ -265,6 +285,29 @@ func parse(raw []byte, src string) (*Config, error) {
 		cost.Overrides(c.Cost.Pricing)
 	}
 	return &c, nil
+}
+
+// Host resolves a configured remote host by name. An unknown name errors
+// listing every configured host (sorted) so a typo is self-correcting.
+func (c *Config) Host(name string) (*Host, error) {
+	if h, ok := c.Hosts[name]; ok && h != nil {
+		return h, nil
+	}
+	names := c.HostNames()
+	if len(names) == 0 {
+		return nil, fmt.Errorf("host %q: no hosts configured (add a hosts: map to config.yaml)", name)
+	}
+	return nil, fmt.Errorf("host %q not configured (configured hosts: %s)", name, strings.Join(names, ", "))
+}
+
+// HostNames returns configured host names in stable (sorted) order.
+func (c *Config) HostNames() []string {
+	names := make([]string, 0, len(c.Hosts))
+	for n := range c.Hosts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // WithModel injects a `--model <model>` flag into a claude command string,
