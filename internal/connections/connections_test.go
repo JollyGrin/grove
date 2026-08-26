@@ -524,12 +524,16 @@ func TestRemoteHostRows(t *testing.T) {
 		"down": {SSH: "nobody@down", GV: "gv"},
 	}}
 	env := Env{Cfg: cfg, Output: func(_ time.Duration, name string, args ...string) (string, error) {
-		if name != "ssh" || args[len(args)-1] != "--version" {
+		// The remote command is ONE string with the gv path quoted the
+		// way remote.Argv quotes it — the remote shell re-splits it, so
+		// an unquoted path with spaces would break apart.
+		last := args[len(args)-1]
+		if name != "ssh" || !strings.HasSuffix(last, " --version") {
 			t.Fatalf("probe = %s %v", name, args)
 		}
-		if args[len(args)-4] == "dean@vps" {
-			if args[len(args)-2] != "/home/dean/go/bin/gv" {
-				t.Errorf("vps probe uses %q, want configured gv path", args[len(args)-2])
+		if args[len(args)-3] == "dean@vps" {
+			if last != "/home/dean/go/bin/gv --version" {
+				t.Errorf("vps probe runs %q, want configured gv path + --version", last)
 			}
 			return "gv v1.2.3\n", nil
 		}

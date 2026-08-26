@@ -62,7 +62,7 @@ func TestRunRejectsUnknownHostAndVerb(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "a, b") {
 		t.Errorf("unknown host err = %v", err)
 	}
-	_, err = Run(cfg, "a", "adopt", nil, nil, nil)
+	_, err = Run(cfg, "a", "done", nil, nil, nil) // done is terminal-state territory — never passes through
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("unsupported verb err = %v", err)
 	}

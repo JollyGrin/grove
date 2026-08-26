@@ -18,6 +18,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
+	"github.com/JollyGrin/grove/internal/remote"
 )
 
 // Severity says what a failing connection does: error blocks the verbs in
@@ -202,8 +203,11 @@ func checkRemoteHost(h *config.Host) func(Env) Status {
 		if e.Output == nil {
 			return Status{State: StateMissing, Info: "no probe"}
 		}
+		// The remote shell re-splits the command string, so h.GV is
+		// quoted exactly as remote.Argv quotes it (a path with spaces
+		// must stay one token).
 		out, err := e.Output(remoteProbeTimeout, "ssh",
-			"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", h.SSH, "--", h.GV, "--version")
+			"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", h.SSH, "--", remote.Quote(h.GV)+" --version")
 		if err != nil {
 			return Status{State: StateMissing, Info: "ssh " + h.SSH + ": " + err.Error()}
 		}

@@ -16,9 +16,13 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 )
 
-// Supported lists the verbs that pass through today. Later tickets in the
-// train add adopt/untrack; anything else is "not supported yet".
-var Supported = map[string]bool{"grab": true, "ls": true}
+// Supported lists the verbs that pass through today (grove-177 added
+// adopt + handoff for the remote half of `gv handoff`); anything else is
+// "not supported yet".
+var Supported = map[string]bool{"grab": true, "ls": true, "adopt": true, "handoff": true}
+
+// SupportedList is the human-readable form for error messages.
+const SupportedList = "grab, ls, adopt, handoff"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -50,17 +54,17 @@ func ExtractHost(args []string) (host string, rest []string) {
 // keeps a missing key from hanging on a password prompt.
 func Argv(h *config.Host, verb string, args []string) []string {
 	parts := make([]string, 0, len(args)+2)
-	parts = append(parts, quote(h.GV), verb)
+	parts = append(parts, Quote(h.GV), verb)
 	for _, a := range args {
-		parts = append(parts, quote(a))
+		parts = append(parts, Quote(a))
 	}
 	return []string{"ssh", "-o", "BatchMode=yes", h.SSH, "--", strings.Join(parts, " ")}
 }
 
-// quote single-quotes s for a POSIX shell; a token of plain safe
+// Quote single-quotes s for a POSIX shell; a token of plain safe
 // characters is left bare so the remote command stays readable in
 // process listings and ssh logs.
-func quote(s string) string {
+func Quote(s string) string {
 	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=/.:@,+%") == "" {
 		return s
 	}
@@ -73,7 +77,7 @@ func quote(s string) string {
 // returned as err.
 func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io.Writer) (int, error) {
 	if !Supported[verb] {
-		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: grab, ls)", verb)
+		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: %s)", verb, SupportedList)
 	}
 	h, err := cfg.Host(host)
 	if err != nil {

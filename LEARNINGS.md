@@ -85,6 +85,21 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-08-22 · hooks match on the DERIVED `tasks.json`, so a scripted
+  hook right after `gv grab` is a silent no-op until something Loads**
+  (grove-177 e2e): `hooks.Receive` finds the task by cwd via
+  `state.ReadTasks` (tasks.json), and `grab` only appends to events.jsonl —
+  the view is rebuilt by the next `state.Load` (any `gv ls`, the cockpit
+  tick). `e2e/dummy.sh` happens to run `gv ls` before its first hook;
+  `e2e/handoff.sh` didn't and its SessionStart vanished, which made the
+  mid-turn guard pass and the suite hang in the idle wait. Rule for e2e
+  scripts: `gv ls --json >/dev/null` before the first seeded hook.
+- **2026-08-22 · a tmux socket path has a ~104-byte limit** (macOS
+  `sun_path`): running an isolated-tmux suite from the session scratchpad
+  dir (`/private/tmp/claude-501/-Users-…/<uuid>/scratchpad`) fails with
+  "error connecting … (File name too long)" — every e2e suite keeps
+  `mktemp -d /tmp/grove-*.XXXXXX` for that reason.
+
 - **2026-08-20 · pane indices depend on `pane-base-index` — never write a
   literal `.0`/`.1` target** (grove-168, fresh-install cockpit failure):
   the common dotfiles pair `base-index 1` + `pane-base-index 1` makes the
