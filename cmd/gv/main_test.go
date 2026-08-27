@@ -49,7 +49,10 @@ func TestOrchestratorLaunchProfileNilIsUnchanged(t *testing.T) {
 // TestRequireAmbientWorkspace is grove-78's containment gate: grab derives
 // the worker's tmux session from the workspace, so any mismatch between
 // where gv runs and where the repo lives must fail closed — never fall
-// back to the legacy global session or a sibling workspace's.
+// back to the legacy global session or a sibling workspace's. The one
+// exception (grove-191): a legacy-run repo that belongs to a workspace no
+// longer refuses — the gate hands back the owning workspace as a route
+// target and grab re-execs inside it.
 func TestRequireAmbientWorkspace(t *testing.T) {
 	wsA := &workspace.Workspace{Root: "/w/a", Label: "a"}
 	wsA2 := &workspace.Workspace{Root: "/w/a", Label: "a"}
@@ -58,26 +61,33 @@ func TestRequireAmbientWorkspace(t *testing.T) {
 		name       string
 		ambient    *workspace.Workspace
 		repo       *workspace.Workspace
-		ok         bool
+		route      string // label of the workspace to re-exec into ("" = none)
 		errMention string // guidance the error must carry
 	}{
-		{"true legacy: no workspaces anywhere", nil, nil, true, ""},
-		{"repo inside the ambient workspace", wsA, wsA2, true, ""},
-		{"repo outside any workspace (the gv-remarkable escape)", wsA, nil, false, "outside the a workspace"},
-		{"repo under a sibling workspace", wsA, wsB, false, "belongs to workspace b"},
-		{"legacy run on a workspaced repo", nil, wsB, false, "belongs to workspace b"},
+		{"true legacy: no workspaces anywhere", nil, nil, "", ""},
+		{"repo inside the ambient workspace", wsA, wsA2, "", ""},
+		{"repo outside any workspace (the gv-remarkable escape)", wsA, nil, "", "outside the a workspace"},
+		{"repo under a sibling workspace", wsA, wsB, "", "belongs to workspace b"},
+		{"legacy run on a workspaced repo routes (grove-191)", nil, wsB, "b", ""},
 	}
 	for _, tc := range cases {
-		err := requireAmbientWorkspace(tc.ambient, tc.repo, "r", "/w/x/r")
-		if tc.ok && err != nil {
+		route, err := requireAmbientWorkspace(tc.ambient, tc.repo, "r", "/w/x/r")
+		if tc.errMention == "" && err != nil {
 			t.Errorf("%s: got error %v, want nil", tc.name, err)
 		}
-		if !tc.ok {
+		if tc.errMention != "" {
 			if err == nil {
 				t.Errorf("%s: got nil, want fail-closed error", tc.name)
 			} else if !strings.Contains(err.Error(), tc.errMention) {
 				t.Errorf("%s: error %q missing guidance %q", tc.name, err, tc.errMention)
 			}
+		}
+		got := ""
+		if route != nil {
+			got = route.Label
+		}
+		if got != tc.route {
+			t.Errorf("%s: route = %q, want %q", tc.name, got, tc.route)
 		}
 	}
 }

@@ -37,6 +37,28 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       `e2e/handoff.sh` asserts the fake-ssh hop for nudge (leading
       `--host`), diff/pause/untrack (trailing `--host`), and the
       free-text-mentions-`--host` case stays green.
+- [x] Global layer is workspace-transparent (grove-191, 2026-08-27, remote
+      train #184–#186): `gv ls` run at the global layer (no ambient
+      workspace) aggregates the global state + every alive registered
+      workspace (new `internal/workspace.FindTicket`/`stateDir` Peek
+      helpers) into one fleet view; `--json` rows gain the additive
+      `workspace` field (label; omitted for global-layer rows), the
+      human table gains a conditional `WORKSPACE` column tagging rows
+      `@<label>` — inside a workspace and on a no-registry machine the
+      output is byte-identical to before. The ticket verbs (`answer,
+      nudge, diff, pause, untrack, adopt, attach, done`) and `grab
+      --repo <workspace repo>`, run at the global layer against a ticket
+      the global state doesn't know, re-exec the same binary
+      (`os.Executable()`, identical argv, `cmd.Dir` = workspace root,
+      streamed stdio, exit code propagated) after one `→ workspace
+      <label>` line; two workspaces owning the ticket error naming both;
+      no recursion (the child resolves ambient and never scans the
+      registry). Ambient label derivation now runs the registry's own
+      `ValidateLabel` (a cloned grove repo with derived label `grove`
+      failed loudly with a `workspace.label` pointer instead of building
+      a `grove-grove` session; hook receiver and fix-path verbs exempt).
+      Contract: `workspace` additive row field; docs/plugins.md;
+      `e2e/workspace.sh` covers all of it.
 - [x] VPS grove-host runbook (grove-179, 2026-08-22): `docs/pc-remote-host-setup.md`
       (WSL2 PC, blocked on BIOS) rewritten as `docs/remote-host-setup.md` —
       Ubuntu VPS over Tailscale SSH as overflow for the Mac-is-home topology
