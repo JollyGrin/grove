@@ -9,6 +9,15 @@
 
 ## Now (2026-07-12)
 
+- [x] Kickoff step-2 subagent-fanout guidance in `md_default.tmpl` (grove-115,
+      2026-08-27): replaced the short step-2 in the markdown-default kickoff
+      template with the longer fan-out variant — instructs workers to use an
+      Explore subagent when reconnaissance spans ~3+ files or unfamiliar
+      territory, read directly when file/line is known, and not to ask for
+      confirmation on implementation ambiguities. No other templates touched
+      (manual/pickup have different structures; linear templates untouched).
+      All `internal/kickoff` tests pass.
+
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
 by grove workers. Live tests + hooks install happened long ago; day-to-day
