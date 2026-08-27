@@ -107,3 +107,76 @@ func TestDocCreatesIntermediateMappings(t *testing.T) {
 		t.Errorf("round-trip: %q", d2.Get("repos", "fresh", "path"))
 	}
 }
+
+func TestDocEmptyConfig(t *testing.T) {
+	// Zero-byte file → Get returns not-found, Set+save round-trips
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := LoadDoc(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Get("linear", "api_key_env"); got != "" {
+		t.Errorf("Get on empty doc = %q, want empty", got)
+	}
+	d.Set("linear-api", "linear", "api_key_env")
+	d.Set("markdown", "provider", "kind")
+	if err := d.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	got := string(raw)
+	if !strings.Contains(got, "linear:") || !strings.Contains(got, "provider:") {
+		t.Errorf("round-trip lost settings:\n%s", got)
+	}
+}
+
+func TestDocCommentOnlyConfig(t *testing.T) {
+	// Comment-only file → Get returns not-found, Set+save round-trips
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("# just a comment\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := LoadDoc(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Get("linear", "api_key_env"); got != "" {
+		t.Errorf("Get on comment-only doc = %q, want empty", got)
+	}
+	d.Set("linear-api", "linear", "api_key_env")
+	if err := d.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	got := string(raw)
+	if !strings.Contains(got, "linear:") {
+		t.Errorf("round-trip lost setting:\n%s", got)
+	}
+}
+
+func TestDocWhitespaceOnlyConfig(t *testing.T) {
+	// Whitespace-only file → Get returns not-found, Set+save round-trips
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("   \n  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := LoadDoc(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Get("linear", "api_key_env"); got != "" {
+		t.Errorf("Get on whitespace-only doc = %q, want empty", got)
+	}
+	d.Set("linear-api", "linear", "api_key_env")
+	if err := d.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	got := string(raw)
+	if !strings.Contains(got, "linear:") {
+		t.Errorf("round-trip lost setting:\n%s", got)
+	}
+}

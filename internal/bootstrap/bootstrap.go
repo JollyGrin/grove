@@ -95,6 +95,20 @@ func ensureConfig(res *Result, path string) error {
 	default:
 		return err
 	}
+	// Treat empty/comment-only files as an empty mapping node.
+	if len(doc.Content) == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
+			{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
+				{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kind"},
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "markdown"},
+				}},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "repos"},
+				{Kind: yaml.MappingNode, Tag: "!!map"},
+			}},
+		}}
+	}
 	root := doc.Content[0]
 
 	repos := mapValue(root, "repos")

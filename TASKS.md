@@ -197,6 +197,15 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       created them, so ownership is by construction; never a generic
       `.worktrees/` pattern. `orphan_processes` rows gained `rss_kb`.
       Stale done-task claude processes (no path in argv) split to #157.
+- [x] Bootstrap panic on empty config.yaml (grove-129, 2026-08-27):
+      `internal/bootstrap/writer.go:53` — `Doc.root()` indexed
+      `d.node.Content[0]`, which was empty when the config file existed
+      but was zero-byte or comment-only. `LoadDoc` + `Get` then panicked
+      with `index out of range`. Fixed by treating empty/comment-only
+      files as an empty mapping node in `LoadDoc` (and similarly in
+      `ensureConfig`); `Get` returns not-found, `Set` creates the mapping.
+      Added unit tests for zero-byte, comment-only, and whitespace-only
+      files.
 - [x] `gv grab --brief "<text>"` (grove-146, 2026-07-29): ad-hoc operator
       instructions at dispatch, so process context (release-scope
       constraints, test-env guidance) no longer had to be written into
