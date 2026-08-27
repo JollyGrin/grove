@@ -118,7 +118,12 @@ Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
 a forwarding pointer to the remote grove host; a later `task_untracked`
-for the same ticket drops the pointer for good).
+for the same ticket drops the pointer for good). `answered` may carry an
+optional `data.op_id` (grove-186, additive): relayed `answer`/`nudge`
+hops (`--host`) stamp a client op id so a retried hop is a no-op on the
+remote — same id seen again ⇒ nothing pasted, no second event. Local
+relays and the cockpit keep appending `answered` with no `data`, exactly
+as before.
 Workspace-scoped (empty `ticket`): `workspace_parked`,
 `orchestrator_closed`. New types will appear over time — skip what you
 don't know.

@@ -17,7 +17,11 @@ func TestGHTimesOut(t *testing.T) {
 
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "gh")
-	script := "#!/bin/sh\nsleep 5\n"
+	// `exec sleep`: a wedged gh is ONE hung process. A plain `sleep` child
+	// would inherit the stdout/stderr pipes, survive the deadline's kill
+	// of its parent sh, and hold Wait open past the bound — modeling the
+	// orphan-descendant hole, not the wedge this test is about.
+	script := "#!/bin/sh\nexec sleep 5\n"
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub gh: %v", err)
 	}

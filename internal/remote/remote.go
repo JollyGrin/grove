@@ -6,6 +6,8 @@
 package remote
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +80,50 @@ func ExtractHostPrefix(args []string) (host string, rest []string) {
 		rest = append(rest, a)
 	}
 	return host, rest
+}
+
+// NewOpID mints a client op id for an idempotent relayed mutation
+// (grove-186): 16 bytes of crypto/rand as lowercase hex (32 chars).
+// go.mod deliberately has no uuid dependency. The id rides the ssh hop as
+// `--op-id <v>` and lands on the remote's `answered` event as
+// `data.op_id` — the receipt a retried hop dedups against.
+func NewOpID() string {
+	b := make([]byte, 16)
+	// crypto/rand.Read only fails on a broken system, and an op id is
+	// unguessable-or-nothing — panic is the honest failure shape.
+	if _, err := rand.Read(b); err != nil {
+		panic("remote: crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// ExtractOpIDPrefix strips `--op-id <v>` / `--op-id=<v>` from args and
+// returns the value plus the remaining args in order. The relay-verb twin
+// of ExtractHostPrefix: scanning stops at the first arg that does not
+// start with `-` (free text may legitimately mention --op-id), a leading
+// unrecognized flag is kept in rest, and a trailing bare `--op-id` (no
+// value) is left in place for the verb's own handling.
+func ExtractOpIDPrefix(args []string) (opID string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		switch {
+		case a == "--op-id" || a == "-op-id":
+			if i+1 < len(args) {
+				opID = args[i+1]
+				i++
+				continue
+			}
+		case strings.HasPrefix(a, "--op-id=") || strings.HasPrefix(a, "-op-id="):
+			opID = a[strings.Index(a, "=")+1:]
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return opID, rest
 }
 
 // Argv builds the local command line: ssh <target> -- <gv> <verb> <args…>.

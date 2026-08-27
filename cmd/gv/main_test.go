@@ -1,10 +1,13 @@
 package main
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
@@ -90,4 +93,64 @@ func TestRequireAmbientWorkspace(t *testing.T) {
 			t.Errorf("%s: route = %q, want %q", tc.name, got, tc.route)
 		}
 	}
+}
+
+// TestCmdRelayOpIDDedups (grove-186) pins the receiver's receipt check: a
+// relayed answer/nudge whose op id is already in the log must print
+// "already applied", append NOTHING, and return before relayText — the
+// tmux send path — so a re-delivered hop can never paste twice. (The e2e
+// fake-ssh retry in e2e/handoff.sh proves the full loop, paste included.)
+func TestCmdRelayOpIDDedups(t *testing.T) {
+	dir := t.TempDir()
+	oldDir := ambient.stateDir
+	ambient.stateDir = dir
+	t.Cleanup(func() { ambient.stateDir = oldDir })
+
+	// The tmux coordinates are deliberately unresolvable: if the dedup
+	// regresses and cmdRelay reaches relayText, the test dies on the
+	// "no live worker window" error instead of touching any real server.
+	if err := state.Append(dir, state.Event{Type: state.EvTaskCreated, Ticket: "task-1",
+		Data: map[string]string{"tmux_session": "grove-186-no-such-session", "tmux_window": "w"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Append(dir, state.Event{Type: state.EvAnswered, Ticket: "task-1",
+		Data: map[string]string{"op_id": "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := cmdRelay([]string{"--op-id", "abc123", "task-1", "keep going"}, false); err != nil {
+			t.Errorf("deduped relay returned an error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "✓ already applied (op abc123)") {
+		t.Errorf("output %q missing the already-applied receipt", out)
+	}
+	evs, err := state.ReadEvents(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Errorf("a deduped relay must append nothing: %d events in the log, want the 2 seeded ones", len(evs))
+	}
+}
+
+// captureStdout swaps os.Stdout for a pipe around f and returns what f
+// printed (cmdRelay's receipts go straight to stdout).
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	f()
+	os.Stdout = old
+	w.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

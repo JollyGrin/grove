@@ -258,6 +258,41 @@
 
 ## Go / CLI
 
+- **2026-08-27 · an empty input box is not proof of delivery — and a long
+  paste hides its own echo** (grove-186, closing the three swallowed
+  nudges of 2026-08-26). `pasteLanded` deliberately reads an empty input
+  box as "submitted", which is right for a live pane and exactly wrong for
+  one that is booting or mid-`/compact`: the paste is swallowed, the box
+  is empty for the opposite reason, and `gv nudge` printed ✓ three times
+  for text no agent ever saw. Two-sided fix: refuse to send while the pane
+  shows `Compacting conversation` (an error, so no event is recorded), and
+  after a verified submit scrape for POSITIVE uptake — the probe echoed
+  outside the input box, or `esc to interrupt`. Second surprise while
+  building it: the uptake scrape must read SCROLLBACK, not the visible
+  screen. A long relayed prompt (the handoff checkpoint template) pushes
+  its own head off-screen, so the visible pane holds no trace of the text
+  that was plainly consumed — `e2e/handoff.sh` failed with a spurious
+  warning until the scrape switched to a bounded `capture-pane -S -200`.
+  Bounded, not `-S -`: unbounded history matches an older identical relay
+  and reports uptake that never happened. Rule: "the text is no longer in
+  the input box" is absence-of-evidence; only a running turn or an echo in
+  history is evidence-of-presence.
+- **2026-08-27 · `exec.CommandContext` kills the child, not its
+  descendants — and pipe copy-goroutines wait for whoever holds the write
+  end** (found pre-existing-red on main during grove-186's gate;
+  `TestGHTimesOut`). The grove-164 test stubbed a wedged `gh` as
+  `#!/bin/sh\nsleep 5`: the deadline's kill took down sh at 100ms, but the
+  orphaned `sleep` had inherited the stdout/stderr pipes (non-*os.File
+  writers ⇒ exec makes os.Pipes + copy goroutines), so `cmd.Wait` blocked
+  until sleep exited at 5s — the timeout looked dead while actually
+  firing. Minimal fix: model the wedge as one process (`exec sleep 5`),
+  which is also what a real stalled-network `gh` is. Latent hole left
+  open on purpose: a timed-out command whose CHILDREN hold the pipes
+  still outlives the deadline — a true fix needs Setpgid + a
+  process-group kill in `Cmd.Cancel`. Rule: a deadline test must stub the
+  hung process itself, never a shell wrapping it; and never conclude a
+  context timeout "isn't working" without checking which pid got the
+  signal.
 - **2026-07-18 · a single re-arming bubbletea timer is a pattern, not a
   one-off fix — it recurs per timer** (grove-118, farewell audit).
   grove-24 fixed the cockpit's 1s beat by making `tickMsg` the sole

@@ -79,6 +79,35 @@ func TestReadEventsMissingAndMalformed(t *testing.T) {
 	}
 }
 
+// SeenOpID (grove-186) is the receipt a retried relayed answer/nudge
+// dedups against: an event already carrying the op id ⇒ already applied.
+func TestSeenOpID(t *testing.T) {
+	dir := t.TempDir()
+	if seen, err := SeenOpID(dir, "abc"); err != nil || seen {
+		t.Fatalf("missing log: SeenOpID = %v, %v; want false, nil", seen, err)
+	}
+	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "t-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// The empty op id is never seen — legacy relays carry no id and must
+	// always run, even against a log full of id-less answered events.
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "t-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := SeenOpID(dir, ""); err != nil || seen {
+		t.Fatalf(`SeenOpID("") = %v, %v; want false, nil`, seen, err)
+	}
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "t-1", Data: map[string]string{"op_id": "abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := SeenOpID(dir, "abc"); err != nil || !seen {
+		t.Fatalf("SeenOpID(abc) = %v, %v; want true, nil", seen, err)
+	}
+	if seen, err := SeenOpID(dir, "other"); err != nil || seen {
+		t.Fatalf("SeenOpID(other) = %v, %v; want false, nil", seen, err)
+	}
+}
+
 func TestParkedTickets(t *testing.T) {
 	mk := func(evs ...Event) []Event { return evs }
 
@@ -262,5 +291,34 @@ func TestEventVersionStamp(t *testing.T) {
 		if ev.Version() != 1 {
 			t.Errorf("event %s/%s Version() = %d, want 1", ev.Type, ev.Ticket, ev.Version())
 		}
+	}
+}
+
+// TestAnsweredEventByteShape is grove-186's additive-by-construction
+// guard: an answered event minted WITHOUT an op id must stay byte-for-byte
+// today's record — Data nil ⇒ `omitempty` drops the key entirely, so no
+// plugin parsing events.jsonl sees any change. Only a relayed hop's event
+// carries data.op_id.
+func TestAnsweredEventByteShape(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "task-1", Data: map[string]string{"op_id": "abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 records, got %d", len(lines))
+	}
+	if strings.Contains(lines[0], "data") {
+		t.Errorf("a local relay's event must carry no data key at all: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"data":{"op_id":"abc"}`) {
+		t.Errorf("a relayed hop's event must stamp data.op_id: %s", lines[1])
 	}
 }

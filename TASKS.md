@@ -22,6 +22,39 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
       Obsidian live board (issue #9, design paused at REVISE), remote
       overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] Idempotent relayed mutations + delivery confirmation (grove-186,
+      2026-08-27, closes the #176–#186 remote-overflow train): **(A)** a
+      retried `gv answer/nudge --host` can no longer double-steer a worker.
+      The sender mints a client op id (`remote.NewOpID`, 16 crypto/rand
+      bytes as hex — no uuid dependency) and prepends `--op-id <id>` to the
+      hop; ssh exit 255 is ambiguous (the remote may or may not have acted)
+      so the SAME argv re-runs once after ~2s, and a second 255 surfaces the
+      op id plus the exact manual retry command. The receiver matches
+      `--op-id` in leading-flag position only (#184's rule for the relay
+      verbs, since free text may mention it) and checks `state.SeenOpID`
+      BEFORE anything a retry would repeat — hit ⇒ `✓ already applied`,
+      no tmux send, no event. Additive by construction: with no op id
+      `Data` is nil and `omitempty` drops the key, so the record is
+      byte-for-byte today's (`TestAnsweredEventByteShape`; `e2e/relay.sh`
+      and `e2e/plugin.sh` stay green). **(B)** ✓ now means "the worker
+      heard you", not "keys were sent" — the three swallowed nudges of
+      2026-08-26 were pasted into panes that were booting or mid-`/compact`,
+      where an EMPTY input box reads as landed to `pasteLanded`. `PasteText`
+      became `(warn string, err error)`: it refuses to send while the pane
+      shows `Compacting conversation` (error ⇒ caller records nothing) and,
+      after a verified submit, scrapes up to 15s for POSITIVE uptake — the
+      probe echoed outside the input box, or `esc to interrupt`. No
+      evidence still records the event (submit was verified; grove-144's
+      stance holds) but returns a warning: stderr for the CLI, the flash
+      for the cockpit. The single-char `SendRawKey` picker path skips both.
+      Two traps found while proving it: the uptake scrape must read bounded
+      SCROLLBACK (a long prompt pushes its own head off-screen; unbounded
+      would match an older identical relay), and e2e pane assertions must
+      squeeze ALL whitespace — `capture-pane` strips trailing spaces, so a
+      wrap on a space welds the words either side. Also fixed a
+      pre-existing red `internal/github` test on main (wedged-`gh` stub was
+      `sh -c "sleep 5"`, whose orphaned child held the stdout pipe open past
+      the deadline and made a working timeout look dead).
 - [x] Cockpit acts on `@host` rows (grove-185, 2026-08-27, cockpit half of
       the remote-overflow train): #178's blanket read-only gate now lifts
       for LIVE remote rows — `a`/`n` open the existing detail input bound
