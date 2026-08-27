@@ -293,3 +293,32 @@ func TestEventVersionStamp(t *testing.T) {
 		}
 	}
 }
+
+// TestAnsweredEventByteShape is grove-186's additive-by-construction
+// guard: an answered event minted WITHOUT an op id must stay byte-for-byte
+// today's record — Data nil ⇒ `omitempty` drops the key entirely, so no
+// plugin parsing events.jsonl sees any change. Only a relayed hop's event
+// carries data.op_id.
+func TestAnsweredEventByteShape(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "task-1", Data: map[string]string{"op_id": "abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 records, got %d", len(lines))
+	}
+	if strings.Contains(lines[0], "data") {
+		t.Errorf("a local relay's event must carry no data key at all: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"data":{"op_id":"abc"}`) {
+		t.Errorf("a relayed hop's event must stamp data.op_id: %s", lines[1])
+	}
+}

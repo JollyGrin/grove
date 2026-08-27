@@ -200,10 +200,18 @@ UNIQ_OPS=$(grep -o '"op_id":"[0-9a-f]*"' "$REMOTE_STATE/events.jsonl" | sort -u 
 # already renders as "@N"), never the name (grove-116).
 RWIN=$(env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' | grep task-001 | awk '{print $1}')
 [ -n "$RWIN" ] || fail "remote worker window vanished before the paste count"
+# Squeeze ALL whitespace, not just newlines: capture-pane strips each
+# line's trailing spaces, so a wrap landing on a space silently welds the
+# words either side of it ("retry probe" → "retryprobe") and a plain
+# `tr -d '\n'` grep finds nothing. Same defence as squeeze() in
+# internal/tmux/ovs.go. grep -o | wc -l counts OCCURRENCES (grep -c would
+# count matching lines — always 1 once the capture is a single line), so a
+# double delivery still fails this assertion.
 env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux list-panes -t "$RWIN" -F '#{pane_id}' | while read -r p; do
   env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux capture-pane -p -S - -t "$p"
-done | tr -d '\n' > "$SCRATCH/retry-pane.flat"
-PASTES=$(grep -o "$RMSG" "$SCRATCH/retry-pane.flat" | wc -l || true)
+done | tr -d '[:space:]' > "$SCRATCH/retry-pane.flat"
+RSQUEEZED=$(printf '%s' "$RMSG" | tr -d '[:space:]')
+PASTES=$(grep -o "$RSQUEEZED" "$SCRATCH/retry-pane.flat" | wc -l || true)
 [ "$PASTES" -eq 1 ] || fail "want exactly 1 paste of the probe text into the remote pane, got $PASTES"
 # The answered event flips the remote agent optimistically to working;
 # park it idle again so the --from release below clears its mid-turn
