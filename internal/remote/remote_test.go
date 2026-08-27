@@ -27,6 +27,30 @@ func TestExtractHost(t *testing.T) {
 	}
 }
 
+func TestExtractHostPrefix(t *testing.T) {
+	cases := []struct {
+		in   []string
+		host string
+		rest []string
+	}{
+		// leading flag position: extracted
+		{[]string{"--host", "pc", "grove-7", "compare with gv ls --host vps"}, "pc", []string{"grove-7", "compare with gv ls --host vps"}},
+		// after the first positional the rest is relay free text: untouched
+		{[]string{"grove-7", "try", "gv", "ls", "--host", "pc"}, "", []string{"grove-7", "try", "gv", "ls", "--host", "pc"}},
+		{[]string{"--host=pc", "grove-7"}, "pc", []string{"grove-7"}},
+		// trailing bare --host (no value) is left for the verb's parser
+		{[]string{"--host"}, "", []string{"--host"}},
+		// other flags share the leading region with --host
+		{[]string{"--force", "--host", "pc", "grove-7"}, "pc", []string{"--force", "grove-7"}},
+	}
+	for _, c := range cases {
+		host, rest := ExtractHostPrefix(c.in)
+		if host != c.host || !reflect.DeepEqual(rest, c.rest) {
+			t.Errorf("ExtractHostPrefix(%v) = %q %v, want %q %v", c.in, host, rest, c.host, c.rest)
+		}
+	}
+}
+
 func TestArgv(t *testing.T) {
 	h := &config.Host{SSH: "dean@grove-host", GV: "/home/dean/go/bin/gv"}
 	cases := []struct {
@@ -39,6 +63,12 @@ func TestArgv(t *testing.T) {
 		{"grab", []string{"grove-1", "--brief", "with spaces"}, "/home/dean/go/bin/gv grab grove-1 --brief 'with spaces'"},
 		{"grab", []string{"grove-1", "--brief", "it's $HOME; rm -rf"}, `/home/dean/go/bin/gv grab grove-1 --brief 'it'\''s $HOME; rm -rf'`},
 		{"grab", []string{"--brief", ""}, "/home/dean/go/bin/gv grab --brief ''"},
+		{"answer", []string{"grove-7", "it's alive, ship it"}, `/home/dean/go/bin/gv answer grove-7 'it'\''s alive, ship it'`},
+		{"nudge", []string{"grove-7", "when idle, compare with gv ls"}, "/home/dean/go/bin/gv nudge grove-7 'when idle, compare with gv ls'"},
+		{"diff", []string{"grove-7", "--stat"}, "/home/dean/go/bin/gv diff grove-7 --stat"},
+		{"pause", []string{"grove-7", "--force"}, "/home/dean/go/bin/gv pause grove-7 --force"},
+		{"untrack", []string{"grove-7", "--rm"}, "/home/dean/go/bin/gv untrack grove-7 --rm"},
+		{"ls", []string{"--json"}, "/home/dean/go/bin/gv ls --json"},
 	}
 	for _, c := range cases {
 		got := Argv(h, c.verb, c.args)

@@ -180,14 +180,15 @@ tmux list-windows -t "=$SESSION" > "$SCRATCH/windows-back.out"
 grep -q task-001 "$SCRATCH/windows-back.out" || fail "local worker window not rebuilt"
 
 say "relay free text mentioning --host is relayed, not intercepted"
-# --host is only parsed for verbs that support it (grab/ls/adopt/handoff):
-# a nudge whose text mentions it must reach the pane as text, never
-# reroute (or error) the whole command.
+# The relay verbs (answer/nudge) match --host only in leading-flag
+# position, before the ticket (ExtractHostPrefix): a nudge whose text
+# mentions it must reach the pane as text, never reroute (or error) the
+# whole command.
 "$GV" nudge task-001 "when idle, compare with gv ls --host pc" > "$SCRATCH/nudge-host.out" 2>&1 || { cat "$SCRATCH/nudge-host.out"; fail "nudge with '--host' in its free text was intercepted"; }
 # ...while a REAL --host flag on an unsupported verb gets the friendly
 # supported-list error, not a flag-parse death.
 ("$GV" done task-001 --host pc 2>&1 || true) > "$SCRATCH/done-host.out"
-grep -q 'supported: grab, ls, adopt, handoff' "$SCRATCH/done-host.out" || { cat "$SCRATCH/done-host.out"; fail "gv done --host must return the friendly supported-list error"; }
+grep -q 'supported: grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack' "$SCRATCH/done-host.out" || { cat "$SCRATCH/done-host.out"; fail "gv done --host must return the friendly supported-list error"; }
 
 say "tombstone terminal path: gv untrack drops the remote's pointer"
 GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-tomb.json"
@@ -196,6 +197,23 @@ GROVE_STATE_DIR="$REMOTE_STATE" "$GV" untrack task-001 > "$SCRATCH/untrack-tomb.
 grep -q 'pointer dropped' "$SCRATCH/untrack-tomb.out" || { cat "$SCRATCH/untrack-tomb.out"; fail "untrack on a tombstone row must drop the pointer"; }
 GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-after.json"
 grep -q 'handed_off_to' "$SCRATCH/ls-remote-after.json" && fail "pointer must clear after untrack" || true
+
+say "extended passthrough: nudge/diff/pause/untrack relay with --host stripped"
+# grove-184: the new verbs hop with --host removed and every other flag
+# intact (quoting per remote.Quote: bare tokens stay bare). The remote no
+# longer tracks task-001 here (released + pointer dropped above), so the
+# relayed gv errors AFTER the hop — the assertion is on what fake ssh
+# received, not the remote's exit. nudge uses the leading-only rule:
+# --host before the ticket relays; in the free-text test above it must
+# not.
+("$GV" nudge --host pc task-001 'ping' > "$SCRATCH/relay-nudge.out" 2>&1 || true)
+grep -Fq "[fake ssh] $GV nudge task-001 ping" "$SCRATCH/relay-nudge.out" || { cat "$SCRATCH/relay-nudge.out"; fail "nudge --host must reach ssh as 'nudge task-001 ping'"; }
+("$GV" diff task-001 --stat --host pc > "$SCRATCH/relay-diff.out" 2>&1 || true)
+grep -Fq "[fake ssh] $GV diff task-001 --stat" "$SCRATCH/relay-diff.out" || { cat "$SCRATCH/relay-diff.out"; fail "diff --stat --host must reach ssh with --host stripped"; }
+("$GV" pause task-001 --force --host pc > "$SCRATCH/relay-pause.out" 2>&1 || true)
+grep -Fq "[fake ssh] $GV pause task-001 --force" "$SCRATCH/relay-pause.out" || { cat "$SCRATCH/relay-pause.out"; fail "pause --force --host must reach ssh with --host stripped"; }
+("$GV" untrack task-001 --rm --host pc > "$SCRATCH/relay-untrack.out" 2>&1 || true)
+grep -Fq "[fake ssh] $GV untrack task-001 --rm" "$SCRATCH/relay-untrack.out" || { cat "$SCRATCH/relay-untrack.out"; fail "untrack --rm --host must reach ssh with --host stripped"; }
 
 say "real tmux server untouched (canary)"
 [ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "the REAL tmux server's session list changed — the suite leaked out of isolation"

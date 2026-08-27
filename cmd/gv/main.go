@@ -65,7 +65,10 @@ const usage = `gv — grove
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
-      … --host <name>                         grab/ls/adopt on a configured remote host (hosts: in config.yaml)
+      … --host <name>                         run the verb over ssh on a configured remote host (hosts: in
+                                              config.yaml) — grab/ls/adopt/handoff/answer/nudge/diff/
+                                              pause/untrack; answer/nudge match --host only before the
+                                              ticket (relay free text may legitimately mention it)
   gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
   gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)
@@ -227,12 +230,21 @@ func main() {
 	// --host <name> (grove-176): run the verb on a remote grove host over
 	// ssh, flags passed through verbatim, output printed unchanged, exit
 	// code propagated. Intercepted before dispatch so the local verb never
-	// touches local state for a remote task. Only verbs that support
-	// --host are scanned at all: a relay's free text may legitimately
-	// contain "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
-	// string-scanning every argv would hijack it.
+	// touches local state for a remote task. The relay verbs (answer,
+	// nudge) recognize --host only in leading-flag position, before the
+	// ticket (ExtractHostPrefix): their free text may legitimately contain
+	// "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
+	// string-scanning the whole argv would hijack it. Every other
+	// supported verb takes flags only, so whole-argv scanning is safe.
 	if remote.Supported[cmd] {
-		if host, rest := remote.ExtractHost(args); host != "" {
+		var host string
+		var rest []string
+		if cmd == "answer" || cmd == "nudge" {
+			host, rest = remote.ExtractHostPrefix(args)
+		} else {
+			host, rest = remote.ExtractHost(args)
+		}
+		if host != "" {
 			code, err := runRemote(host, cmd, rest)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "gv:", err)
@@ -240,11 +252,9 @@ func main() {
 			}
 			os.Exit(code)
 		}
-	} else if cmd != "nudge" && cmd != "answer" {
+	} else {
 		// A real --host on an unsupported verb gets the friendly
-		// supported-list error, not a flag-parse death. The relay verbs
-		// stay exempt from scanning entirely: their free text may
-		// legitimately contain "--host".
+		// supported-list error, not a flag-parse death.
 		if host, _ := remote.ExtractHost(args); host != "" {
 			fmt.Fprintf(os.Stderr, "gv: --host is not supported for `gv %s` yet (supported: %s)\n", cmd, remote.SupportedList)
 			os.Exit(1)

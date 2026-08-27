@@ -22,6 +22,21 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
       Obsidian live board (issue #9, design paused at REVISE), remote
       overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] Remote `--host` passthrough for five more verbs (grove-184,
+      2026-08-27, tail of the #176–#178 remote-overflow train): `answer`,
+      `nudge`, `diff`, `pause`, `untrack` join `grab/ls/adopt/handoff` in
+      `remote.Supported` — the remote gv does its own guarding, interactive
+      confirms already stream over ssh (#177). The one verb-specific rule
+      (the filing's "pure passthrough" was wrong): relay free text may
+      legitimately contain `--host` (`gv nudge grove-7 try gv ls --host
+      pc`), so `answer`/`nudge` match `--host` only in leading-flag
+      position via new `remote.ExtractHostPrefix` (scan stops at the first
+      non-flag arg; `--host=X` and trailing bare `--host` behave as in
+      `ExtractHost`); the no-free-text verbs keep whole-argv
+      `ExtractHost`, so trailing flags relay exactly like `grab`/`ls`.
+      `e2e/handoff.sh` asserts the fake-ssh hop for nudge (leading
+      `--host`), diff/pause/untrack (trailing `--host`), and the
+      free-text-mentions-`--host` case stays green.
 - [x] VPS grove-host runbook (grove-179, 2026-08-22): `docs/pc-remote-host-setup.md`
       (WSL2 PC, blocked on BIOS) rewritten as `docs/remote-host-setup.md` —
       Ubuntu VPS over Tailscale SSH as overflow for the Mac-is-home topology
