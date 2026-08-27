@@ -28,7 +28,7 @@ unset GROVE_STATE_DIR || true   # per-workspace state is the subject here
 cleanup() {
   tmux kill-server 2>/dev/null || true
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
-  rm -rf "$SCRATCH"
+  rm -rf "$SCRATCH" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -103,6 +103,44 @@ printf '{"session_id":"ws-e2e","cwd":"%s","hook_event_name":"Stop","last_assista
 [ "$(wc -l < "$ALPHA/.grove/state/events.jsonl")" -gt "$EV_A" ] || fail "hook event did not land in alpha"
 [ ! -e "$DUO/.grove/state/events.jsonl" ] || fail "hook wrote into a non-owning fleet"
 
+say "grove-191: global-layer gv ls aggregates the registered workspaces"
+( cd "$SCRATCH" && "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-global.json" )
+grep -q 'task-001' "$SCRATCH/ls-global.json" || fail "global ls must aggregate workspace tasks:
+$(cat "$SCRATCH/ls-global.json")"
+grep -q '"workspace": "alpha"' "$SCRATCH/ls-global.json" || fail "aggregated rows must carry the workspace label:
+$(cat "$SCRATCH/ls-global.json")"
+( cd "$SCRATCH" && "$GV" ls --no-pr --no-cost > "$SCRATCH/ls-global.out" )
+grep -q 'WORKSPACE' "$SCRATCH/ls-global.out" || fail "human table must gain the WORKSPACE column:
+$(cat "$SCRATCH/ls-global.out")"
+grep -q '@alpha' "$SCRATCH/ls-global.out" || fail "human rows must tag the workspace:
+$(cat "$SCRATCH/ls-global.out")"
+# in-workspace output is byte-identical: the field never leaks in
+! grep -q '"workspace"' "$SCRATCH/ls-a.json" || fail "in-workspace ls must not emit the workspace field"
+
+say "grove-191: global-layer answer re-execs into the owning workspace"
+EV_A=$(wc -l < "$ALPHA/.grove/state/events.jsonl")
+( cd "$SCRATCH" && "$GV" answer task-001 "routed hello" > "$SCRATCH/answer-global.out" 2> "$SCRATCH/answer-global.err" )
+grep -q '→ workspace alpha' "$SCRATCH/answer-global.out" || fail "answer must print the routing line:
+$(cat "$SCRATCH/answer-global.out")
+$(cat "$SCRATCH/answer-global.err")"
+grep -q '✓ sent' "$SCRATCH/answer-global.out" || fail "routed answer must complete:
+$(cat "$SCRATCH/answer-global.out")"
+[ "$(wc -l < "$ALPHA/.grove/state/events.jsonl")" -eq "$((EV_A + 1))" ] || fail "answered event must land in alpha's state"
+[ ! -e "$HOME/.local/state/grove/events.jsonl" ] || fail "routed answer must not touch global state"
+
+say "grove-191: a ticket tracked in two workspaces is an honest error"
+mkdir -p "$DUO/svc-a/.grove/tasks"
+printf -- "---\nid: task-001\ntitle: duo duplicate\nstatus: todo\n---\nbody\n" > "$DUO/svc-a/.grove/tasks/task-001.md"
+( cd "$DUO" && "$GV" grab task-001 --repo svc-a > "$SCRATCH/grab-duo.out" 2>&1 )
+grep -q '✓ task-001 grabbed' "$SCRATCH/grab-duo.out" || fail "duo grab of the duplicate ticket failed:
+$(cat "$SCRATCH/grab-duo.out")"
+rc=0
+( cd "$SCRATCH" && "$GV" answer task-001 "which one?" > "$SCRATCH/ambiguous.out" 2>&1 ) || rc=$?
+[ "$rc" -ne 0 ] || fail "ambiguous ticket must exit non-zero"
+grep -q 'alpha' "$SCRATCH/ambiguous.out" && grep -q 'duo' "$SCRATCH/ambiguous.out" \
+  || fail "ambiguity error must name both workspaces:
+$(cat "$SCRATCH/ambiguous.out")"
+
 say "dash pane shows the workspace label (the driver)"
 ( cd "$ALPHA" && "$GV" >/dev/null 2>&1 || true )   # headless attach fails after build — expected
 tmux has-session -t grove-alpha 2>/dev/null || fail "grove-alpha session missing"
@@ -128,6 +166,7 @@ cat > "$HOME/.config/grove/config.yaml" <<EOF
 provider: {kind: markdown}
 repos:
   legacy-repo: {path: $LEG, base: main, claude: echo}
+  alpha: {path: $ALPHA, base: main, claude: echo}
 EOF
 mkdir -p "$LEG/.grove/tasks"
 printf -- "---\nid: task-009\ntitle: legacy check\nstatus: todo\n---\nbody\n" > "$LEG/.grove/tasks/task-009.md"
@@ -135,7 +174,60 @@ printf -- "---\nid: task-009\ntitle: legacy check\nstatus: todo\n---\nbody\n" > 
 grep -q 'workspace:' "$SCRATCH/grab-leg.out" && fail "legacy grab must not claim a workspace" || true
 [ -s "$HOME/.local/state/grove/events.jsonl" ] || fail "legacy grab must use the global state dir"
 
+say "grove-191: global-layer grab --repo <workspace repo> routes instead of refusing"
+printf -- "---\nid: task-002\ntitle: routed grab\nstatus: todo\n---\nbody\n" > "$ALPHA/.grove/tasks/task-002.md"
+EV_A=$(wc -l < "$ALPHA/.grove/state/events.jsonl")
+( cd "$SCRATCH" && "$GV" grab task-002 --repo alpha > "$SCRATCH/grab-route.out" 2>&1 )
+grep -q '→ workspace alpha' "$SCRATCH/grab-route.out" || fail "grab must print the routing line:
+$(cat "$SCRATCH/grab-route.out")"
+grep -q '✓ task-002 grabbed' "$SCRATCH/grab-route.out" || fail "routed grab must complete:
+$(cat "$SCRATCH/grab-route.out")"
+[ "$(wc -l < "$ALPHA/.grove/state/events.jsonl")" -gt "$EV_A" ] || fail "routed grab must grow the WORKSPACE state"
+grep -q '"ticket":"task-002"' "$ALPHA/.grove/state/events.jsonl" || fail "task_created must land in alpha's events"
+! grep -q '"ticket":"task-002"' "$HOME/.local/state/grove/events.jsonl" || fail "routed grab must not touch global state"
+
+say "grove-191: routed verbs propagate the child's exit code"
+rc=0
+( cd "$SCRATCH" && "$GV" done task-002 > "$SCRATCH/done-route.out" 2>&1 ) || rc=$?
+[ "$rc" -ne 0 ] || fail "an unmerged done must exit non-zero through the route"
+grep -q '→ workspace alpha' "$SCRATCH/done-route.out" || fail "done must print the routing line"
+grep -q 'has no remote' "$SCRATCH/done-route.out" || fail "the refusal must come from inside the workspace:
+$(cat "$SCRATCH/done-route.out")"
+grep -q '"ticket":"task-002"' "$ALPHA/.grove/state/events.jsonl" || fail "a refused done must leave the task tracked"
+
+say "grove-191: routed untrack cleans up through the route"
+( cd "$SCRATCH" && "$GV" untrack task-002 --rm --force > "$SCRATCH/untrack-route.out" 2>&1 )
+grep -q '→ workspace alpha' "$SCRATCH/untrack-route.out" || fail "untrack must print the routing line:
+$(cat "$SCRATCH/untrack-route.out")"
+grep -q '✓ task-002 untracked' "$SCRATCH/untrack-route.out" || fail "routed untrack must complete:
+$(cat "$SCRATCH/untrack-route.out")"
+
+say "grove-191: a no-registry machine stays byte-identical"
+mkdir -p "$SCRATCH/home2"
+( cd "$SCRATCH" && HOME="$SCRATCH/home2" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-noreg.json" )
+! grep -q '"workspace"' "$SCRATCH/ls-noreg.json" || fail "no-registry ls must not emit the workspace field:
+$(cat "$SCRATCH/ls-noreg.json")"
+
+say "grove-191: reserved ambient label fails loudly (the cloned-grove shape)"
+mkrepo "$SCRATCH/grove"
+mkdir -p "$SCRATCH/grove/.grove"
+printf 'repos:\n  grove: {path: %s, base: main, claude: echo}\n' "$SCRATCH/grove" > "$SCRATCH/grove/.grove/config.yaml"
+rc=0
+( cd "$SCRATCH/grove" && "$GV" ls > "$SCRATCH/badlabel.out" 2>&1 ) || rc=$?
+[ "$rc" -ne 0 ] || fail "a reserved ambient label must exit non-zero"
+grep -q 'reserved' "$SCRATCH/badlabel.out" || fail "label error must say why:
+$(cat "$SCRATCH/badlabel.out")"
+grep -q 'workspace.label' "$SCRATCH/badlabel.out" || fail "label error must name workspace.label:
+$(cat "$SCRATCH/badlabel.out")"
+( cd "$SCRATCH/grove" && "$GV" > /dev/null 2>&1 ) || true   # bare gv dies at the same gate
+! tmux has-session -t grove-grove 2>/dev/null || fail "must never build a grove-<reserved> session"
+printf '{"session_id":"x","cwd":"/nonexistent","hook_event_name":"Stop"}' \
+  | ( cd "$SCRATCH/grove" && "$GV" hook stop ) || fail "hook receiver must stay exit-0 inside a bad-label workspace"
+printf 'workspace:\n  label: grove-repo\nrepos:\n  grove: {path: %s, base: main, claude: echo}\n' "$SCRATCH/grove" > "$SCRATCH/grove/.grove/config.yaml"
+( cd "$SCRATCH/grove" && "$GV" ls > /dev/null 2>&1 ) || fail "a valid workspace.label must make the workspace usable"
+
 say "untrack cleanup"
 ( cd "$ALPHA" && "$GV" untrack task-001 --rm --force > /dev/null )
+( cd "$DUO" && "$GV" untrack task-001 --rm --force > /dev/null )
 
 say "PASS — workspaces: isolated state, ambient scoping, visible focus, owned hooks, legacy intact"

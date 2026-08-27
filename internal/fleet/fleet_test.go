@@ -143,6 +143,26 @@ func TestDecodeStampsHostAndDropsRemoteTombstones(t *testing.T) {
 	}
 }
 
+// TestDecodeCarriesWorkspace (grove-191): a remote's aggregated rows carry
+// their workspace label through the merge untouched — host says WHERE the
+// machine is, workspace which grove on it owns the task.
+func TestDecodeCarriesWorkspace(t *testing.T) {
+	raw := []byte(`{"schema_version":1,"tasks":[
+	  {"ticket":"gr-7","workspace":"grove-repo","live":"working"}
+	]}`)
+	rows, err := Decode("vps", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Workspace != "grove-repo" {
+		t.Fatalf("rows = %+v, want gr-7 with workspace grove-repo", rows)
+	}
+	merged, _ := Merge(nil, nil, []Result{{Host: "vps", Rows: rows}})
+	if len(merged) != 1 || merged[0].Workspace != "grove-repo" || merged[0].Host != "vps" {
+		t.Fatalf("merged = %+v, want workspace+host preserved", merged)
+	}
+}
+
 func TestFetchParallelWithFailures(t *testing.T) {
 	cfg := &config.Config{Hosts: map[string]*config.Host{
 		"a": {SSH: "a.example", GV: "gv"},

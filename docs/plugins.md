@@ -91,6 +91,17 @@ Since grove-178 (the remote-overflow train) two additive row fields:
   twice). Plugins that only want runnable rows: skip rows with
   `handed_off_to`.
 
+Since grove-191 (workspace transparency) one more additive row field:
+
+- `workspace` — the label of the workspace that owns the task. `gv ls`
+  run at the global layer (no ambient workspace) aggregates every alive
+  registered workspace's rows into one fleet view; those rows carry
+  `workspace: "<label>"`, while tasks living in the global layer itself
+  omit the field. Inside a workspace `gv ls` stays scoped to it (no
+  field, byte-identical to before). Over `--remote` a row can carry both
+  `host` and `workspace` — the host says which machine, the workspace
+  which grove on it owns the task.
+
 ## React: tail `events.jsonl`
 
 Each workspace's `.grove/state/events.jsonl` is an append-only,

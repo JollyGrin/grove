@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -128,6 +129,71 @@ func loadCfg() (*config.Config, error) {
 
 func stateDir() string { return ambient.stateDir }
 
+// ambientLabelExempt lists verbs that never touch the ambient workspace
+// label, so a broken label (see requireValidAmbientLabel) doesn't block
+// its own fix or the always-usable surfaces. The hook receiver is not
+// listed: it returns from main before the check runs (exit 0, always).
+var ambientLabelExempt = map[string]bool{
+	"version": true, "--version": true, "help": true, "-h": true, "--help": true,
+	"init": true, "workspaces": true, "doctor": true, "update": true,
+}
+
+// requireValidAmbientLabel applies the registry's ValidateLabel rule to
+// the ambient workspace's label (grove-191): a label derived from a
+// reserved/invalid directory name — the grove repo itself is dir "grove" —
+// used to pass silently here while `workspaces add` refused it, and bare
+// `gv` then built a grove-grove cockpit session. The registry and ambient
+// paths now agree: error with the pointer instead.
+func requireValidAmbientLabel() error {
+	if ambient.ws == nil {
+		return nil
+	}
+	if err := workspace.ValidateLabel(ambient.ws.Label); err != nil {
+		return fmt.Errorf("workspace at %s: %v — set workspace.label in %s",
+			ambient.ws.Root, err, filepath.Join(ambient.ws.Root, ".grove", "config.yaml"))
+	}
+	return nil
+}
+
+// routeIntoWorkspace re-executes this binary with the identical argv
+// inside ws (grove-191) — the ssh-passthrough shape one machine down, so
+// global-layer verbs reach workspace tasks with zero remote-specific code.
+// Prints the routing line first, streams stdio, and exits with the child's
+// code (argv is passed as a slice: no shell, no quoting). Only a launch
+// failure returns; callers treat that as an ordinary error. No recursion
+// is possible: the child's ambient walk-up finds the workspace, and the
+// workspace layer never scans the registry.
+func routeIntoWorkspace(ws *workspace.Workspace) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("→ workspace %s\n", ws.Label)
+	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Dir = ws.Root
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.ExitCode())
+		}
+		return err
+	}
+	os.Exit(0)
+	return nil // unreachable; keeps the signature honest for callers
+}
+
+// ambiguousError is the honest refusal when a ticket is tracked in more
+// than one registered workspace (grove-191): routing would pick a winner
+// silently, so name them and let the human cd.
+func ambiguousError(owners []workspace.Workspace, idOrURL string) error {
+	var labels []string
+	for _, ws := range owners {
+		labels = append(labels, ws.Label)
+	}
+	return fmt.Errorf("%s is tracked in several workspaces: %s — run the verb from inside one", idOrURL, strings.Join(labels, ", "))
+}
+
 func wsLabel() string {
 	if ambient.ws != nil {
 		return ambient.ws.Label
@@ -196,6 +262,10 @@ func main() {
 		// Bare gv: inside a workspace -> its cockpit; outside with a
 		// registry -> the switcher (DESIGN 6.5.3); outside with none ->
 		// the legacy global cockpit.
+		if err := requireValidAmbientLabel(); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
 		var err error
 		if ambient.ws == nil {
 			if list, _ := workspace.LoadRegistry(); len(list) > 0 {
@@ -225,6 +295,20 @@ func main() {
 			}
 		}
 		return
+	}
+
+	// grove-191: an ambient workspace label that fails the registry's own
+	// ValidateLabel rule (derived from a reserved/invalid directory name —
+	// the grove repo itself — or set wrong in config) must fail loudly
+	// with the fix pointer, never silently build a grove-<reserved>
+	// session. The hook receiver returns above (its exit-0 rule), and the
+	// verbs that never touch the ambient label stay usable so the fix
+	// paths (init, workspaces) keep working from inside.
+	if !ambientLabelExempt[cmd] {
+		if err := requireValidAmbientLabel(); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
 	}
 
 	// --host <name> (grove-176): run the verb on a remote grove host over
@@ -960,8 +1044,17 @@ func cmdGrab(args []string) error {
 	// outside the workspace gv is running in. The session is derived from
 	// the workspace below; a repo whose path resolves elsewhere would
 	// silently escape to the legacy global session or a sibling workspace's.
-	if err := requireAmbientWorkspace(ambient.ws, workspace.Find(repo.Path), repoName, repo.Path); err != nil {
+	// grove-191: at the global layer a repo that belongs to a workspace
+	// routes the whole grab there instead of refusing.
+	routeWS, err := requireAmbientWorkspace(ambient.ws, workspace.Find(repo.Path), repoName, repo.Path)
+	if err != nil {
 		return err
+	}
+	if routeWS != nil {
+		if err := routeIntoWorkspace(routeWS); err != nil {
+			return fmt.Errorf("route into workspace %s: %w", routeWS.Label, err)
+		}
+		return fmt.Errorf("workspace route returned") // unreachable: routeIntoWorkspace exits
 	}
 
 	profileName, profile, err := cfg.ResolveProfile(*profileFlag, repo)
@@ -1164,21 +1257,24 @@ func workspaceRoot(ws *workspace.Workspace, repoPath string) string {
 // would escape to that sibling's session — both live surprises. Workers
 // must never leave the workspace gv runs in; fail closed with guidance.
 // The legacy session stays reachable only from true legacy runs (no
-// ambient workspace, un-workspaced repo).
-func requireAmbientWorkspace(ambientWS, repoWS *workspace.Workspace, repoName, repoPath string) error {
+// ambient workspace, un-workspaced repo). Since grove-191 the global-layer
+// arm no longer refuses: it returns the owning workspace as a route
+// target and the caller re-execs the whole grab inside it
+// (routeIntoWorkspace), so `gv grab <t> --repo X` from the login dir —
+// including over `gv grab ... --host` — just works.
+func requireAmbientWorkspace(ambientWS, repoWS *workspace.Workspace, repoName, repoPath string) (*workspace.Workspace, error) {
 	switch {
 	case ambientWS == nil && repoWS == nil:
-		return nil
+		return nil, nil
 	case ambientWS != nil && repoWS != nil && ambientWS.Root == repoWS.Root:
-		return nil
+		return nil, nil
 	case ambientWS == nil:
-		return fmt.Errorf("repo %s (%s) belongs to workspace %s — grab it from inside that workspace (cd %s)",
-			repoName, repoPath, repoWS.Label, repoWS.Root)
+		return repoWS, nil
 	case repoWS == nil:
-		return fmt.Errorf("repo %s (%s) is outside the %s workspace — map it in its own workspace, or in a parent workspace of both",
+		return nil, fmt.Errorf("repo %s (%s) is outside the %s workspace — map it in its own workspace, or in a parent workspace of both",
 			repoName, repoPath, ambientWS.Label)
 	default:
-		return fmt.Errorf("repo %s (%s) belongs to workspace %s, not %s — grab it from there (cd %s)",
+		return nil, fmt.Errorf("repo %s (%s) belongs to workspace %s, not %s — grab it from there (cd %s)",
 			repoName, repoPath, repoWS.Label, ambientWS.Label, repoWS.Root)
 	}
 }
@@ -1525,38 +1621,83 @@ func cmdLs(args []string) error {
 	if err != nil {
 		return err
 	}
-	active := state.Active(tasks)
-	handedOff := state.HandedOff(tasks)
 
+	// grove-191: at the global layer the fleet is the whole machine —
+	// every alive registered workspace's tasks join the view, each row
+	// tagged with its workspace label (the additive `workspace` field).
+	// Inside a workspace, and on a machine with no alive registered
+	// workspaces, the fleet is exactly today's and the output stays
+	// byte-identical (Workspace is omitempty, the column collapses).
+	// Workspace state is folded read-only via state.Peek — this ls never
+	// rewrites another workspace's derived tasks.json.
+	type fleetSrc struct {
+		label string
+		tasks map[string]*state.Task
+		cfg   *config.Config // nil: no PR lookups for this fleet
+	}
+	fleets := []fleetSrc{{tasks: tasks}}
+	if cfgErr == nil {
+		fleets[0].cfg = cfg
+	}
+	if ambient.ws == nil {
+		list, _ := workspace.LoadRegistry()
+		sort.Slice(list, func(i, j int) bool { return list[i].Label < list[j].Label })
+		for _, ws := range list {
+			if !workspace.Alive(ws) {
+				continue
+			}
+			wt, err := state.Peek(config.StateDirAt(ws.Root))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "gv ls: warning: workspace %s: %v\n", ws.Label, err)
+				continue
+			}
+			f := fleetSrc{label: ws.Label, tasks: wt}
+			if c, err := config.LoadAt(ws.Root); err == nil {
+				f.cfg = c
+			}
+			fleets = append(fleets, f)
+		}
+	}
+	var handedOff []*state.Task
 	prs := map[string]*github.PR{}
-	if !*noPR && cfgErr == nil {
-		lookups := map[string][2]string{}
-		for _, t := range active {
-			if r, ok := cfg.Repos[t.Repo]; ok {
-				lookups[t.Ticket] = [2]string{r.Path, t.Branch}
+	if !*noPR {
+		for _, f := range fleets {
+			if f.cfg == nil {
+				continue
+			}
+			lookups := map[string][2]string{}
+			for _, t := range state.Active(f.tasks) {
+				if r, ok := f.cfg.Repos[t.Repo]; ok {
+					lookups[t.Ticket] = [2]string{r.Path, t.Branch}
+				}
+			}
+			for k, v := range github.FetchAll(lookups) {
+				prs[k] = v
 			}
 		}
-		prs = github.FetchAll(lookups)
 	}
 
 	costCache := cost.NewCache()
-	rows := make([]lsRow, 0, len(active))
-	for _, t := range active {
-		// Resolve the current window name (a P3 status glyph is a display
-		// suffix on the stable base) so the byte-comparable detect probe's
-		// exact name match still finds a live worker.
-		live := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
-		liveStr := "gone"
-		if live.Exists {
-			liveStr = live.Status.String()
-		}
-		row := lsRow{Task: t, Live: liveStr, PR: prs[t.Ticket]}
-		if !*noCost {
-			if tot, err := costCache.ForTask(t.Worktree); err == nil {
-				row.Cost = &tot
+	rows := make([]lsRow, 0, len(tasks))
+	for _, f := range fleets {
+		for _, t := range state.Active(f.tasks) {
+			// Resolve the current window name (a P3 status glyph is a display
+			// suffix on the stable base) so the byte-comparable detect probe's
+			// exact name match still finds a live worker.
+			live := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
+			liveStr := "gone"
+			if live.Exists {
+				liveStr = live.Status.String()
 			}
+			row := lsRow{Task: t, Live: liveStr, PR: prs[t.Ticket], Workspace: f.label}
+			if !*noCost {
+				if tot, err := costCache.ForTask(t.Worktree); err == nil {
+					row.Cost = &tot
+				}
+			}
+			rows = append(rows, row)
 		}
-		rows = append(rows, row)
+		handedOff = append(handedOff, state.HandedOff(f.tasks)...)
 	}
 	// grove-178: one fleet. Remote hosts are asked in parallel (5s each),
 	// a failure is one warning line and never a non-zero exit; local rows
@@ -1617,6 +1758,16 @@ func cmdLs(args []string) error {
 			break
 		}
 	}
+	// The WORKSPACE column (grove-191) collapses the same way: it appears
+	// only when the aggregate view carries a workspace-tagged row, so a
+	// global-only fleet and every in-workspace run stay byte-identical.
+	anyWorkspace := false
+	for _, r := range rows {
+		if r.Workspace != "" {
+			anyWorkspace = true
+			break
+		}
+	}
 	header := fmt.Sprintf("%-11s %-11s %-10s %-8s %-9s %-5s %-9s %-8s %s",
 		"TICKET", "REPO", "STATUS", "LIVE", "PR", "CI", "PREVIEW", "COST", "AGE")
 	if anyProfile {
@@ -1624,6 +1775,9 @@ func cmdLs(args []string) error {
 	}
 	if anyRemote {
 		header += "  HOST"
+	}
+	if anyWorkspace {
+		header += "  WORKSPACE"
 	}
 	fmt.Println(header)
 	for _, r := range rows {
@@ -1660,6 +1814,13 @@ func cmdLs(args []string) error {
 		}
 		if anyRemote {
 			line += "  " + r.Host
+		}
+		if anyWorkspace {
+			ws := "—"
+			if r.Workspace != "" {
+				ws = "@" + r.Workspace // the cockpit's @host tag, one layer down
+			}
+			line += "  " + ws
 		}
 		fmt.Println(line)
 		if r.Agent == state.AgentWaiting && r.Question != "" {
@@ -2259,6 +2420,22 @@ func cmdAdopt(args []string) error {
 		if _, ok := tasks[cand]; ok {
 			id = cand
 			break
+		}
+	}
+	if id == "" && ambient.ws == nil {
+		// grove-191: at the global layer, a ticket any registered
+		// workspace has ever tracked routes there — adopt revives done
+		// tasks, so the scan matches any state, not just active. Cold
+		// adopts (nothing anywhere) keep resolving below.
+		list, _ := workspace.LoadRegistry()
+		if owners := workspace.FindTicket(list, positionals[0], true); len(owners) > 0 {
+			if len(owners) == 1 {
+				if err := routeIntoWorkspace(&owners[0]); err != nil {
+					return fmt.Errorf("route into workspace %s: %w", owners[0].Label, err)
+				}
+				return fmt.Errorf("workspace route returned") // unreachable: routeIntoWorkspace exits
+			}
+			return ambiguousError(owners, positionals[0])
 		}
 	}
 	if id == "" {
@@ -3165,18 +3342,35 @@ func findTask(idOrURL string) (*state.Task, error) {
 		}
 	}
 	// Mid-migration hint: the id may be tracked by another fleet (plan
-	// review I-3) — read-only scan, never acts across workspaces.
+	// review I-3) — read-only scan, never acts across workspaces. The
+	// workspace layer never routes (that is the global layer's job), so
+	// inside a workspace this stays a hint.
 	list, _ := workspace.LoadRegistry()
-	for _, ws := range list {
-		if !workspace.Alive(ws) {
-			continue
-		}
-		owned := state.ReadTasks(config.StateDirAt(ws.Root))
-		for _, id := range cands {
-			if t, ok := owned[id]; ok && !t.Done && ws.Label != wsLabel() {
-				return nil, fmt.Errorf("no active task %s here — it is tracked in workspace %q (cd there or `gv switch %s`)", idOrURL, ws.Label, ws.Label)
+	if ambient.ws != nil {
+		for _, ws := range list {
+			if !workspace.Alive(ws) {
+				continue
+			}
+			owned := state.ReadTasks(config.StateDirAt(ws.Root))
+			for _, id := range cands {
+				if t, ok := owned[id]; ok && !t.Done && ws.Label != wsLabel() {
+					return nil, fmt.Errorf("no active task %s here — it is tracked in workspace %q (cd there or `gv switch %s`)", idOrURL, ws.Label, ws.Label)
+				}
 			}
 		}
+		return nil, fmt.Errorf("no active task %s — see `gv ls`", idOrURL)
+	}
+	// grove-191: at the global layer the miss re-routes into the owning
+	// workspace (the re-exec prints `→ workspace <label>` and exits with
+	// the workspace-layer result); ambiguity is an honest error.
+	if owners := workspace.FindTicket(list, idOrURL, false); len(owners) > 0 {
+		if len(owners) == 1 {
+			if err := routeIntoWorkspace(&owners[0]); err != nil {
+				return nil, fmt.Errorf("route into workspace %s: %w", owners[0].Label, err)
+			}
+			return nil, fmt.Errorf("workspace route returned") // unreachable: routeIntoWorkspace exits
+		}
+		return nil, ambiguousError(owners, idOrURL)
 	}
 	return nil, fmt.Errorf("no active task %s — see `gv ls`", idOrURL)
 }

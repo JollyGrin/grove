@@ -34,13 +34,17 @@ import (
 // Row is one `gv ls --json` row: the task plus its live/PR/cost columns.
 // Host lives HERE, not on state.Task: it is merge-output display data, and
 // keeping it off the persisted type means a Task reaching tasks.json can
-// never round-trip a host tag by construction.
+// never round-trip a host tag by construction. Workspace (grove-191) is the
+// same kind of display data: the owning registered workspace's label on the
+// global layer's aggregated rows — omitted for global-layer tasks and
+// inside workspaces, so pre-existing payloads are unchanged.
 type Row struct {
 	*state.Task
-	Host string       `json:"host,omitempty"`
-	Live string       `json:"live"`
-	PR   *github.PR   `json:"pr,omitempty"`
-	Cost *cost.Totals `json:"cost,omitempty"`
+	Host      string       `json:"host,omitempty"`
+	Workspace string       `json:"workspace,omitempty"`
+	Live      string       `json:"live"`
+	PR        *github.PR   `json:"pr,omitempty"`
+	Cost      *cost.Totals `json:"cost,omitempty"`
 }
 
 // Live values for tombstone rows — additive vocabulary next to the tmux
