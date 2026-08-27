@@ -258,6 +258,25 @@
 
 ## Go / CLI
 
+- **2026-08-27 · an empty input box is not proof of delivery — and a long
+  paste hides its own echo** (grove-186, closing the three swallowed
+  nudges of 2026-08-26). `pasteLanded` deliberately reads an empty input
+  box as "submitted", which is right for a live pane and exactly wrong for
+  one that is booting or mid-`/compact`: the paste is swallowed, the box
+  is empty for the opposite reason, and `gv nudge` printed ✓ three times
+  for text no agent ever saw. Two-sided fix: refuse to send while the pane
+  shows `Compacting conversation` (an error, so no event is recorded), and
+  after a verified submit scrape for POSITIVE uptake — the probe echoed
+  outside the input box, or `esc to interrupt`. Second surprise while
+  building it: the uptake scrape must read SCROLLBACK, not the visible
+  screen. A long relayed prompt (the handoff checkpoint template) pushes
+  its own head off-screen, so the visible pane holds no trace of the text
+  that was plainly consumed — `e2e/handoff.sh` failed with a spurious
+  warning until the scrape switched to a bounded `capture-pane -S -200`.
+  Bounded, not `-S -`: unbounded history matches an older identical relay
+  and reports uptake that never happened. Rule: "the text is no longer in
+  the input box" is absence-of-evidence; only a running turn or an echo in
+  history is evidence-of-presence.
 - **2026-08-27 · `exec.CommandContext` kills the child, not its
   descendants — and pipe copy-goroutines wait for whoever holds the write
   end** (found pre-existing-red on main during grove-186's gate;

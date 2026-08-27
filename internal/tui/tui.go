@@ -83,9 +83,13 @@ type actionDoneMsg struct {
 }
 
 // relayDoneMsg carries the outcome of an inline reply. Separate from
-// actionDoneMsg so a nudge never triggers the done ritual.
+// actionDoneMsg so a nudge never triggers the done ritual. warn (grove-186)
+// is a delivered-but-unconfirmed relay: the event IS recorded, but the
+// pane showed no sign of taking the text up, so the flash says so instead
+// of a bare ✓.
 type relayDoneMsg struct {
 	err    error
+	warn   string
 	ticket string
 }
 
@@ -260,16 +264,17 @@ func prTickEvery(d time.Duration) tea.Cmd {
 func relayCmd(stateDir, ticket, pane, text string) tea.Cmd {
 	return func() tea.Msg {
 		var err error
+		var warn string
 		if len([]rune(text)) == 1 {
 			err = tmux.SendRawKey(pane, text) // option pickers: raw, no Enter
 		} else {
-			err = tmux.PasteText(pane, text)
+			warn, err = tmux.PasteText(pane, text)
 		}
 		if err != nil {
 			return relayDoneMsg{err: err, ticket: ticket}
 		}
 		_ = state.Append(stateDir, state.Event{Type: state.EvAnswered, Ticket: ticket})
-		return relayDoneMsg{ticket: ticket}
+		return relayDoneMsg{warn: warn, ticket: ticket}
 	}
 }
 
@@ -807,9 +812,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case relayDoneMsg:
-		if msg.err != nil {
+		switch {
+		case msg.err != nil:
 			m.flash = msg.err.Error()
-		} else {
+		case msg.warn != "":
+			// Recorded, but unconfirmed (grove-186) — never a bare ✓.
+			m.flash = msg.warn
+		default:
 			m.flash = "✓ sent to " + msg.ticket
 		}
 		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)

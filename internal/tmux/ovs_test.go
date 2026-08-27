@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPickPane(t *testing.T) {
@@ -186,5 +187,172 @@ func TestClaudePaneNonexistentWindow(t *testing.T) {
 	// callers behave exactly as before this helper existed.
 	if got := ClaudePane("pr-test-nonexistent-session-xyz", "nope"); got != 1 {
 		t.Errorf("ClaudePane fallback = %d, want 1", got)
+	}
+}
+
+// --- grove-186: delivery confirmation (compact guard + consumption scrape) ---
+
+// The pre-send guard: a pane mid-/compact swallows a paste outright, so
+// PasteText must wait it out and — if it never clears — return an error
+// BEFORE load-buffer, meaning nothing was sent and the caller records no
+// event (the grove-144 contract, reused).
+func TestWaitOutCompact(t *testing.T) {
+	compacting := "✻ Compacting conversation… (34%)\n" + box("> ")
+	idle := box("> ")
+
+	// Shrink the budget so the loop is small and explicit — these are
+	// package vars precisely so tests can do this.
+	oldPoll, oldMax := compactPoll, compactMax
+	compactPoll, compactMax = time.Millisecond, 3*time.Millisecond
+	defer func() { compactPoll, compactMax = oldPoll, oldMax }()
+	wantPolls := polls(compactMax, compactPoll) // 3 waits ⇒ up to 4 looks
+
+	cases := []struct {
+		name        string
+		captures    []string
+		captureErr  error
+		wantErr     bool
+		wantSettles int
+	}{
+		{"idle pane: proceeds on the first look", []string{idle}, nil, false, 0},
+		{"compact clears on the third look", []string{compacting, compacting, idle}, nil, false, 2},
+		{"never clears: error after the full budget", []string{compacting}, nil, true, wantPolls},
+		// Permissive, like every other scrape here: an unreadable pane must
+		// never block a relay on the scraper's own uncertainty.
+		{"unreadable pane proceeds", []string{""}, errors.New("no pane"), false, 0},
+	}
+	for _, c := range cases {
+		i, settles := 0, 0
+		err := waitOutCompact("%9",
+			func() (string, error) {
+				out := c.captures[min(i, len(c.captures)-1)]
+				i++
+				return out, c.captureErr
+			},
+			func() { settles++ },
+		)
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, wantErr %v", c.name, err, c.wantErr)
+		}
+		if settles != c.wantSettles {
+			t.Errorf("%s: %d waits, want %d", c.name, settles, c.wantSettles)
+		}
+		if c.wantErr && err != nil {
+			for _, want := range []string{"mid-compact", "nothing sent"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: error %q missing %q", c.name, err, want)
+				}
+			}
+		}
+	}
+}
+
+// The post-submit scrape. No evidence is a WARNING, never an error: the
+// submit was already verified, so the caller still records its event.
+func TestAwaitConsumption(t *testing.T) {
+	const text = "please rebase onto main and rerun the gate"
+	echoed := "> " + text + "\n\n" + box("> ")
+	running := box("> ") + "\n  esc to interrupt\n"
+	nothing := box("> ") // booting/empty pane: submitted-looking, but no uptake
+
+	oldPoll, oldMax := consumePoll, consumeMax
+	consumePoll, consumeMax = time.Millisecond, 3*time.Millisecond
+	defer func() { consumePoll, consumeMax = oldPoll, oldMax }()
+
+	cases := []struct {
+		name       string
+		captures   []string
+		captureErr error
+		wantWarn   bool
+	}{
+		{"echoed into the transcript above the box", []string{echoed}, nil, false},
+		{"a turn is visibly running", []string{running}, nil, false},
+		{"evidence arrives on a later poll", []string{nothing, nothing, echoed}, nil, false},
+		{"no evidence within the budget: warn", []string{nothing}, nil, true},
+		{"unreadable pane is not a warning", []string{""}, errors.New("no pane"), false},
+	}
+	for _, c := range cases {
+		i := 0
+		warn := awaitConsumption("%9", text,
+			func() (string, error) {
+				out := c.captures[min(i, len(c.captures)-1)]
+				i++
+				return out, c.captureErr
+			},
+			func() {},
+		)
+		if (warn != "") != c.wantWarn {
+			t.Errorf("%s: warn = %q, wantWarn %v", c.name, warn, c.wantWarn)
+		}
+		if c.wantWarn && warn != "" {
+			for _, want := range []string{"no consumption evidence", "capture-pane", "%9"} {
+				if !strings.Contains(warn, want) {
+					t.Errorf("%s: warning %q missing %q", c.name, warn, want)
+				}
+			}
+		}
+	}
+}
+
+// consumedEvidence's discriminator: text sitting IN the input box is the
+// UNSENT case (verifySubmit's business), not evidence of uptake. Only text
+// echoed outside the box, or a running turn, counts.
+func TestConsumedEvidence(t *testing.T) {
+	const text = "please rebase onto main and rerun the gate"
+	cases := []struct {
+		name    string
+		capture string
+		want    bool
+	}{
+		{"echoed above an empty box", "> " + text + "\n\n" + box("> "), true},
+		{"still sitting in the input box", box("> " + text), false},
+		{"running-turn marker, box empty", box("> ") + "\n  esc to interrupt\n", true},
+		{"marker is matched case-insensitively", box("> ") + "\n  Esc to interrupt\n", true},
+		{"plain shell pane echoed the line", "$ " + text + "\nbash: command not found\n$ ", true},
+		{"booting pane, nothing at all", box("> "), false},
+		{"empty capture", "", false},
+		// Wrapping in the transcript must not hide the echo (squeeze drops
+		// whitespace on both sides), which is how a narrow pane renders it.
+		{"echo wrapped across lines", "> please rebase onto\nmain and rerun the gate\n\n" + box("> "), true},
+		// Degenerate: nothing distinctive to look for.
+		{"empty text", box("> "), true},
+	}
+	for _, c := range cases {
+		probe := text
+		if c.name == "empty text" {
+			probe = ""
+		}
+		if got := consumedEvidence(c.capture, probe); got != c.want {
+			t.Errorf("%s: consumedEvidence = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// outsideInputBox is the "above the box" half of the split; with no box
+// visible the whole capture is outside (plain shell panes, new chrome).
+func TestOutsideInputBox(t *testing.T) {
+	got := outsideInputBox("transcript line\n" + box("> hi"))
+	if !strings.Contains(got, "transcript line") || strings.Contains(got, "> hi") {
+		t.Errorf("outsideInputBox = %q, want just the transcript", got)
+	}
+	if got := outsideInputBox("no box here\n$ "); got != "no box here\n$ " {
+		t.Errorf("no box: outsideInputBox = %q, want the whole capture", got)
+	}
+}
+
+func TestPolls(t *testing.T) {
+	cases := []struct {
+		max, poll time.Duration
+		want      int
+	}{
+		{30 * time.Second, 2 * time.Second, 15},
+		{15 * time.Second, 3 * time.Second, 5},
+		{time.Second, 2 * time.Second, 1}, // max below poll still loops once
+		{time.Second, 0, 1},               // degenerate poll never divides by zero
+	}
+	for _, c := range cases {
+		if got := polls(c.max, c.poll); got != c.want {
+			t.Errorf("polls(%s, %s) = %d, want %d", c.max, c.poll, got, c.want)
+		}
 	}
 }

@@ -123,24 +123,75 @@ var pasteSettle = 250 * time.Millisecond
 // pane that confirms the submit landed.
 var submitSettle = 300 * time.Millisecond
 
+// Delivery-confirmation timings (grove-186). Package-level vars, like the
+// settles above, so unit tests can shrink them.
+//
+// compactPoll/compactMax bound the PRE-send guard: a pane running
+// /compact swallows a paste outright, so we wait for it to finish rather
+// than send into the hole. consumePoll/consumeMax bound the POST-submit
+// scrape that looks for evidence the pane actually consumed the text.
+var (
+	compactPoll = 2 * time.Second
+	compactMax  = 30 * time.Second
+	consumePoll = 3 * time.Second
+	consumeMax  = 15 * time.Second
+)
+
+// compactMarker is the line Claude Code paints while compacting. That
+// window (and a booting pane) is where three relayed nudges were silently
+// swallowed on 2026-08-26: send-keys landed in a pane that was not
+// listening, and the resulting EMPTY input box reads as "landed" to
+// pasteLanded — deliberately, since an empty box normally means submitted.
+const compactMarker = "Compacting conversation"
+
+// runningTurnMarker is the footer Claude paints while a turn is running —
+// the strongest evidence a relayed paste was consumed.
+const runningTurnMarker = "esc to interrupt"
+
+// polls converts a budget + interval into the number of waits that fit.
+// At least one, so a test that shrinks max below poll still exercises the
+// loop.
+func polls(max, poll time.Duration) int {
+	if poll <= 0 || max <= poll {
+		return 1
+	}
+	return int(max / poll)
+}
+
 // PasteText delivers multi-line or special-character text to a pane via
 // load-buffer + a BRACKETED paste-buffer (-p), lets the receiving TUI settle,
 // then submits with a separate Enter and verifies that the submit actually
 // landed: one retry Enter, then an error (grove-144), so callers never record
 // an answer the agent never received. SendKeys is unsafe for prose: it is
 // single-line and tmux interprets key-name lookalikes.
-func PasteText(target, text string) error {
+//
+// grove-186 wraps that core in the two halves of delivery confirmation, so
+// a ✓ means "the worker heard you" rather than "keys were sent":
+//
+//	pre-send   refuse to paste into a pane that is mid-/compact (it would
+//	           swallow the text and leave an empty box that reads as
+//	           landed). An error here means NOTHING was sent — the caller
+//	           records no event, exactly as for a failed submit.
+//	post-submit scrape for evidence the pane consumed the text. No
+//	           evidence is a WARNING, not an error: the submit itself was
+//	           verified, and scraping stays garnish (grove-144's stance),
+//	           so the caller still records the event and surfaces warn.
+func PasteText(target, text string) (warn string, err error) {
+	capture := func() (string, error) { return CapturePane(target) }
+	if err := waitOutCompact(target, capture, func() { time.Sleep(compactPoll) }); err != nil {
+		return "", err
+	}
 	load := exec.Command("tmux", "load-buffer", "-b", "gv-relay", "-")
 	load.Stdin = strings.NewReader(text)
 	if out, err := load.CombinedOutput(); err != nil {
-		return &execError{op: "load-buffer", out: string(out), err: err}
+		return "", &execError{op: "load-buffer", out: string(out), err: err}
 	}
 	// -p brackets the paste when the foreground app requested bracketed
 	// paste mode (Claude's TUI does; a plain shell does not, and tmux then
 	// sends the buffer bare). The doc comment claimed this for a year while
 	// the flag was missing.
 	if _, err := run("paste-buffer", "-d", "-p", "-b", "gv-relay", "-t", target); err != nil {
-		return err
+		return "", err
 	}
 	time.Sleep(pasteSettle)
 	enter := func() error {
@@ -148,16 +199,102 @@ func PasteText(target, text string) error {
 		return err
 	}
 	if err := enter(); err != nil {
-		return err
+		return "", err
 	}
 	// Whole visible pane, not CapturePaneBottom: that helper reads the pane's
 	// bottom N ROWS, which are blank whenever the app draws from the top
 	// (caught in e2e/relay.sh — the scrape saw nothing but empty rows and
 	// called every relay landed). inputBoxContent finds the box itself.
-	return verifySubmit(target, text,
-		func() (string, error) { return CapturePane(target) },
-		enter,
-		func() { time.Sleep(submitSettle) })
+	if err := verifySubmit(target, text, capture, enter,
+		func() { time.Sleep(submitSettle) }); err != nil {
+		return "", err
+	}
+	// Scrollback, not the visible screen: verifySubmit watches the input
+	// box (always on screen), but a consumed prompt scrolls up and away.
+	return awaitConsumption(target, text,
+		func() (string, error) { return capturePaneHistory(target) },
+		func() { time.Sleep(consumePoll) }), nil
+}
+
+// waitOutCompact is the pre-send guard: while the pane shows Claude's
+// compact banner, wait it out rather than paste into a window that eats
+// the text. tmux calls are injected so the sequencing is testable without
+// a live server. An unreadable pane proceeds — scraping never blocks a
+// relay on its own uncertainty (grove-144); only a POSITIVE compact
+// reading holds the send back.
+func waitOutCompact(target string, capture func() (string, error), settle func()) error {
+	for i := 0; i <= polls(compactMax, compactPoll); i++ {
+		if i > 0 {
+			settle()
+		}
+		out, err := capture()
+		if err != nil || !strings.Contains(out, compactMarker) {
+			return nil
+		}
+	}
+	// One line: this also renders as the cockpit's flash message.
+	return fmt.Errorf("relay to %s: pane is mid-compact — nothing sent, retry when idle (watch: tmux capture-pane -p -t %s)", target, target)
+}
+
+// awaitConsumption scrapes for evidence that a verified submit was
+// actually taken up by the agent: the text echoed into the transcript
+// ABOVE the input box, or a turn visibly running. Returns "" once either
+// shows (or when the pane is unreadable), else the operator-facing
+// warning. Never an error — the submit was already verified, so the
+// caller records its event either way.
+func awaitConsumption(target, text string, capture func() (string, error), settle func()) string {
+	for i := 0; i <= polls(consumeMax, consumePoll); i++ {
+		if i > 0 {
+			settle()
+		}
+		out, err := capture()
+		if err != nil {
+			return ""
+		}
+		if consumedEvidence(out, text) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("⚠ sent, but no consumption evidence within %s — check the pane: tmux capture-pane -p -t %s", consumeMax, target)
+}
+
+// consumeLookback is how many lines of scrollback the consumption scrape
+// reads. A long relayed prompt pushes its OWN head off the visible screen
+// — the e2e checkpoint nudge does exactly that — so the echo it left
+// behind lives in history, not on screen. Bounded rather than `-S -`: an
+// unbounded history would also match a much older identical relay and
+// report uptake that never happened.
+const consumeLookback = 200
+
+// capturePaneHistory captures a pane plus a bounded slice of its
+// scrollback, wrapped lines joined (-J, so a wrap landing on a space does
+// not weld the words either side of it). Missing pane reads as "" and no
+// error, matching CapturePane's permissive shape.
+func capturePaneHistory(target string) (string, error) {
+	out, err := run("capture-pane", "-p", "-J", "-S", "-"+strconv.Itoa(consumeLookback), "-t", target)
+	if err != nil {
+		return "", nil
+	}
+	return out, nil
+}
+
+// consumedEvidence reports whether a pane capture shows the relayed text
+// being acted on. Two independent signals, either sufficient: a running
+// turn, or the probe appearing OUTSIDE the input box (i.e. echoed into
+// the transcript — inside the box it would mean still-unsent, which is
+// verifySubmit's business, not ours).
+func consumedEvidence(capture, text string) bool {
+	if strings.Contains(strings.ToLower(capture), runningTurnMarker) {
+		return true
+	}
+	probe := squeeze(text)
+	if r := []rune(probe); len(r) > pasteProbeRunes {
+		probe = string(r[:pasteProbeRunes])
+	}
+	if probe == "" {
+		return true // nothing distinctive to look for
+	}
+	return strings.Contains(squeeze(outsideInputBox(capture)), probe)
 }
 
 // verifySubmit is the check → retry-Enter → check ladder that runs after a
@@ -222,6 +359,31 @@ const footerSlack = 6
 // when no box is visible (a plain shell pane, or unfamiliar chrome).
 func inputBoxContent(capture string) string {
 	lines := strings.Split(capture, "\n")
+	start, end, ok := inputBoxRange(lines)
+	if !ok {
+		return ""
+	}
+	return strings.Join(lines[start:end+1], "\n")
+}
+
+// outsideInputBox returns the transcript ABOVE the input box — where a
+// consumed prompt is echoed (grove-186). With no box visible (plain shell
+// pane, unfamiliar chrome) the whole capture is "outside", which keeps the
+// e2e shell stubs and any future chrome working.
+func outsideInputBox(capture string) string {
+	lines := strings.Split(capture, "\n")
+	start, _, ok := inputBoxRange(lines)
+	if !ok {
+		return capture
+	}
+	return strings.Join(lines[:start], "\n")
+}
+
+// inputBoxRange locates the bottom-most bordered box in a pane capture,
+// returning its inclusive body line range. Shared by inputBoxContent (what
+// is IN the box) and outsideInputBox (what is above it) so both read the
+// same chrome the same way.
+func inputBoxRange(lines []string) (start, end int, ok bool) {
 	end, skipped := -1, 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		t := strings.TrimSpace(lines[i])
@@ -234,16 +396,16 @@ func inputBoxContent(capture string) string {
 			end = i // bottom border scrolled off
 		default:
 			if skipped++; skipped > footerSlack {
-				return ""
+				return 0, 0, false
 			}
 			continue
 		}
 		break
 	}
 	if end < 0 {
-		return ""
+		return 0, 0, false
 	}
-	start := end + 1
+	start = end + 1
 	for i := end; i >= 0; i-- {
 		if !isBoxSide(strings.TrimSpace(lines[i])) {
 			break
@@ -251,9 +413,9 @@ func inputBoxContent(capture string) string {
 		start = i
 	}
 	if start > end {
-		return ""
+		return 0, 0, false
 	}
-	return strings.Join(lines[start:end+1], "\n")
+	return start, end, true
 }
 
 func isBottomBorder(trimmed string) bool {

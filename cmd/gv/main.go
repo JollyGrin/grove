@@ -2358,17 +2358,26 @@ func relayText(t *state.Task, text, opID string) error {
 		return fmt.Errorf("%s has no live worker window: %w", t.Ticket, err)
 	}
 	// Single character → raw key without Enter (option pickers / plan
-	// approval). Anything longer → bracketed paste + Enter.
+	// approval), which skips both the compact guard and the consumption
+	// scrape: a picker keystroke has no input box to watch and no turn to
+	// start. Anything longer → bracketed paste + Enter.
+	var warn string
 	if len([]rune(text)) == 1 {
 		err = tmux.SendRawKey(pane, text)
 	} else {
-		err = tmux.PasteText(pane, text)
+		warn, err = tmux.PasteText(pane, text)
 	}
 	if err != nil {
-		// PasteText verifies the submit landed (grove-144), so a failure here
-		// means the agent never got the text — recording EvAnswered anyway is
+		// PasteText verifies the submit landed (grove-144) and refuses to
+		// send into a mid-compact pane (grove-186), so a failure here means
+		// the agent never got the text — recording EvAnswered anyway is
 		// what made this bug silent: gv ls showed `working` on a dead worker.
 		return err
+	}
+	// A verified submit with no sign of uptake still records its event —
+	// but the operator hears about it, on stderr so ✓/--json stay clean.
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, warn)
 	}
 	var data map[string]string
 	if opID != "" {
