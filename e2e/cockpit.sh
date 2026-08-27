@@ -4,8 +4,9 @@
 # renders AGENTS + ACTIVITY (no MAIL/REVIEW panels) and that
 # `gv orchestrator new` stacks another chat pane. grove-185 adds the
 # @host-row keys: driving the live TUI with send-keys against a fake ssh
-# (handoff.sh pattern), R merges an @pc row, then a/d/enter must hit the
-# host with the right argv while tombstones stay read-only.
+# (handoff.sh pattern), R merges an @pc row, then a/n/d/enter must hit
+# the host with the right argv while v stays blocked and tombstones stay
+# read-only.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -20,6 +21,13 @@ GV="$SCRATCH/gv"
 
 export HOME="$SCRATCH/home"
 export GROVE_STATE_DIR="$SCRATCH/state"
+# Hermetic scratch HOME: the pane shells and the grove-185 diff pager
+# otherwise drop .bash_history/.lesshst into it as they DIE — i.e. during
+# cleanup's rm -rf, which then fails "Directory not empty" and (as the
+# EXIT trap's last command) becomes the suite's exit status. Green run,
+# red script.
+export HISTFILE=/dev/null
+export LESSHISTFILE=-
 # $TMUX beats TMUX_TMPDIR in tmux's socket resolution — launched from
 # inside a tmux pane, TMUX_TMPDIR alone is a silent no-op and every tmux
 # call (including cleanup's kill-server) hits the REAL server. Unset first.
@@ -30,7 +38,15 @@ mkdir -p "$HOME/.config/grove" "$GROVE_STATE_DIR" "$TMUX_TMPDIR" "$SCRATCH/repo"
 
 cleanup() {
   tmux kill-server 2>/dev/null || true
-  rm -rf "$SCRATCH"
+  # Let the panes actually die before removing the tree: kill-server only
+  # signals, and a shell still flushing its history recreates a directory
+  # rm has already emptied (see the HISTFILE note above). Poll the socket,
+  # then retry the remove once.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
+    sleep 0.2
+  done
+  rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; rm -rf "$SCRATCH"; }
 }
 trap cleanup EXIT
 
@@ -200,6 +216,24 @@ $(cat "$SSH_LOG")"
 sleep 1
 [ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -eq "$EV_LINES" ] || fail "remote answer appended a LOCAL event — the remote host records its own"
 grep -q '"type":"answered"' "$GROVE_STATE_DIR/events.jsonl" && fail "a local answered event was written" || true
+
+say "n on the @pc row relays gv nudge — same input, nudge flavor"
+wait_grep '▸.*pc-9' || fail "cursor left the @pc row after the answer:
+$CAP"
+tmux send-keys -t "$PANE0" n
+wait_grep 'NUDGE' || fail "n did not open the detail input in nudge flavor:
+$CAP"
+echo "$CAP" | grep -q 'remote worker on @pc' || fail "nudge detail must carry the remote hint too:
+$CAP"
+tmux send-keys -t "$PANE0" wake Enter
+wait_ssh ' nudge pc-9 wake' || fail "ssh nudge argv wrong (want '… -- <gv> nudge pc-9 wake'):
+$(cat "$SSH_LOG")"
+
+say "v stays blocked on a live remote row (review state is local)"
+tmux send-keys -t "$PANE0" v
+wait_grep 'review state is local' || fail "v on a remote row must flash the local-review refusal:
+$CAP"
+grep -q ' review pc-9' "$SSH_LOG" && fail "v must not reach the host" || true
 
 say "d on the @pc row pages the remote diff; q restores the cockpit"
 tmux send-keys -t "$PANE0" d
