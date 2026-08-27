@@ -17,12 +17,15 @@ import (
 )
 
 // Supported lists the verbs that pass through today (grove-177 added
-// adopt + handoff for the remote half of `gv handoff`); anything else is
-// "not supported yet".
-var Supported = map[string]bool{"grab": true, "ls": true, "adopt": true, "handoff": true}
+// adopt + handoff for the remote half of `gv handoff`; grove-184 the
+// relay/read/control five); anything else is "not supported yet".
+var Supported = map[string]bool{
+	"grab": true, "ls": true, "adopt": true, "handoff": true,
+	"answer": true, "nudge": true, "diff": true, "pause": true, "untrack": true,
+}
 
 // SupportedList is the human-readable form for error messages.
-const SupportedList = "grab, ls, adopt, handoff"
+const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -31,6 +34,36 @@ const SupportedList = "grab, ls, adopt, handoff"
 func ExtractHost(args []string) (host string, rest []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		switch {
+		case a == "--host" || a == "-host":
+			if i+1 < len(args) {
+				host = args[i+1]
+				i++
+				continue
+			}
+		case strings.HasPrefix(a, "--host=") || strings.HasPrefix(a, "-host="):
+			host = a[strings.Index(a, "=")+1:]
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return host, rest
+}
+
+// ExtractHostPrefix is ExtractHost for the relay verbs (answer/nudge):
+// same stripping of `--host <name>` / `--host=<name>`, same
+// trailing-bare-`--host` pass-through — except scanning stops at the
+// first arg that does not start with `-`; that arg and everything after
+// it are returned in rest verbatim. Relay free text may legitimately
+// contain `--host` (`gv nudge grove-7 try gv ls --host pc`), and once
+// the ticket position is reached every remaining word is payload.
+func ExtractHostPrefix(args []string) (host string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			rest = append(rest, args[i:]...)
+			break
+		}
 		switch {
 		case a == "--host" || a == "-host":
 			if i+1 < len(args) {
