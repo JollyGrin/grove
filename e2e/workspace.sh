@@ -18,6 +18,13 @@ GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
 export HOME="$SCRATCH/home"
+# Hermetic scratch HOME: a pane shell flushes .bash_history into it as it
+# DIES — i.e. during cleanup's rm -rf, which then fails "Directory not
+# empty" and (as the EXIT trap's last command) becomes this suite's exit
+# status. Every assertion passes and the script still reports red; it hit
+# e2e/all.sh under load on 2026-08-27.
+export HISTFILE=/dev/null
+export LESSHISTFILE=-
 # $TMUX beats TMUX_TMPDIR — without the unset, a run from inside a tmux
 # pane puts every tmux call (incl. cleanup's kill-server) on the REAL
 # server. See LEARNINGS.md (2026-07-07 grove-7 crash).
@@ -27,8 +34,20 @@ mkdir -p "$HOME" "$TMUX_TMPDIR"
 unset GROVE_STATE_DIR || true   # per-workspace state is the subject here
 cleanup() {
   tmux kill-server 2>/dev/null || true
+  # kill-server only signals: wait for the panes to actually go, or a
+  # shell still flushing its history recreates a directory rm just
+  # emptied (see the HISTFILE note above), then retry once.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
+    sleep 0.2
+  done
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
-  rm -rf "$SCRATCH" 2>/dev/null || true
+  # Retry once (the settle above is a poll, not a guarantee), and never
+  # let the remove decide the suite's exit status — as the EXIT trap's
+  # last command it would turn a fully-green run red (grove-191 reached
+  # the same `|| true`; the settle + retry is so the tree actually goes,
+  # instead of accumulating in /tmp).
+  rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; rm -rf "$SCRATCH" 2>/dev/null || true; }
 }
 trap cleanup EXIT
 

@@ -6,7 +6,9 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -86,6 +89,16 @@ type relayDoneMsg struct {
 	ticket string
 }
 
+// remoteDoneMsg carries the outcome of a cockpit relay to a remote host
+// (grove-185). Nothing local changed — the remote host records its own
+// answered event — so unlike relayDoneMsg no refresh follows it.
+type remoteDoneMsg struct {
+	err    error
+	verb   string // "answer" | "nudge"
+	ticket string
+	host   string
+}
+
 type Model struct {
 	cfg      *config.Config
 	stateDir string
@@ -122,6 +135,9 @@ type Model struct {
 	paneTail string
 	input    textinput.Model
 	nudging  bool // detail input sends a nudge instead of an answer
+	// detailHost names the host a remote-bound detail relays to (grove-185);
+	// "" = a local row, whose submit pastes into the agent's pane here.
+	detailHost string
 
 	// modeProfilePick overlay state (grove-45): the sorted candidate profile
 	// names and the cursor into them. Runtime-only — nothing is persisted.
@@ -183,9 +199,13 @@ type Model struct {
 	AttachTo *state.Task
 }
 
+// localReplyPlaceholder is the detail input's hint on a LOCAL row; a
+// remote-bound detail swaps it for the ssh flavor in openDetail (grove-185).
+const localReplyPlaceholder = "type a reply — enter sends straight to the agent's pane"
+
 func New(cfg *config.Config, stateDir, label string) Model {
 	in := textinput.New()
-	in.Placeholder = "type a reply — enter sends straight to the agent's pane"
+	in.Placeholder = localReplyPlaceholder
 	in.Prompt = sKey.Render("❯ ")
 	in.CharLimit = 0
 	fx := fxFull
@@ -351,6 +371,118 @@ func remoteCmd(cfg *config.Config) tea.Cmd {
 		}
 		return remoteMsg{results: fleet.Fetch(context.Background(), cfg, cfg.HostNames(), nil)}
 	}
+}
+
+// remoteSendCmd runs one relay verb (answer/nudge) on the row's host over
+// ssh (grove-185) — the grove-184 passthrough argv, a one-shot keypress cmd
+// in the R merge fetch's class, bounded at 10s so a dead host can only cost
+// a flash, never a hang. Output is captured, not streamed: on failure the
+// first non-empty line becomes the flash. The REMOTE host records its own
+// answered event — nothing is appended locally.
+func remoteSendCmd(h *config.Host, host, verb, ticket, text string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		argv := remote.Argv(h, verb, []string{ticket, text})
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		if err == nil {
+			return remoteDoneMsg{verb: verb, ticket: ticket, host: host}
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			err = errors.New("timed out after 10s")
+		} else if line := firstNonEmptyLine(out.String()); line != "" {
+			err = errors.New(line)
+		}
+		return remoteDoneMsg{
+			err:  fmt.Errorf("%s %s @%s: %v", verb, ticket, host, err),
+			verb: verb, ticket: ticket, host: host,
+		}
+	}
+}
+
+// remoteDiffCmd suspends the TUI and pages the remote `gv diff` through
+// less (grove-185): the grove-184 passthrough argv piped into `less -R` so
+// git's own colors survive. One process per keypress; nothing resident,
+// and the cockpit repaints when the pager exits.
+func remoteDiffCmd(h *config.Host, host, ticket string) tea.Cmd {
+	argv := remote.Argv(h, "diff", []string{ticket})
+	paged := exec.Command("sh", "-c", strings.Join(argv, " ")+" | less -R")
+	return tea.ExecProcess(paged, func(err error) tea.Msg {
+		if err != nil {
+			return flashMsg(fmt.Sprintf("diff %s @%s: %v", ticket, host, err))
+		}
+		return nil
+	})
+}
+
+// remoteAttachCmd suspends the TUI and execs the field-proven #177 follow
+// shape — the remote gv resolves the session/window on ITS side and does
+// the attach bookkeeping; a raw `tmux attach -t` from here never could
+// (the remote names sessions grove-<label> too, so the target may not even
+// exist here). Detach — or a dropped ssh — restores the cockpit.
+func remoteAttachCmd(h *config.Host, host, ticket string) tea.Cmd {
+	attach := exec.Command("ssh", h.SSH, "-t", h.GV, "attach", ticket)
+	return tea.ExecProcess(attach, func(err error) tea.Msg {
+		if err != nil {
+			return flashMsg(fmt.Sprintf("attach %s @%s: %v", ticket, host, err))
+		}
+		return nil
+	})
+}
+
+// firstNonEmptyLine returns the first line with visible content, "" when
+// the whole output is blank.
+func firstNonEmptyLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// openDetail enters the detail/input mode for t (grove-185 lifted the
+// enter/n bodies into one helper so the remote keys can bind a host to
+// the same flow). host "" is a LOCAL row: the pane tail follows and
+// submit pastes into the agent's pane here. A named host makes the
+// submit a grove-184 relay — no pane is scraped (there is none here),
+// so the view shows the fixed remote hint instead of a tail.
+func (m Model) openDetail(t *state.Task, host string, nudging bool) (tea.Model, tea.Cmd) {
+	m.detail = t
+	m.detailHost = host
+	m.mode = modeDetail
+	m.nudging = nudging
+	m.paneTail = ""
+	m.input.SetValue("")
+	m.input.Focus()
+	if host != "" {
+		m.input.Placeholder = "type a reply — enter relays it over ssh to @" + host
+		return m, nil
+	}
+	m.input.Placeholder = localReplyPlaceholder
+	return m, paneTailCmd(t)
+}
+
+// remoteHostByName resolves the selected row's host for the grove-185
+// remote keys. A lookup miss (config dropped the host between the R
+// fetch and the keypress) lands in the flash, never a panic.
+func (m Model) remoteHostByName(name string) (*config.Host, error) {
+	if m.cfg == nil {
+		return nil, fmt.Errorf("no config — remote hosts unknown")
+	}
+	return m.cfg.Host(name)
+}
+
+// remoteReadonlyFlash explains the one row key that stays blocked on a
+// live remote row: the reviewing flag is LOCAL backend state, so marking
+// it from here would set a flag nobody's ping loop reads.
+func remoteReadonlyFlash(r boardRow) string {
+	return r.Ticket + " runs on " + r.Host +
+		" — review state is local; mark it on the host (gv review " + r.Ticket + " there)"
 }
 
 // boardRow is one rendered AGENTS row: the fleet row plus everything the
@@ -559,22 +691,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// steer the wrong agent's pane (grove-116 class). A ticket
 				// that left the local fleet (done, untracked, handed off)
 				// drops detail entirely instead of steering a recycled name.
-				var fresh *state.Task
-				for _, t := range m.localTasks {
-					if t.Ticket == m.detail.Ticket {
-						fresh = t
-						break
+				// A REMOTE-bound detail (grove-185) skips the repoint: its
+				// ticket is by construction absent from localTasks, and the
+				// task pointer is held by remoteResults until R toggles off.
+				if m.detailHost == "" {
+					var fresh *state.Task
+					for _, t := range m.localTasks {
+						if t.Ticket == m.detail.Ticket {
+							fresh = t
+							break
+						}
 					}
-				}
-				m.detail = fresh
-				if fresh == nil && (m.mode == modeDetail || m.mode == modeConfirmDone) {
-					m.mode = modeList
-					m.input.Blur()
+					m.detail = fresh
+					if fresh == nil && (m.mode == modeDetail || m.mode == modeConfirmDone) {
+						m.mode = modeList
+						m.input.Blur()
+					}
 				}
 			}
 		}
 		var cmds []tea.Cmd
-		if m.mode == modeDetail && m.detail != nil {
+		// No pane tail for a remote-bound detail (grove-185): scraping the
+		// task's window coordinates here could hit a LOCAL pane that merely
+		// shares the name (grove-116 class) — the worker has no local pane.
+		if m.mode == modeDetail && m.detail != nil && m.detailHost == "" {
 			cmds = append(cmds, paneTailCmd(m.detail))
 		}
 		if m.mode == modeCosts {
@@ -674,6 +814,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
 
+	case remoteDoneMsg:
+		// grove-185: nothing local changed (the remote host recorded its own
+		// event), so unlike relayDoneMsg no refresh follows — just the flash.
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+		} else {
+			m.flash = "✓ " + msg.verb + "ed " + msg.ticket + " on " + msg.host
+		}
+		return m, nil
+
 	case actionDoneMsg:
 		if msg.err != nil {
 			m.flash = msg.err.Error()
@@ -717,13 +867,40 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAlmanacKey(k)
 	}
 
-	// grove-178: a remote or handed-off row is read-only here — steering
-	// lives on the host that runs it (`gv answer --host` is a later ticket).
+	// grove-178 kept every non-local row read-only; grove-185 lifts that
+	// for LIVE remote rows — a/n open the relay input bound to the row's
+	// host, d pages the remote diff, enter attaches over ssh. Handed-off
+	// tombstones stay read-only bookmarks, and v stays blocked on both:
+	// the reviewing flag is local backend state this host owns.
 	if r, ok := m.selectedRow(); ok && (fleet.IsRemote(r.Row) || r.HandedOffTo != "") {
 		switch k.String() {
-		case "enter", "n", "a", "v", "d":
-			m.flash = elsewhereFlash(r)
+		case "v":
+			if r.HandedOffTo != "" {
+				m.flash = elsewhereFlash(r)
+			} else {
+				m.flash = remoteReadonlyFlash(r)
+			}
 			return m, nil
+		case "enter", "n", "a", "d":
+			if r.HandedOffTo != "" {
+				m.flash = elsewhereFlash(r)
+				return m, nil
+			}
+			h, err := m.remoteHostByName(r.Host)
+			if err != nil {
+				m.flash = err.Error()
+				return m, nil
+			}
+			switch k.String() {
+			case "a":
+				return m.openDetail(r.Task, r.Host, false)
+			case "n":
+				return m.openDetail(r.Task, r.Host, true)
+			case "d":
+				return m, remoteDiffCmd(h, r.Host, r.Ticket)
+			case "enter":
+				return m, remoteAttachCmd(h, r.Host, r.Ticket)
+			}
 		}
 	}
 
@@ -803,23 +980,11 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 	case "enter":
 		if t := m.selected(); t != nil {
-			m.detail = t
-			m.mode = modeDetail
-			m.nudging = false
-			m.paneTail = ""
-			m.input.SetValue("")
-			m.input.Focus()
-			return m, paneTailCmd(t)
+			return m.openDetail(t, "", false)
 		}
 	case "n":
 		if t := m.selected(); t != nil {
-			m.detail = t
-			m.mode = modeDetail
-			m.nudging = true
-			m.paneTail = ""
-			m.input.SetValue("")
-			m.input.Focus()
-			return m, paneTailCmd(t)
+			return m.openDetail(t, "", true)
 		}
 	case "a":
 		if t := m.selected(); t != nil {
@@ -910,6 +1075,7 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeList
 		m.detail = nil
+		m.detailHost = ""
 		m.input.Blur()
 		return m, nil
 	case "enter":
@@ -926,8 +1092,30 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil || t.HandedOffTo != "" {
 			m.mode = modeList
 			m.detail = nil
+			m.detailHost = ""
 			m.input.Blur()
 			return m, nil
+		}
+		// grove-185: a remote-bound detail relays over ssh (gv answer /
+		// nudge --host class). The REMOTE host records its own answered
+		// event — no local pane to target, no local state to append — so
+		// this must never fall through to relayCmd.
+		if host := m.detailHost; host != "" {
+			h, err := m.remoteHostByName(host)
+			if err != nil {
+				m.flash = err.Error()
+				return m, nil
+			}
+			verb := "answer"
+			if m.nudging {
+				verb = "nudge"
+			}
+			m.flash = "relaying " + verb + " to " + t.Ticket + " on " + host + "…"
+			m.mode = modeList
+			m.detail = nil
+			m.detailHost = ""
+			m.input.Blur()
+			return m, remoteSendCmd(h, host, verb, t.Ticket, text)
 		}
 		// Pane resolved by id (grove-116): a name-built target can hit a
 		// prefix-extending sibling's window and steer the wrong agent.
@@ -955,11 +1143,13 @@ func (m Model) handleConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cfg := m.cfg
 		m.mode = modeList
 		m.detail = nil
+		m.detailHost = ""
 		m.flash = "cleaning up " + t.Ticket + "…"
 		return m, func() tea.Msg { return actionDoneMsg{err: FinishTask(cfg, t, false), ticket: t.Ticket} }
 	default:
 		m.mode = modeList
 		m.detail = nil
+		m.detailHost = ""
 	}
 	return m, nil
 }

@@ -22,6 +22,24 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
       Obsidian live board (issue #9, design paused at REVISE), remote
       overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] Cockpit acts on `@host` rows (grove-185, 2026-08-27, cockpit half of
+      the remote-overflow train): #178's blanket read-only gate now lifts
+      for LIVE remote rows — `a`/`n` open the existing detail input bound
+      to the row's host and submit relays `gv answer|nudge` over ssh
+      (`remote.Argv`, one-shot `tea.Cmd`, 10s ctx, first output line to the
+      flash); `d` and `enter` suspend via `tea.ExecProcess` (`gv diff |
+      less -R`, and the field-proven #177 `ssh <ssh> -t <gv> attach`).
+      Deliberate divergence from local rows: `d` is NOT done and `enter` is
+      NOT the detail view, so a cockpit `done` can never fire at a remote
+      worker. `v` stays blocked (the reviewing flag is local backend
+      state) and handed-off tombstones stay read-only bookmarks. Nothing
+      local is appended — the remote host records its own `answered` event
+      — and a remote-bound detail skips `paneTailCmd` entirely (scraping
+      here could hit a local pane that merely shares the name, grove-116
+      class), rendering a fixed attach hint instead. No new goroutine,
+      poll, or cache: every path is one keypress → one process, the `R`
+      merge fetch's class. `e2e/cockpit.sh` drives the live TUI with
+      send-keys against a fake ssh and asserts each argv.
 - [x] Remote `--host` passthrough for five more verbs (grove-184,
       2026-08-27, tail of the #176–#178 remote-overflow train): `answer`,
       `nudge`, `diff`, `pause`, `untrack` join `grab/ls/adopt/handoff` in
