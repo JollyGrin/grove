@@ -46,7 +46,9 @@ cleanup() {
     [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
     sleep 0.2
   done
-  rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; rm -rf "$SCRATCH"; }
+  # Retry once, and never let the remove decide the exit status: as the
+  # EXIT trap's last command it would turn a fully-green run red.
+  rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; rm -rf "$SCRATCH" 2>/dev/null || true; }
 }
 trap cleanup EXIT
 
