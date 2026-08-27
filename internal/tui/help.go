@@ -25,6 +25,7 @@ var (
 		{"v", "mark you're reviewing: silences re-pings while you read the PR (toggle)"},
 		{"n", "nudge: send the agent a wake-up message"},
 		{"d", "done: merged-check + full cleanup of the task — asks to confirm first"},
+		{"@host", "on a remote row the same keys steer over ssh: a/n relay the reply, d pages its diff, enter attaches (v stays local)"},
 	}
 	helpSpawn = []helpEntry{
 		{"O", "new chat: spawn an orchestrator chat pane (0 works too)"},

@@ -376,7 +376,14 @@ func (m Model) viewDetail() string {
 		sections = append(sections, sChrome.Render(wrap(firstLines(t.LastMessage, 6), w)), "")
 	}
 
-	if m.paneTail != "" {
+	if m.detailHost != "" {
+		// grove-185: a remote-bound detail has no pane HERE to scrape —
+		// paneTailCmd would risk steering into a local pane that merely
+		// shares the name (grove-116 class) — so the tail slot carries a
+		// fixed pointer to the ssh attach instead.
+		sections = append(sections,
+			sDim.Render("(remote worker on @"+m.detailHost+" — press esc, then enter to attach)"), "")
+	} else if m.paneTail != "" {
 		sections = append(sections, sPanelTitle.Render("PANE"))
 		for _, l := range strings.Split(strings.TrimRight(m.paneTail, "\n"), "\n") {
 			sections = append(sections, sDim.Render(trunc(l, w)))
