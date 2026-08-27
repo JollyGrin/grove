@@ -97,3 +97,46 @@ func TestRunRejectsUnknownHostAndVerb(t *testing.T) {
 		t.Errorf("unsupported verb err = %v", err)
 	}
 }
+
+// NewOpID (grove-186): 32 lowercase hex chars, unguessable, unique per
+// mint — the id a retried relayed hop dedups on.
+func TestNewOpID(t *testing.T) {
+	id := NewOpID()
+	if len(id) != 32 {
+		t.Fatalf("NewOpID len = %d (%q), want 32", len(id), id)
+	}
+	for _, r := range id {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("NewOpID = %q, want lowercase hex only", id)
+		}
+	}
+	if id == NewOpID() {
+		t.Fatal("two minted op ids collided")
+	}
+}
+
+func TestExtractOpIDPrefix(t *testing.T) {
+	cases := []struct {
+		in   []string
+		opID string
+		rest []string
+	}{
+		// leading flag position: extracted
+		{[]string{"--op-id", "abc", "grove-7", "keep going"}, "abc", []string{"grove-7", "keep going"}},
+		{[]string{"--op-id=abc", "grove-7"}, "abc", []string{"grove-7"}},
+		// after the first positional the rest is relay free text: untouched
+		{[]string{"grove-7", "try", "--op-id", "x"}, "", []string{"grove-7", "try", "--op-id", "x"}},
+		// no flags at all
+		{[]string{"grove-7", "hi"}, "", []string{"grove-7", "hi"}},
+		// trailing bare --op-id (no value) is left for the verb's parser
+		{[]string{"--op-id"}, "", []string{"--op-id"}},
+		// other leading flags share the region with --op-id
+		{[]string{"--force", "--op-id", "abc", "grove-7"}, "abc", []string{"--force", "grove-7"}},
+	}
+	for _, c := range cases {
+		opID, rest := ExtractOpIDPrefix(c.in)
+		if opID != c.opID || !reflect.DeepEqual(rest, c.rest) {
+			t.Errorf("ExtractOpIDPrefix(%v) = %q %v, want %q %v", c.in, opID, rest, c.opID, c.rest)
+		}
+	}
+}

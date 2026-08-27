@@ -69,7 +69,9 @@ const usage = `gv — grove
       … --host <name>                         run the verb over ssh on a configured remote host (hosts: in
                                               config.yaml) — grab/ls/adopt/handoff/answer/nudge/diff/
                                               pause/untrack; answer/nudge match --host only before the
-                                              ticket (relay free text may legitimately mention it)
+                                              ticket (relay free text may legitimately mention it);
+                                              relayed answer/nudge hop with a client --op-id so an ssh
+                                              retry can never double-steer (exit 255 auto-retries once)
   gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
   gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)
@@ -329,7 +331,17 @@ func main() {
 			host, rest = remote.ExtractHost(args)
 		}
 		if host != "" {
-			code, err := runRemote(host, cmd, rest)
+			// Relayed answer/nudge hop with a client op id (grove-186):
+			// an ambiguous ssh failure retries the SAME argv, and the
+			// remote's SeenOpID receipt dedups, so a retry can never
+			// double-steer the worker.
+			var code int
+			var err error
+			if cmd == "answer" || cmd == "nudge" {
+				code, err = runRemoteRelay(host, cmd, rest)
+			} else {
+				code, err = runRemote(host, cmd, rest)
+			}
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "gv:", err)
 				os.Exit(1)
@@ -432,6 +444,53 @@ func runRemote(host, verb string, args []string) (int, error) {
 		return 0, err
 	}
 	return remote.Run(cfg, host, verb, args, os.Stdout, os.Stderr)
+}
+
+// relayRetryWait is the pause before the automatic same-op-id retry of a
+// relayed answer/nudge after ssh dies with 255 (grove-186). Package-level
+// so tests can shrink it.
+var relayRetryWait = 2 * time.Second
+
+// runRemoteRelay is runRemote for the relay verbs (grove-186): every hop
+// carries a client op id — minted here, or reused when the command line
+// already carries one (which is what makes the manual retry command in
+// the double-failure error safe to paste) — and ssh exit 255 (connection
+// failure, outcome unknown: the remote may or may not have acted) re-runs
+// the SAME argv once after a beat. The remote's SeenOpID receipt dedups,
+// so the retry's worst case is a "✓ already applied", never a second
+// paste into the worker. A second 255 gives up with the exact manual
+// retry command.
+func runRemoteRelay(host, verb string, rest []string) (int, error) {
+	cfg, err := loadCfg()
+	if err != nil {
+		return 0, err
+	}
+	opID, rest := remote.ExtractOpIDPrefix(rest)
+	if opID == "" {
+		opID = remote.NewOpID()
+	}
+	args := append([]string{"--op-id", opID}, rest...)
+	run := func() (int, error) { return remote.Run(cfg, host, verb, args, os.Stdout, os.Stderr) }
+	code, err := run()
+	if err != nil {
+		return 0, err
+	}
+	if code != 255 {
+		return code, nil
+	}
+	fmt.Fprintf(os.Stderr, "gv: ssh to %s failed (exit 255) — the remote may or may not have acted; retrying once with the same op id %s\n", host, opID)
+	time.Sleep(relayRetryWait)
+	if code, err = run(); err != nil {
+		return 0, err
+	}
+	if code == 255 {
+		manual := "gv " + verb + " --host " + host + " --op-id " + opID
+		for _, a := range rest {
+			manual += " " + remote.Quote(a)
+		}
+		return 1, fmt.Errorf("ssh to %s failed twice (exit 255) — nothing further was sent; safe to retry by hand, the op id makes a duplicate a no-op: %s", host, manual)
+	}
+	return code, nil
 }
 
 // cmdVersion prints the stamped build version (`gv version` / `gv --version`).
@@ -2239,12 +2298,27 @@ func cmdRelay(args []string, isAnswer bool) error {
 	if isAnswer {
 		verb = "answer"
 	}
+	// --op-id <v> (grove-186) rides relayed hops and is recognized in
+	// leading-flag position only, like --host: free text may legitimately
+	// mention it. The receipt check runs BEFORE anything else a retry
+	// would repeat — no tmux send, no event, no text prompt.
+	opID, args := remote.ExtractOpIDPrefix(args)
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gv %s <ticket> [text]", verb)
 	}
 	t, err := findTask(args[0])
 	if err != nil {
 		return err
+	}
+	if opID != "" {
+		seen, err := state.SeenOpID(stateDir(), opID)
+		if err != nil {
+			return fmt.Errorf("cannot check op %s against the event log: %w", opID, err)
+		}
+		if seen {
+			fmt.Printf("✓ already applied (op %s)\n", opID)
+			return nil
+		}
 	}
 
 	if isAnswer && t.Question != "" {
@@ -2262,7 +2336,7 @@ func cmdRelay(args []string, isAnswer bool) error {
 	if text == "" {
 		return fmt.Errorf("empty %s — nothing sent", verb)
 	}
-	if err := relayText(t, text); err != nil {
+	if err := relayText(t, text, opID); err != nil {
 		return err
 	}
 	fmt.Printf("✓ sent to %s\n", t.Ticket)
@@ -2271,8 +2345,10 @@ func cmdRelay(args []string, isAnswer bool) error {
 
 // relayText is the shared send path of answer/nudge (and handoff's
 // checkpoint nudge): paste into the claude pane, then record EvAnswered
-// only once the submit verifiably landed.
-func relayText(t *state.Task, text string) error {
+// only once the submit verifiably landed. opID (grove-186) is "" for
+// local sends — the event is byte-identical to pre-186 — and the relayed
+// hop's id otherwise, stamped as data.op_id for the receipt check.
+func relayText(t *state.Task, text, opID string) error {
 	// Resolve the claude pane by id — usually .1, but a window that lost
 	// its split runs claude in its only pane, and a name-built target can
 	// resolve to a prefix-extending sibling's window ("repo · grove-1" vs
@@ -2294,7 +2370,11 @@ func relayText(t *state.Task, text string) error {
 		// what made this bug silent: gv ls showed `working` on a dead worker.
 		return err
 	}
-	return state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket})
+	var data map[string]string
+	if opID != "" {
+		data = map[string]string{"op_id": opID}
+	}
+	return state.Append(stateDir(), state.Event{Type: state.EvAnswered, Ticket: t.Ticket, Data: data})
 }
 
 // --- attach ---

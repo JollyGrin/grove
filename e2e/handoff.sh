@@ -65,6 +65,19 @@ done
 [ "\$target" = "localhost" ] || { echo "fake ssh: target '\$target' is not the configured hosts.pc.ssh value (localhost)" >&2; exit 42; }
 cmd="\$*"
 echo "[fake ssh] \$cmd" >&2
+# grove-186 fail-first knob: with the marker present, the FIRST --op-id
+# hop runs the relayed command against the remote state and THEN reports
+# the connection dead (exit 255) — delivery happened, but the sender
+# cannot know. The hop counter lets the suite prove the sender retried
+# exactly once.
+if [ -f "$SCRATCH/ssh-fail-first" ] && [[ "\$cmd" == *--op-id* ]]; then
+  n=\$(cat "$SCRATCH/ssh-op-hops" 2>/dev/null || echo 0)
+  echo \$((n+1)) > "$SCRATCH/ssh-op-hops"
+  if [ "\$n" -eq 0 ]; then
+    env GROVE_STATE_DIR="$REMOTE_STATE" TMUX_TMPDIR="$REMOTE_TMUX" sh -c "\$cmd"
+    exit 255
+  fi
+fi
 exec env GROVE_STATE_DIR="$REMOTE_STATE" TMUX_TMPDIR="$REMOTE_TMUX" sh -c "\$cmd"
 EOF
 # gh: one open draft PR for any branch, body = the five handoff headings.
@@ -163,6 +176,40 @@ grep -q 'local-only hand edit' "$SCRATCH/sync-ahead.out" || fail "the refusal mu
 git -C "$WTDIR" log --oneline -1 | grep -q 'local-only hand edit' || fail "the ahead commit must survive the refusal"
 git -C "$WTDIR" reset -q --hard "origin/$BRANCH"   # undo the hand edit so the pull-back below is unchanged
 
+say "grove-186: an ssh-255 retry delivers exactly once (op-id receipt)"
+# The fake ssh's first --op-id hop runs the remote nudge, then dies with
+# 255 — outcome unknown to the sender. The sender must re-run the SAME
+# argv (same op id) once; the receiver's SeenOpID receipt makes that a
+# no-op. Want: exactly 2 ssh hops, ONE paste into the remote pane, ONE
+# answered event carrying the op id, "✓ already applied" on the retry.
+touch "$SCRATCH/ssh-fail-first"
+RMSG="grove-186 retry probe"
+"$GV" nudge --host pc task-001 "$RMSG" > "$SCRATCH/relay-retry.out" 2>&1 || { cat "$SCRATCH/relay-retry.out"; fail "retried relayed nudge failed"; }
+cat "$SCRATCH/relay-retry.out"
+grep -q 'retrying once with the same op id' "$SCRATCH/relay-retry.out" || { cat "$SCRATCH/relay-retry.out"; fail "ssh 255 did not trigger the automatic same-op-id retry"; }
+grep -q 'already applied' "$SCRATCH/relay-retry.out" || fail "the retry did not hit the op-id receipt"
+rm -f "$SCRATCH/ssh-fail-first"
+[ "$(cat "$SCRATCH/ssh-op-hops")" -eq 2 ] || fail "expected exactly 2 ssh hops (failed first + retry), got $(cat "$SCRATCH/ssh-op-hops")"
+OP_EVENTS=$(grep -c '"type":"answered".*"op_id"' "$REMOTE_STATE/events.jsonl" || true)
+[ "$OP_EVENTS" -eq 1 ] || fail "want exactly 1 answered event with an op id in the remote log, got $OP_EVENTS"
+UNIQ_OPS=$(grep -o '"op_id":"[0-9a-f]*"' "$REMOTE_STATE/events.jsonl" | sort -u | wc -l || true)
+[ "$UNIQ_OPS" -eq 1 ] || fail "expected one unique op id in the remote log, got $UNIQ_OPS"
+# Exactly one paste: the probe text appears once across every pane of the
+# remote worker window, scrollback included (grove-75: capture with -S -).
+# Window names are "repo · ticket" — target the immutable @id (window_id
+# already renders as "@N"), never the name (grove-116).
+RWIN=$(env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' | grep task-001 | awk '{print $1}')
+[ -n "$RWIN" ] || fail "remote worker window vanished before the paste count"
+env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux list-panes -t "$RWIN" -F '#{pane_id}' | while read -r p; do
+  env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux capture-pane -p -S - -t "$p"
+done | tr -d '\n' > "$SCRATCH/retry-pane.flat"
+PASTES=$(grep -o "$RMSG" "$SCRATCH/retry-pane.flat" | wc -l || true)
+[ "$PASTES" -eq 1 ] || fail "want exactly 1 paste of the probe text into the remote pane, got $PASTES"
+# The answered event flips the remote agent optimistically to working;
+# park it idle again so the --from release below clears its mid-turn
+# guard (the same Stop-hook flip the local side used before --to).
+printf '{"session_id":"s-h1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — retry probe consumed"}' "$WTDIR" | GROVE_STATE_DIR="$REMOTE_STATE" "$GV" hook stop
+
 say "gv handoff task-001 --from pc --as mac --yes --no-checkpoint (the mirror)"
 "$GV" handoff task-001 --from pc --as mac --yes --no-checkpoint > "$SCRATCH/from.out" 2>&1 || { cat "$SCRATCH/from.out"; fail "handoff --from failed"; }
 cat "$SCRATCH/from.out"
@@ -207,7 +254,9 @@ say "extended passthrough: nudge/diff/pause/untrack relay with --host stripped"
 # --host before the ticket relays; in the free-text test above it must
 # not.
 ("$GV" nudge --host pc task-001 'ping' > "$SCRATCH/relay-nudge.out" 2>&1 || true)
-grep -Fq "[fake ssh] $GV nudge task-001 ping" "$SCRATCH/relay-nudge.out" || { cat "$SCRATCH/relay-nudge.out"; fail "nudge --host must reach ssh as 'nudge task-001 ping'"; }
+# grove-186: relayed hops now carry a client --op-id (minted by the
+# sender, leading position) — the receipt a retried hop dedups against.
+grep -Eq "\[fake ssh\] $GV nudge --op-id [0-9a-f]{32} task-001 ping" "$SCRATCH/relay-nudge.out" || { cat "$SCRATCH/relay-nudge.out"; fail "nudge --host must reach ssh as 'nudge --op-id <32-hex-id> task-001 ping'"; }
 ("$GV" diff task-001 --stat --host pc > "$SCRATCH/relay-diff.out" 2>&1 || true)
 grep -Fq "[fake ssh] $GV diff task-001 --stat" "$SCRATCH/relay-diff.out" || { cat "$SCRATCH/relay-diff.out"; fail "diff --stat --host must reach ssh with --host stripped"; }
 ("$GV" pause task-001 --force --host pc > "$SCRATCH/relay-pause.out" 2>&1 || true)

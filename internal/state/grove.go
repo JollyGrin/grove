@@ -86,6 +86,26 @@ func ReadTasks(stateDir string) map[string]*Task {
 	return tasks
 }
 
+// SeenOpID reports whether an event carrying this client op id is already
+// in the log (grove-186) — the receipt that makes a retried relayed
+// answer/nudge a no-op on the remote instead of a double-steer. An empty
+// op id is never "seen": legacy relays carry no id and must always run.
+func SeenOpID(stateDir, op string) (bool, error) {
+	if op == "" {
+		return false, nil
+	}
+	events, err := ReadEvents(stateDir, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, ev := range events {
+		if ev.Data["op_id"] == op {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ReadEvents returns up to limit most-recent events from events.jsonl,
 // oldest-first (callers reverse for a newest-first feed). Malformed lines
 // are skipped — the feed is a render of the log, never a gate on it. A

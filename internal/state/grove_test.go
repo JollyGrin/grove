@@ -79,6 +79,35 @@ func TestReadEventsMissingAndMalformed(t *testing.T) {
 	}
 }
 
+// SeenOpID (grove-186) is the receipt a retried relayed answer/nudge
+// dedups against: an event already carrying the op id ⇒ already applied.
+func TestSeenOpID(t *testing.T) {
+	dir := t.TempDir()
+	if seen, err := SeenOpID(dir, "abc"); err != nil || seen {
+		t.Fatalf("missing log: SeenOpID = %v, %v; want false, nil", seen, err)
+	}
+	if err := Append(dir, Event{Type: EvTaskCreated, Ticket: "t-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// The empty op id is never seen — legacy relays carry no id and must
+	// always run, even against a log full of id-less answered events.
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "t-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := SeenOpID(dir, ""); err != nil || seen {
+		t.Fatalf(`SeenOpID("") = %v, %v; want false, nil`, seen, err)
+	}
+	if err := Append(dir, Event{Type: EvAnswered, Ticket: "t-1", Data: map[string]string{"op_id": "abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := SeenOpID(dir, "abc"); err != nil || !seen {
+		t.Fatalf("SeenOpID(abc) = %v, %v; want true, nil", seen, err)
+	}
+	if seen, err := SeenOpID(dir, "other"); err != nil || seen {
+		t.Fatalf("SeenOpID(other) = %v, %v; want false, nil", seen, err)
+	}
+}
+
 func TestParkedTickets(t *testing.T) {
 	mk := func(evs ...Event) []Event { return evs }
 

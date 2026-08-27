@@ -236,7 +236,9 @@ func (l *localHandoff) Agent(ticket string) (string, bool, error) {
 }
 
 func (l *localHandoff) Nudge(_ string, text string) error {
-	return relayText(l.t, text)
+	// A local checkpoint nudge carries no op id (grove-186): it is not a
+	// relayed hop, and the handoff flow owns its own retry semantics.
+	return relayText(l.t, text, "")
 }
 
 func (l *localHandoff) Verify(info *handoff.Info) (*handoff.Verified, error) {

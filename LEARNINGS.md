@@ -258,6 +258,22 @@
 
 ## Go / CLI
 
+- **2026-08-27 · `exec.CommandContext` kills the child, not its
+  descendants — and pipe copy-goroutines wait for whoever holds the write
+  end** (found pre-existing-red on main during grove-186's gate;
+  `TestGHTimesOut`). The grove-164 test stubbed a wedged `gh` as
+  `#!/bin/sh\nsleep 5`: the deadline's kill took down sh at 100ms, but the
+  orphaned `sleep` had inherited the stdout/stderr pipes (non-*os.File
+  writers ⇒ exec makes os.Pipes + copy goroutines), so `cmd.Wait` blocked
+  until sleep exited at 5s — the timeout looked dead while actually
+  firing. Minimal fix: model the wedge as one process (`exec sleep 5`),
+  which is also what a real stalled-network `gh` is. Latent hole left
+  open on purpose: a timed-out command whose CHILDREN hold the pipes
+  still outlives the deadline — a true fix needs Setpgid + a
+  process-group kill in `Cmd.Cancel`. Rule: a deadline test must stub the
+  hung process itself, never a shell wrapping it; and never conclude a
+  context timeout "isn't working" without checking which pid got the
+  signal.
 - **2026-07-18 · a single re-arming bubbletea timer is a pattern, not a
   one-off fix — it recurs per timer** (grove-118, farewell audit).
   grove-24 fixed the cockpit's 1s beat by making `tickMsg` the sole
