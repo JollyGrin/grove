@@ -25,6 +25,15 @@ const EvOrchestratorClosed = "orchestrator_closed"
 // ParkedTickets, not stored on Task.
 const EvWorkspaceParked = "workspace_parked"
 
+// EvOrchestratorSpawned (grove-198) records a detached orchestrator chat
+// spawned for a workspace: `gv orchestrator new --workspace <label>`, the
+// receiving half of `--host`. Data carries {workspace, session, profile?,
+// op_id?} — the op id makes a retried ssh hop a no-op (SeenOpID), and the
+// session name lets that retry print the same attach line it printed the
+// first time. Ticket-less and workspace-scoped like EvOrchestratorClosed,
+// so fold ignores it and state.go stays byte-comparable.
+const EvOrchestratorSpawned = "orchestrator_spawned"
+
 // Version returns an event record's plugin-contract version
 // (docs/plugins.md). Records written before the v field existed
 // (pre-grove-75) carry no stamp and read as v1.
@@ -91,19 +100,29 @@ func ReadTasks(stateDir string) map[string]*Task {
 // answer/nudge a no-op on the remote instead of a double-steer. An empty
 // op id is never "seen": legacy relays carry no id and must always run.
 func SeenOpID(stateDir, op string) (bool, error) {
+	ev, err := EventByOpID(stateDir, op)
+	return ev != nil, err
+}
+
+// EventByOpID returns the event carrying data.op_id == op, or nil when the
+// log has none (grove-198): the receipt SeenOpID reports on, plus the data
+// a retried hop needs to reprint its first run's answer — the chat session
+// name it already spawned.
+func EventByOpID(stateDir, op string) (*Event, error) {
 	if op == "" {
-		return false, nil
+		return nil, nil
 	}
 	events, err := ReadEvents(stateDir, 0)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, ev := range events {
 		if ev.Data["op_id"] == op {
-			return true, nil
+			found := ev
+			return &found, nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 // ReadEvents returns up to limit most-recent events from events.jsonl,

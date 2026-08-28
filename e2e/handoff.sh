@@ -243,7 +243,7 @@ say "relay free text mentioning --host is relayed, not intercepted"
 # ...while a REAL --host flag on an unsupported verb gets the friendly
 # supported-list error, not a flag-parse death.
 ("$GV" done task-001 --host pc 2>&1 || true) > "$SCRATCH/done-host.out"
-grep -q 'supported: grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack' "$SCRATCH/done-host.out" || { cat "$SCRATCH/done-host.out"; fail "gv done --host must return the friendly supported-list error"; }
+grep -q 'supported: grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new' "$SCRATCH/done-host.out" || { cat "$SCRATCH/done-host.out"; fail "gv done --host must return the friendly supported-list error"; }
 
 say "tombstone terminal path: gv untrack drops the remote's pointer"
 GROVE_STATE_DIR="$REMOTE_STATE" "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-remote-tomb.json"

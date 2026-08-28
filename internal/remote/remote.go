@@ -21,13 +21,16 @@ import (
 // Supported lists the verbs that pass through today (grove-177 added
 // adopt + handoff for the remote half of `gv handoff`; grove-184 the
 // relay/read/control five); anything else is "not supported yet".
+// grove-198 added `orchestrator` — only its `new` subcommand relays; the
+// dispatcher rejects the others with the same friendly shape.
 var Supported = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true, "untrack": true,
+	"orchestrator": true,
 }
 
 // SupportedList is the human-readable form for error messages.
-const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack"
+const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -175,4 +178,31 @@ func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io
 		return 0, fmt.Errorf("ssh %s: %w", h.SSH, err)
 	}
 	return 0, nil
+}
+
+// chatAttachPrefix is the line the receiving half of `gv orchestrator new
+// --workspace` prints for its detached chat session (grove-198). It is
+// both the human's paste-able attach command when they are already logged
+// into the host AND the machine-readable carrier the relaying half parses
+// (ParseChatSession) to render the ssh form: the session's number is
+// picked remotely, so the local side cannot know the name any other way.
+const chatAttachPrefix = "attach: tmux attach -t ="
+
+// ChatAttachLine renders the receiving half's attach hint for session.
+func ChatAttachLine(session string) string { return chatAttachPrefix + session }
+
+// ParseChatSession extracts the chat session name from a relayed
+// `orchestrator new` run's stdout, or "" when the output carries no attach
+// line (an error, an older remote gv, a spawn that never happened).
+func ParseChatSession(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), chatAttachPrefix)
+		if !ok {
+			continue
+		}
+		if name := strings.TrimSpace(rest); name != "" {
+			return name
+		}
+	}
+	return ""
 }

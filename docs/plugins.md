@@ -125,8 +125,13 @@ remote — same id seen again ⇒ nothing pasted, no second event. Local
 relays and the cockpit keep appending `answered` with no `data`, exactly
 as before.
 Workspace-scoped (empty `ticket`): `workspace_parked`,
-`orchestrator_closed`. New types will appear over time — skip what you
-don't know.
+`orchestrator_closed`, `orchestrator_spawned` (grove-198, additive: data
+`{workspace, session, profile?, op_id?}` — a detached orchestrator chat
+started for a workspace by `gv orchestrator new --workspace <label>`, the
+receiving half of `--host`; `session` is its `grove-chat-<label>-<n>` tmux
+session and `op_id` the relayed hop's receipt, so a retried hop reprints
+the first spawn instead of making a second one). New types will appear
+over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
 itself does the same).

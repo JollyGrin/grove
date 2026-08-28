@@ -85,14 +85,16 @@ regardless of where the Mac keeps its checkout.
 
 Two rules learned live (2026-08-26 shakedown — LEARNINGS §Remote):
 
-- **The host is GLOBAL-layer only.** Every `--host` verb runs over ssh at
-  the login dir — no workspace marker, so the host's gv resolves
+- **Passthrough lands on the GLOBAL layer.** Every `--host` verb runs over
+  ssh at the login dir — no workspace marker, so the host's gv resolves
   `~/.config/grove/config.yaml` and the global state dir. That file must
   carry **both** the `repos:` map (paths under this host's home) **and**
   `provider: kind: github` — the provider otherwise defaults to markdown
-  and remote `adopt`/`grab` fail (`task not found in .grove/tasks`). Do
-  NOT mirror the Mac's workspace `.grove/config.yaml` layout here; it is
-  invisible to passthrough.
+  and remote `adopt`/`grab` fail (`task not found in .grove/tasks`). The
+  global layer stays the landing pad for `grab`/`ls`/`adopt`/`handoff`
+  even once the host also carries workspace twins (below): since grove-191
+  a global-layer `gv ls` aggregates the registered workspaces too, so the
+  two coexist.
 - **Burn the first-run dialogs at provisioning time.** The first session
   in a fresh `~/.claude` profile shows the folder-trust dialog and the
   bypass-permissions acceptance — and they eat the adopt/grab kickoff
@@ -102,6 +104,43 @@ Two rules learned live (2026-08-26 shakedown — LEARNINGS §Remote):
   accept both prompts (trust: Enter; bypass: `2` then Enter), and exit.
   If it happens anyway: answer the dialogs in the pane, then re-send the
   instructions with `gv nudge`.
+
+## Workspace twins (for `gv orchestrator new --host`)
+
+`gv orchestrator new --host <host>` (grove-198) starts an orchestrator chat
+**on the host, inside the host's twin of the workspace you are standing
+in** — its own detached `grove-chat-<label>-<n>` tmux session, so a later
+`ssh -t <host> tmux attach` (or the cockpit's attach pane) joins the same
+live chat from either end. Only NAMES travel: the workspace label and the
+profile name, resolved against the host's own registry and config.
+
+That needs a twin: a workspace on the host **registered under the same
+label** as the one on the Mac.
+
+```bash
+mkdir -p ~/git/<label> && cd ~/git/<label>      # or the repo/parent you want
+gv init --yes --label <label>                   # writes .grove/ AND registers it
+gv workspaces                                   # the label must be listed, no ✗
+```
+
+- The label must match the Mac's exactly — that string is the whole
+  addressing scheme. `gv workspaces` on either side shows it.
+- The twin gets its **own** `.grove/config.yaml`: its own `orchestrator:
+  claude:` command, its own `model_profiles:`, its own `.grove/state`.
+  Nothing is copied from the Mac, and nothing is inherited from this
+  host's global `config.yaml` either — the `orchestrator:` block is
+  deliberately dropped from the global layer inside a workspace, so a
+  machine-specific wrapper there can never become a twin's brain.
+- **No twin ⇒ hard error**, never a fall-back to the global layer:
+  `no workspace '<label>' on @<host> — register a twin there or spawn
+  locally`. Same for a registered root whose `.grove/` has moved away, and
+  for a `--profile` name the host has no `model_profiles:` entry for.
+- Registering workspaces here does **not** disturb passthrough: `--host`
+  verbs still land on the global layer (above), and a global-layer `gv ls`
+  aggregates the twins' fleets since grove-191.
+- The chat is a detached session of its own, not a window in the host's
+  cockpit — an ssh client attaching to it cannot resize the cockpit's
+  shared windows, and the chat survives the ssh connection dropping.
 
 Updating the host later: `gv update` is a GitHub-releases self-updater
 and errors on a private source install — use
@@ -125,6 +164,8 @@ gv doctor                          # host line: reachable + remote gv version
 gv ls --host grove-host            # empty fleet, printed by the host's own gv
 gv grab grove-N --repo grove --host grove-host
 ssh grove-host -t tmux attach -t =grove-<label>     # watch it work; detach with C-b d
+gv orchestrator new --host grove-host               # a chat in the host's twin (needs one — see above)
+                                                    # prints: ssh -t <host> tmux attach -t =grove-chat-<label>-<n>
 ```
 
 ## Headless gotchas

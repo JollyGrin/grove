@@ -31,6 +31,37 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
       Obsidian live board (issue #9, design paused at REVISE), remote
       overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] Remote orchestrator chat: `gv orchestrator new --host` (grove-198,
+      2026-08-28, part 1 of the remote-orchestrator pair; the cockpit `@`
+      prefix + attach pane is #199): starts an orchestrator chat ON a host,
+      inside that host's TWIN of the calling workspace. Local half mints an
+      op id and relays `orchestrator new --op-id <id> --as <host>
+      --workspace <label> [--profile p]` through the hop grove-186 built
+      (`runRemoteIdempotent`, now shared with answer/nudge), auto-filling
+      the label from the ambient workspace; `orchestrator` joined
+      `remote.Supported` (other subcommands get the friendly error).
+      Receiving half resolves the label against ITS registry
+      (`workspace.ResolveTwin`) and the profile name against the TWIN's
+      config, then spawns a detached `grove-chat-<label>-<n>` session
+      (`tmux.NextChatSession`/`CreateChatSession`) in the twin's
+      orchestrator dir, seeding CLAUDE.md exactly as `buildCockpit` does.
+      Own session, not a cockpit window: an ssh client attaching must not
+      resize the cockpit's shared windows, and the chat outlives the ssh
+      drop. Only NAMES travel — no twin, a dead marker, or an unknown
+      profile is a hard non-zero error (`no workspace '<label>' on
+      @<host> — register a twin there or spawn locally`), NEVER a
+      fall-back to the host's global layer (the 2026-07-05
+      ccwork-inheritance hazard). Idempotency: the receipt is checked
+      against the TWIN's state before anything is created and the spawn
+      appends `orchestrator_spawned` (additive, workspace-scoped, data
+      `{workspace, session, profile?, op_id?}`) carrying the session name,
+      so a 255 retry reprints the first spawn's attach line instead of
+      making a second chat. Output is paste-able from either end: the host
+      prints `attach: tmux attach -t =<session>`, the local half parses it
+      back and adds `ssh -t <ssh> tmux attach -t =<session>`. New
+      `e2e/chat.sh` (fake ssh, second tmux server, real-server canary) in
+      `e2e/all.sh`; docs/remote-host-setup.md gained a "Workspace twins"
+      section replacing the workspace-free rule.
 - [x] Idempotent relayed mutations + delivery confirmation (grove-186,
       2026-08-27, closes the #176–#186 remote-overflow train): **(A)** a
       retried `gv answer/nudge --host` can no longer double-steer a worker.

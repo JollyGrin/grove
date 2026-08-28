@@ -182,3 +182,27 @@ func TestFirstPaneID(t *testing.T) {
 		}
 	}
 }
+
+// TestNextChatSession pins the detached-chat numbering (grove-198): the
+// lowest free grove-chat-<label>-<n>, per workspace, ignoring every other
+// session on the server (cockpits, other workspaces' chats).
+func TestNextChatSession(t *testing.T) {
+	cases := []struct {
+		name     string
+		label    string
+		existing []string
+		want     string
+	}{
+		{"fresh server", "unbrewed", nil, "grove-chat-unbrewed-1"},
+		{"unrelated sessions only", "unbrewed", []string{"grove-unbrewed", "grove", "pr-x"}, "grove-chat-unbrewed-1"},
+		{"one taken", "unbrewed", []string{"grove-chat-unbrewed-1"}, "grove-chat-unbrewed-2"},
+		{"gap is reused", "unbrewed", []string{"grove-chat-unbrewed-2"}, "grove-chat-unbrewed-1"},
+		{"another workspace's chats don't count", "unbrewed", []string{"grove-chat-grid-1", "grove-chat-grid-2"}, "grove-chat-unbrewed-1"},
+		{"prefix lookalike label", "unbrewed", []string{"grove-chat-unbrewed-x-1"}, "grove-chat-unbrewed-1"},
+	}
+	for _, c := range cases {
+		if got := NextChatSession(c.label, c.existing); got != c.want {
+			t.Errorf("%s: NextChatSession(%q, %v) = %q, want %q", c.name, c.label, c.existing, got, c.want)
+		}
+	}
+}

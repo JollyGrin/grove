@@ -140,3 +140,34 @@ func TestExtractOpIDPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestChatAttachRoundTrip pins the one line both halves of `gv
+// orchestrator new --host` agree on (grove-198): the receiving half prints
+// it as a paste-able attach command, the relaying half parses the session
+// name back out of it to render the ssh form.
+func TestChatAttachRoundTrip(t *testing.T) {
+	line := ChatAttachLine("grove-chat-unbrewed-3")
+	if line != "attach: tmux attach -t =grove-chat-unbrewed-3" {
+		t.Fatalf("ChatAttachLine = %q", line)
+	}
+	out := "✓ orchestrator chat grove-chat-unbrewed-3 — workspace unbrewed\n" + line + "\n"
+	if got := ParseChatSession(out); got != "grove-chat-unbrewed-3" {
+		t.Fatalf("ParseChatSession = %q, want the session name", got)
+	}
+	// Output from a failed spawn (or an older remote gv) carries no line —
+	// the relaying half must print no attach hint rather than a wrong one.
+	if got := ParseChatSession("gv: no workspace 'x' on @pc\n"); got != "" {
+		t.Fatalf("ParseChatSession(no attach line) = %q, want \"\"", got)
+	}
+}
+
+// TestOrchestratorIsSupported: the verb relays, and the friendly
+// supported-list error names it.
+func TestOrchestratorIsSupported(t *testing.T) {
+	if !Supported["orchestrator"] {
+		t.Fatal("orchestrator must be a --host verb (grove-198)")
+	}
+	if !strings.Contains(SupportedList, "orchestrator new") {
+		t.Fatalf("SupportedList = %q, want it to mention `orchestrator new`", SupportedList)
+	}
+}

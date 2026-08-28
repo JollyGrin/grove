@@ -410,6 +410,17 @@
   not a simplification. Bonus verified: the failed remote adopt left the
   task untracked with NO tombstone and a working retry hint — the
   #183-fix-round failure semantics observed live.
+- **2026-08-28 · "global-layer only" is about where passthrough LANDS,
+  not about what a host may hold (grove-198)** — the shakedown rule above
+  reads as "keep the host workspace-free", and that is one step too far: a
+  host can register workspace twins and still serve `--host` passthrough
+  from the global layer (grove-191 made a global-layer `gv ls` aggregate
+  registered workspaces). `gv orchestrator new --host` needs exactly that:
+  a twin registered under the SAME label, whose own `.grove/config.yaml`
+  supplies the chat's brain. What must never happen is the opposite
+  direction — resolving a missing twin by falling back to the global
+  layer, which would run the chat on a machine-specific `claude` wrapper
+  (the 2026-07-05 ccwork inheritance). Missing twin ⇒ hard error.
 - **2026-08-26 · first-run Claude dialogs eat the pickup prompt on a
   fresh host** — the first adopt on a new `~/.claude` profile hit the
   folder-trust dialog AND the bypass-permissions acceptance before the

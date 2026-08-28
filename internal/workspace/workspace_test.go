@@ -385,3 +385,51 @@ func TestSortByActionability(t *testing.T) {
 		t.Fatalf("tiebreak order = %v", tie)
 	}
 }
+
+// TestResolveTwin is grove-198's targeting gate: `gv orchestrator new
+// --host` must land in the caller's workspace TWIN on the host, and refuse
+// loudly otherwise — never fall through to the host's global layer, whose
+// orchestrator command and auth belong to a different brain.
+func TestResolveTwin(t *testing.T) {
+	tmp := realTemp(t)
+	live := filepath.Join(tmp, "unbrewed")
+	mkWorkspace(t, live, "")
+	dead := filepath.Join(tmp, "moved-away")
+	list := []Workspace{
+		{Root: live, Label: "unbrewed", Scope: ScopeRepo},
+		{Root: dead, Label: "ghost", Scope: ScopeRepo},
+	}
+
+	got, err := ResolveTwin(list, "unbrewed", "groveremote")
+	if err != nil {
+		t.Fatalf("live twin: %v", err)
+	}
+	if got.Root != live || got.Label != "unbrewed" {
+		t.Fatalf("live twin = %+v, want root %s", got, live)
+	}
+
+	_, err = ResolveTwin(list, "nope", "groveremote")
+	if err == nil {
+		t.Fatal("missing twin: want error")
+	}
+	if want := "no workspace 'nope' on @groveremote — register a twin there or spawn locally"; err.Error() != want {
+		t.Fatalf("missing twin error = %q, want %q", err, want)
+	}
+
+	// Registered but its .grove marker is gone (root moved/deleted): still
+	// a hard error, with the stale root named so it can be fixed.
+	_, err = ResolveTwin(list, "ghost", "groveremote")
+	if err == nil {
+		t.Fatal("dead twin: want error")
+	}
+	for _, want := range []string{"no workspace 'ghost' on @groveremote", dead, "register a twin there or spawn locally"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("dead twin error = %q, want it to mention %q", err, want)
+		}
+	}
+
+	// Run locally (no host alias), the same refusal names this machine.
+	if _, err := ResolveTwin(nil, "unbrewed", ""); err == nil || !strings.Contains(err.Error(), "on this host") {
+		t.Fatalf("local refusal = %v, want it to say 'on this host'", err)
+	}
+}
