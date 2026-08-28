@@ -7,9 +7,14 @@ You are working on task {{.ID}}: {{.Title}}
 
 Work autonomously:
 1. {{.Verbs.Start}}
-2. Investigate the relevant code and form a plan. If something ambiguous
-   would materially change the implementation, ask — otherwise do not ask
-   for confirmation.
+2. Investigate the relevant code and form a plan. When reconnaissance
+   spans more than ~3 files or unfamiliar territory, fan it out to an
+   Explore subagent and pull back only the conclusion — never read whole
+   files into your context that you won't edit. When you already know the
+   file and line, read it directly; a subagent for one known file is
+   waste in the other direction. If something ambiguous would materially
+   change the implementation, ask — otherwise do not ask for
+   confirmation.
 3. Implement. Run the repo's lint, build, and tests before finishing.
 4. Commit with the task prefix ({{.ID}}: ...).
 5. If this repo has a remote, push and open a PR against the base branch
