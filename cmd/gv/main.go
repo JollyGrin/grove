@@ -908,7 +908,15 @@ func cmdMobile() error {
 		if err != nil {
 			return err
 		}
-		if err := tmux.SendKeys(pane, "gv"); err != nil {
+		// Absolute path + ` dash`, not bare "gv": bare gv is now the
+		// cockpit/workspace switcher, and entering it would move the phone
+		// onto the desktop grove-<label> session and shrink every desk pane
+		// to phone size (same absolute-executable rule as the cockpit pane).
+		dash := "gv dash"
+		if exe, err := os.Executable(); err == nil {
+			dash = exe + " dash"
+		}
+		if err := tmux.SendKeys(pane, dash); err != nil {
 			return err
 		}
 	}
