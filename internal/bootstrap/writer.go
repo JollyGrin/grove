@@ -34,6 +34,14 @@ func LoadDoc(path string) (*Doc, error) {
 		if err := yaml.Unmarshal(raw, &d.node); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
+		// Treat empty/comment-only files as an empty mapping node.
+		// yaml.Unmarshal accepts these without error but produces a node
+		// with empty Content, causing index out of range in root().
+		if len(d.node.Content) == 0 {
+			d.node = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
+				{Kind: yaml.MappingNode, Tag: "!!map"},
+			}}
+		}
 	case os.IsNotExist(err):
 		if err := yaml.Unmarshal([]byte("{}\n"), &d.node); err != nil {
 			return nil, err

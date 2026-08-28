@@ -154,3 +154,53 @@ func TestRunOutsideGitRepo(t *testing.T) {
 		t.Errorf("want inside-a-git-repo error, got %v", err)
 	}
 }
+
+func TestRunEmptyConfig(t *testing.T) {
+	repo := initRepo(t, "main")
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.yaml")
+	// Zero-byte config file should not crash Run
+	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(repo, cfgPath, "2026-07-04")
+	if err != nil {
+		t.Fatalf("Run with empty config failed: %v", err)
+	}
+	if !res.WroteConfig {
+		t.Error("new repo should be written to empty config")
+	}
+	c := readCfg(t, cfgPath)
+	if c.Provider.Kind != "markdown" {
+		t.Errorf("provider.kind = %q, want markdown", c.Provider.Kind)
+	}
+	name := filepath.Base(repo)
+	if _, ok := c.Repos[name]; !ok {
+		t.Errorf("repo %q not added to config", name)
+	}
+}
+
+func TestRunCommentOnlyConfig(t *testing.T) {
+	repo := initRepo(t, "main")
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.yaml")
+	// Comment-only config file should not crash Run
+	if err := os.WriteFile(cfgPath, []byte("# just a comment\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(repo, cfgPath, "2026-07-04")
+	if err != nil {
+		t.Fatalf("Run with comment-only config failed: %v", err)
+	}
+	if !res.WroteConfig {
+		t.Error("new repo should be written to comment-only config")
+	}
+	c := readCfg(t, cfgPath)
+	if c.Provider.Kind != "markdown" {
+		t.Errorf("provider.kind = %q, want markdown", c.Provider.Kind)
+	}
+	name := filepath.Base(repo)
+	if _, ok := c.Repos[name]; !ok {
+		t.Errorf("repo %q not added to config", name)
+	}
+}
