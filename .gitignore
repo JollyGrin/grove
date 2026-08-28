@@ -1,2 +1,6 @@
 .env
 WHOAMI.md
+
+# stray local build: `go build ./cmd/gv` drops the binary here
+# (the real install path is `go install ./cmd/gv` → ~/go/bin/gv)
+/gv

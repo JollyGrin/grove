@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
@@ -191,18 +192,35 @@ const chatAttachPrefix = "attach: tmux attach -t ="
 // ChatAttachLine renders the receiving half's attach hint for session.
 func ChatAttachLine(session string) string { return chatAttachPrefix + session }
 
+// chatSessionRe is the shape ChatAttachLine's tail must have to be
+// believed: tmux.NextChatSession's `grove-chat-<label>-<n>`, anchored to
+// the whole line remainder. Deliberately strict, because the string this
+// parser feeds is printed as a paste-able command — see ParseChatSession.
+var chatSessionRe = regexp.MustCompile(`^grove-chat-[a-z0-9][a-z0-9_-]*-[0-9]+$`)
+
 // ParseChatSession extracts the chat session name from a relayed
-// `orchestrator new` run's stdout, or "" when the output carries no attach
-// line (an error, an older remote gv, a spawn that never happened).
+// `orchestrator new` run's stdout, or "" when the output carries no
+// believable attach line (an error, an older remote gv, a spawn that never
+// happened).
+//
+// The output can span BOTH hops of a retried relay, so this takes the LAST
+// match, not the first: hop 1 may have spawned the chat and then had ssh
+// die mid-write, leaving a truncated attach line that the complete one
+// from hop 2 must win over. A truncation can also weld onto the next hop's
+// first line ("…-t =grove-cha✓ already applied…"), which is why the
+// remainder must match chatSessionRe as a whole rather than merely being
+// non-empty — the caller prints this as a command for the operator to
+// paste, and a plausible-looking wrong session name is worse than none.
 func ParseChatSession(out string) string {
+	session := ""
 	for _, line := range strings.Split(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), chatAttachPrefix)
 		if !ok {
 			continue
 		}
-		if name := strings.TrimSpace(rest); name != "" {
-			return name
+		if name := strings.TrimSpace(rest); chatSessionRe.MatchString(name) {
+			session = name
 		}
 	}
-	return ""
+	return session
 }

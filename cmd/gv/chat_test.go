@@ -90,6 +90,26 @@ func TestChatSpawnPlan(t *testing.T) {
 	}
 }
 
+// mkTwin creates a registered workspace twin under home and returns its
+// root — the fixture the receiving half resolves a label against.
+func mkTwin(t *testing.T, home, label string) string {
+	t.Helper()
+	root := filepath.Join(home, label)
+	if err := os.MkdirAll(filepath.Join(root, ".grove"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".grove", "config.yaml"),
+		[]byte("workspace:\n  label: "+label+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.AddToRegistry(workspace.Workspace{
+		Root: root, Label: label, Scope: workspace.ScopeRepo,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 // TestSpawnWorkspaceChatRefusesMissingTwin: the receiving half never falls
 // back to the host's global layer (wrong brain, wrong claude command —
 // the 2026-07-05 ccwork-inheritance incident). No twin ⇒ error, and
@@ -113,18 +133,7 @@ func TestSpawnWorkspaceChatDedupsOpID(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("GROVE_STATE_DIR", "")
 
-	root := filepath.Join(home, "unbrewed")
-	if err := os.MkdirAll(filepath.Join(root, ".grove"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".grove", "config.yaml"),
-		[]byte("workspace:\n  label: unbrewed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ws := workspace.Workspace{Root: root, Label: "unbrewed", Scope: workspace.ScopeRepo}
-	if err := workspace.AddToRegistry(ws); err != nil {
-		t.Fatal(err)
-	}
+	root := mkTwin(t, home, "unbrewed")
 	// The first run's receipt, as spawnWorkspaceChat writes it.
 	if err := state.Append(config.StateDirAt(root), state.Event{
 		Type: state.EvOrchestratorSpawned,
@@ -157,5 +166,55 @@ func TestSpawnWorkspaceChatDedupsOpID(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("spawn events = %d, want exactly 1 (the re-run must not spawn)", n)
+	}
+}
+
+// TestSpawnWorkspaceChatRejectsForeignOpID: --op-id is operator-facing and
+// every relayed mutation shares one event log, so an id that landed on
+// some OTHER kind of event is not a receipt for a chat. Believing it would
+// print a bare attach line, exit 0, and spawn nothing — a silent success
+// for a chat that never happened.
+func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROVE_STATE_DIR", "")
+	root := mkTwin(t, home, "unbrewed")
+
+	// The same op id, but on a relayed answer (grove-186's event).
+	if err := state.Append(config.StateDirAt(root), state.Event{
+		Type: state.EvAnswered, Ticket: "grove-7",
+		Data: map[string]string{"op_id": "op-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		err = spawnWorkspaceChat("unbrewed", "", "op-1", "groveremote")
+	})
+	if err == nil {
+		t.Fatalf("a foreign op id must be refused, got nil (stdout %q)", out)
+	}
+	for _, want := range []string{"op-1", "answered", "different operation"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal = %q, want it to mention %q", err, want)
+		}
+	}
+	if strings.Contains(out, "already applied") {
+		t.Errorf("a foreign op id must not read as a receipt: %q", out)
+	}
+	if strings.Contains(out, "attach: tmux attach -t =\n") {
+		t.Errorf("a bare attach line was printed: %q", out)
+	}
+	// A spawn event with no session name is the same class of lie.
+	if err := state.Append(config.StateDirAt(root), state.Event{
+		Type: state.EvOrchestratorSpawned,
+		Data: map[string]string{"op_id": "op-2", "workspace": "unbrewed"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := spawnWorkspaceChat("unbrewed", "", "op-2", "groveremote"); err == nil ||
+		!strings.Contains(err.Error(), "names no session") {
+		t.Fatalf("sessionless receipt = %v, want a refusal", err)
 	}
 }

@@ -161,6 +161,60 @@ func TestChatAttachRoundTrip(t *testing.T) {
 	}
 }
 
+// TestParseChatSessionSpansBothHops: the relaying half tees ONE buffer
+// across both ssh hops, so a first hop that spawned the chat and then had
+// ssh die mid-write leaves a truncated attach line in front of the
+// retry's complete one. The complete one must win — the parsed name is
+// printed as a command for the operator to paste, so a plausible-looking
+// wrong session is worse than none.
+func TestParseChatSessionSpansBothHops(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{
+			"truncated first hop, complete retry",
+			"✓ orchestrator chat grove-chat-unbrewed-3 — workspace unbrewed\n" +
+				"attach: tmux attach -t =grove-cha\n" +
+				"✓ already applied (op abc) — orchestrator chat grove-chat-unbrewed-3 in workspace unbrewed\n" +
+				"attach: tmux attach -t =grove-chat-unbrewed-3\n",
+			"grove-chat-unbrewed-3",
+		},
+		{
+			// No newline after the truncation: the retry's first line welds
+			// onto it, and the whole welded line must be rejected.
+			"truncation welded onto the retry's output",
+			"attach: tmux attach -t =grove-cha✓ already applied (op abc)\n" +
+				"attach: tmux attach -t =grove-chat-unbrewed-12\n",
+			"grove-chat-unbrewed-12",
+		},
+		{
+			// Both hops complete (a 255 that fired after the full write):
+			// they name the same session, and the last is still right.
+			"two complete lines",
+			"attach: tmux attach -t =grove-chat-unbrewed-3\nattach: tmux attach -t =grove-chat-unbrewed-3\n",
+			"grove-chat-unbrewed-3",
+		},
+		{
+			// Nothing believable at all: no hint beats a wrong one.
+			"only a truncated line",
+			"attach: tmux attach -t =grove-cha",
+			"",
+		},
+		{
+			"session number lost to the truncation",
+			"attach: tmux attach -t =grove-chat-unbrewed-\n",
+			"",
+		},
+	}
+	for _, c := range cases {
+		if got := ParseChatSession(c.out); got != c.want {
+			t.Errorf("%s: ParseChatSession = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // TestOrchestratorIsSupported: the verb relays, and the friendly
 // supported-list error names it.
 func TestOrchestratorIsSupported(t *testing.T) {

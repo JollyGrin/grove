@@ -177,8 +177,24 @@ func spawnWorkspaceChat(label, profile, opID, host string) error {
 			return fmt.Errorf("cannot check op %s against the event log: %w", opID, err)
 		}
 		if prior != nil {
-			fmt.Printf("✓ already applied (op %s) — orchestrator chat %s in workspace %s\n", opID, prior.Data["session"], label)
-			fmt.Println(remote.ChatAttachLine(prior.Data["session"]))
+			// The id alone is NOT the receipt. --op-id is operator-facing
+			// (the double-255 error prints a retry command carrying one)
+			// and every relayed mutation shares this one log, so an id
+			// that landed on an `answered` event would otherwise fire this
+			// branch with an empty session: a bare attach line, exit 0,
+			// and no chat. A same-id event of another kind is refused, not
+			// believed — proceeding instead would file a SECOND event
+			// under that id, and the next retry would dedup against
+			// whichever came first.
+			if prior.Type != state.EvOrchestratorSpawned {
+				return fmt.Errorf("op %s is already recorded in workspace %s on a %q event — that id belongs to a different operation, so nothing was spawned; re-run without --op-id", opID, label, prior.Type)
+			}
+			session := prior.Data["session"]
+			if session == "" {
+				return fmt.Errorf("op %s is recorded in workspace %s but its spawn event names no session — nothing was spawned; re-run without --op-id", opID, label)
+			}
+			fmt.Printf("✓ already applied (op %s) — orchestrator chat %s in workspace %s\n", opID, session, label)
+			fmt.Println(remote.ChatAttachLine(session))
 			return nil
 		}
 	}
