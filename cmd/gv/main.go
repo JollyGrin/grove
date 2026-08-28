@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,8 +91,10 @@ const usage = `gv — grove
                                               abandoned→untrack, idle→pause, orphan process→kill
   gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
-  gv orchestrator new [--profile p]            add an orchestrator chat pane (O in the TUI; ) for a profiled one);
+  gv orchestrator new [--profile p]           add an orchestrator chat pane (O in the TUI; ) for a profiled one);
                                               --profile opens it on a model profile instead of Claude
+  gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
+                                              this workspace — prints the ssh line that attaches to it
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
@@ -334,12 +337,20 @@ func main() {
 			// Relayed answer/nudge hop with a client op id (grove-186):
 			// an ambiguous ssh failure retries the SAME argv, and the
 			// remote's SeenOpID receipt dedups, so a retry can never
-			// double-steer the worker.
+			// double-steer the worker. `orchestrator new` (grove-198)
+			// rides the same idempotent hop.
 			var code int
 			var err error
-			if cmd == "answer" || cmd == "nudge" {
+			switch {
+			case cmd == "answer" || cmd == "nudge":
 				code, err = runRemoteRelay(host, cmd, rest)
-			} else {
+			case cmd == "orchestrator":
+				if len(rest) == 0 || rest[0] != "new" {
+					fmt.Fprintf(os.Stderr, "gv: --host is only supported for `gv orchestrator new` (supported: %s)\n", remote.SupportedList)
+					os.Exit(1)
+				}
+				code, err = runRemoteOrchestratorNew(host, rest[1:])
+			default:
 				code, err = runRemote(host, cmd, rest)
 			}
 			if err != nil {
@@ -470,7 +481,23 @@ func runRemoteRelay(host, verb string, rest []string) (int, error) {
 		opID = remote.NewOpID()
 	}
 	args := append([]string{"--op-id", opID}, rest...)
-	run := func() (int, error) { return remote.Run(cfg, host, verb, args, os.Stdout, os.Stderr) }
+	manual := "gv " + verb + " --host " + host + " --op-id " + opID
+	for _, a := range rest {
+		manual += " " + remote.Quote(a)
+	}
+	return runRemoteIdempotent(cfg, host, verb, args, opID, manual, os.Stdout)
+}
+
+// runRemoteIdempotent is the shared hop of every op-id-carrying relayed
+// mutation (grove-186 answer/nudge, grove-198 orchestrator new): run the
+// argv on the host, and on ssh exit 255 — connection failure, outcome
+// unknown — re-run the SAME argv once after a beat. The remote dedups on
+// the op id, so the retry's worst case is an "already applied" print. A
+// second 255 gives up with `manual`, the exact by-hand retry command.
+// stdout is a writer so a caller can tee the remote's output (the chat
+// spawn parses the session name out of it).
+func runRemoteIdempotent(cfg *config.Config, host, verb string, args []string, opID, manual string, stdout io.Writer) (int, error) {
+	run := func() (int, error) { return remote.Run(cfg, host, verb, args, stdout, os.Stderr) }
 	code, err := run()
 	if err != nil {
 		return 0, err
@@ -484,10 +511,6 @@ func runRemoteRelay(host, verb string, rest []string) (int, error) {
 		return 0, err
 	}
 	if code == 255 {
-		manual := "gv " + verb + " --host " + host + " --op-id " + opID
-		for _, a := range rest {
-			manual += " " + remote.Quote(a)
-		}
 		return 1, fmt.Errorf("ssh to %s failed twice (exit 255) — nothing further was sent; safe to retry by hand, the op id makes a duplicate a no-op: %s", host, manual)
 	}
 	return code, nil
@@ -655,12 +678,11 @@ func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
 	return cfg.Orchestrator.Dir
 }
 
-// buildCockpit lays out the main-vertical cockpit: dashboard TUI as the
-// main (left) pane, one orchestrator chat stacked right (O adds more).
-// Seeds the orchestrator dir + CLAUDE.md brain on first run.
-func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
-	session := cockpitSessionFor(ws)
-	orchDir := orchestratorDirFor(ws, cfg)
+// seedOrchestratorDir creates an orchestrator brain dir and installs the
+// CLAUDE.md brain on first run. Shared by the cockpit build and the
+// detached chat spawn (grove-198), which must seed a twin exactly the way
+// a locally opened cockpit would.
+func seedOrchestratorDir(orchDir string) error {
 	if err := os.MkdirAll(orchDir, 0o755); err != nil {
 		return err
 	}
@@ -670,6 +692,18 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 			return err
 		}
 		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
+	}
+	return nil
+}
+
+// buildCockpit lays out the main-vertical cockpit: dashboard TUI as the
+// main (left) pane, one orchestrator chat stacked right (O adds more).
+// Seeds the orchestrator dir + CLAUDE.md brain on first run.
+func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
+	session := cockpitSessionFor(ws)
+	orchDir := orchestratorDirFor(ws, cfg)
+	if err := seedOrchestratorDir(orchDir); err != nil {
+		return err
 	}
 	root := ""
 	if ws != nil {
@@ -794,7 +828,16 @@ func orchestratorLaunchProfile(cfg *config.Config, root string, p *config.ModelP
 func cmdOrchestratorNew(args []string) error {
 	fs := flag.NewFlagSet("orchestrator new", flag.ExitOnError)
 	profileFlag := fs.String("profile", "", "open this orchestrator on a model profile (e.g. openrouter-glm) instead of Claude")
+	wsFlag := fs.String("workspace", "", "spawn detached in this REGISTERED workspace's own grove-chat-<label>-<n> session (the receiving half of --host)")
+	opFlag := fs.String("op-id", "", "idempotency receipt for a relayed spawn — the same id twice spawns once")
+	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
 	_ = fs.Parse(args)
+
+	// grove-198: --workspace is the receiving half — a detached chat in a
+	// registered workspace twin, not a pane in this machine's cockpit.
+	if *wsFlag != "" {
+		return spawnWorkspaceChat(*wsFlag, *profileFlag, *opFlag, *asFlag)
+	}
 
 	cfg, err := loadCfg()
 	if err != nil {

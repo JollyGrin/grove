@@ -759,3 +759,62 @@ func CapturePaneBottomKnown(target string, height, lines int) (string, error) {
 	}
 	return out, nil
 }
+
+// --- detached orchestrator chat sessions (grove-198) ---
+
+// chatSessionPrefix is the naming scheme for a workspace's detached
+// orchestrator chats: `grove-chat-<label>-<n>`. Its own session, never a
+// window in the workspace's `grove-<label>` cockpit — a chat spawned from
+// (or attached over) ssh must not resize the cockpit's shared windows for
+// everyone else, and it has to survive the ssh client dropping.
+func chatSessionPrefix(label string) string { return "grove-chat-" + label + "-" }
+
+// NextChatSession picks the lowest free `grove-chat-<label>-<n>` (n from 1)
+// given the server's existing session names. Pure so the numbering is
+// testable without a tmux server; a name that raced in between is still
+// caught by new-session refusing a duplicate.
+func NextChatSession(label string, existing []string) string {
+	taken := make(map[string]bool, len(existing))
+	for _, s := range existing {
+		taken[strings.TrimSpace(s)] = true
+	}
+	prefix := chatSessionPrefix(label)
+	for n := 1; ; n++ {
+		name := prefix + strconv.Itoa(n)
+		if !taken[name] {
+			return name
+		}
+	}
+}
+
+// SessionNames lists the server's session names. A tmux that isn't running
+// yet ("no server running on …") is an empty list, not an error — the
+// first chat on a fresh machine is exactly that case, and a genuinely
+// broken server still fails loudly at CreateChatSession.
+func SessionNames() []string {
+	out, err := run("list-sessions", "-F", "#{session_name}")
+	if err != nil || out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+// CreateChatSession creates the detached chat session rooted at dir and
+// types cmd into its single pane. Typed (SendKeys) rather than passed to
+// new-session for the same reasons as SpawnPane: shell aliases in the
+// orchestrator command keep working, and the pane survives the command
+// exiting. The pane id is resolved, never assumed at an index (grove-168).
+func CreateChatSession(session, dir, cmd string) error {
+	if _, err := run("new-session", "-d", "-s", session, "-n", "chat", "-c", dir); err != nil {
+		return err
+	}
+	window := Exact(session) + ":chat"
+	if err := DisableAutoRename(window); err != nil {
+		return err
+	}
+	pane, err := FirstPaneID(window)
+	if err != nil {
+		return err
+	}
+	return SendKeys(pane, cmd)
+}

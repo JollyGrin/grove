@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
@@ -21,13 +22,16 @@ import (
 // Supported lists the verbs that pass through today (grove-177 added
 // adopt + handoff for the remote half of `gv handoff`; grove-184 the
 // relay/read/control five); anything else is "not supported yet".
+// grove-198 added `orchestrator` — only its `new` subcommand relays; the
+// dispatcher rejects the others with the same friendly shape.
 var Supported = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true, "untrack": true,
+	"orchestrator": true,
 }
 
 // SupportedList is the human-readable form for error messages.
-const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack"
+const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -175,4 +179,48 @@ func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io
 		return 0, fmt.Errorf("ssh %s: %w", h.SSH, err)
 	}
 	return 0, nil
+}
+
+// chatAttachPrefix is the line the receiving half of `gv orchestrator new
+// --workspace` prints for its detached chat session (grove-198). It is
+// both the human's paste-able attach command when they are already logged
+// into the host AND the machine-readable carrier the relaying half parses
+// (ParseChatSession) to render the ssh form: the session's number is
+// picked remotely, so the local side cannot know the name any other way.
+const chatAttachPrefix = "attach: tmux attach -t ="
+
+// ChatAttachLine renders the receiving half's attach hint for session.
+func ChatAttachLine(session string) string { return chatAttachPrefix + session }
+
+// chatSessionRe is the shape ChatAttachLine's tail must have to be
+// believed: tmux.NextChatSession's `grove-chat-<label>-<n>`, anchored to
+// the whole line remainder. Deliberately strict, because the string this
+// parser feeds is printed as a paste-able command — see ParseChatSession.
+var chatSessionRe = regexp.MustCompile(`^grove-chat-[a-z0-9][a-z0-9_-]*-[0-9]+$`)
+
+// ParseChatSession extracts the chat session name from a relayed
+// `orchestrator new` run's stdout, or "" when the output carries no
+// believable attach line (an error, an older remote gv, a spawn that never
+// happened).
+//
+// The output can span BOTH hops of a retried relay, so this takes the LAST
+// match, not the first: hop 1 may have spawned the chat and then had ssh
+// die mid-write, leaving a truncated attach line that the complete one
+// from hop 2 must win over. A truncation can also weld onto the next hop's
+// first line ("…-t =grove-cha✓ already applied…"), which is why the
+// remainder must match chatSessionRe as a whole rather than merely being
+// non-empty — the caller prints this as a command for the operator to
+// paste, and a plausible-looking wrong session name is worse than none.
+func ParseChatSession(out string) string {
+	session := ""
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), chatAttachPrefix)
+		if !ok {
+			continue
+		}
+		if name := strings.TrimSpace(rest); chatSessionRe.MatchString(name) {
+			session = name
+		}
+	}
+	return session
 }

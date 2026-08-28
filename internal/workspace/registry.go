@@ -125,3 +125,31 @@ func RemoveFromRegistry(label string) error {
 		return fmt.Errorf("workspace %q not in registry", label)
 	})
 }
+
+// ResolveTwin picks the registered workspace with the given label — the
+// receiving half of `gv orchestrator new --host` (grove-198), which spawns
+// a chat inside the caller's workspace TWIN on this machine. A missing or
+// dead entry is a hard error, never a fall-back to the global layer: the
+// global layer is a different brain with a different orchestrator command
+// (the 2026-07-05 ccwork-inheritance incident), so spawning there instead
+// would silently run the chat on the wrong config.
+//
+// host is the alias the caller knows this machine by, used only to make
+// the error nameable from the other end ("" ⇒ this host).
+func ResolveTwin(list []Workspace, label, host string) (*Workspace, error) {
+	place := "on this host"
+	if host != "" {
+		place = "on @" + host
+	}
+	for _, ws := range list {
+		if ws.Label != label {
+			continue
+		}
+		if !Alive(ws) {
+			return nil, fmt.Errorf("no workspace '%s' %s (registered at %s, .grove marker gone) — register a twin there or spawn locally", label, place, ws.Root)
+		}
+		found := ws
+		return &found, nil
+	}
+	return nil, fmt.Errorf("no workspace '%s' %s — register a twin there or spawn locally", label, place)
+}
