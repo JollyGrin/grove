@@ -26,6 +26,46 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-08-27/29 · the cheap-lane probe results, and why the probe
+  protocol is worth its cost** — four OpenRouter lanes dispatched on real
+  grove tickets, ~91k resident context: `qwen/qwen3.7-flash` $0.056 —
+  **PASS**, matched a verbatim spec character-for-character, gate green,
+  TASKS.md row, clean sentinel (first choice for rote);
+  `qwen/qwen3-coder-next` $0.566 — **PASS with caveat**, correct fix plus a
+  real regression test but exceeded the enumerated surface and *invented*
+  default config values instead of asking; `deepseek/deepseek-v4-flash-0731`
+  $0.104 — **FAIL, loops**: produced the correct diff, then could not
+  recognise it was finished (203 turns / 20 min / no commit, re-verifying
+  the same file); undated `deepseek/deepseek-v4-flash` $0.139 — **FAIL at
+  Gate 0**: reasoned about grove-115 correctly, then emitted DeepSeek's
+  native `<｜DSML｜tool_calls>` markup inside a thinking block — 407 output
+  tokens, zero `tool_use` blocks, zero text blocks, no error, 12 seconds.
+  Three rules fell out: **pin dated slugs** (the `0731` snapshot clears
+  Gate 0, the undated alias does not — same vendor, same family, same
+  endpoint), **judge the model + endpoint pair** (z.ai's
+  `api.z.ai/api/anthropic` is a real Anthropic-protocol surface;
+  OpenRouter's generic endpoint passes some models' native tool syntax
+  straight through), and **specification quality dominates model choice**
+  in this tier — the $0.056 lane nailed the most tightly specified ticket
+  while the 10×-dearer lane drifted on a looser one. Distilled into
+  `.claude/skills/model-lanes` §Verified lanes + §The probe protocol.
+
+- **2026-08-29 · every worked example in a skill is executable, so treat it
+  like code (grove-202)** — the model-lanes skill instructed the
+  orchestrator to run its snippets verbatim, and three of them were wrong
+  in ways that fail *silently*: a calibration `jq` reading a
+  `total_tokens` field `gv cost --analyze --json` has never emitted (yields
+  `null`, so every downstream credit figure was null or skewed); a
+  transcript path built with `sed 's#/#-#g'`, missing `EncodePath`'s second
+  `.` → `-` rule, so the Gate 0 lane-killer read a directory that does not
+  exist; and `sorted(glob(...))[-1]` over UUID filenames, which on a live
+  7-file project dir picks a different transcript than mtime does. Plus a
+  double-applied peak multiplier that put the z.ai windowed ceiling at
+  40/80 turns when the file's own 18.6-credits/turn calibration gives
+  ~80/~160. None of the four raises an error. **A skill snippet ships
+  unreviewed and untested by default — run every one against live output
+  before merging it, and quote the observed output beside it.**
+
 - **2026-07-09 · Claude Code clobbers tmux pane titles on boot** — it sets
   the terminal title via OSC ("✳ Claude Code" / its version string), so a
   `select-pane -T` tag survives only until boot. Durable per-pane tagging

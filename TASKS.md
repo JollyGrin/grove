@@ -9,6 +9,40 @@
 
 ## Now (2026-07-12)
 
+- [x] model-lanes skill: executable snippets now actually execute
+      (grove-202, 2026-08-29): the skill tells the orchestrator to run its
+      snippets verbatim, and four defects made that produce wrong routing
+      *silently*. (1) The Step 2 calibration read `total_tokens / turns`;
+      `gv cost --analyze --json` emits five separate counters
+      (`input_tokens`, `output_tokens`, `cache_create_5m_tokens`,
+      `cache_create_1h_tokens`, `cache_read_tokens`) and no total at all,
+      so the expression yielded `null` and every credit/ceiling number
+      downstream was null or skewed — replaced with a jq that sums the five
+      and prints tickets/turns/resident_k/cache-share (live: 16 tickets,
+      1,066 turns, 108k resident, 95% cache read). (2) Gate 0 built the
+      transcript dir with `sed 's#/#-#g'`, missing `EncodePath`'s second
+      `.` → `-` rule — `…/grove/.grove/orchestrator` encodes to
+      `-home-dean-git-grove--grove-orchestrator`, so the lane-killer gate
+      read a nonexistent directory and any lane would look dead. (3) It
+      picked the transcript with `sorted(glob(...))[-1]` over UUID
+      filenames; now `max(..., key=os.path.getmtime)` (on a live 7-file
+      project dir the two disagree). (4) The z.ai windowed ceiling
+      double-applied the peak multiplier — 2,000-credit bucket ÷ 18.6
+      credits/turn is ~107 turns, ~80 under the ≤75% in-flight rule (~160
+      off-peak), not 40/80; off-peak fleet share is ~37%, not ~19%, so
+      width is 2, not 3. Also: `repos:`/`provider:` documented as
+      replaced wholesale (not deep-merged) with `orchestrator:` dropped
+      from the global layer; `ZAI_API_KEY`'s origin documented (profile
+      `auth_token_env` + `~/.config/grove/.env`, per-machine — a 401 means
+      no key on this box, not no credits); the
+      `CLAUDE_CODE_AUTO_COMPACT_WINDOW` ban scoped to the credit meter with
+      the shipped `kimi` profile named as the required exception; the skill
+      relocated in its own text to repo-tracked `.claude/skills/`; the
+      60–90 routing band reconciled against `ticket-writing`'s split-at-60
+      (split wins whenever splitting is still available). The path-encoding
+      and mtime rules were promoted into `claude-code-facts`, and the
+      never-logged 2026-08-27 probe results into LEARNINGS.md.
+
 - [x] `null` / bare `---` config.yaml no longer slips the empty-doc guard
       (grove-201, 2026-08-29): grove-129 fixed the *empty* config panic by
       testing `len(doc.Content) == 0`, but yaml.v3 parses a file holding
