@@ -203,7 +203,7 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 	if strings.Contains(out, "already applied") {
 		t.Errorf("a foreign op id must not read as a receipt: %q", out)
 	}
-	if strings.Contains(out, "attach: tmux attach -t =\n") {
+	if strings.Contains(out, "attach: tmux attach -t ''\n") {
 		t.Errorf("a bare attach line was printed: %q", out)
 	}
 	// A spawn event with no session name is the same class of lie.
@@ -223,10 +223,11 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 
 // The local pane attaches over ssh to the session the HOST named, with the
 // session exact-anchored (grove-99) so a longer host-side name can't be
-// grabbed instead.
+// grabbed instead — and the anchored target quoted, because the pane's
+// shell is zsh on the Mac this feature exists for (grove-207).
 func TestRemoteChatAttachCmd(t *testing.T) {
 	got := remoteChatAttachCmd("groveremote", "grove-chat-unbrewed-2")
-	want := "ssh -t groveremote tmux attach -t =grove-chat-unbrewed-2"
+	want := "ssh -t groveremote tmux attach -t '=grove-chat-unbrewed-2'"
 	if got != want {
 		t.Errorf("remoteChatAttachCmd = %q, want %q", got, want)
 	}

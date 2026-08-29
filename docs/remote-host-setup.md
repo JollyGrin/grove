@@ -167,7 +167,7 @@ The same spawn, one keypress deep, without leaving the local cockpit:
 | esc / anything else | cancel |
 
 On success a local pane opens running `ssh -t <host> tmux attach -t
-=grove-chat-<label>-<n>`, tiled beside the local chats: titled `@<host> ·
+'=grove-chat-<label>-<n>'`, tiled beside the local chats: titled `@<host> ·
 <profile>` with its own border color, so remote and local chats are
 distinguishable at a glance. On failure — no twin, unknown profile, dead
 ssh — the host's own error line becomes the cockpit flash and **no pane is
@@ -198,10 +198,16 @@ First-run test — no manual ssh:
 gv doctor                          # host line: reachable + remote gv version
 gv ls --host grove-host            # empty fleet, printed by the host's own gv
 gv grab grove-N --repo grove --host grove-host
-ssh grove-host -t tmux attach -t =grove-<label>     # watch it work; detach with C-b d
+ssh grove-host -t tmux attach -t '=grove-<label>'   # watch it work; detach with C-b d
 gv orchestrator new --host grove-host               # a chat in the host's twin (needs one — see above)
-                                                    # prints: ssh -t <host> tmux attach -t =grove-chat-<label>-<n>
+                                                    # prints: ssh -t <host> tmux attach -t '=grove-chat-<label>-<n>'
 ```
+
+The `=` is tmux's exact-match anchor (so a session whose name merely extends
+this one is never attached instead) and the quotes keep it literal: zsh —
+macOS's default shell — equals-expands a word that STARTS with `=`, so the
+unquoted form dies with `zsh: grove-<label> not found` before `ssh` ever runs
+(grove-207). bash has no such expansion; the quoted form is right in both.
 
 ## Headless gotchas
 
@@ -222,7 +228,7 @@ gv orchestrator new --host grove-host               # a chat in the host's twin 
 ## Phone
 
 Tailscale app + Termius or Blink → `ssh grove-host` → `tmux attach -t
-=grove-<label>` (or `gv ls`). The `grove-mobile` cockpit (issue #5, parked)
+'=grove-<label>'` (or `gv ls`). The `grove-mobile` cockpit (issue #5, parked)
 is the intended narrow-screen view once phone access is real; a Telegram
 sidecar (read-only fleet digest + `gv answer` relay, as a user systemd unit —
 hence `enable-linger`) is the next idea after that.

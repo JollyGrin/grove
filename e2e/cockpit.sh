@@ -127,7 +127,7 @@ case " \$cmd " in
     esac
     n=\$(cat "$SCRATCH/chat-n" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$SCRATCH/chat-n"
     echo "✓ orchestrator chat grove-chat-rws-\$n — workspace rws"
-    echo "attach: tmux attach -t =grove-chat-rws-\$n" ;;
+    echo "attach: tmux attach -t '=grove-chat-rws-\$n'" ;;
   *)
     echo "[fake ssh] ran: \$cmd" ;;
 esac
@@ -336,6 +336,9 @@ grep -Eq "orchestrator new --op-id [0-9a-f]{32} --as pc --workspace rws --profil
 $(cat "$SSH_LOG")"
 
 say "…then a LOCAL pane attaches over ssh to the session the host named"
+# ssh.log holds the pane shell's POST-parse argv, so the grove-207 quotes
+# around the exact-match target are gone by here — that they are absent is
+# the proof the quoting is transparent to ssh and tmux.
 wait_ssh '-t localhost tmux attach -t =grove-chat-rws-1' \
   || fail "no local ssh-attach pane for the host's chat session:
 $(cat "$SSH_LOG")"

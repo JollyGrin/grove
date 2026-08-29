@@ -147,7 +147,7 @@ func TestExtractOpIDPrefix(t *testing.T) {
 // name back out of it to render the ssh form.
 func TestChatAttachRoundTrip(t *testing.T) {
 	line := ChatAttachLine("grove-chat-unbrewed-3")
-	if line != "attach: tmux attach -t =grove-chat-unbrewed-3" {
+	if line != "attach: tmux attach -t '=grove-chat-unbrewed-3'" {
 		t.Fatalf("ChatAttachLine = %q", line)
 	}
 	out := "✓ orchestrator chat grove-chat-unbrewed-3 — workspace unbrewed\n" + line + "\n"
@@ -223,5 +223,57 @@ func TestOrchestratorIsSupported(t *testing.T) {
 	}
 	if !strings.Contains(SupportedList, "orchestrator new") {
 		t.Fatalf("SupportedList = %q, want it to mention `orchestrator new`", SupportedList)
+	}
+}
+
+// TestParseChatSessionQuoteForms: the attach line's target gained quotes
+// (grove-207 — zsh equals-expands a bare `=name`), and the two halves of
+// `gv orchestrator new --host` upgrade independently, so a new local half
+// must read an OLD host's bare line as well as a new host's quoted one.
+// A half or mismatched quote is not a form either half ever prints — it is
+// a truncation, and must yield no hint rather than a wrong one.
+func TestParseChatSessionQuoteForms(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"bare (old host)", "attach: tmux attach -t =grove-chat-unbrewed-3\n", "grove-chat-unbrewed-3"},
+		{"single-quoted", "attach: tmux attach -t '=grove-chat-unbrewed-3'\n", "grove-chat-unbrewed-3"},
+		{"double-quoted", "attach: tmux attach -t \"=grove-chat-unbrewed-3\"\n", "grove-chat-unbrewed-3"},
+		{"opening quote only", "attach: tmux attach -t '=grove-chat-unbrewed-3\n", ""},
+		{"closing quote only", "attach: tmux attach -t =grove-chat-unbrewed-3'\n", ""},
+		{"mismatched pair", "attach: tmux attach -t '=grove-chat-unbrewed-3\"\n", ""},
+		{"quoted but truncated", "attach: tmux attach -t '=grove-cha\n", ""},
+		{"no exact-match anchor", "attach: tmux attach -t 'grove-chat-unbrewed-3'\n", ""},
+		{"empty quoted target", "attach: tmux attach -t ''\n", ""},
+		{"bare hop then quoted retry", "attach: tmux attach -t =grove-cha\n" +
+			"attach: tmux attach -t '=grove-chat-unbrewed-12'\n", "grove-chat-unbrewed-12"},
+	}
+	for _, c := range cases {
+		if got := ParseChatSession(c.out); got != c.want {
+			t.Errorf("%s: ParseChatSession = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestQuoteLeadingExpansionChars: Quote's bare-token shortcut is judged
+// for zsh too (grove-207). A word starting with "=" is equals-expanded
+// there and one starting with "~" is tilde-expanded, so both must come
+// back quoted even though every character is otherwise "safe"; the same
+// characters later in the word are inert and stay bare.
+func TestQuoteLeadingExpansionChars(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"=grove-chat-unbrewed-1", "'=grove-chat-unbrewed-1'"},
+		{"~/git/grove", "'~/git/grove'"},
+		{"grove-chat-unbrewed-1", "grove-chat-unbrewed-1"},
+		{"ANTHROPIC_MODEL=opus", "ANTHROPIC_MODEL=opus"},
+		{"dean@groveremote", "dean@groveremote"},
+		{"", "''"},
+	}
+	for _, c := range cases {
+		if got := Quote(c.in); got != c.want {
+			t.Errorf("Quote(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

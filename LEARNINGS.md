@@ -431,6 +431,22 @@
 
 ## Remote / attach architecture (verified against t3code source)
 
+- **2026-08-29 · zsh equals-expands a word that STARTS with `=`, so every
+  unquoted `tmux attach -t =<session>` is a broken paste on macOS**
+  (grove-207): zsh's `EQUALS` option (on by default, not interactive-only)
+  replaces `=foo` with the path of the command `foo`, and aborts the line
+  when there is none — `zsh: grove-chat-unbrewed-1 not found`, which is NOT
+  command-not-found (`zsh: command not found: X`) and never reaches ssh.
+  bash has no such expansion, which is why the Linux side never saw it. The
+  same is true of a leading `~`. Both are word-INITIAL: `A=b` and `a~b` are
+  inert. The `=` cannot be dropped (tmux's exact-match anchor, grove-99), so
+  the target is single-quoted — literal in bash and zsh alike — everywhere a
+  command is printed for a human OR handed to a pane's shell. `remote.Quote`
+  had `=` in its leave-it-bare safe set, so it was returning the anchor
+  unquoted; it now forces quotes on a leading `=` or `~`, which is what
+  fixed the cockpit's own ssh-attach pane, not just the printed hints. Any
+  "is this shell-safe?" set has to be judged for zsh, not just POSIX sh.
+
 - **2026-08-29 · an ssh hop fired from inside the TUI must not inherit
   `os.Stdin`, and must not write to the real stderr** (grove-199):
   `remote.Run` hands ssh `os.Stdin` — fine for a CLI verb, but inside the

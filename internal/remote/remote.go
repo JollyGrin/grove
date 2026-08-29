@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/tmux"
 )
 
 // Supported lists the verbs that pass through today (grove-177 added
@@ -147,8 +148,17 @@ func Argv(h *config.Host, verb string, args []string) []string {
 // Quote single-quotes s for a POSIX shell; a token of plain safe
 // characters is left bare so the remote command stays readable in
 // process listings and ssh logs.
+//
+// "Safe" is judged for the shell that actually runs the line, and that is
+// often zsh (macOS): a word STARTING with "=" is equals-expanded there
+// (`=foo` → the path of the command foo, or an abort when there is none)
+// and one starting with "~" is tilde-expanded, even though "=" and "~"
+// are inert anywhere later in the word. tmux's exact-match anchor is
+// exactly such a word — `-t =grove-chat-x-1` (grove-207) — so a leading
+// "=" or "~" forces the quotes on.
 func Quote(s string) string {
-	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=/.:@,+%") == "" {
+	if s != "" && !strings.ContainsAny(s[:1], "=~") &&
+		strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=/.:@,+%") == "" {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
@@ -199,10 +209,19 @@ func run(cfg *config.Config, host, verb string, args []string, stdin io.Reader, 
 // into the host AND the machine-readable carrier the relaying half parses
 // (ParseChatSession) to render the ssh form: the session's number is
 // picked remotely, so the local side cannot know the name any other way.
-const chatAttachPrefix = "attach: tmux attach -t ="
+//
+// The prefix stops BEFORE the target because the target's spelling is
+// version-skewed (grove-207): an old host writes it bare (`-t =name`), a
+// new one quoted (`-t '=name'`) so it survives zsh's equals expansion.
+// The parser accepts both; see ParseChatSession.
+const chatAttachPrefix = "attach: tmux attach -t "
 
-// ChatAttachLine renders the receiving half's attach hint for session.
-func ChatAttachLine(session string) string { return chatAttachPrefix + session }
+// ChatAttachLine renders the receiving half's attach hint for session:
+// exact-anchored (the grove-99 rule) and quoted, so the human logged into
+// the host can paste it into zsh as well as bash (grove-207).
+func ChatAttachLine(session string) string {
+	return chatAttachPrefix + Quote(tmux.Exact(session))
+}
 
 // chatSessionRe is the shape ChatAttachLine's tail must have to be
 // believed: tmux.NextChatSession's `grove-chat-<label>-<n>`, anchored to
@@ -223,6 +242,11 @@ var chatSessionRe = regexp.MustCompile(`^grove-chat-[a-z0-9][a-z0-9_-]*-[0-9]+$`
 // remainder must match chatSessionRe as a whole rather than merely being
 // non-empty — the caller prints this as a command for the operator to
 // paste, and a plausible-looking wrong session name is worse than none.
+//
+// The target is accepted bare, single-quoted or double-quoted (grove-207:
+// the printed form gained quotes, and a new local half must keep reading
+// an old host's bare line). A half or mismatched quote is not unwrapped,
+// so it fails chatSessionRe and yields no hint.
 func ParseChatSession(out string) string {
 	session := ""
 	for _, line := range strings.Split(out, "\n") {
@@ -230,9 +254,24 @@ func ParseChatSession(out string) string {
 		if !ok {
 			continue
 		}
-		if name := strings.TrimSpace(rest); chatSessionRe.MatchString(name) {
+		name, ok := chatAttachTarget(strings.TrimSpace(rest))
+		if ok && chatSessionRe.MatchString(name) {
 			session = name
 		}
 	}
 	return session
+}
+
+// chatAttachTarget unwraps one attach line's `-t` target into the bare
+// session name: a matching pair of surrounding quotes comes off, then the
+// "=" exact-match anchor, which is mandatory — a line without it is not
+// the carrier this parser trusts.
+func chatAttachTarget(s string) (string, bool) {
+	for _, q := range []string{"'", `"`} {
+		if len(s) >= 2 && strings.HasPrefix(s, q) && strings.HasSuffix(s, q) {
+			s = s[1 : len(s)-1]
+			break
+		}
+	}
+	return strings.CutPrefix(s, "=")
 }
