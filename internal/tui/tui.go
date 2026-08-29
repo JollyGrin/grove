@@ -191,6 +191,14 @@ type Model struct {
 	handedOff     []*state.Task
 	remoteResults []fleet.Result
 
+	// armedHost is the `@` remote-spawn arming (grove-199): "" = disarmed,
+	// otherwise the configured host the NEXT spawn key opens a chat on. A
+	// transient state, not a mode — it clears on the spawn, on esc, and on
+	// any key that isn't a spawn key, so the local spawn keys never change
+	// meaning. It survives exactly one hop into the `)` picker, whose enter
+	// consumes it.
+	armedHost string
+
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
 	greeted bool
@@ -876,6 +884,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAlmanacKey(k)
 	}
 
+	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
+	// it intercepts everything — including the remote-row keys below and
+	// the local spawn keys, whose meaning never changes because the armed
+	// state is consumed here and cleared before they can be reached again.
+	if m.armedHost != "" {
+		return m.handleArmedKey(k)
+	}
+
 	// grove-178 kept every non-local row read-only; grove-185 lifts that
 	// for LIVE remote rows — a/n open the relay input bound to the row's
 	// host, d pages the remote diff, enter attaches over ssh. Handed-off
@@ -934,6 +950,15 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// The ad-hoc refresh brings the tombstones in (their scan is gated
 		// on R being on); live remote rows land with the ssh answer.
 		return m, tea.Batch(remoteCmd(m.cfg), refreshCmd(m.folder, m.stateDir, m.sessionName(), true))
+	case "@": // arm a remote spawn (grove-199); a second @ cycles the host
+		host, err := m.firstArmedHost()
+		if err != nil {
+			m.flash = err.Error()
+			return m, nil
+		}
+		m.armedHost = host
+		m.flash = ""
+		return m, nil
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
@@ -1198,6 +1223,7 @@ func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		m.mode = modeList
 		m.pickProfiles = nil
+		m.armedHost = "" // a remote arming ends with the picker it opened
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1218,6 +1244,10 @@ func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		profile := m.pickProfiles[m.pickSel]
 		m.mode = modeList
 		m.pickProfiles = nil
+		if host := m.armedHost; host != "" {
+			m.armedHost = ""
+			return m.spawnRemote(host, profile)
+		}
 		return m.spawnProfile(profile)
 	case "1", "2", "3", "4", "5", "6", "7", "8":
 		if m.pickSel < 0 || m.pickSel >= len(m.pickProfiles) {
@@ -1253,6 +1283,111 @@ func (m Model) handleProfilePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// handleArmedKey is the one keypress that follows `@` (grove-199). Exactly
+// three things can happen: another `@` cycles the armed host, a spawn key
+// (0/O, 1–8, `)`) opens a chat ON that host, or anything else cancels — and
+// in every case but the cycle and the picker hop, the armed state is gone
+// by the time this returns. Nothing here polls or waits: the spawn is the
+// same one-shot keypress command shape as R (the cockpit RAM rule).
+func (m Model) handleArmedKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	host := m.armedHost
+	switch k.String() {
+	case "@":
+		m.armedHost = m.nextArmedHost(host)
+		m.flash = ""
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.armedHost = ""
+		m.flash = "remote spawn cancelled"
+		return m, nil
+	case "O", "0":
+		m.armedHost = ""
+		return m.spawnRemote(host, "")
+	case "1", "2", "3", "4", "5", "6", "7", "8":
+		// The SAME digit→profile map the local digits and the `)` picker
+		// bind (grove-105) — one source of truth, and only the resolved
+		// profile NAME travels to the host, never a local model config.
+		digit := k.String()
+		profile := m.cfg.Orchestrator.Hotkeys[digit]
+		m.armedHost = ""
+		if profile == "" {
+			m.flash = digit + " unbound — bind it in the ) picker"
+			return m, nil
+		}
+		return m.spawnRemote(host, profile)
+	case ")":
+		candidates, action := m.cfg.ResolveOrchestratorProfile()
+		if action == config.ProfileHint {
+			m.armedHost = ""
+			m.flash = "no model_profiles configured — add one to ~/.config/grove/config.yaml"
+			return m, nil
+		}
+		// armedHost deliberately survives the hop: the picker renders the
+		// @host banner and its enter spawns remotely (esc clears it).
+		m.pickProfiles = candidates
+		m.pickSel = 0
+		m.mode = modeProfilePick
+		m.flash = ""
+		return m, nil
+	}
+	m.armedHost = ""
+	m.flash = "remote spawn cancelled — @ then 0, 1-8 or )"
+	return m, nil
+}
+
+// firstArmedHost is the host a bare `@` arms: the first configured host in
+// the same sorted order the R merge and the host cycle use. Zero hosts is
+// the one flash-only outcome.
+func (m Model) firstArmedHost() (string, error) {
+	if m.cfg == nil || len(m.cfg.Hosts) == 0 {
+		return "", errors.New("no hosts configured (hosts: map in config.yaml)")
+	}
+	return m.cfg.HostNames()[0], nil
+}
+
+// nextArmedHost cycles the armed host on a repeated `@`. One configured
+// host cycles to itself — the arming stands, so a stray second `@` can
+// never silently disarm.
+func (m Model) nextArmedHost(cur string) string {
+	names := m.cfg.HostNames()
+	for i, n := range names {
+		if n == cur {
+			return names[(i+1)%len(names)]
+		}
+	}
+	if len(names) > 0 {
+		return names[0]
+	}
+	return cur
+}
+
+// spawnRemote fires the remote chat spawn: the grove-198 relay on the host,
+// then a local ssh-attach pane here — both inside cmd/gv's injected
+// SpawnRemoteOrchestrator, so a relay that fails spawns no pane and its
+// error line becomes the flash.
+func (m Model) spawnRemote(host, profile string) (tea.Model, tea.Cmd) {
+	cfg := m.cfg
+	m.flash = "spawning @" + host + " chat" + remoteProfileSuffix(profile) + "…"
+	return m, func() tea.Msg {
+		out, err := SpawnRemoteOrchestrator(cfg, host, profile)
+		if err != nil {
+			return flashMsg(err.Error())
+		}
+		return flashMsg(out)
+	}
+}
+
+// remoteProfileSuffix names the backend in a flash, or says nothing for the
+// host's own Claude.
+func remoteProfileSuffix(profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return " (" + profile + ")"
 }
 
 // spawnProfile fires the profiled-orchestrator spawn for a resolved profile
@@ -1305,6 +1440,15 @@ var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
 // `gv orchestrator new --profile <name>`.
 var SpawnOrchestratorProfile = func(cfg *config.Config, profile string) (string, error) {
 	return "", fmt.Errorf("orchestrator spawn not wired")
+}
+
+// SpawnRemoteOrchestrator is the `@`-armed spawn (grove-199), injected by
+// cmd/gv: relay `gv orchestrator new --host <host> [--profile p]` (the
+// grove-198 verb, op-id'd), then open a local pane attached to the chat the
+// host created. Returns a flash line; an error means nothing was spawned
+// here, and its text is the remote's own error line.
+var SpawnRemoteOrchestrator = func(cfg *config.Config, host, profile string) (string, error) {
+	return "", fmt.Errorf("remote orchestrator spawn not wired")
 }
 
 // SaveHotkeyBinding persists one digit→profile hotkey binding from the `)`

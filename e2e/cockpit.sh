@@ -116,6 +116,18 @@ cmd="\$*"
 case " \$cmd " in
   *" ls "*)
     printf '{"schema_version":1,"tasks":[{"ticket":"pc-9","title":"remote row","repo":"demo","agent":"working","live":"waiting","created":"$NOW"}]}' ;;
+  *" orchestrator "*)
+    # grove-199: the host half of the @-armed spawn. A profile the host does
+    # not have is the error path — a non-zero exit whose stderr line is the
+    # whole diagnosis, and the cockpit must spawn NO pane for it.
+    case " \$cmd " in
+      *" --profile boom "*)
+        echo "gv: unknown model profile \"boom\" on @pc" >&2
+        exit 1 ;;
+    esac
+    n=\$(cat "$SCRATCH/chat-n" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$SCRATCH/chat-n"
+    echo "✓ orchestrator chat grove-chat-rws-\$n — workspace rws"
+    echo "attach: tmux attach -t =grove-chat-rws-\$n" ;;
   *)
     echo "[fake ssh] ran: \$cmd" ;;
 esac
@@ -263,4 +275,104 @@ tmux send-keys -t "$PANE0" a
 wait_grep 'was handed off to pc' || fail "a on a tombstone must flash read-only, not relay:
 $CAP"
 
-say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh"
+# --- grove-199: the `@`-armed remote spawn ---
+# A WORKSPACE cockpit, because a remote chat spawns into the HOST's twin of
+# the workspace the operator is standing in — the label is what travels, so
+# there is nothing to send from the global layer.
+
+say "grove-199: a workspace cockpit (rws) for the @ spawn"
+WS="$SCRATCH/rws"
+mkdir -p "$WS"
+git -C "$WS" init -qb main
+git -C "$WS" config user.email e2e@grove.test && git -C "$WS" config user.name "grove e2e"
+( cd "$WS" && echo x > README.md && git add -A && git commit -qm init )
+( cd "$WS" && "$GV" init --yes --label rws > /dev/null )
+cat >> "$WS/.grove/config.yaml" <<EOF
+model_profiles:
+  e2e-glm:
+    base_url: https://openrouter.ai/api
+    auth_token_env: OPENROUTER_API_KEY
+    opus: z-ai/glm-5.2
+  boom:
+    base_url: https://openrouter.ai/api
+    auth_token_env: OPENROUTER_API_KEY
+    opus: nope/nope
+orchestrator:
+  claude: echo
+  hotkeys:
+    "1": e2e-glm
+    "2": boom
+hosts:
+  pc:
+    ssh: localhost
+    gv: $GV
+EOF
+( cd "$WS" && "$GV" >/dev/null 2>&1 ) || true
+tmux has-session -t '=grove-rws' 2>/dev/null || fail "workspace cockpit session grove-rws not created"
+
+# The polling helpers key off PANE0 — point them at the workspace cockpit's
+# dashboard pane for the rest of the suite.
+PANE0="$(tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' | head -1)"
+tmux resize-window -t "$PANE0" -x 200 -y 50
+tmux resize-pane -t "$PANE0" -x 140
+sleep 2
+wait_grep 'AGENTS' || fail "workspace cockpit never rendered:
+$CAP"
+PANES_BEFORE=$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)
+
+say "@ arms the spawn: the footer swaps to the armed prompt"
+tmux send-keys -t "$PANE0" -l '@'
+wait_grep 'esc cancel' || fail "@ did not swap the footer to the armed prompt:
+$CAP"
+echo "$CAP" | grep -q '@pc' || fail "the armed prompt must name the host:
+$CAP"
+
+say "@ then 1 relays grove-198's verb — op id, --as, --workspace, profile name only"
+tmux send-keys -t "$PANE0" -l '1'
+wait_ssh 'orchestrator new --op-id' || fail "@ + digit did not relay the spawn:
+$(cat "$SSH_LOG")"
+grep -Eq "orchestrator new --op-id [0-9a-f]{32} --as pc --workspace rws --profile e2e-glm\$" "$SSH_LOG" \
+  || fail "relayed argv wrong (want 'orchestrator new --op-id <32-hex> --as pc --workspace rws --profile e2e-glm'):
+$(cat "$SSH_LOG")"
+
+say "…then a LOCAL pane attaches over ssh to the session the host named"
+wait_ssh '-t localhost tmux attach -t =grove-chat-rws-1' \
+  || fail "no local ssh-attach pane for the host's chat session:
+$(cat "$SSH_LOG")"
+PANES_AFTER=$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)
+[ "$PANES_AFTER" -eq "$((PANES_BEFORE + 1))" ] || fail "want exactly one new pane ($PANES_BEFORE → $PANES_AFTER)"
+
+say "the remote pane wears its identity: @host · profile, in its own border color"
+NEWPANE="$(tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' | tail -1)"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_remote)" = "pc" ] || fail "remote pane not tagged with its host"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_profile)" = "e2e-glm" ] || fail "remote pane not tagged with its profile"
+tmux show-options -pqv -t "$NEWPANE" pane-border-style | grep -q 'fg=' || fail "remote pane has no distinct border color"
+FMT="$(tmux show-options -wqv -t '=grove-rws:cockpit' pane-border-format)"
+[ -n "$FMT" ] || fail "cockpit pane borders are off — the remote tag would be invisible"
+TITLE="$(tmux display-message -p -t "$NEWPANE" -F "$FMT")"
+echo "$TITLE" | grep -q '@pc · e2e-glm' || fail "remote pane title = '$TITLE', want '@pc · e2e-glm'"
+DASHTITLE="$(tmux display-message -p -t "$PANE0" -F "$FMT")"
+echo "$DASHTITLE" | grep -q '@pc' && fail "the local dashboard pane must not read as remote: $DASHTITLE" || true
+
+say "error path: the remote's error line becomes the flash, and NO pane is spawned"
+tmux send-keys -t "$PANE0" -l '@'
+wait_grep 'esc cancel' || fail "@ did not re-arm:
+$CAP"
+tmux send-keys -t "$PANE0" -l '2'
+wait_grep 'unknown model profile' || fail "the remote's error line never reached the flash:
+$CAP"
+sleep 1
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq "$PANES_AFTER" ] \
+  || fail "a failed remote spawn must leave no pane behind"
+
+say "esc disarms: the ordinary legend is back and nothing was sent"
+SSH_LINES=$(wc -l < "$SSH_LOG")
+tmux send-keys -t "$PANE0" -l '@'
+wait_grep 'esc cancel' || fail "@ did not arm a third time:
+$CAP"
+tmux send-keys -t "$PANE0" Escape
+wait_grep 'remote spawn cancelled' || fail "esc did not cancel the arming:
+$CAP"
+[ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "a cancelled arming still reached the host"
+
+say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host"

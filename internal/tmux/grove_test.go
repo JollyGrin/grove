@@ -98,11 +98,16 @@ func TestPaneBorderFormat(t *testing.T) {
 	// title when the option is unset so unprofiled panes are visually
 	// unchanged. Guard the exact expansion so a refactor can't silently drop
 	// the fallback (which would blank every unprofiled pane's border).
-	want := "#{pane_index}: #{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}"
+	// grove-199 nests a REMOTE arm in front of it (@grove_remote, the same
+	// OSC-proof carrier): a remote chat pane reads "@<host> · <profile>",
+	// falling back to "chat" for the host's own Claude, because an ssh-attach
+	// pane's own title belongs to the ssh client, not the agent.
+	want := "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat}," +
+		"#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
 	if paneBorderFormat != want {
 		t.Errorf("paneBorderFormat = %q, want %q", paneBorderFormat, want)
 	}
-	for _, needle := range []string{"@grove_profile", "#{pane_title}", "#{pane_index}"} {
+	for _, needle := range []string{"@grove_profile", "@grove_remote", "#{pane_title}", "#{pane_index}"} {
 		if !strings.Contains(paneBorderFormat, needle) {
 			t.Errorf("paneBorderFormat %q missing %q", paneBorderFormat, needle)
 		}
@@ -127,6 +132,15 @@ func TestClosablePane(t *testing.T) {
 		{"orchestrator above a base-1 dashboard allowed", "grove-unbrewed", 2, 1, true},
 		{"non-cockpit session refused", "pr-unbrewed-p2p", 1, 0, false},
 		{"lookalike session refused", "grovething", 1, 0, false},
+		// grove-199: a detached chat session (grove-198) has no dashboard —
+		// its single pane IS the orchestrator, and its seeded brain instructs
+		// `gv orchestrator close` for dispatch-and-dismiss. The first-pane
+		// rule would strand that claude process alive forever.
+		{"chat session's only pane closable", "grove-chat-unbrewed-1", 0, 0, true},
+		{"chat session under pane-base-index 1 closable", "grove-chat-unbrewed-2", 1, 1, true},
+		// …and the exemption is by session name, so a real cockpit dashboard
+		// is still protected right next to it.
+		{"cockpit dashboard still refused", "grove-chatty", 0, 0, false},
 	}
 	for _, tc := range cases {
 		err := closablePane(tc.session, tc.index, tc.first)

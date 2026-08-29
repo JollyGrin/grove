@@ -13,6 +13,8 @@
 #   4. an ssh-255 retry does NOT double-spawn (op-id receipt)
 #   5. no twin / dead twin / unknown profile / no label = hard, non-zero
 #      errors — never a fall-back to the host's global layer
+#   6. (grove-199) the spawned chat can dismiss itself with `gv orchestrator
+#      close` — its single pane is not a dashboard to protect
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -218,6 +220,22 @@ rc=0
 ( cd "$WS" && "$GV" orchestrator close --host pc ) > "$SCRATCH/close.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "orchestrator close --host must exit non-zero"
 grep -q 'only supported for `gv orchestrator new`' "$SCRATCH/close.out" || { cat "$SCRATCH/close.out"; fail "wrong subcommand error"; }
+
+say "grove-199: a chat session self-closes (gv orchestrator close from its pane)"
+# The seeded brain instructs exactly this for dispatch-and-dismiss, and the
+# chat's single pane is its window's FIRST — the dashboard guard used to
+# refuse it and strand the claude process alive on the host forever.
+CHAT_PANE="$(remote_tmux list-panes -t '=grove-chat-chatws-1:chat' -F '#{pane_id}' | head -1)"
+[ -n "$CHAT_PANE" ] || fail "no pane in grove-chat-chatws-1"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" TMUX_PANE="$CHAT_PANE" "$GV" orchestrator close --reason e2e ) \
+  > "$SCRATCH/selfclose.out" 2>&1 || { cat "$SCRATCH/selfclose.out"; fail "a chat session must be able to close itself"; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null || break
+  sleep 0.2
+done
+if remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null; then fail "the chat session survived its self-close"; fi
+[ "$(chat_sessions chatws)" -eq 2 ] || fail "want 2 chat sessions after the self-close, got $(chat_sessions chatws)"
+grep -q '"type":"orchestrator_closed"' "$EVENTS" || fail "the self-close left no orchestrator_closed event in the twin's log"
 
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true

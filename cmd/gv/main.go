@@ -497,7 +497,17 @@ func runRemoteRelay(host, verb string, rest []string) (int, error) {
 // stdout is a writer so a caller can tee the remote's output (the chat
 // spawn parses the session name out of it).
 func runRemoteIdempotent(cfg *config.Config, host, verb string, args []string, opID, manual string, stdout io.Writer) (int, error) {
-	run := func() (int, error) { return remote.Run(cfg, host, verb, args, stdout, os.Stderr) }
+	return runRemoteIdempotentWith(host, opID, manual, os.Stderr, func() (int, error) {
+		return remote.Run(cfg, host, verb, args, stdout, os.Stderr)
+	})
+}
+
+// runRemoteIdempotentWith is that hop with the ssh call and the notice
+// stream injected: the cockpit's `@` spawn (grove-199) relays from inside
+// the tea loop, where the hop must neither write to the real stderr (it
+// would corrupt the alt-screen) nor share the terminal's stdin with the
+// TUI's own key reader — so it passes a buffer and remote.RunDetached.
+func runRemoteIdempotentWith(host, opID, manual string, notice io.Writer, run func() (int, error)) (int, error) {
 	code, err := run()
 	if err != nil {
 		return 0, err
@@ -505,7 +515,7 @@ func runRemoteIdempotent(cfg *config.Config, host, verb string, args []string, o
 	if code != 255 {
 		return code, nil
 	}
-	fmt.Fprintf(os.Stderr, "gv: ssh to %s failed (exit 255) — the remote may or may not have acted; retrying once with the same op id %s\n", host, opID)
+	fmt.Fprintf(notice, "gv: ssh to %s failed (exit 255) — the remote may or may not have acted; retrying once with the same op id %s\n", host, opID)
 	time.Sleep(relayRetryWait)
 	if code, err = run(); err != nil {
 		return 0, err
@@ -553,6 +563,7 @@ func cmdDashboard() error {
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
+	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
 	tui.CloseWorkspace = closeWorkspace
 	tui.SaveHotkeyBinding = func(digit, profile string) error {

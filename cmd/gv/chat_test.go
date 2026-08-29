@@ -218,3 +218,53 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 		t.Fatalf("sessionless receipt = %v, want a refusal", err)
 	}
 }
+
+// --- grove-199: the cockpit's remote spawn ---
+
+// The local pane attaches over ssh to the session the HOST named, with the
+// session exact-anchored (grove-99) so a longer host-side name can't be
+// grabbed instead.
+func TestRemoteChatAttachCmd(t *testing.T) {
+	got := remoteChatAttachCmd("groveremote", "grove-chat-unbrewed-2")
+	want := "ssh -t groveremote tmux attach -t =grove-chat-unbrewed-2"
+	if got != want {
+		t.Errorf("remoteChatAttachCmd = %q, want %q", got, want)
+	}
+	// A dial name with a shell metachar is quoted for the pane's shell.
+	if got := remoteChatAttachCmd("box;rm -rf /", "grove-chat-x-1"); !strings.Contains(got, "'box;rm -rf /'") {
+		t.Errorf("hostile ssh target not quoted: %q", got)
+	}
+}
+
+// The flash the cockpit shows names the host, and the profile when there is
+// one — an unprofiled remote chat says nothing extra, like its local twin.
+func TestRemoteChatFlash(t *testing.T) {
+	if got, want := remoteChatFlash("groveremote", ""), "✓ @groveremote chat pane"; got != want {
+		t.Errorf("remoteChatFlash = %q, want %q", got, want)
+	}
+	if got, want := remoteChatFlash("groveremote", "glm"), "✓ @groveremote chat pane, profile glm"; got != want {
+		t.Errorf("remoteChatFlash = %q, want %q", got, want)
+	}
+}
+
+// A failed spawn flashes the REMOTE's own diagnosis: its stderr line wins,
+// its stdout is the fallback, and a silent failure still says which host and
+// what exit code — never a bare "failed".
+func TestRemoteSpawnError(t *testing.T) {
+	cases := []struct {
+		name           string
+		code           int
+		stderr, stdout string
+		want           string
+	}{
+		{"remote error line", 1, "gv: no workspace 'ws' on @pc — register a twin there\n", "",
+			"@pc: no workspace 'ws' on @pc — register a twin there"},
+		{"stdout fallback", 1, "  \n", "unknown model profile \"glm\"\n", "@pc: unknown model profile \"glm\""},
+		{"silent failure", 255, "", "", "@pc: orchestrator new failed (exit 255)"},
+	}
+	for _, tc := range cases {
+		if got := remoteSpawnError("pc", tc.code, tc.stderr, tc.stdout); got.Error() != tc.want {
+			t.Errorf("%s: remoteSpawnError = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

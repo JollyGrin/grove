@@ -85,6 +85,18 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-08-29 · `pane-border-style` is a PANE option since tmux 3.2, and
+  `#{?…}` conditionals nest** (grove-199): `tmux set-option -p -t %N
+  pane-border-style fg=colour110` is accepted and read back by
+  `show-options -p` on 3.4 — so a single pane's border can be colored
+  without touching the window-wide option every other pane shares. Verified
+  live on an isolated server, together with a two-level
+  `pane-border-format` (`#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},…}}`):
+  tmux parses the commas inside the nested `#{ }` correctly, so a remote
+  chat pane reads `@host · profile` while local panes are byte-identical to
+  before. Both stay best-effort in the code — an older tmux rejects
+  `set-option -p` and a cosmetic tag must never fail a spawn.
+
 - **2026-08-22 · hooks match on the DERIVED `tasks.json`, so a scripted
   hook right after `gv grab` is a silent no-op until something Loads**
   (grove-177 e2e): `hooks.Receive` finds the task by cwd via
@@ -395,6 +407,28 @@
   ESTIMATES of relative effort, never billing.
 
 ## Remote / attach architecture (verified against t3code source)
+
+- **2026-08-29 · an ssh hop fired from inside the TUI must not inherit
+  `os.Stdin`, and must not write to the real stderr** (grove-199):
+  `remote.Run` hands ssh `os.Stdin` — fine for a CLI verb, but inside the
+  bubbletea loop ssh and the cockpit's key reader then race for the
+  operator's keystrokes, and anything ssh's stderr prints (the grove-186
+  255-retry notice included) lands on top of the alt-screen. The `@` spawn
+  therefore uses `remote.RunDetached` (stdin nil) with both streams
+  captured into buffers, through `runRemoteIdempotentWith` — the same
+  idempotent hop with its ssh call and notice stream injected. Same class
+  as the existing `remoteSendCmd`, which had quietly sidestepped it by
+  building its own argv.
+- **2026-08-29 · the cockpit dashboard guard blocked a chat's
+  self-close** (grove-199, found in the #200 review): `closablePane`
+  refuses a window's FIRST pane as "the dashboard", but a detached
+  `grove-chat-<label>-<n>` session (grove-198) is one window with one pane
+  and that pane IS the orchestrator — whose seeded brain instructs
+  `gv orchestrator close` for dispatch-and-dismiss. A fire-and-forget
+  remote chat grabbed its ticket, failed to close with a message about
+  protecting a dashboard that does not exist there, and left its claude
+  process alive on the host indefinitely. The guard now exempts sessions
+  named `grove-chat-*` by prefix; cockpit dashboards are untouched.
 
 - **2026-08-26 · live handoff shakedown (grove-187, Mac ↔ Frankfurt VPS):
   a remote host is GLOBAL-layer only — repos AND `provider:` must live in

@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/remote"
@@ -247,4 +248,119 @@ func chatProfileSuffix(profile string) string {
 		return ""
 	}
 	return ", profile " + profile
+}
+
+// --- grove-199: the cockpit's `@`-armed remote spawn ---
+
+// remoteChatAttachCmd is the local pane's command: attach, over ssh, to the
+// chat session the host just spawned. The session name is exact-anchored
+// (`=`, the grove-99 target rule) so a host-side session whose name merely
+// extends this one can never be attached instead, and both words are quoted
+// for the login shell ssh hands the command to.
+func remoteChatAttachCmd(sshTarget, session string) string {
+	return "ssh -t " + remote.Quote(sshTarget) + " tmux attach -t " + remote.Quote(tmux.Exact(session))
+}
+
+// remoteChatFlash is the cockpit flash for a spawned remote chat.
+func remoteChatFlash(host, profile string) string {
+	return "✓ @" + host + " chat pane" + chatProfileSuffix(profile)
+}
+
+// remoteSpawnError renders the failure the cockpit flashes: the REMOTE's own
+// first error line where there is one (a missing twin, an unknown profile,
+// ssh's own 255), because that line is the whole diagnosis and the flash is
+// one line wide.
+func remoteSpawnError(host string, code int, stderr, stdout string) error {
+	if line := firstNonEmptyLine(stderr); line != "" {
+		return fmt.Errorf("@%s: %s", host, strings.TrimPrefix(line, "gv: "))
+	}
+	if line := firstNonEmptyLine(stdout); line != "" {
+		return fmt.Errorf("@%s: %s", host, line)
+	}
+	return fmt.Errorf("@%s: orchestrator new failed (exit %d)", host, code)
+}
+
+// firstNonEmptyLine returns the first line with visible content, "" when the
+// whole output is blank.
+func firstNonEmptyLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// spawnRemoteChat is the cockpit's `@`-armed spawn (grove-199), injected into
+// the TUI as SpawnRemoteOrchestrator. Two moves, in this order:
+//
+//  1. relay grove-198's verb — the chat is created ON the host, in its twin
+//     of this workspace, and the host answers with the session name;
+//  2. only then open a LOCAL pane running `ssh -t <host> tmux attach` on that
+//     session, tiled into the cockpit window like any local chat.
+//
+// Order matters: a relay that fails (no twin, unknown profile, dead ssh)
+// returns the remote's own error line and NOTHING is spawned here — a pane
+// attached to a session that was never created is a dead pane the operator
+// has to notice and close.
+//
+// Both ssh streams are captured, never streamed: this runs inside the tea
+// loop, where a stray write to the terminal corrupts the alt-screen.
+func spawnRemoteChat(cfg *config.Config, host, profile string) (string, error) {
+	h, err := cfg.Host(host)
+	if err != nil {
+		return "", err
+	}
+	label := wsLabel()
+	if label == "" {
+		return "", fmt.Errorf("@%s: no ambient workspace — a remote chat spawns into the HOST's twin of this one, so run the cockpit from inside a workspace", host)
+	}
+	session := cockpitSessionFor(ambient.ws)
+	if !tmux.SessionExists(session) {
+		return "", fmt.Errorf("cockpit session %s is not running", session)
+	}
+	opID := remote.NewOpID()
+	var out, errBuf bytes.Buffer
+	code, err := runRemoteIdempotentWith(host, opID,
+		chatManualRetry(opID, host, label, profile), &errBuf,
+		func() (int, error) {
+			return remote.RunDetached(cfg, host, "orchestrator",
+				chatHopArgs(opID, host, label, profile), &out, &errBuf)
+		})
+	if err != nil {
+		return "", fmt.Errorf("@%s: %v", host, err)
+	}
+	if code != 0 {
+		return "", remoteSpawnError(host, code, errBuf.String(), out.String())
+	}
+	remoteSession := remote.ParseChatSession(out.String())
+	if remoteSession == "" {
+		return "", fmt.Errorf("@%s: spawned, but the host printed no attach line — attach by hand over ssh", host)
+	}
+	// The pane's cwd is only the shell's: the agent lives on the host. The
+	// workspace root is the one directory guaranteed to exist here.
+	dir := ambient.ws.Root
+	paneID, err := tmux.SpawnPane(session, dir, remoteChatAttachCmd(h.SSH, remoteSession))
+	if err != nil {
+		return "", err
+	}
+	// Pane identity (grove-199): remote panes wear "@<host> · <profile>" and a
+	// distinct border color, so a glance separates the chats running here from
+	// the ones running there. Cosmetic — a tmux too old for pane options never
+	// fails the spawn.
+	if err := tmux.SetPaneRemote(paneID, host); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not tag remote chat pane with host %q: %v\n", host, err)
+	}
+	if profile != "" {
+		if err := tmux.SetPaneProfile(paneID, profile); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not tag remote chat pane with profile %q: %v\n", profile, err)
+		}
+	}
+	if err := tmux.SetPaneRemoteBorder(paneID); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not color the remote chat pane's border: %v\n", err)
+	}
+	if err := tmux.ShowPaneBorders(tmux.Exact(session) + ":cockpit"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not show cockpit pane borders: %v\n", err)
+	}
+	return remoteChatFlash(host, profile), nil
 }
