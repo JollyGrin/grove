@@ -95,7 +95,7 @@ const usage = `gv — grove
   gv untrack <ticket> [--rm] [--rm-remote]    stop tracking (git untouched unless --rm)
   gv sweep [--dry-run|--json]                 per-row-confirmed cleanup offers: merged→done,
                                               abandoned→untrack, idle→pause, orphan process→kill
-  gv park                                     kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
+  gv park [--chats]                           kill this workspace's cockpit session (free memory) — resume with gv + gv adopt
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new [--profile p]           add an orchestrator chat pane (O in the TUI; ) for a profiled one);
                                               --profile opens it on a model profile instead of Claude
@@ -573,7 +573,22 @@ func cmdDashboard() error {
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
-	tui.CloseWorkspace = closeWorkspace
+	// The cockpit's X hotkey never reaps chats (grove-203): it kills the
+	// session it is drawn in, so a warning printed after the fact would have
+	// nowhere to land — the modal names them BEFORE the keypress instead, and
+	// the parked event records them either way.
+	tui.CloseWorkspace = func(sd, label string) error {
+		chats, _ := liveChats(label)
+		return closeWorkspace(sd, label, chats, false)
+	}
+	tui.LiveChats = func(label string) []string {
+		chats, _ := liveChats(label)
+		names := make([]string, len(chats))
+		for i, c := range chats {
+			names[i] = c.Session
+		}
+		return names
+	}
 	tui.SaveHotkeyBinding = func(digit, profile string) error {
 		// Workspace-scoped like the orchestrator block it lives in (LoadAt
 		// drops the global orchestrator section inside a workspace).
@@ -652,16 +667,94 @@ func cockpitSessionForLabel(label string) string {
 
 // closeWorkspace parks a workspace (grove-33): it logs the durable
 // EvWorkspaceParked BEFORE killing the shared grove-<label> session, so the
-// record survives — kill-session takes down the cockpit, the orchestrator,
-// and every worker in one stroke, freeing their memory. Nothing is deleted
-// and no task terminal state is touched: bare `gv` rebuilds the cockpit and
-// `gv adopt <ticket>` revives a worker. Injected into the TUI as
-// tui.CloseWorkspace.
-func closeWorkspace(stateDir, label string) error {
-	if err := state.Append(stateDir, state.Event{Type: state.EvWorkspaceParked}); err != nil {
+// record survives — kill-session takes down the cockpit, the orchestrator
+// pane, and every worker window in that session, freeing their memory.
+// Nothing is deleted and no task terminal state is touched: bare `gv`
+// rebuilds the cockpit and `gv adopt <ticket>` revives a worker. Injected
+// into the TUI as tui.CloseWorkspace.
+//
+// What it does NOT reach (grove-203): the workspace's detached orchestrator
+// chats. Since grove-198 those are their own `grove-chat-<label>-<n>`
+// sessions — deliberately outside grove-<label>, so an attaching ssh client
+// cannot resize the cockpit's shared windows and the chat outlives the ssh
+// drop — so one kill-session is no longer "one stroke". chats is what
+// liveChats found; killChats reaps them too (`gv park --chats`). Either way
+// their names go into the parked event, so a park that leaves claude
+// processes running on the host is recorded rather than silent — a remote
+// host has no cockpit row to notice them from.
+func closeWorkspace(stateDir, label string, chats []tmux.ChatSession, killChats bool) error {
+	if err := state.Append(stateDir, parkedEvent(chats, killChats)); err != nil {
 		return err
 	}
+	// Chats first: killing grove-<label> can take down this very process
+	// (the cockpit X hotkey, or `gv park` run from inside a worker window),
+	// so anything sequenced after it may never run.
+	if killChats {
+		for _, c := range chats {
+			if err := tmux.KillSession(c.Session); err != nil {
+				return fmt.Errorf("could not kill chat session %s: %w", c.Session, err)
+			}
+		}
+	}
 	return tmux.KillSession(cockpitSessionForLabel(label))
+}
+
+// parkedEvent builds the durable park record (grove-33). Its chat fields
+// (grove-203) are the audit trail for what park did NOT stop: `chats` names
+// every detached chat that was live at park time, and `chats_killed` marks
+// the `--chats` runs that reaped them. A park with no chats writes no Data
+// at all, so the pre-grove-203 record shape is unchanged.
+func parkedEvent(chats []tmux.ChatSession, killChats bool) state.Event {
+	ev := state.Event{Type: state.EvWorkspaceParked}
+	if len(chats) == 0 {
+		return ev
+	}
+	names := make([]string, len(chats))
+	for i, c := range chats {
+		names[i] = c.Session
+	}
+	ev.Data = map[string]string{"chats": strings.Join(names, ",")}
+	if killChats {
+		ev.Data["chats_killed"] = "true"
+	}
+	return ev
+}
+
+// parkChatLines renders what park tells the operator about the chats it
+// found — one line each, plus a closing line naming the escape hatch when
+// they are being left behind. Empty for a workspace with no chats, so the
+// ordinary park keeps its two-line output.
+func parkChatLines(chats []tmux.ChatSession, killChats bool) []string {
+	if len(chats) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(chats)+1)
+	for _, c := range chats {
+		if killChats {
+			lines = append(lines, fmt.Sprintf("  ✗ chat %s (pid %d) — killed", c.Session, c.PID))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  ▸ chat %s still running (pid %d, %s) — %s",
+			c.Session, c.PID, c.Command, remote.ChatAttachLine(c.Session)))
+	}
+	if !killChats {
+		lines = append(lines, fmt.Sprintf("  %d chat session(s) survive this park — they are their own tmux sessions. `gv park --chats` reaps them; `gv audit` lists them.", len(chats)))
+	}
+	return lines
+}
+
+// liveChats enumerates the workspace's detached orchestrator chats
+// (grove-203). The registry read is what separates a chat from a cockpit
+// whose label merely looks like one, so its failure is returned rather than
+// swallowed — but every caller treats it as a warning: refusing to park, or
+// failing an audit, because a registry file is unreadable would be worse
+// than the under-report.
+func liveChats(label string) ([]tmux.ChatSession, error) {
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return nil, err
+	}
+	return tmux.ChatSessions(label, isCockpit), nil
 }
 
 // cmdPark is the CLI twin of the cockpit X hotkey (grove-33): park the
@@ -669,13 +762,31 @@ func closeWorkspace(stateDir, label string) error {
 // dispatch); run from inside the session it kills, the print may not land
 // because the pane dies with the session — the parked event is durable
 // either way.
+//
+// Chats survive a park by default (grove-203, "propose then dispose"): they
+// are long-lived by design and a chat is the operator's own conversation,
+// not a worker to reap on a schedule. So park NAMES each one it is leaving
+// behind, with the pid and the attach line, and `--chats` is the explicit
+// opt-in that kills them too.
 func cmdPark(args []string) error {
-	session := cockpitSessionForLabel(wsLabel())
+	fs := flag.NewFlagSet("park", flag.ExitOnError)
+	killChats := fs.Bool("chats", false, "also kill this workspace's detached orchestrator chats (grove-chat-<label>-<n>); by default they survive the park")
+	parseAnywhere(fs, args)
+
+	label := wsLabel()
+	session := cockpitSessionForLabel(label)
 	if !tmux.SessionExists(session) {
 		return fmt.Errorf("%s is not running — nothing to park", session)
 	}
+	chats, err := liveChats(label)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not enumerate this workspace's chat sessions: %v\n", err)
+	}
 	fmt.Printf("⏸ parking %s — state saved; resume with gv (then gv adopt <ticket>)\n", session)
-	return closeWorkspace(stateDir(), wsLabel())
+	for _, line := range parkChatLines(chats, *killChats) {
+		fmt.Println(line)
+	}
+	return closeWorkspace(stateDir(), label, chats, *killChats)
 }
 
 // cockpitTitleFor: the outer terminal-tab title for a cockpit — the
@@ -2053,6 +2164,14 @@ func cmdAudit(args []string) error {
 		return err
 	}
 	rep := audit.Gather(cfg, tasks, stateDir())
+	// grove-203: the workspace's detached chats are not tasks and live in
+	// their own tmux sessions, so nothing in Gather's reconciliation can
+	// see them — and nothing else on the machine reports them either.
+	chats, chatErr := liveChats(wsLabel())
+	if chatErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not enumerate chat sessions: %v\n", chatErr)
+	}
+	rep.ChatSessions = chats
 
 	if *asJSON {
 		return emitJSON("report", rep)
@@ -2098,6 +2217,18 @@ func cmdAudit(args []string) error {
 		for _, p := range rep.WorktreeProcesses {
 			fmt.Printf("  pid %-8d %-11s cpu %5.1f%%  rss %6.1f MB  elapsed %-10s %s\n",
 				p.PID, p.Ticket, p.CPUPct, float64(p.RSSKB)/1024, p.Elapsed, truncateLine(p.Args, 70))
+		}
+	}
+	if len(rep.ChatSessions) > 0 {
+		fmt.Printf("\nCHAT SESSIONS (detached orchestrator chats — their own tmux sessions, NOT killed by gv park; report only):\n")
+		for _, c := range rep.ChatSessions {
+			attached := ""
+			if c.Attached {
+				attached = "  (attached)"
+			}
+			fmt.Println(strings.TrimRight(fmt.Sprintf("  %-24s pid %-8d %-10s up %-8s%s",
+				c.Session, c.PID, c.Command, age(c.Created), attached), " "))
+			fmt.Printf("    %s   (or reap them all with gv park --chats)\n", remote.ChatAttachLine(c.Session))
 		}
 	}
 	if len(rep.StalePrompts) > 0 {

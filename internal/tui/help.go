@@ -41,7 +41,7 @@ var (
 		{"$", "costs: spend + account tabs — per-ticket spend, ledger, OpenRouter balance"},
 		{"*", "effects: cycle ambient effects off → calm → full (runtime only)"},
 		{"g", "gardens: the almanac — one garden per day, h/l walk days"},
-		{"X", "park: stop workers + orchestrator + cockpit; state stays on disk"},
+		{"X", "park: stop workers + orchestrator + cockpit (chats keep running); state stays on disk"},
 		{"r", "refresh PR states now (also polled every 30s)"},
 		{"R", "remote: fold every configured host's fleet in (one ssh per host per press; rows tagged @host)"},
 		{"q", "quit the cockpit — workers keep running"},

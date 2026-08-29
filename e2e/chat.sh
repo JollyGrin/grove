@@ -17,6 +17,10 @@
 #      close` — its single pane is not a dashboard to protect — while a
 #      workspace whose LABEL collides with the chat naming (`chat-app` ⇒
 #      session `grove-chat-app`) keeps its dashboard guard
+#   7. (grove-203) chat sessions are reapable: `gv audit` reports them,
+#      `gv park` names the ones it leaves running, `gv park --chats` kills
+#      them — and neither path touches the colliding `grove-chat-app`
+#      cockpit
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -260,6 +264,49 @@ grep -q "first pane" "$SCRATCH/collide.out" || { cat "$SCRATCH/collide.out"; fai
 remote_tmux has-session -t '=grove-chat-app' 2>/dev/null || fail "the chat-app cockpit was killed by the chat exemption"
 grep -q '"type":"orchestrator_closed"' "$COLLIDE/.grove/state/events.jsonl" 2>/dev/null \
   && fail "a refused close must log nothing" || true
+
+say "grove-203: gv audit sees the chats; gv park names them; --chats reaps them"
+# park kills grove-<label> — which since grove-198 does NOT contain the chat
+# sessions, so two claude processes used to survive it invisibly. Live now:
+# grove-chat-chatws-2 and -3 (chatws-1 self-closed above).
+[ "$(chat_sessions chatws)" -eq 2 ] || fail "precondition: want 2 live chats, got $(chat_sessions chatws)"
+remote_tmux new-session -d -s grove-chatws -n cockpit -c "$WS"
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" audit ) > "$SCRATCH/audit.out" 2>&1
+cat "$SCRATCH/audit.out"
+grep -q 'CHAT SESSIONS' "$SCRATCH/audit.out" || fail "gv audit must report the workspace's live chat sessions"
+grep -q 'grove-chat-chatws-2' "$SCRATCH/audit.out" || fail "audit missed chat 2"
+grep -q 'grove-chat-chatws-3' "$SCRATCH/audit.out" || fail "audit missed chat 3"
+grep -q 'grove-chat-app' "$SCRATCH/audit.out" && fail "audit reported another workspace's COCKPIT as a chat" || true
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" audit --json ) > "$SCRATCH/audit.json" 2>&1
+grep -q '"chat_sessions"' "$SCRATCH/audit.json" || fail "audit --json must carry chat_sessions"
+grep -q '"session": "grove-chat-chatws-2"' "$SCRATCH/audit.json" || fail "audit --json chat_sessions must name the session"
+
+say "park leaves the chats running — and says so"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" park ) > "$SCRATCH/park.out" 2>&1
+cat "$SCRATCH/park.out"
+grep -q 'chat grove-chat-chatws-2 still running' "$SCRATCH/park.out" || fail "park must name each chat it leaves behind"
+grep -q "attach: tmux attach -t '=grove-chat-chatws-3'" "$SCRATCH/park.out" || fail "the survivor line needs a paste-able attach hint"
+grep -q '2 chat session(s) survive this park' "$SCRATCH/park.out" || fail "park must count the survivors"
+grep -q 'gv park --chats' "$SCRATCH/park.out" || fail "park must name the flag that reaps them"
+if remote_tmux has-session -t '=grove-chatws' 2>/dev/null; then fail "park did not kill the cockpit session"; fi
+[ "$(chat_sessions chatws)" -eq 2 ] || fail "a default park must NOT kill the chats, got $(chat_sessions chatws)"
+grep -q '"chats":"grove-chat-chatws-2,grove-chat-chatws-3"' "$EVENTS" \
+  || fail "the parked event must durably record what park left running"
+grep -q '"chats_killed"' "$EVENTS" && fail "a default park must not claim it killed anything" || true
+
+say "gv park --chats reaps them, and the colliding cockpit survives"
+remote_tmux new-session -d -s grove-chatws -n cockpit -c "$WS"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" park --chats ) > "$SCRATCH/park2.out" 2>&1
+cat "$SCRATCH/park2.out"
+grep -q 'chat grove-chat-chatws-2 (pid [0-9]*) — killed' "$SCRATCH/park2.out" || fail "--chats must name what it killed"
+grep -q 'survive this park' "$SCRATCH/park2.out" && fail "--chats leaves nothing behind" || true
+[ "$(chat_sessions chatws)" -eq 0 ] || fail "--chats must kill every chat, $(chat_sessions chatws) left"
+if remote_tmux has-session -t '=grove-chatws' 2>/dev/null; then fail "park --chats did not kill the cockpit"; fi
+grep -q '"chats_killed":"true"' "$EVENTS" || fail "the parked event must record the reap"
+# The name-shape collision, on the KILLING path this time: grove-chat-app is
+# the REGISTERED cockpit of `chat-app`, not chat <n> of anything.
+remote_tmux has-session -t '=grove-chat-app' 2>/dev/null || fail "park --chats killed a registered COCKPIT that merely looks like a chat"
 
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true

@@ -9,6 +9,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
@@ -303,5 +304,56 @@ func TestCockpitSessionCheck(t *testing.T) {
 		if got := isCockpit(tc.session); got != tc.want {
 			t.Errorf("isCockpit(%q) = %v, want %v — %s", tc.session, got, tc.want, tc.why)
 		}
+	}
+}
+
+// grove-203: park must never leak a chat silently. Two halves — what the
+// durable event records, and what the operator is told.
+func TestParkedEventRecordsChats(t *testing.T) {
+	if ev := parkedEvent(nil, false); ev.Data != nil {
+		t.Errorf("a park with no chats must keep the pre-grove-203 record shape, got Data %v", ev.Data)
+	}
+	chats := []tmux.ChatSession{
+		{Session: "grove-chat-unbrewed-1", PID: 201, Command: "claude"},
+		{Session: "grove-chat-unbrewed-2", PID: 202, Command: "node"},
+	}
+	ev := parkedEvent(chats, false)
+	if ev.Type != state.EvWorkspaceParked {
+		t.Fatalf("event type = %q", ev.Type)
+	}
+	if got := ev.Data["chats"]; got != "grove-chat-unbrewed-1,grove-chat-unbrewed-2" {
+		t.Errorf("chats = %q, want both session names", got)
+	}
+	if _, ok := ev.Data["chats_killed"]; ok {
+		t.Errorf("a default park kills no chats — chats_killed must be absent: %v", ev.Data)
+	}
+	if got := parkedEvent(chats, true).Data["chats_killed"]; got != "true" {
+		t.Errorf("chats_killed = %q, want true for gv park --chats", got)
+	}
+}
+
+func TestParkChatLines(t *testing.T) {
+	if got := parkChatLines(nil, false); got != nil {
+		t.Errorf("no chats = no extra output, got %v", got)
+	}
+	chats := []tmux.ChatSession{{Session: "grove-chat-unbrewed-1", PID: 201, Command: "claude"}}
+
+	left := strings.Join(parkChatLines(chats, false), "\n")
+	for _, want := range []string{"grove-chat-unbrewed-1", "pid 201", "still running", "gv park --chats", "gv audit"} {
+		if !strings.Contains(left, want) {
+			t.Errorf("a leave-behind park must mention %q:\n%s", want, left)
+		}
+	}
+	// The attach line is quoted (grove-207) — the operator pastes it into zsh.
+	if !strings.Contains(left, "tmux attach -t '=grove-chat-unbrewed-1'") {
+		t.Errorf("the survivor line must carry a paste-able attach hint:\n%s", left)
+	}
+
+	killed := strings.Join(parkChatLines(chats, true), "\n")
+	if !strings.Contains(killed, "killed") {
+		t.Errorf("--chats must say what it killed:\n%s", killed)
+	}
+	if strings.Contains(killed, "survive") {
+		t.Errorf("--chats leaves nothing behind — no survivor line:\n%s", killed)
 	}
 }

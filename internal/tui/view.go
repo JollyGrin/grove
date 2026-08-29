@@ -326,6 +326,13 @@ func (m Model) viewFooter() string {
 		// and how to bring it back (grove-33).
 		prompt := fmt.Sprintf("park %s? stops %d worker(s) + orchestrator + cockpit · state saved on disk · resume: gv, then gv adopt <ticket> ",
 			m.sessionName(), len(m.localTasks))
+		// grove-203: chat sessions are their OWN tmux sessions, so park
+		// leaves them running. Say so here — this modal is the last thing
+		// on screen before the dashboard dies with the session.
+		if n := len(m.parkChats); n > 0 {
+			prompt += fmt.Sprintf("· %d chat(s) KEEP RUNNING (%s) — gv park --chats reaps them ",
+				n, strings.Join(m.parkChats, " "))
+		}
 		line := " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
