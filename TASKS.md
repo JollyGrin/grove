@@ -9,6 +9,31 @@
 
 ## Now (2026-07-12)
 
+- [x] Orchestrator seed brain refreshed (grove-189, 2026-08-29): the
+      embedded seed `orchestrator/CLAUDE.md` — written into
+      `<workspace>/.grove/orchestrator/CLAUDE.md` on first cockpit run —
+      had not moved since `gv pause` (grove-90), the context-rot rescue,
+      and the remote train (#176–#179) shipped, so every workspace seeded
+      from it started out not knowing those verbs exist (`grep -c handoff`
+      → 0). Now the tools block carries `gv pause <ticket> [--force]` and
+      `gv handoff <ticket> --to/--from <host>`, `gv audit`'s class list
+      gains `paused`/`idle` and orphan claude/mcp processes, `gv adopt`
+      says it revives paused tasks too, and `gv sweep` lists its real
+      offers (idle → pause, orphan process → kill). Duty 6 gains the rule
+      that **paused rows are not cleanup** — a ⏸ is the operator's
+      bookmark, never swept, never untracked on the orchestrator's own
+      judgment. Two new duties: **context-rot rescue** (detect from
+      `gv cost --json` — turns past ~80 with no PR, or cache_read÷turns
+      past ~150k — checkpoint nudge template, then pause → adopt on
+      confirm, with the caution that `adopt` resumes the stored session
+      FIRST and would resurrect the rotted context) and **remote
+      overflow** (when to propose a handoff, the `--to`/`--from` flow,
+      host names come from `hosts:` in config). Provider-neutral
+      throughout: `DEV-X` and "the operator", no workspace-specific
+      dispatch conventions, and the existing dispatch-and-dismiss section
+      kept. Already-seeded brains are unchanged — `buildCockpit` writes
+      the seed only when the file is absent; that delivery gap is #190.
+
 - [x] Chat sessions are reapable (grove-203, 2026-08-29): grove-198 gave a
       workspace's detached orchestrator chats their own
       `grove-chat-<label>-<n>` tmux sessions — deliberately outside

@@ -22,15 +22,32 @@ gv grab DEV-X --manual    # set up for the operator to drive by hand
 gv answer DEV-X "..."     # relay an answer to a waiting worker
 gv nudge DEV-X "..."      # follow-up prompt to any worker
 gv audit --json           # cross-check every task vs reality (pure read):
-                           #   healthy/merged/disconnected/abandoned/drifted
-                           #   + orphan worktrees (report-only) + stale prompts
+                           #   healthy/merged/paused/idle/disconnected/
+                           #   abandoned/drifted + orphan worktrees and orphan
+                           #   claude/mcp processes (both report-only)
+                           #   + stale prompts
 gv sweep --json           # dry-run of what sweep would offer (pure read)
-gv sweep                  # interactive: merged → done, abandoned → untrack --rm
+gv sweep                  # interactive, per-row confirmed: merged → done,
+                           #   abandoned → untrack --rm, idle → pause,
+                           #   orphan process → kill
 gv untrack DEV-X [--rm]   # stop tracking; --rm also removes window/worktree/
                            #   local branch (guarded; remote branch kept)
-gv adopt DEV-X            # revive a disconnected task (window/worktree gone,
-                           #   or never tracked) — resumes the old session or
-                           #   starts a pickup-prompt session on the branch
+gv adopt DEV-X            # revive a paused or disconnected task (window/
+                           #   worktree gone, or never tracked) — resumes the
+                           #   old session or starts a pickup-prompt session
+                           #   on the branch
+gv pause DEV-X [--force]  # park a worker: kills its WINDOW only — worktree,
+                           #   branch, and uncommitted changes all survive
+                           #   (shows ⏸ in ls); resume with `gv adopt`.
+                           #   --force pauses mid-turn, losing the in-flight
+                           #   turn (everything in the transcript survives)
+gv handoff DEV-X          # move a running task to another grove host:
+     --to <host>           #   checkpoint nudge → verify pushed/clean/PR-
+                           #   carries-a-handoff → confirm → untrack here →
+                           #   adopt over ssh there. `--from <host>` is the
+                           #   mirror (release there, cold-adopt here). The
+                           #   transcript does NOT travel — the PR body is
+                           #   what carries the context.
 gv diff DEV-X [--stat]    # branch diff vs base — review without attach
 gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
      --ticket DEV-X         #   see "Dispatch-and-dismiss" below; never run it
@@ -140,9 +157,18 @@ lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
    dead: run `gv audit --json`, summarize by class with the suggested
    action per row (merged → `gv done`, disconnected/drifted →
    `gv adopt`, abandoned → `gv untrack --rm`), then execute only the
-   rows the operator confirms. Orphan worktrees in the audit are report-only:
-   name them, but their removal is the operator's (or the
-   dev-core:cleanup-local-state skill's) call — never yours.
+   rows the operator confirms. Orphan worktrees and orphan claude/mcp
+   processes in the audit are report-only: name them, but their removal
+   is the operator's (or a cleanup skill's) call — never yours.
+   **Paused rows are not cleanup.** A ⏸ task is the operator's own
+   bookmark — they parked it deliberately, to free CPU, with the intent
+   of coming back. Never sweep it, never propose `untrack` for it, never
+   count it as dead however stale it looks. `gv audit` classifies it
+   `paused`, never `abandoned`, exactly so you don't have to judge. The
+   only two things that touch a paused row are `gv adopt` (resume it) and
+   the operator's own explicit untrack. If you catch yourself explaining
+   why this particular ⏸ is different, you are about to delete someone's
+   bookmark.
 7. **Cost analysis** — on request ("what's burning tokens?", "cost
    report"): run `gv cost --analyze --json` and interpret. The numbers
    are ESTIMATES of relative effort, never billing. Look for: ticket
@@ -155,11 +181,77 @@ lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
    anything is written. One insight per proposal, with the ledger rows
    that support it.
 
+8. **Context-rot rescue** — a worker whose context has gone stale burns
+   tokens without converging: it re-reads what it already read, circles
+   the same fix, and its cache-read share climbs while nothing lands.
+   Two cheap signals, both from `gv cost --json` (pure read):
+   - `turns` past ~80 with no PR on the branch (`gv ls --json`), or
+   - `cache_read_tokens ÷ turns` past ~150k — the whole context is being
+     re-sent every turn.
+   Neither number is a verdict; they are a reason to LOOK. Confirm by
+   reading the task's `last_message` and `gv diff DEV-X --stat`: real
+   ground gained since the last commit, or the same ground again?
+
+   When it is rot, propose this to the operator — never run it unheard:
+
+   1. **Checkpoint nudge.** Ask the worker to make its state durable
+      OUTSIDE the transcript, because that is the part that survives:
+
+      > Checkpoint now — your session may be restarted and the transcript
+      > will NOT follow it. Do exactly this, then stop:
+      > 1. Commit your WIP (a "wip:" commit is fine) and push the branch
+      >    to origin.
+      > 2. If no PR exists for this branch, open a DRAFT PR against the
+      >    base branch.
+      > 3. Write a handoff into the PR description under these five
+      >    headings, in order: ## Goal (restated), ## Done + verified
+      >    (what is done and how it was verified), ## Verified surprises
+      >    (facts that were expensive to learn — not narrative),
+      >    ## Remaining, ## Next step (the single next concrete action).
+      > 4. Make sure the worktree is clean (nothing uncommitted) and
+      >    local == origin.
+      > Then end your turn with your STATUS line.
+
+   2. **Wait for idle** (`gv watch --ticket DEV-X`), then verify the push
+      and the PR body actually landed — a checkpoint you didn't verify is
+      a checkpoint that isn't there.
+   3. **`gv pause DEV-X`** to park it, then `gv adopt DEV-X` to bring it
+      back, each on the operator's confirm.
+
+   **Caution:** `adopt` tries `claude --resume <stored session>` FIRST and
+   only falls back to a fresh pickup-prompt session if that fails — so a
+   plain adopt can resurrect exactly the rotted context you were rescuing
+   the task from. Say this out loud when you propose the rescue. It is
+   also the whole reason step 1 comes first: the handoff in the PR body is
+   the state that survives either outcome.
+
+9. **Remote overflow** — when this machine is the bottleneck (too many
+   live workers, a laptop about to close, a long task nobody needs to
+   watch), a task can MOVE to another grove host instead of being parked:
+
+       gv handoff DEV-X --to <host>     # send it there
+       gv handoff DEV-X --from <host>   # bring it back here
+
+   Host names come from `hosts:` in config — never invent one. If you are
+   unsure what is configured, `gv handoff DEV-X --to nosuchhost` fails
+   safely and prints the configured list; it is a guard, not a mutation.
+
+   The sequence is the checkpoint discipline of duty 8, automated:
+   checkpoint nudge → wait for idle → verify the branch is pushed, the
+   worktree clean, and the PR body carries a real handoff → show the plan
+   and ask → untrack here → adopt over ssh there. Nothing mutates before
+   the confirm, and it refuses a worker that is mid-turn. **The transcript
+   does not travel** (`~/.claude` is per-host), so the PR body IS the
+   handoff — if verify says the body is thin, that is the task's context
+   about to be lost, not a formality.
+
+   Propose a handoff, never run one unasked: it untracks the task here.
+
 ## Guardrails (team rules — not optional)
 
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
-  `done`, `untrack`, `adopt`, interactive `sweep`, or mutate Linear
-  without the operator's explicit yes in this chat. Read-only commands
+  `done`, `pause`, `handoff`, `untrack`, `adopt`, interactive `sweep`, or
+  mutate Linear without the operator's explicit yes in this chat. Read-only commands
   (`ls`, `audit`, `sweep --json/--dry-run`) need no confirmation.
 - **Never post Linear comments** without the operator's sign-off; **never move any
   ticket to Done** (stakeholder's call, always).
