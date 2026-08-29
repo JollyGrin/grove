@@ -330,6 +330,18 @@ func (m Model) viewFooter() string {
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
 	}
+	if m.armedHost != "" {
+		// grove-199: the armed prompt REPLACES the legend for exactly one
+		// keypress — the keys it lists are the only ones that spawn, and
+		// anything else cancels, so showing the ordinary legend underneath
+		// would advertise meanings that key no longer has.
+		line := " " + sWaiting.Render("@"+m.armedHost) + sFoot.Render(" ▸ ") +
+			sKey.Render("0") + sFoot.Render(" chat") + sDim.Render(" · ") +
+			sKey.Render("1-8") + sFoot.Render(" profile") + sDim.Render(" · ") +
+			sKey.Render(")") + sFoot.Render(" picker") + sDim.Render(" · ") +
+			sKey.Render("esc") + sFoot.Render(" cancel")
+		return truncPad(line, m.width)
+	}
 	// The one-line legend (grove-72): hints drop by keep-priority to fit,
 	// so footerHeight is a constant 1. The flash is the only surface errors
 	// have — when it doesn't fit beside the included hints, optional hints
@@ -438,8 +450,16 @@ func (m Model) viewProfilePick() string {
 		rows = append(rows, truncPad(line, w))
 	}
 
-	body := sPanelTitleFocus.Render("PICK A PROFILE") +
-		sChrome.Render("  (enter spawns · a digit binds the highlighted row)") +
+	// grove-199: the same picker serves the local `)` and the `@`-armed
+	// remote spawn — the banner is the only thing that says which, so it
+	// sits in the title where the eye already is.
+	title := sPanelTitleFocus.Render("PICK A PROFILE")
+	hint := "  (enter spawns · a digit binds the highlighted row)"
+	if m.armedHost != "" {
+		title += sWaiting.Render("  @" + m.armedHost)
+		hint = "  (enter spawns it ON @" + m.armedHost + " · a digit binds the highlighted row)"
+	}
+	body := title + sChrome.Render(hint) +
 		"\n" + strings.Join(rows, "\n")
 	panel := sPanelFocus.Width(m.width - 2).Render(body)
 

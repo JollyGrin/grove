@@ -141,6 +141,41 @@ gv workspaces                                   # the label must be listed, no �
 - The chat is a detached session of its own, not a window in the host's
   cockpit — an ssh client attaching to it cannot resize the cockpit's
   shared windows, and the chat survives the ssh connection dropping.
+- A chat can dismiss itself (grove-199): `gv orchestrator close` from
+  inside a `grove-chat-*` session kills its pane — and with it the
+  session and the claude process — which is what the seeded brain's
+  dispatch-and-dismiss instruction assumes. A real cockpit dashboard pane
+  is still protected: whether a session is a cockpit is answered by the
+  workspace registry, not by the name, because a workspace labelled
+  `chat-app` owns the session `grove-chat-app` — the same shape a chat
+  produces. An ambiguous name is treated as a cockpit, so such a chat
+  must be closed by hand (`C-b :kill-session`, or `tmux kill-session -t
+  =<session>`); avoid `chat-`-prefixed workspace labels if you want the
+  self-close.
+
+### From the cockpit: `@` (grove-199)
+
+The same spawn, one keypress deep, without leaving the local cockpit:
+
+| key | effect |
+| --- | --- |
+| `@` | arm a remote spawn; the footer becomes `@<host> ▸ 0 chat · 1-8 profile · ) picker · esc cancel` |
+| `@` again | cycle to the next configured host |
+| `0` / `O` | spawn on the host's own Claude |
+| `1`–`8` | spawn on the profile bound to that digit (the same binding the local digits use — only the NAME is sent, and the host resolves it against its own config) |
+| `)` | the profile picker, banner-marked `@<host>`; enter spawns there |
+| esc / anything else | cancel |
+
+On success a local pane opens running `ssh -t <host> tmux attach -t
+=grove-chat-<label>-<n>`, tiled beside the local chats: titled `@<host> ·
+<profile>` with its own border color, so remote and local chats are
+distinguishable at a glance. On failure — no twin, unknown profile, dead
+ssh — the host's own error line becomes the cockpit flash and **no pane is
+spawned**.
+
+That pane is nested tmux: your outer prefix (`C-b`) is eaten by the
+cockpit's own tmux, so to reach the chat's tmux send the prefix twice
+(`C-b C-b`). Same accepted tradeoff as attaching a worker.
 
 Updating the host later: `gv update` is a GitHub-releases self-updater
 and errors on a private source install — use

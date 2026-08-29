@@ -31,6 +31,9 @@ var (
 		{"O", "new chat: spawn an orchestrator chat pane (0 works too)"},
 		{")", "profiled chat: pick a model profile — a digit there binds it as a hotkey"},
 		{"1-8", "spawn the profile bound to that digit directly (bind in the ) picker)"},
+		{"@", "remote chat: arms a spawn on a host — then 0 (default), 1-8 (that profile) or ) (picker); @ again cycles hosts, esc cancels"},
+		{"", "the chat runs on the HOST, in its twin of this workspace; the local pane is an ssh attach, bordered blue and titled @host · profile"},
+		{"", "nested tmux: that pane's own prefix is the outer C-b — send it twice (C-b C-b) to reach the chat's tmux, same as an attached worker"},
 	}
 	helpGlobal = []helpEntry{
 		{"?", "this cheat sheet"},

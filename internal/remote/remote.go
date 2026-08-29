@@ -159,6 +159,18 @@ func Quote(s string) string {
 // is ssh's own connection failure). A non-exit error (ssh missing) is
 // returned as err.
 func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io.Writer) (int, error) {
+	return run(cfg, host, verb, args, os.Stdin, stdout, stderr)
+}
+
+// RunDetached is Run with stdin closed: the cockpit relays from inside the
+// bubbletea loop (grove-199), where handing ssh the terminal's stdin means
+// ssh and the TUI's key reader race for the operator's keystrokes — every
+// one ssh wins is a keypress the cockpit never sees.
+func RunDetached(cfg *config.Config, host, verb string, args []string, stdout, stderr io.Writer) (int, error) {
+	return run(cfg, host, verb, args, nil, stdout, stderr)
+}
+
+func run(cfg *config.Config, host, verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if !Supported[verb] {
 		return 0, fmt.Errorf("--host is not supported for `gv %s` yet (supported: %s)", verb, SupportedList)
 	}
@@ -168,7 +180,7 @@ func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io
 	}
 	argv := Argv(h, verb, args)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {

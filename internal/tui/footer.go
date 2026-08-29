@@ -14,7 +14,7 @@ type hint struct{ key, label string }
 // rebuilding them per frame.
 var (
 	rowHints    = []hint{{"enter", "reply"}}
-	spawnHints  = []hint{{"O", "new chat"}, {")", "profiled chat"}}
+	spawnHints  = []hint{{"O", "new chat"}, {")", "profiled chat"}, {"@", "remote chat"}}
 	globalHints = []hint{
 		{"?", "help"}, {"L", "layout"}, {"$", "costs"},
 		{"*", "effects"}, {"X", "park"}, {"q", "quit"},
@@ -25,8 +25,10 @@ var (
 // rank survives longer. Ranks below minKeep are the operator-specified
 // minimum trio (O, ), ?): they never drop, they only shed their labels and,
 // below the bare keys, truncate.
+// (grove-199 added "@" at the tail: the remote spawn is the newest and
+// least-reached-for hint, so it is the first to yield its room.)
 var keepRank = map[string]int{
-	"?": 0, "O": 1, ")": 2, "enter": 3, "L": 4, "$": 5, "*": 6, "X": 7, "q": 8,
+	"?": 0, "O": 1, ")": 2, "enter": 3, "L": 4, "$": 5, "*": 6, "X": 7, "q": 8, "@": 9,
 }
 
 const (

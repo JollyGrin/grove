@@ -31,6 +31,47 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
 - [ ] Parked-but-tracked side quests: mobile cockpit v2 (issue #5, planned),
       Obsidian live board (issue #9, design paused at REVISE), remote
       overflow host (docs/remote-host-setup.md; train #176–#178)
+- [x] Cockpit `@`-armed remote spawn (grove-199, 2026-08-29, part 2 of the
+      remote-orchestrator pair; #198 is the verb it calls): from the local
+      cockpit, `@` arms a remote spawn and the NEXT key opens an
+      orchestrator chat on the host — `0`/`O` the host's own Claude, `1-8`
+      the same digit→profile map the local keys and the `)` picker bind
+      (only the profile NAME travels), `)` the picker with an `@<host>`
+      banner. Transient state, not a mode: it clears on the spawn, on esc,
+      and on any other key (which cancels with a flash rather than falling
+      through to its local meaning), so no local spawn key changed
+      meaning. One host arms directly, a repeated `@` cycles hosts (sorted,
+      the R-merge order), zero hosts flashes `no hosts configured`. The
+      spawn relays #198's verb with a fresh op id, and ONLY on success
+      opens a local pane running `ssh -t <ssh> tmux attach -t =<session>`,
+      re-tiled through the existing `SpawnPane`/`SelectLayout` path — a
+      failed relay surfaces the remote's own error line as the flash and
+      spawns nothing (never a dead pane). The relay runs
+      `remote.RunDetached` (stdin closed: ssh must not race the TUI's key
+      reader) with both streams captured (a stray write corrupts the
+      alt-screen), via `runRemoteIdempotentWith` — the grove-186 hop with
+      its ssh call and notice stream injected. Pane identity: remote panes
+      carry `@grove_remote` (the same OSC-proof user-option carrier as
+      `@grove_profile`) and read `@<host> · <profile>` in the border
+      status, in their own border color; local panes are unchanged.
+      Keypress-driven throughout — no poll, no goroutine (the cockpit RAM
+      rule). Also fixes the #200-review follow-up: a `grove-chat-*` session
+      can now self-close via `gv orchestrator close` (its single pane is
+      the orchestrator, not a dashboard), so a fire-and-forget remote chat
+      no longer strands its claude process alive on the host. The
+      exemption is decided by the workspace REGISTRY, not the name shape
+      (#204 review): a workspace labelled `chat-app` owns cockpit session
+      `grove-chat-app`, the same string a chat session produces, so
+      `closablePane` takes an injected `tmux.CockpitCheck`
+      (`cockpitSessionCheck`, built from the registered labels) and an
+      ambiguous name collapses to COCKPIT — a nil check treats every
+      session as one, so forgetting to inject is only ever
+      over-protective. `e2e/cockpit.sh` gained a workspace
+      cockpit driving `@`+digit against a fake ssh (relay argv, the local
+      ssh-attach pane command, the pane's identity tags, and an error path
+      that spawns no pane); `e2e/chat.sh` covers the self-close.
+      Nested-tmux prefix capture on the attach pane is the accepted
+      tradeoff (documented in the `?` overlay, as with worker attach).
 - [x] Remote orchestrator chat: `gv orchestrator new --host` (grove-198,
       2026-08-28, part 1 of the remote-orchestrator pair; the cockpit `@`
       prefix + attach pane is #199): starts an orchestrator chat ON a host,

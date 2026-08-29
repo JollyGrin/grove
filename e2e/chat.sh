@@ -13,6 +13,10 @@
 #   4. an ssh-255 retry does NOT double-spawn (op-id receipt)
 #   5. no twin / dead twin / unknown profile / no label = hard, non-zero
 #      errors — never a fall-back to the host's global layer
+#   6. (grove-199) the spawned chat can dismiss itself with `gv orchestrator
+#      close` — its single pane is not a dashboard to protect — while a
+#      workspace whose LABEL collides with the chat naming (`chat-app` ⇒
+#      session `grove-chat-app`) keeps its dashboard guard
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -218,6 +222,42 @@ rc=0
 ( cd "$WS" && "$GV" orchestrator close --host pc ) > "$SCRATCH/close.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "orchestrator close --host must exit non-zero"
 grep -q 'only supported for `gv orchestrator new`' "$SCRATCH/close.out" || { cat "$SCRATCH/close.out"; fail "wrong subcommand error"; }
+
+say "grove-199: a chat session self-closes (gv orchestrator close from its pane)"
+# The seeded brain instructs exactly this for dispatch-and-dismiss, and the
+# chat's single pane is its window's FIRST — the dashboard guard used to
+# refuse it and strand the claude process alive on the host forever.
+CHAT_PANE="$(remote_tmux list-panes -t '=grove-chat-chatws-1:chat' -F '#{pane_id}' | head -1)"
+[ -n "$CHAT_PANE" ] || fail "no pane in grove-chat-chatws-1"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" TMUX_PANE="$CHAT_PANE" "$GV" orchestrator close --reason e2e ) \
+  > "$SCRATCH/selfclose.out" 2>&1 || { cat "$SCRATCH/selfclose.out"; fail "a chat session must be able to close itself"; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null || break
+  sleep 0.2
+done
+if remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null; then fail "the chat session survived its self-close"; fi
+[ "$(chat_sessions chatws)" -eq 2 ] || fail "want 2 chat sessions after the self-close, got $(chat_sessions chatws)"
+grep -q '"type":"orchestrator_closed"' "$EVENTS" || fail "the self-close left no orchestrator_closed event in the twin's log"
+
+say "grove-199: a workspace labelled chat-app still gets its dashboard guard"
+# The name-shape collision: labels are [a-z0-9][a-z0-9_-]*, so the workspace
+# `chat-app` owns cockpit session `grove-chat-app` — exactly the shape of a
+# chat session. The registry decides, and a registered label means COCKPIT:
+# its first pane is a dashboard, and closing it is refused.
+COLLIDE="$SCRATCH/chat-app"
+mkrepo "$COLLIDE"
+( cd "$COLLIDE" && "$GV" init --yes --label chat-app > /dev/null )
+remote_tmux new-session -d -s grove-chat-app -n cockpit -c "$COLLIDE"
+COLLIDE_PANE="$(remote_tmux list-panes -t '=grove-chat-app:cockpit' -F '#{pane_id}' | head -1)"
+[ -n "$COLLIDE_PANE" ] || fail "no pane in the colliding cockpit session"
+rc=0
+( cd "$COLLIDE" && env TMUX_TMPDIR="$REMOTE_TMUX" TMUX_PANE="$COLLIDE_PANE" "$GV" orchestrator close ) \
+  > "$SCRATCH/collide.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || { cat "$SCRATCH/collide.out"; fail "closing the chat-app cockpit's DASHBOARD must be refused"; }
+grep -q "first pane" "$SCRATCH/collide.out" || { cat "$SCRATCH/collide.out"; fail "wrong refusal — want the dashboard guard"; }
+remote_tmux has-session -t '=grove-chat-app' 2>/dev/null || fail "the chat-app cockpit was killed by the chat exemption"
+grep -q '"type":"orchestrator_closed"' "$COLLIDE/.grove/state/events.jsonl" 2>/dev/null \
+  && fail "a refused close must log nothing" || true
 
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true

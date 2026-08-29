@@ -454,12 +454,44 @@ func SetPaneProfile(pane, profile string) error {
 	return err
 }
 
-// paneBorderFormat renders each pane's index plus, when the pane carries a
-// @grove_profile user option (SetPaneProfile), a "⚡ <profile>" tag; otherwise
-// it falls back to whatever title the pane's foreground program set. So a
-// profiled pane shows its backend permanently while unprofiled panes keep
-// Claude Code's own titles — the no-profile path is visually unchanged.
-const paneBorderFormat = "#{pane_index}: #{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}"
+// SetPaneRemote tags a cockpit pane as a REMOTE chat (grove-199) — an
+// `ssh … tmux attach` pane whose claude runs on <host>, not here. Same
+// carrier and the same reasoning as SetPaneProfile: a pane USER OPTION
+// (@grove_remote) survives the foreground program's OSC title writes, which
+// a `select-pane -T` title would not. An empty host clears the tag.
+func SetPaneRemote(pane, host string) error {
+	if host == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_remote")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_remote", host)
+	return err
+}
+
+// remotePaneBorderStyle is the border color a remote chat pane wears: sky
+// blue, the palette's "elsewhere/delivery" accent, against the default
+// border of every local pane. The at-a-glance PERSONAL vs host cue once
+// remote and local chats sit side by side (grove-199).
+const remotePaneBorderStyle = "fg=colour110"
+
+// SetPaneRemoteBorder paints one pane's border in the remote color. A PANE
+// option (tmux 3.2+): an older tmux rejects `set-option -p pane-border-style`
+// and the caller treats that as cosmetic — the @grove_remote title tag in
+// paneBorderFormat is the carrier that always works.
+func SetPaneRemoteBorder(pane string) error {
+	_, err := run("set-option", "-p", "-t", pane, "pane-border-style", remotePaneBorderStyle)
+	return err
+}
+
+// paneBorderFormat renders each pane's index plus its identity:
+//
+//   - a REMOTE chat pane (@grove_remote, grove-199) shows "@<host> · <profile>",
+//     falling back to "chat" for the host's own Claude — the pane is an ssh
+//     attachment, so its own title would be the ssh client's, not the agent's;
+//   - a local profiled pane (@grove_profile) shows "⚡ <profile>";
+//   - anything else falls back to whatever title the pane's foreground program
+//     set, so the no-profile local path is visually unchanged.
+const paneBorderFormat = "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
 
 // ShowPaneBorders turns on a top pane-border status line, scoped to ONE window
 // via its target (e.g. session:cockpit) — never a global/session-wide option,
@@ -500,9 +532,27 @@ func DisableAutoRename(target string) error {
 // its own $TMUX_PANE, in the cockpit window), and every worker window's
 // first pane is the protected worktree shell, so no worker pane is ever at
 // risk.
-func closablePane(session string, index, first int) error {
+func closablePane(session string, index, first int, isCockpit CockpitCheck) error {
 	if session != "grove" && !strings.HasPrefix(session, "grove-") {
 		return fmt.Errorf("pane is in session %q, not a grove cockpit — refusing to close", session)
+	}
+	// A detached chat session (grove-198) has NO dashboard: `grove-chat-<label>-<n>`
+	// is one window with one pane, and that pane is the orchestrator itself —
+	// seeded with the brain that instructs `gv orchestrator close` for
+	// dispatch-and-dismiss. The first-pane rule would refuse it with a message
+	// about protecting a dashboard that does not exist there, stranding the
+	// chat's claude process alive on the host forever (grove-199).
+	//
+	// The name ALONE cannot decide that, though: labels are
+	// `[a-z0-9][a-z0-9_-]*`, so a workspace labelled `chat-app` has the
+	// cockpit session `grove-chat-app` — the chat shape and a real cockpit
+	// are the same string. The registry breaks the tie (isCockpit), and
+	// when both readings are live (`grove-chat-app-2` is chat 2 of
+	// `chat-app` AND the cockpit of `chat-app-2`) the COCKPIT reading wins:
+	// the cost of being wrong is a dead dashboard one way and a chat the
+	// operator closes by hand the other.
+	if strings.HasPrefix(session, chatSessionMarker) && !isCockpit.cockpit(session) {
+		return nil
 	}
 	if index == first {
 		return fmt.Errorf("pane %d is the window's first pane — the dashboard — refusing to close it", index)
@@ -510,14 +560,30 @@ func closablePane(session string, index, first int) error {
 	return nil
 }
 
+// CockpitCheck answers "is this tmux session a workspace COCKPIT?" — i.e.
+// does its window's first pane hold a dashboard the guard must protect.
+// Only the workspace registry knows (cockpit sessions are `grove-<label>`
+// for any registered label), and the registry lives above this package, so
+// the caller injects the answer. A nil CockpitCheck says yes to everything:
+// an uninjected caller can only ever be MORE protective, never less.
+type CockpitCheck func(session string) bool
+
+func (c CockpitCheck) cockpit(session string) bool {
+	if c == nil {
+		return true
+	}
+	return c(session)
+}
+
 // PaneClosable reports whether pane (e.g. "%23") is a cockpit orchestrator
 // pane safe to kill — queries its session/index plus its window's lowest
-// pane index and runs closablePane. Fails closed: if the window's panes
+// pane index and runs closablePane against the caller's CockpitCheck (nil
+// = treat every session as a cockpit). Fails closed: if the window's panes
 // can't be listed, the guard refuses rather than guessing which pane is
 // the dashboard. Callers check this BEFORE any irreversible side effect
 // (e.g. logging the dismissal) so a guard rejection never leaves a
 // half-done record.
-func PaneClosable(pane string) error {
+func PaneClosable(pane string, isCockpit CockpitCheck) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
 	}
@@ -543,7 +609,7 @@ func PaneClosable(pane string) error {
 	if !ok {
 		return fmt.Errorf("cannot list panes of %s's window — refusing to close", pane)
 	}
-	return closablePane(parts[0], index, first)
+	return closablePane(parts[0], index, first, isCockpit)
 }
 
 // lowestPaneIndex parses list-panes "#{pane_index}" output and returns the
@@ -566,8 +632,8 @@ func lowestPaneIndex(out string) (int, bool) {
 // PaneClosable. The caller passes its own $TMUX_PANE, so this is how a
 // fire-and-forget orchestrator dismisses itself: killing the pane also
 // takes down the claude process running in it.
-func ClosePane(pane string) error {
-	if err := PaneClosable(pane); err != nil {
+func ClosePane(pane string, isCockpit CockpitCheck) error {
+	if err := PaneClosable(pane, isCockpit); err != nil {
 		return err
 	}
 	_, err := run("kill-pane", "-t", pane)
@@ -767,7 +833,12 @@ func CapturePaneBottomKnown(target string, height, lines int) (string, error) {
 // window in the workspace's `grove-<label>` cockpit — a chat spawned from
 // (or attached over) ssh must not resize the cockpit's shared windows for
 // everyone else, and it has to survive the ssh client dropping.
-func chatSessionPrefix(label string) string { return "grove-chat-" + label + "-" }
+func chatSessionPrefix(label string) string { return chatSessionMarker + label + "-" }
+
+// chatSessionMarker is what every chat session name starts with — the one
+// string closablePane and chatSessionPrefix both key off, so the self-close
+// exemption can never drift from the naming scheme.
+const chatSessionMarker = "grove-chat-"
 
 // NextChatSession picks the lowest free `grove-chat-<label>-<n>` (n from 1)
 // given the server's existing session names. Pure so the numbering is

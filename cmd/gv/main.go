@@ -497,7 +497,17 @@ func runRemoteRelay(host, verb string, rest []string) (int, error) {
 // stdout is a writer so a caller can tee the remote's output (the chat
 // spawn parses the session name out of it).
 func runRemoteIdempotent(cfg *config.Config, host, verb string, args []string, opID, manual string, stdout io.Writer) (int, error) {
-	run := func() (int, error) { return remote.Run(cfg, host, verb, args, stdout, os.Stderr) }
+	return runRemoteIdempotentWith(host, opID, manual, os.Stderr, func() (int, error) {
+		return remote.Run(cfg, host, verb, args, stdout, os.Stderr)
+	})
+}
+
+// runRemoteIdempotentWith is that hop with the ssh call and the notice
+// stream injected: the cockpit's `@` spawn (grove-199) relays from inside
+// the tea loop, where the hop must neither write to the real stderr (it
+// would corrupt the alt-screen) nor share the terminal's stdin with the
+// TUI's own key reader — so it passes a buffer and remote.RunDetached.
+func runRemoteIdempotentWith(host, opID, manual string, notice io.Writer, run func() (int, error)) (int, error) {
 	code, err := run()
 	if err != nil {
 		return 0, err
@@ -505,7 +515,7 @@ func runRemoteIdempotent(cfg *config.Config, host, verb string, args []string, o
 	if code != 255 {
 		return code, nil
 	}
-	fmt.Fprintf(os.Stderr, "gv: ssh to %s failed (exit 255) — the remote may or may not have acted; retrying once with the same op id %s\n", host, opID)
+	fmt.Fprintf(notice, "gv: ssh to %s failed (exit 255) — the remote may or may not have acted; retrying once with the same op id %s\n", host, opID)
 	time.Sleep(relayRetryWait)
 	if code, err = run(); err != nil {
 		return 0, err
@@ -553,6 +563,7 @@ func cmdDashboard() error {
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
+	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
 	tui.CloseWorkspace = closeWorkspace
 	tui.SaveHotkeyBinding = func(digit, profile string) error {
@@ -956,6 +967,33 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	return fmt.Sprintf("✓ new orchestrator chat pane (%s)", resolvedName), nil
 }
 
+// cockpitSessionCheck builds the guard's "is this session a cockpit?"
+// answer from THIS machine's workspace registry (grove-199): `grove` and
+// `grove-mobile` always, plus `grove-<label>` for every registered label.
+// Nothing else may derive a workspace from a session name — a chat session
+// is `grove-chat-<label>-<n>`, and a workspace labelled `chat-app` produces
+// the very same string, so only the registry can tell them apart.
+//
+// A registry that cannot be read is a hard error rather than a guess: the
+// two readings of an ambiguous name differ by a dead dashboard.
+func cockpitSessionCheck() (tmux.CockpitCheck, error) {
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the workspace registry (needed to tell a cockpit from a chat session): %w", err)
+	}
+	labels := make(map[string]bool, len(list))
+	for _, ws := range list {
+		labels[ws.Label] = true
+	}
+	return func(session string) bool {
+		if session == "grove" || session == "grove-mobile" {
+			return true
+		}
+		label, ok := strings.CutPrefix(session, "grove-")
+		return ok && labels[label]
+	}, nil
+}
+
 // cmdOrchestratorClose dismisses the calling orchestrator's own cockpit
 // pane — the CLI half of the fire-and-forget dispatch flow (orchestrator
 // CLAUDE.md). It logs an activity event FIRST (durable before the pane, and
@@ -971,9 +1009,16 @@ func cmdOrchestratorClose(args []string) error {
 	if pane == "" {
 		return fmt.Errorf("no $TMUX_PANE — `gv orchestrator close` runs from inside a cockpit pane")
 	}
+	// Which sessions hold a dashboard to protect is a REGISTRY question,
+	// not a name-shape one (grove-199) — resolve it here, where the
+	// registry lives, and hand the answer to the guard.
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return err
+	}
 	// Validate BEFORE logging: a guard rejection must not leave a
 	// "dismissed" activity row for a pane that never closed.
-	if err := tmux.PaneClosable(pane); err != nil {
+	if err := tmux.PaneClosable(pane, isCockpit); err != nil {
 		return err
 	}
 	// Log before the kill: kill-pane takes down this very process, so a
@@ -989,7 +1034,7 @@ func cmdOrchestratorClose(args []string) error {
 	}); err != nil {
 		return err
 	}
-	return tmux.ClosePane(pane)
+	return tmux.ClosePane(pane, isCockpit)
 }
 
 // cmdMobile is the phone cockpit. tmux sizes a session to its SMALLEST
