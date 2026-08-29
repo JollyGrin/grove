@@ -59,6 +59,14 @@ func SaveHotkey(path, digit, profile string) error {
 		}}
 	}
 	root := doc.Content[0]
+	// A `null`, `~` or bare `---` file parses to one null scalar rather
+	// than an empty document, so it slips the guard above; coerce it in
+	// place for the same reason ensureMap does (grove-201).
+	if root.Kind == yaml.ScalarNode && root.Tag == "!!null" {
+		root.Kind = yaml.MappingNode
+		root.Tag = "!!map"
+		root.Value = ""
+	}
 	if root.Kind != yaml.MappingNode {
 		return fmt.Errorf("%s: top level is not a mapping", path)
 	}

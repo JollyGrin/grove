@@ -155,52 +155,67 @@ func TestRunOutsideGitRepo(t *testing.T) {
 	}
 }
 
-func TestRunEmptyConfig(t *testing.T) {
-	repo := initRepo(t, "main")
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.yaml")
-	// Zero-byte config file should not crash Run
-	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	res, err := Run(repo, cfgPath, "2026-07-04")
-	if err != nil {
-		t.Fatalf("Run with empty config failed: %v", err)
-	}
-	if !res.WroteConfig {
-		t.Error("new repo should be written to empty config")
-	}
-	c := readCfg(t, cfgPath)
-	if c.Provider.Kind != "markdown" {
-		t.Errorf("provider.kind = %q, want markdown", c.Provider.Kind)
-	}
-	name := filepath.Base(repo)
-	if _, ok := c.Repos[name]; !ok {
-		t.Errorf("repo %q not added to config", name)
+// TestRunSettingsFreeConfig: Run must seed and register into every shape
+// of a settings-free config. The `null`/`---` shapes parse to a lone
+// !!null scalar, which slipped the original len(Content) guard and made
+// ensureConfig report WroteConfig while emitting `null` (grove-201).
+func TestRunSettingsFreeConfig(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty", ""},
+		{"comment only", "# just a comment\n"},
+		{"whitespace only", "   \n  \n"},
+		{"null", "null\n"},
+		{"tilde", "~\n"},
+		{"bare doc marker", "---\n"},
+		{"whitespace then doc marker", "  \n---\n"},
+		{"comment then doc marker", "# just a comment\n---\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initRepo(t, "main")
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(cfgPath, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Run(repo, cfgPath, "2026-07-04")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !res.WroteConfig {
+				t.Error("new repo should be written to a settings-free config")
+			}
+			c := readCfg(t, cfgPath)
+			if c.Provider.Kind != "markdown" {
+				t.Errorf("provider.kind = %q, want markdown", c.Provider.Kind)
+			}
+			name := filepath.Base(repo)
+			if _, ok := c.Repos[name]; !ok {
+				raw, _ := os.ReadFile(cfgPath)
+				t.Errorf("repo %q not added to config, file is:\n%s", name, raw)
+			}
+		})
 	}
 }
 
-func TestRunCommentOnlyConfig(t *testing.T) {
-	repo := initRepo(t, "main")
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.yaml")
-	// Comment-only config file should not crash Run
-	if err := os.WriteFile(cfgPath, []byte("# just a comment\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	res, err := Run(repo, cfgPath, "2026-07-04")
-	if err != nil {
-		t.Fatalf("Run with comment-only config failed: %v", err)
-	}
-	if !res.WroteConfig {
-		t.Error("new repo should be written to comment-only config")
-	}
-	c := readCfg(t, cfgPath)
-	if c.Provider.Kind != "markdown" {
-		t.Errorf("provider.kind = %q, want markdown", c.Provider.Kind)
-	}
-	name := filepath.Base(repo)
-	if _, ok := c.Repos[name]; !ok {
-		t.Errorf("repo %q not added to config", name)
+// A config whose root holds real non-mapping content is an error, not an
+// overwrite.
+func TestRunNonMappingConfig(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"scalar", "hello\n"},
+		{"sequence", "- a\n- b\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initRepo(t, "main")
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(cfgPath, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Run(repo, cfgPath, "2026-07-04"); err == nil || !strings.Contains(err.Error(), "not a mapping") {
+				t.Fatalf("Run err = %v, want a not-a-mapping error", err)
+			}
+			raw, _ := os.ReadFile(cfgPath)
+			if string(raw) != tc.body {
+				t.Errorf("config was rewritten: %q", string(raw))
+			}
+		})
 	}
 }
