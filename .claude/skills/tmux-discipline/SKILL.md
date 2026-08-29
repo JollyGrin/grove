@@ -115,6 +115,25 @@ grove worker) silently targets the **real server** unless it clears
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
   and chrome layout have both changed under us — activity checks scan the
   full ~30-line capture, never a bottom window.
+- **Never derive a task's COMPLETION from pane text — use `gv watch`**
+  (grove-205). Every kickoff template ends with the three `STATUS:
+  QUESTION|BLOCKED|DONE — …` placeholder lines, so all three sentinels are
+  in every worker's pane from second zero: a pane grep for any of them
+  fires instantly, on every task, forever (it filed two false DONEs in one
+  minute on 2026-08-29). The authoritative signal is the Stop hook's
+  classification of the agent's own last message —
+  `gv watch [--ticket X] [--until done]` streams it, one flushed line per
+  transition, default from-now. Three sub-rules:
+  - A marker's **presence** is not a **transition**. Ask what changed, not
+    what is on screen.
+  - A baseline sampled **after** the probe was armed is not a baseline —
+    `gv watch`'s from-now default removes the whole failure class by
+    construction; never hand-roll the "before" snapshot.
+  - If a pane fallback is genuinely unavoidable, it must exclude the
+    placeholder lines (`STATUS: … — <…>`) **and** require that the agent
+    has stopped. Silence is not success either: watch the terminal states
+    (idle stop with no STATUS line, `session_ended`) too, or a crashed
+    worker reads as a working one.
 - The detector reads `unknown` for a plain shell pane (before Claude
   boots). Expected; the task status column carries the truth.
 - e2e assertions on pane content: a bare `capture-pane -p` sees only the

@@ -12,6 +12,10 @@ The `gv` CLI is your hands (every read command takes `--json`):
 ```
 gv ls --json              # fleet state: agent/sentinel/question per task
 gv ls --json --no-pr      # same, faster (skips gh)
+gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
+     --until done          #   it lands. --until exits 0 exactly when that
+                           #   sentinel arrives. Read the Monitoring section
+                           #   below before writing ANY completion detector.
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
 gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
 gv grab DEV-X --manual    # set up for the operator to drive by hand
@@ -40,10 +44,53 @@ gv doctor                 # environment preflight
 Also available: `gh pr view/list` for PR/CI state, the **dev-linear MCP
 tools** for exploring the Linear backlog, and read-only `tmux capture-pane`
 if you need to see what a worker is doing
-(`tmux capture-pane -p -t <tmux_session>:<tmux_window>.1`).
+(`tmux capture-pane -p -t <tmux_session>:<tmux_window>.1`) — for READING a
+pane, never for concluding anything (see Monitoring).
 
 State lives at `~/.local/state/grove/` (`tasks.json` view,
 `events.jsonl` history). Repo mapping is in `~/.config/grove/config.yaml`.
+
+## Monitoring — how to know a task changed state
+
+**Use `gv watch`. Never derive completion from pane text.**
+
+```
+gv watch                                  # this workspace's transition stream
+gv watch --ticket DEV-X --until done      # exits 0 the moment DEV-X reports done
+gv watch --json --sentinel done,blocked   # machine-readable, sentinels only
+gv watch --replay --ticket DEV-X          # include history (default is FROM NOW)
+```
+
+One event per line, flushed as it lands, pure read. Run it in the
+background (Bash `run_in_background`, or a Monitor whose command is the
+`--until` form) and you get exactly one notification, at the moment the
+worker actually reports done — no polling arithmetic, no baseline to keep.
+
+Four rules, each of which cost a real false DONE (grove-205, 2026-08-29 —
+two of them inside one minute, both workers still `agent: working`):
+
+1. **Never grep a pane for `STATUS: DONE`** (or QUESTION, or BLOCKED). The
+   kickoff prompt ENDS with all three lines verbatim, so they are in every
+   worker's pane from second zero. That grep fires instantly, on every
+   task, forever. The Stop hook's classification — what `gv watch` and
+   `gv ls --json` report — only ever sees the agent's own message, never
+   the prompt, so it cannot be fooled this way.
+2. **A marker's presence is not a transition.** Ask what CHANGED. A poll
+   of `gv ls --json` compares `sentinel_at` (when the current sentinel
+   landed) against your cutoff; a stream is better.
+3. **Never gate on a baseline sampled after the probe was armed.** A
+   "before" snapshot taken once the thing already happened can never fire.
+   `gv watch`'s from-now default removes the whole class: it only ever
+   shows events appended after it started.
+4. **Silence is not success.** The default stream carries every terminal
+   and actionable state — `agent_status` (including an idle stop with NO
+   STATUS line), `notification`, `session_ended`, `task_done`,
+   `task_untracked`, `task_paused` — so a crashed or wedged worker still
+   produces a line. A detector that only watches for the happy event
+   reports "still working" forever.
+
+If a pane fallback is truly unavoidable, it must exclude the placeholder
+lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
 
 ## Duties
 

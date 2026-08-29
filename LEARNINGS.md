@@ -97,6 +97,29 @@
   before. Both stay best-effort in the code — an older tmux rejects
   `set-option -p` and a cosmetic tag must never fail a spawn.
 
+- **2026-08-29 · a pane grep for `STATUS: DONE` fires on every task, from
+  second zero — the kickoff prompt contains all three sentinels verbatim**
+  (grove-205; two false DONEs inside a minute on unbrewed-artgen #16 and
+  #18/#19, both workers still `agent: working`). `md_default.tmpl:29` (and
+  `md_pickup.tmpl:27`, `default.tmpl:26`, `pickup.tmpl:30`) ends every
+  kickoff with the three `STATUS: …` placeholder lines, so the string a
+  monitor greps for is planted in the pane by grove itself, before the
+  agent has done anything. The same incident carried the mirror-image bug:
+  a push probe whose "before" snapshot was taken AFTER the push had
+  landed, so it could never fire. Both are the 2026-08-27 rule from the
+  other side — **a marker's presence is not a transition, and a baseline
+  sampled after the probe was armed is not a baseline**. This was grove's
+  booby trap, not just a bad script: `orchestrator/CLAUDE.md` pointed
+  monitor authors at `tmux capture-pane`, grove planted the placeholder,
+  and grove offered nothing better. Fix: `gv watch` (grove-205) streams
+  `events.jsonl` — the Stop hook's classification of the agent's OWN last
+  message, which by construction never sees the prompt — one line per
+  event, flushed, default from-now so the baseline cannot be sampled late,
+  `--until done` for the one-notification shape. The templates were
+  deliberately NOT changed: teaching the sentinel by literal example is
+  why sentinel emission is reliable, and the hook regex parses that exact
+  shape; the fix is to make the pane unnecessary. Rule folded into the
+  tmux-discipline skill.
 - **2026-08-22 · hooks match on the DERIVED `tasks.json`, so a scripted
   hook right after `gv grab` is a silent no-op until something Loads**
   (grove-177 e2e): `hooks.Receive` finds the task by cwd via

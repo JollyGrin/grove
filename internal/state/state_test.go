@@ -1,9 +1,12 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // gv pause (grove-90): task_paused bookmarks a deliberately parked worker;
@@ -413,5 +416,88 @@ func TestFoldHandedOff(t *testing.T) {
 	fold(tasks, Event{Type: EvTaskUntracked, Ticket: "gr-1"})
 	if !task.Done || task.HandedOffTo != "" {
 		t.Errorf("task_untracked must clear the tombstone pointer: %+v", task)
+	}
+}
+
+// grove-205: sentinel_at dates the CURRENT sentinel. Updated moves for any
+// event, so a poll-based consumer cannot tell "done just now" from "done an
+// hour ago" — this field is what lets it edge-detect against a cutoff
+// without keeping a baseline of its own (the failure mode that filed the
+// ticket was a baseline sampled after the fact).
+func TestFoldSentinelAt(t *testing.T) {
+	base := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	tasks := map[string]*Task{}
+	fold(tasks, Event{Time: base, Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{"title": "t"}})
+	task := tasks["gr-1"]
+	if task.SentinelAt != nil {
+		t.Fatal("a fresh task has no sentinel to date")
+	}
+
+	// An idle stop with no STATUS line reports sentinel "none" — the
+	// ABSENCE of a sentinel, so nothing to stamp.
+	fold(tasks, Event{Time: base.Add(time.Minute), Type: EvAgentStatus, Ticket: "gr-1",
+		Data: map[string]string{"status": AgentIdle, "sentinel": "none", "message": "wandered off"}})
+	if task.SentinelAt != nil {
+		t.Errorf("sentinel \"none\" must not date a sentinel: %v", task.SentinelAt)
+	}
+	if !task.Updated.Equal(base.Add(time.Minute)) {
+		t.Error("updated must still move for any event")
+	}
+
+	q := base.Add(2 * time.Minute)
+	fold(tasks, Event{Time: q, Type: EvAgentStatus, Ticket: "gr-1",
+		Data: map[string]string{"status": AgentWaiting, "sentinel": "question", "question": "which?"}})
+	if task.SentinelAt == nil || !task.SentinelAt.Equal(q) {
+		t.Fatalf("sentinel_at = %v, want %v", task.SentinelAt, q)
+	}
+
+	// A later event that is not an agent_status leaves the stamp alone even
+	// though it moves `updated` — that is the whole point of the field.
+	fold(tasks, Event{Time: base.Add(3 * time.Minute), Type: EvAnswered, Ticket: "gr-1"})
+	if task.SentinelAt == nil || !task.SentinelAt.Equal(q) {
+		t.Errorf("sentinel_at moved on a non-status event: %v", task.SentinelAt)
+	}
+
+	done := base.Add(4 * time.Minute)
+	fold(tasks, Event{Time: done, Type: EvAgentStatus, Ticket: "gr-1",
+		Data: map[string]string{"status": AgentIdle, "sentinel": "done", "message": "shipped"}})
+	if task.SentinelAt == nil || !task.SentinelAt.Equal(done) {
+		t.Fatalf("sentinel_at = %v, want %v", task.SentinelAt, done)
+	}
+
+	// Adopt clears the sentinel; the stamp goes with it.
+	fold(tasks, Event{Time: base.Add(5 * time.Minute), Type: EvTaskAdopted, Ticket: "gr-1", Data: map[string]string{}})
+	if task.Sentinel != "" || task.SentinelAt != nil {
+		t.Errorf("adopt left a stale sentinel stamp: %q %v", task.Sentinel, task.SentinelAt)
+	}
+
+	// So does a handoff tombstone.
+	fold(tasks, Event{Time: base.Add(6 * time.Minute), Type: EvAgentStatus, Ticket: "gr-1",
+		Data: map[string]string{"status": AgentIdle, "sentinel": "done", "message": "shipped"}})
+	fold(tasks, Event{Time: base.Add(7 * time.Minute), Type: EvTaskHandedOff, Ticket: "gr-1",
+		Data: map[string]string{"host": "box"}})
+	if task.SentinelAt != nil {
+		t.Errorf("handoff left a stale sentinel stamp: %v", task.SentinelAt)
+	}
+}
+
+// The field is additive: absent for a task without a sentinel, and never
+// emitted as a zero timestamp (omitempty does not omit a zero time.Time —
+// hence the pointer).
+func TestSentinelAtIsOmittedWhenAbsent(t *testing.T) {
+	tasks := map[string]*Task{}
+	fold(tasks, Event{Time: time.Now(), Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{"title": "t"}})
+	raw, err := json.Marshal(tasks["gr-1"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sentinel_at") {
+		t.Fatalf("sentinel_at emitted for a task without one: %s", raw)
+	}
+	fold(tasks, Event{Time: time.Now(), Type: EvAgentStatus, Ticket: "gr-1",
+		Data: map[string]string{"status": AgentIdle, "sentinel": "done"}})
+	raw, _ = json.Marshal(tasks["gr-1"])
+	if !strings.Contains(string(raw), `"sentinel_at":`) {
+		t.Fatalf("sentinel_at missing for a task with one: %s", raw)
 	}
 }
