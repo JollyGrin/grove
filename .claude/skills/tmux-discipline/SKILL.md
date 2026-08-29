@@ -98,6 +98,13 @@ grove worker) silently targets the **real server** unless it clears
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.
+- Whenever an `=`-anchored target leaves Go and enters a SHELL — a line
+  printed for the operator to paste, or a pane/window command tmux runs
+  through `$SHELL -c` — single-quote it: `-t '=grove-chat-x-1'`. zsh
+  (macOS's default) equals-expands a word that starts with `=` and aborts
+  the line before the command runs (grove-207); bash does not, so this
+  never shows up on Linux. `remote.Quote` handles it, but only since it
+  stopped treating a leading `=`/`~` as safe — do not hand-roll the check.
 
 - **`kill-window` kills the foreground process group, not the tree**
   (grove-156): daemonizing children (jest-worker et al.) survive,
