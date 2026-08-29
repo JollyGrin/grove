@@ -216,10 +216,11 @@ func run(cfg *config.Config, host, verb string, args []string, stdin io.Reader, 
 // The parser accepts both; see ParseChatSession.
 const chatAttachPrefix = "attach: tmux attach -t "
 
-// ChatAttachLine renders the receiving half's attach hint for session,
-// exact-anchored (the grove-99 rule).
+// ChatAttachLine renders the receiving half's attach hint for session:
+// exact-anchored (the grove-99 rule) and quoted, so the human logged into
+// the host can paste it into zsh as well as bash (grove-207).
 func ChatAttachLine(session string) string {
-	return chatAttachPrefix + tmux.Exact(session)
+	return chatAttachPrefix + Quote(tmux.Exact(session))
 }
 
 // chatSessionRe is the shape ChatAttachLine's tail must have to be

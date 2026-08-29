@@ -203,7 +203,7 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 	if strings.Contains(out, "already applied") {
 		t.Errorf("a foreign op id must not read as a receipt: %q", out)
 	}
-	if strings.Contains(out, "attach: tmux attach -t =\n") {
+	if strings.Contains(out, "attach: tmux attach -t ''\n") {
 		t.Errorf("a bare attach line was printed: %q", out)
 	}
 	// A spawn event with no session name is the same class of lie.

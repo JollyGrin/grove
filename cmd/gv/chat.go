@@ -103,7 +103,7 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 		return code, err
 	}
 	if session := remote.ParseChatSession(buf.String()); session != "" {
-		fmt.Printf("  from here: ssh -t %s tmux attach -t =%s\n", h.SSH, session)
+		fmt.Printf("  from here: %s\n", remoteChatAttachCmd(h.SSH, session))
 	}
 	return code, nil
 }
@@ -252,11 +252,14 @@ func chatProfileSuffix(profile string) string {
 
 // --- grove-199: the cockpit's `@`-armed remote spawn ---
 
-// remoteChatAttachCmd is the local pane's command: attach, over ssh, to the
-// chat session the host just spawned. The session name is exact-anchored
+// remoteChatAttachCmd is the local pane's command — attach, over ssh, to
+// the chat session the host just spawned — and the same line the CLI
+// prints for the operator to paste. The session name is exact-anchored
 // (`=`, the grove-99 target rule) so a host-side session whose name merely
-// extends this one can never be attached instead, and both words are quoted
-// for the login shell ssh hands the command to.
+// extends this one can never be attached instead; the anchored target and
+// the dial name are both quoted, because the shell running this line is
+// zsh on the Mac, where a bare leading `=` is equals-expanded and the
+// command dies before ssh runs (grove-207).
 func remoteChatAttachCmd(sshTarget, session string) string {
 	return "ssh -t " + remote.Quote(sshTarget) + " tmux attach -t " + remote.Quote(tmux.Exact(session))
 }

@@ -134,9 +134,11 @@ cat "$SCRATCH/spawn1.out" "$SCRATCH/spawn1.err"
 grep -Eq "\[fake ssh\] $GV orchestrator new --op-id [0-9a-f]{32} --as pc --workspace chatws\$" "$SCRATCH/spawn1.err" \
   || fail "relayed argv wrong — want 'orchestrator new --op-id <32-hex> --as pc --workspace chatws'"
 grep -q '✓ orchestrator chat grove-chat-chatws-1 — workspace chatws' "$SCRATCH/spawn1.out" || fail "missing the remote's success line"
-grep -q 'attach: tmux attach -t =grove-chat-chatws-1' "$SCRATCH/spawn1.out" || fail "missing the host-side attach line"
-grep -q 'from here: ssh -t localhost tmux attach -t =grove-chat-chatws-1' "$SCRATCH/spawn1.out" \
-  || fail "missing the paste-able ssh attach line (must dial hosts.pc.ssh)"
+grep -q "attach: tmux attach -t '=grove-chat-chatws-1'" "$SCRATCH/spawn1.out" || fail "missing the host-side attach line"
+# grove-207: both hints quote the exact-match target — a bare `=name` is
+# equals-expanded by zsh (macOS) and the pasted line dies before ssh runs.
+grep -q "from here: ssh -t localhost tmux attach -t '=grove-chat-chatws-1'" "$SCRATCH/spawn1.out" \
+  || fail "missing the paste-able ssh attach line (must dial hosts.pc.ssh, target quoted)"
 
 say "the session lives on the HOST's tmux server, not this one"
 remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null || fail "chat session missing on the remote tmux server"
@@ -177,7 +179,7 @@ grep -q 'retrying once with the same op id' "$SCRATCH/retry.err" || fail "ssh 25
 grep -q 'already applied' "$SCRATCH/retry.out" || fail "the retry did not hit the op-id receipt"
 grep -q 'already applied (op .*) — orchestrator chat grove-chat-chatws-3' "$SCRATCH/retry.out" \
   || fail "the retry must reprint the FIRST hop's session name"
-grep -q 'from here: ssh -t localhost tmux attach -t =grove-chat-chatws-3' "$SCRATCH/retry.out" \
+grep -q "from here: ssh -t localhost tmux attach -t '=grove-chat-chatws-3'" "$SCRATCH/retry.out" \
   || fail "a deduped retry must still print the attach line"
 [ "$(cat "$SCRATCH/ssh-op-hops")" -eq 2 ] || fail "expected exactly 2 ssh hops, got $(cat "$SCRATCH/ssh-op-hops")"
 [ "$(chat_sessions chatws)" -eq 3 ] || fail "want 3 chat sessions after the retry (no double-spawn), got $(chat_sessions chatws)"

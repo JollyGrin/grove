@@ -147,7 +147,7 @@ func TestExtractOpIDPrefix(t *testing.T) {
 // name back out of it to render the ssh form.
 func TestChatAttachRoundTrip(t *testing.T) {
 	line := ChatAttachLine("grove-chat-unbrewed-3")
-	if line != "attach: tmux attach -t =grove-chat-unbrewed-3" {
+	if line != "attach: tmux attach -t '=grove-chat-unbrewed-3'" {
 		t.Fatalf("ChatAttachLine = %q", line)
 	}
 	out := "✓ orchestrator chat grove-chat-unbrewed-3 — workspace unbrewed\n" + line + "\n"

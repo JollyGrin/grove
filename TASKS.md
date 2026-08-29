@@ -9,6 +9,25 @@
 
 ## Now (2026-07-12)
 
+- [x] Paste-able attach hints survive zsh (grove-207, 2026-08-29): a word
+      that STARTS with `=` is equals-expanded by zsh (macOS's default
+      shell), so the printed `tmux attach -t =grove-chat-<label>-<n>` died
+      with `zsh: grove-chat-… not found` before `ssh` ever ran — the
+      copy-paste path was broken on exactly the machine `@` was built for.
+      The `=` stays (tmux's exact-match anchor, the grove-99 rule); the
+      target is quoted instead. `remote.Quote` no longer treats a leading
+      `=` or `~` as safe (both are word-initial expansions in zsh), which
+      also fixed the cockpit's own ssh-attach pane command; both printed
+      hints — the host's `attach:` line and the local `from here:` line,
+      now rendered by the one `remoteChatAttachCmd` — carry the quotes.
+      The `attach:` line is also the machine-readable carrier, so the
+      parser went permissive FIRST: `ParseChatSession` accepts the target
+      bare, single- or double-quoted (a half or mismatched quote is a
+      truncation and yields no hint), keeping new-local/old-host skew
+      working. `e2e/chat.sh` asserts the quoted print; `e2e/cockpit.sh`'s
+      fake host now emits the quoted carrier while the ssh.log assertion
+      stays bare — the pane shell strips the quotes, which is the proof
+      they are transparent to ssh and tmux.
 - [x] Kickoff step-2 subagent-fanout guidance in `md_default.tmpl` (grove-115,
       2026-08-27): replaced the short step-2 in the markdown-default kickoff
       template with the longer fan-out variant — instructs workers to use an
