@@ -28,9 +28,18 @@ type Row struct {
 	Fix      string `json:"fix,omitempty"`
 }
 
-// Run evaluates the full manifest against the real machine.
-func Run(cfg *config.Config, cfgErr error) []Row {
-	return FromResults(connections.EvaluateAll(connections.NewEnv(cfg, cfgErr)))
+// Run evaluates the full manifest against the real machine. orchDir is
+// the ambient workspace's orchestrator brain dir (grove-190) — the
+// caller resolves it, since only cmd/gv knows which workspace is
+// ambient; "" falls back to the configured (legacy global) dir, and the
+// seed-drift row drops out entirely when neither is known.
+func Run(cfg *config.Config, cfgErr error, orchDir string) []Row {
+	env := connections.NewEnv(cfg, cfgErr)
+	if orchDir == "" && cfg != nil && cfgErr == nil {
+		orchDir = cfg.Orchestrator.Dir
+	}
+	env.OrchestratorDir = orchDir
+	return FromResults(connections.EvaluateAll(env))
 }
 
 // FromResults flattens manifest results into rows — the seam tests use to

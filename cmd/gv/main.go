@@ -808,20 +808,56 @@ func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
 	return cfg.Orchestrator.Dir
 }
 
+// orchestratorDirAt is the brain dir of the workspace rooted at root —
+// what a cockpit opened there would use. `gv init` works on the root it
+// just configured, which may not be the ambient workspace.
+func orchestratorDirAt(root string) string {
+	return filepath.Join(root, ".grove", "orchestrator")
+}
+
+// brainStateOf reports the orchestrator brain's drift state for the
+// wizard step's "current" column (absent · current · stale · unstamped).
+func brainStateOf(root string, force bool) string {
+	plan, err := bootstrap.InspectBrain(orchestratorDirAt(root), orchestrator.ClaudeMd, force)
+	if err != nil {
+		return ""
+	}
+	return string(plan.State)
+}
+
+// refreshOrchestratorBrain is the `orchestrator-md` step: seed an absent
+// brain, leave an up-to-date one alone, and drop CLAUDE.md.new beside a
+// brain whose seed stamp has moved. It never overwrites an existing
+// brain — the human diffs and merges (grove-190).
+func refreshOrchestratorBrain(root string, force bool) error {
+	plan, wrote, err := bootstrap.RefreshBrain(orchestratorDirAt(root), orchestrator.ClaudeMd, force)
+	if err != nil {
+		return err
+	}
+	mark := "•"
+	if wrote != "" {
+		mark = "✓"
+	}
+	fmt.Printf("%s %s\n", mark, plan.Note)
+	if plan.Action == bootstrap.ActionNew {
+		fmt.Printf("   → diff %s %s\n", filepath.Join(orchestratorDirAt(root), bootstrap.BrainFile), wrote)
+	}
+	return nil
+}
+
 // seedOrchestratorDir creates an orchestrator brain dir and installs the
 // CLAUDE.md brain on first run. Shared by the cockpit build and the
 // detached chat spawn (grove-198), which must seed a twin exactly the way
-// a locally opened cockpit would.
+// a locally opened cockpit would. Never touches a brain that already
+// exists — a moved seed is `gv doctor`'s row to raise and
+// `gv init --only orchestrator-md`'s job to deliver (grove-190).
 func seedOrchestratorDir(orchDir string) error {
-	if err := os.MkdirAll(orchDir, 0o755); err != nil {
+	wrote, err := bootstrap.SeedBrain(orchDir, orchestrator.ClaudeMd)
+	if err != nil {
 		return err
 	}
-	claudeMd := filepath.Join(orchDir, "CLAUDE.md")
-	if _, err := os.Stat(claudeMd); os.IsNotExist(err) {
-		if err := os.WriteFile(claudeMd, []byte(orchestrator.ClaudeMd), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("→ installed orchestrator CLAUDE.md at", claudeMd)
+	if wrote != "" {
+		fmt.Println("→ installed orchestrator CLAUDE.md at", wrote)
 	}
 	return nil
 }
@@ -1629,6 +1665,9 @@ func cmdInit(args []string) error {
 	fs.BoolVar(&f.AgentsMD, "agents-md", false, "generate AGENTS.md via a one-shot agent")
 	fs.BoolVar(&f.NoAgentsMD, "no-agents-md", false, "skip the AGENTS.md step")
 	fs.BoolVar(&f.ForceAgentsMD, "force-agents-md", false, "write AGENTS.md.new when AGENTS.md exists")
+	fs.BoolVar(&f.OrchestratorMD, "orchestrator-md", false, "refresh the orchestrator brain from the built-in seed")
+	fs.BoolVar(&f.NoOrchestratorMD, "no-orchestrator-md", false, "skip the orchestrator brain step")
+	fs.BoolVar(&f.ForceOrchestratorMD, "force-orchestrator-md", false, "write CLAUDE.md.new even for an unstamped (hand-managed) brain")
 	fs.StringVar(&f.Label, "label", "", "workspace label (cockpit session grove-<label>)")
 	_ = parseAnywhere(fs, args)
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -1676,6 +1715,7 @@ func cmdInit(args []string) error {
 		HooksPaths:     hookPaths,
 		Scope:          scope,
 		DetectedLabel:  filepath.Base(root),
+		BrainState:     brainStateOf(root, f.ForceOrchestratorMD),
 		Flags:          f,
 	}
 	steps, err := wizard.Build(in)
@@ -1763,11 +1803,16 @@ func cmdInit(args []string) error {
 			fmt.Printf("✓ wrote %s — review it, then commit\n", target)
 		}
 	}
+	if a.RefreshOrchestratorMD {
+		if err := refreshOrchestratorBrain(root, f.ForceOrchestratorMD); err != nil {
+			fmt.Fprintf(os.Stderr, "orchestrator-md: %v\n", err)
+		}
+	}
 
 	// The summary board: what's available, what would improve this repo.
 	fmt.Println()
 	cfg, cfgErr := loadCfg()
-	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr))
+	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr, orchestratorDirAt(root)))
 	fmt.Printf("\nnext: gv grab   (list backlog) · gv grab task-001 · gv   (cockpit)\n")
 	return nil
 }
@@ -3533,7 +3578,7 @@ func cmdDoctor(args []string) error {
 		return fmt.Errorf("usage: gv doctor [--json]")
 	}
 	cfg, cfgErr := loadCfg()
-	rows := doctor.Run(cfg, cfgErr)
+	rows := doctor.Run(cfg, cfgErr, orchestratorDirFor(ambient.ws, cfg))
 	if jsonOut {
 		if err := doctor.RenderJSON(os.Stdout, rows); err != nil {
 			return err

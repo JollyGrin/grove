@@ -16,9 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/orchestrator"
 )
 
 // Severity says what a failing connection does: error blocks the verbs in
@@ -95,6 +97,13 @@ type Env struct {
 	HookSettingsPaths func(workers []string) []string
 	GOOS              string
 	Home              string
+
+	// OrchestratorDir is the workspace brain dir the seed-drift row
+	// checks; "" drops the row (nothing to compare). OrchestratorSeed is
+	// the embedded seed it is compared against — a seam so the row is
+	// testable without pinning the real seed's bytes.
+	OrchestratorDir  string
+	OrchestratorSeed string
 }
 
 // NewEnv builds the real-machine Env.
@@ -113,6 +122,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		HookSettingsPaths: hooks.SettingsPaths,
 		GOOS:              runtime.GOOS,
 		Home:              home,
+		OrchestratorSeed:  orchestrator.ClaudeMd,
 	}
 }
 
@@ -182,6 +192,34 @@ func checkFile(path string) func(Env) Status {
 		}
 		return Status{State: StateOK}
 	}
+}
+
+// checkOrchestratorBrain compares the workspace's orchestrator brain
+// against the embedded seed by its stamp alone (grove-190), so prose the
+// operator added around the stamp never reads as drift. Two states stay
+// green on purpose: a brain not seeded yet (the cockpit seeds it on
+// first run) and a brain with no stamp at all (hand-managed from before
+// stamping — reported, never nagged).
+func checkOrchestratorBrain(e Env) Status {
+	b, err := e.ReadFile(filepath.Join(e.OrchestratorDir, bootstrap.BrainFile))
+	if err != nil {
+		return Status{State: StateOK, Info: "not seeded yet — the cockpit seeds it on first run"}
+	}
+	plan := bootstrap.PlanBrain(string(b), true, e.OrchestratorSeed, false)
+	switch plan.State {
+	case bootstrap.BrainCurrent:
+		return Status{State: StateOK, Info: "seed " + plan.Want}
+	case bootstrap.BrainUnstamped:
+		return Status{State: StateOK, Info: "hand-managed, no seed stamp"}
+	}
+	info := "seed moved " + plan.Have + " → " + plan.Want
+	// The refresh already ran and the human hasn't merged yet: say so,
+	// so the row doesn't read as "you never did anything".
+	if nb, err := e.ReadFile(filepath.Join(e.OrchestratorDir, bootstrap.BrainFile+".new")); err == nil &&
+		bootstrap.BrainStamp(string(nb)) == plan.Want {
+		info += "; " + bootstrap.BrainFile + ".new is waiting to be diffed in"
+	}
+	return Status{State: StateMissing, Info: info}
 }
 
 func checkCLIAuth(name string, args ...string) func(Env) Status {

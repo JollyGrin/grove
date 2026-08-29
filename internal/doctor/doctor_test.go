@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/doctor"
@@ -108,6 +109,91 @@ func TestFullRowSet(t *testing.T) {
 		if g.ID != w.id || g.Severity != w.severity || g.State != w.state || g.Pack != w.pack {
 			t.Errorf("row %d: got {%s %s %s pack=%q}, want {%s %s %s pack=%q}",
 				i, g.ID, g.Severity, g.State, g.Pack, w.id, w.severity, w.state, w.pack)
+		}
+	}
+}
+
+// The orchestrator brain row (grove-190) is the delivery tripwire for a
+// moved seed: the cockpit only ever seeds an ABSENT brain, so drift can
+// only surface here. It stays green on a freshly seeded workspace and on
+// a hand-managed (unstamped) brain; a stale stamp flags with the refresh
+// command as the remedy.
+func TestOrchestratorBrainRow(t *testing.T) {
+	const seed = "# seed v2\n"
+	brainEnv := func(content string, readErr error) connections.Env {
+		env := happyEnv(testConfig())
+		env.OrchestratorDir = "/ws/.grove/orchestrator"
+		env.OrchestratorSeed = seed
+		env.ReadFile = func(name string) ([]byte, error) {
+			if name == "/ws/.grove/orchestrator/CLAUDE.md" {
+				if readErr != nil {
+					return nil, readErr
+				}
+				return []byte(content), nil
+			}
+			return happyEnv(testConfig()).ReadFile(name)
+		}
+		return env
+	}
+	find := func(t *testing.T, env connections.Env) doctor.Row {
+		t.Helper()
+		for _, r := range rows(env) {
+			if r.ID == "orchestrator-md" {
+				return r
+			}
+		}
+		t.Fatal("no orchestrator-md row")
+		return doctor.Row{}
+	}
+
+	fresh := find(t, brainEnv(bootstrap.StampSeed(seed), nil))
+	if fresh.State != "ok" || fresh.Severity != "warn" {
+		t.Errorf("freshly seeded: %+v, want ok/warn", fresh)
+	}
+	if fresh.Title != "orchestrator brain up to date" {
+		t.Errorf("title = %q", fresh.Title)
+	}
+
+	stale := find(t, brainEnv(bootstrap.StampSeed("# seed v1\n")+"\nmy own notes\n", nil))
+	if stale.State != "warn" {
+		t.Errorf("stale stamp: state %q, want warn", stale.State)
+	}
+	if stale.Fix != "gv init --only orchestrator-md" {
+		t.Errorf("fix = %q, want the refresh command", stale.Fix)
+	}
+	if !strings.Contains(stale.Info, "seed moved") {
+		t.Errorf("info = %q, want the stamp move", stale.Info)
+	}
+
+	// Once the refresh has dropped a current .new beside the brain, the
+	// row says it is waiting to be merged rather than reading as untouched.
+	waiting := brainEnv(bootstrap.StampSeed("# seed v1\n"), nil)
+	inner := waiting.ReadFile
+	waiting.ReadFile = func(name string) ([]byte, error) {
+		if name == "/ws/.grove/orchestrator/CLAUDE.md.new" {
+			return []byte(bootstrap.StampSeed(seed)), nil
+		}
+		return inner(name)
+	}
+	if r := find(t, waiting); r.State != "warn" || !strings.Contains(r.Info, "waiting to be diffed in") {
+		t.Errorf("pending .new: %+v", r)
+	}
+
+	handMade := find(t, brainEnv("# my own brain\n", nil))
+	if handMade.State != "ok" || !strings.Contains(handMade.Info, "hand-managed") {
+		t.Errorf("unstamped brain must be reported, not nagged: %+v", handMade)
+	}
+
+	unseeded := find(t, brainEnv("", os.ErrNotExist))
+	if unseeded.State != "ok" || !strings.Contains(unseeded.Info, "not seeded") {
+		t.Errorf("unseeded workspace: %+v, want a green 'not seeded yet' row", unseeded)
+	}
+
+	// No dir known (legacy global path, no config): the row drops out
+	// rather than checking a guessed path.
+	for _, r := range rows(happyEnv(testConfig())) {
+		if r.ID == "orchestrator-md" {
+			t.Error("row must not exist without an orchestrator dir")
 		}
 	}
 }

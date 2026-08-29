@@ -3,8 +3,9 @@
 # against scratch everything. Asserts detection lands in config, hand-edited
 # config survives --yes byte-identical, --only hooks wires the scratch
 # settings.json exactly once (ovs entries preserved), --yes never spawns the
-# agents-md run, --agents-md with a stub worker writes AGENTS.md, and
-# doctor --json renders the connections board.
+# agents-md run, --agents-md with a stub worker writes AGENTS.md, the
+# orchestrator brain refresh seeds/stamps/never-overwrites (grove-190),
+# and doctor --json renders the connections board.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -107,6 +108,41 @@ say "--only rejects unknown steps"
 if "$GV" init --only nonsense > "$SCRATCH/only.out" 2>&1; then fail "unknown --only must error"; fi
 grep -q 'agents-md' "$SCRATCH/only.out" || fail "error must list valid steps"
 
+say "orchestrator brain: seeded stamped, refresh is idempotent, drift lands as .new (grove-190)"
+BRAIN="$ROOT/.grove/orchestrator/CLAUDE.md"
+[ -f "$BRAIN" ] || fail "init should have seeded the orchestrator brain"
+[ "$(grep -c 'grove-seed' "$BRAIN")" = 1 ] || fail "brain must carry exactly one seed stamp:
+$(tail -3 "$BRAIN")"
+"$GV" init --only orchestrator-md --yes > "$SCRATCH/orch1.out" 2>&1
+grep -q 'up to date' "$SCRATCH/orch1.out" || fail "matching stamp must be a no-op:
+$(cat "$SCRATCH/orch1.out")"
+[ ! -f "$BRAIN.new" ] || fail "a no-op refresh must not write .new"
+# Simulate a moved seed: rewrite the stamp, add operator prose around it.
+sed -i.bak 's/<!-- grove-seed: .* -->/<!-- grove-seed: deadbeef1234 -->/' "$BRAIN" && rm -f "$BRAIN.bak"
+printf '\n## my own section\n' >> "$BRAIN"
+BEFORE="$(cat "$BRAIN")"
+"$GV" init --only orchestrator-md --yes > "$SCRATCH/orch2.out" 2>&1
+grep -q 'seed moved' "$SCRATCH/orch2.out" || fail "stale stamp must be reported:
+$(cat "$SCRATCH/orch2.out")"
+[ -f "$BRAIN.new" ] || fail "stale stamp must write CLAUDE.md.new"
+[ "$(cat "$BRAIN")" = "$BEFORE" ] || fail "grove overwrote an existing brain"
+"$GV" init --only orchestrator-md --yes > /dev/null 2>&1   # twice: no duplicates
+[ "$(grep -c 'grove-seed' "$BRAIN.new")" = 1 ] || fail ".new must carry exactly one stamp"
+[ "$(cat "$BRAIN")" = "$BEFORE" ] || fail "second refresh overwrote the brain"
+"$GV" doctor > "$SCRATCH/orchdoc.txt" 2>&1 || true
+grep -q 'orchestrator brain up to date' "$SCRATCH/orchdoc.txt" || fail "doctor must carry the brain row:
+$(cat "$SCRATCH/orchdoc.txt")"
+grep -q 'seed moved' "$SCRATCH/orchdoc.txt" || fail "doctor must flag the stale stamp"
+# A hand-managed brain (no stamp at all) is reported, never rewritten.
+rm -f "$BRAIN.new"; printf '# my own brain\n' > "$BRAIN"
+"$GV" init --only orchestrator-md --yes > "$SCRATCH/orch3.out" 2>&1
+grep -q 'hand-managed' "$SCRATCH/orch3.out" || fail "unstamped brain must be reported:
+$(cat "$SCRATCH/orch3.out")"
+[ ! -f "$BRAIN.new" ] || fail "an unstamped brain must not be nagged with a .new"
+"$GV" init --only orchestrator-md --yes --force-orchestrator-md > /dev/null 2>&1
+[ -f "$BRAIN.new" ] || fail "--force-orchestrator-md must write .new for an unstamped brain"
+[ "$(cat "$BRAIN")" = "# my own brain" ] || fail "forced run overwrote the brain"
+
 say "doctor renders the connections board"
 "$GV" doctor --json > "$SCRATCH/doctor.json" 2>&1 || true   # exit 1 = expected (scratch gh auth)
 python3 -c "
@@ -115,7 +151,7 @@ data = json.load(open('$SCRATCH/doctor.json'))
 assert data.get('schema_version') == 1, f'missing/wrong schema_version: {data.get(\"schema_version\")}'
 rows = data['rows']
 ids = {r['id'] for r in rows}
-need = {'binary:tmux','gh-auth'}
+need = {'binary:tmux','gh-auth','orchestrator-md'}
 missing = need - ids
 assert not missing, f'doctor rows missing {missing}'
 assert any(i.startswith('hooks:') for i in ids), f'per-profile hooks row missing: {ids}'

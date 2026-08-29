@@ -88,6 +88,22 @@ func Core(env Env) []Connection {
 		conns = append(conns, remoteHostConnections(env)...)
 	}
 
+	// The orchestrator brain's seed-drift row (grove-190): the cockpit
+	// only ever seeds an ABSENT brain, so without this row a seed
+	// improvement would silently never reach an already-seeded workspace.
+	if env.OrchestratorDir != "" {
+		conns = append(conns, Connection{
+			ID:          "orchestrator-md",
+			Step:        "orchestrator-md",
+			Kind:        KindFile,
+			Severity:    SeverityWarn,
+			RequiredFor: []string{"ui"},
+			Title:       "orchestrator brain up to date",
+			Fix:         "gv init --only orchestrator-md",
+			Check:       checkOrchestratorBrain,
+		})
+	}
+
 	// One row per worker-profile settings.json — hooks only fire for the
 	// profile they're installed in (a plain-claude fleet needs ~/.claude,
 	// the Grid's ccwork needs ~/.cc-work).

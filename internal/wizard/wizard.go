@@ -35,7 +35,7 @@ const (
 // Step is one wizard screen. Value carries the resolved answer: pre-filled
 // by Build (precedence applied), overwritten by the interactive runner.
 type Step struct {
-	ID       string // the --only namespace: repo·setup·worker·provider·ntfy·hooks·agents-md
+	ID       string // the --only namespace: repo·setup·worker·provider·ntfy·hooks·agents-md·orchestrator-md
 	Title    string
 	Detected string
 	Current  string
@@ -46,7 +46,7 @@ type Step struct {
 }
 
 // StepIDs is the --only namespace, in run order.
-var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "workspace"}
+var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "orchestrator-md", "workspace"}
 
 // Flags are the prompt twins. Empty string / false = not provided.
 type Flags struct {
@@ -63,6 +63,10 @@ type Flags struct {
 	AgentsMD      bool
 	NoAgentsMD    bool
 	ForceAgentsMD bool
+
+	OrchestratorMD      bool
+	NoOrchestratorMD    bool
+	ForceOrchestratorMD bool
 }
 
 // Input is everything Build needs to decide the step set.
@@ -75,6 +79,7 @@ type Input struct {
 	HooksPaths     []string // worker-profile settings.json files hooks would land in
 	Scope          string   // workspace scope: repo | parent
 	DetectedLabel  string   // default workspace label (root basename)
+	BrainState     string   // orchestrator brain state, for the step's Current column
 	Flags          Flags
 }
 
@@ -166,6 +171,14 @@ func Build(in Input) ([]Step, error) {
 			Current: in.Probe.AgentContext.Kind,
 			On:      resolveAgentsMD(f, in),
 		},
+		{
+			ID: "orchestrator-md", Kind: KindConfirm,
+			Title: "refresh the orchestrator brain (.grove/orchestrator/CLAUDE.md) " +
+				"from the built-in seed — seeds it when absent; when the seed has " +
+				"moved you get CLAUDE.md.new to diff. Your brain is never overwritten",
+			Current: in.BrainState,
+			On:      resolveOrchestratorMD(f),
+		},
 	}
 
 	// Parent scope: per-repo steps don't apply (children register as
@@ -174,7 +187,7 @@ func Build(in Input) ([]Step, error) {
 		var kept []Step
 		for _, s := range steps {
 			switch s.ID {
-			case "workspace", "provider", "ntfy", "hooks":
+			case "workspace", "provider", "ntfy", "hooks", "orchestrator-md":
 				kept = append(kept, s)
 			}
 		}
@@ -235,10 +248,25 @@ func resolveAgentsMD(f Flags, in Input) bool {
 	}
 }
 
+// resolveOrchestratorMD: safe, local, and never destructive — it only
+// ever writes a brain that does not exist yet or a .new file beside one
+// that does. So it runs by default, --yes included; --no-orchestrator-md
+// opts out.
+func resolveOrchestratorMD(f Flags) bool {
+	switch {
+	case f.NoOrchestratorMD:
+		return false
+	case f.OrchestratorMD, f.Only == "orchestrator-md":
+		return true
+	default:
+		return true
+	}
+}
+
 // Answers extracts the final decisions from (possibly runner-edited) steps.
 type Answers struct {
-	Label, Base, Setup, Worker, Provider, Ntfy string
-	InstallHooks, RunAgentsMD                  bool
+	Label, Base, Setup, Worker, Provider, Ntfy       string
+	InstallHooks, RunAgentsMD, RefreshOrchestratorMD bool
 }
 
 func Collect(steps []Step) Answers {
@@ -261,6 +289,8 @@ func Collect(steps []Step) Answers {
 			a.InstallHooks = s.On
 		case "agents-md":
 			a.RunAgentsMD = s.On
+		case "orchestrator-md":
+			a.RefreshOrchestratorMD = s.On
 		}
 	}
 	return a
