@@ -51,6 +51,18 @@ type Report struct {
 	WorktreeProcesses []WorktreeProcess `json:"worktree_processes"`
 	StalePrompts      []string          `json:"stale_prompts"`
 	EventsSizeBytes   int64             `json:"events_size_bytes"`
+	// ChatSessions (additive, grove-203) lists the workspace's live
+	// detached orchestrator chats (`grove-chat-<label>-<n>`, grove-198).
+	// They are their OWN tmux sessions, deliberately outside the
+	// workspace's `grove-<label>` — so `gv park`'s kill-session never
+	// reaches them and, until this field existed, nothing on the machine
+	// could see the claude processes they leave behind. Report-only.
+	//
+	// Filled by the CALLER, not by Gather: telling a chat session from a
+	// cockpit whose label merely looks like one is a workspace-REGISTRY
+	// question (ParseChatSessions), and audit deliberately does not reach
+	// for the registry. Gather leaves it nil; `gv audit` sets it.
+	ChatSessions []tmux.ChatSession `json:"chat_sessions"`
 }
 
 // Gather cross-checks every active task against reality and scans for

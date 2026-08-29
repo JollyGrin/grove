@@ -9,6 +9,31 @@
 
 ## Now (2026-07-12)
 
+- [x] Chat sessions are reapable (grove-203, 2026-08-29): grove-198 gave a
+      workspace's detached orchestrator chats their own
+      `grove-chat-<label>-<n>` tmux sessions — deliberately outside
+      `grove-<label>`, so an attaching ssh client can't resize the
+      cockpit's shared windows and the chat outlives the ssh drop — and
+      nothing reaped or reported them. `gv park` killed only the cockpit
+      session, leaving one claude process per chat alive and invisible;
+      `gv audit` knew nothing about them, so on a remote host reached only
+      over ssh there was no surface at all to notice them from. Now:
+      `tmux.ChatSessions` enumerates them (pid, pane command, attached,
+      uptime), resolving the `grove-chat-app` name collision through the
+      workspace registry the way `closablePane` does — cockpit wins, and a
+      nil check yields NOTHING, so an uninjected caller under-reports
+      rather than over-kills a dashboard. `gv audit` gains a report-only
+      CHAT SESSIONS block and an additive `chat_sessions` JSON field.
+      `gv park` keeps them running by design ("propose, then dispose" — a
+      chat is the operator's own conversation) but NAMES each survivor with
+      its pid and attach line; `gv park --chats` is the explicit reap. The
+      cockpit's X modal says the same thing before the keypress, since the
+      kill takes the dashboard that would print it. Either way the parked
+      event records `chats` (and `chats_killed`), so a park that leaves
+      processes running is durable rather than silent. `e2e/chat.sh` covers
+      audit → park → `park --chats`, and asserts the colliding `chat-app`
+      cockpit survives the reap.
+
 - [x] Paste-able attach hints survive zsh (grove-207, 2026-08-29): a word
       that STARTS with `=` is equals-expanded by zsh (macOS's default
       shell), so the printed `tmux attach -t =grove-chat-<label>-<n>` died

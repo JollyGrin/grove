@@ -199,6 +199,13 @@ type Model struct {
 	// consumes it.
 	armedHost string
 
+	// parkChats holds the detached chat sessions (grove-198) that would
+	// SURVIVE a park, sampled when the X modal opens (grove-203). The
+	// cockpit's kill-session does not reach them, and it takes this
+	// dashboard down with it — so the confirmation is the only place a
+	// warning can still be read.
+	parkChats []string
+
 	// greeted latches after the first data refresh — the A6 first-light
 	// flash fires exactly once per cockpit launch (grove-56).
 	greeted bool
@@ -1077,6 +1084,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeConfirmDone
 		}
 	case "X": // park the whole workspace (grove-33) — workspace-level, no row needed
+		// Sample the surviving chats HERE, not in the footer: the modal is
+		// redrawn every frame, and park's whole promise is that it never
+		// leaks a claude process silently (grove-203).
+		m.parkChats = LiveChats(m.label)
 		m.mode = modeConfirmClose
 	case "r":
 		// Local tasks only: PRs polled off a merged board would land a
@@ -1423,10 +1434,20 @@ var FinishTask = func(cfg *config.Config, t *state.Task, force bool) error {
 // CloseWorkspace is injected by cmd/gv (the park flow — parked event then
 // tmux.KillSession — lives there); wired at startup to avoid an import
 // cycle. It logs the durable EvWorkspaceParked BEFORE the kill so the
-// record survives the session death.
+// record survives the session death. It never reaps the workspace's
+// detached chats (grove-203) — the modal names them instead, since this
+// call takes down the dashboard that would have to print the warning.
 var CloseWorkspace = func(stateDir, label string) error {
 	return fmt.Errorf("park flow not wired")
 }
+
+// LiveChats is injected by cmd/gv: the names of this workspace's detached
+// orchestrator chat sessions (grove-198), which survive a park because they
+// are their own tmux sessions (grove-203). Sampled once when the park modal
+// opens — a tmux call per frame would be a poll — so the confirmation can
+// say what park is about to leave running. Unwired = none, and the modal
+// simply omits the line.
+var LiveChats = func(label string) []string { return nil }
 
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
 // there); wired at startup to avoid an import cycle. Returns a flash line.

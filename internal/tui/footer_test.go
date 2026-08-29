@@ -176,6 +176,26 @@ func TestFooterHeightAlwaysOne(t *testing.T) {
 	if lw := lipgloss.Width(m.viewFooter()); lw > 60 {
 		t.Errorf("confirm-close footer is %d cells, want ≤ 60", lw)
 	}
+	// grove-203: park does NOT reap the workspace's detached chats, and the
+	// kill takes this dashboard down — so the modal is the last chance to
+	// say so. Still one line, still within the width.
+	m.parkChats = []string{"grove-chat-unbrewed-1", "grove-chat-unbrewed-2"}
+	if m.footerHeight() != 1 {
+		t.Errorf("confirm-close-with-chats footerHeight = %d, want 1", m.footerHeight())
+	}
+	m.width = 220
+	out := m.viewFooter()
+	for _, want := range []string{"2 chat(s) KEEP RUNNING", "grove-chat-unbrewed-1", "gv park --chats"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("park modal must name the surviving chats (%q):\n%s", want, out)
+		}
+	}
+	for width := 40; width <= 220; width++ {
+		m.width = width
+		if lw := lipgloss.Width(m.viewFooter()); lw > width {
+			t.Errorf("width %d: confirm-close-with-chats footer is %d cells", width, lw)
+		}
+	}
 }
 
 // The flash is the only surface errors have: at every usable width it stays

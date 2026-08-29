@@ -152,6 +152,14 @@ gv workspaces                                   # the label must be listed, no â
   must be closed by hand (`C-b :kill-session`, or `tmux kill-session -t
   =<session>`); avoid `chat-`-prefixed workspace labels if you want the
   self-close.
+- Because chats sit outside `grove-<label>`, **`gv park` does not stop
+  them** (grove-203) â€” a parked workspace can still have claude processes
+  burning on the host. Park says so, one line per survivor with its pid
+  and attach hint, and records the names in the `workspace_parked` event;
+  `gv audit` lists them any time (report-only, under CHAT SESSIONS, and in
+  `--json` as `chat_sessions`). `gv park --chats` is the explicit reap.
+  The registry tie-break applies here too: a workspace labelled
+  `chat-app` is a COCKPIT, so `--chats` never touches it.
 
 ### From the cockpit: `@` (grove-199)
 

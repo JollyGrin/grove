@@ -53,7 +53,7 @@ payload under one named key.
 | Command | Payload key | Shape |
 |---|---|---|
 | `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`, `host`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
-| `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes |
+| `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes + `chat_sessions` (live detached orchestrator chats, grove-203) |
 | `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |

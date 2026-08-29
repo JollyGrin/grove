@@ -5,8 +5,10 @@ package tmux
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Exact anchors a session name as an exact-match tmux target ("=name").
@@ -888,4 +890,104 @@ func CreateChatSession(session, dir, cmd string) error {
 		return err
 	}
 	return SendKeys(pane, cmd)
+}
+
+// --- grove-203: enumerating a workspace's detached chat sessions ---
+
+// ChatSession is one live detached orchestrator chat (grove-198): its own
+// `grove-chat-<label>-<n>` tmux session, the process its single pane is
+// running, and how long it has been up. Report-only — nothing in this
+// package kills one on its own; the cockpit's kill-session never reaches
+// them, which is exactly why they have to be enumerable.
+type ChatSession struct {
+	Session  string    `json:"session"`
+	PID      int       `json:"pid"`     // the chat pane's process — claude runs under it
+	Command  string    `json:"command"` // pane_current_command ("claude"/"node" while the agent runs)
+	Attached bool      `json:"attached"`
+	Created  time.Time `json:"created"`
+}
+
+// chatListFormat asks list-panes for everything a chat report needs in one
+// call: session_* format variables resolve in a pane context too, so no
+// second list-sessions is needed to learn attachment or start time.
+const chatListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}"
+
+// ChatSessions lists the live chat sessions belonging to one workspace
+// label, oldest number first. A tmux that isn't running is an empty list,
+// not an error (SessionNames' rule) — a machine with no server has no
+// chats to leak. An empty label yields nothing: chats are spawned only
+// into a registered workspace, so the legacy global layer never owns one.
+func ChatSessions(label string, isCockpit CockpitCheck) []ChatSession {
+	if label == "" {
+		return nil
+	}
+	out, err := run("list-panes", "-a", "-F", chatListFormat)
+	if err != nil || out == "" {
+		return nil
+	}
+	return ParseChatSessions(out, label, isCockpit)
+}
+
+// ParseChatSessions is the pure half — testable without a tmux server.
+// Two filters, and the second is the one that matters: a session is chat
+// <n> of this label only if the name is `grove-chat-<label>-<n>` with a
+// numeric <n>, AND the registry does not claim that name as a COCKPIT.
+// Labels are `[a-z0-9][a-z0-9_-]*`, so `grove-chat-app-2` is chat 2 of
+// `chat-app` and equally the cockpit of a workspace labelled `chat-app-2`;
+// closablePane resolves that same collision the same way, cockpit wins.
+// Here the stake is higher — `gv park --chats` kills what this returns, so
+// mistaking a cockpit for a chat would kill a dashboard and every worker
+// under it. A nil CockpitCheck therefore yields NOTHING rather than
+// everything (CockpitCheck.cockpit's nil answer is "yes, cockpit"), which
+// keeps an uninjected caller under-reporting instead of over-killing.
+//
+// One row per session: a chat has a single pane by construction, but an
+// operator who split it must not be reported (or killed) twice.
+func ParseChatSessions(out, label string, isCockpit CockpitCheck) []ChatSession {
+	prefix := chatSessionPrefix(label)
+	nums := map[string]int{}
+	var chats []ChatSession
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimSpace(line), "\t")
+		if len(f) < 5 {
+			continue
+		}
+		name := f[0]
+		if _, dup := nums[name]; dup {
+			continue
+		}
+		n, ok := chatIndex(name, prefix)
+		if !ok || isCockpit.cockpit(name) {
+			continue
+		}
+		nums[name] = n
+		c := ChatSession{Session: name, Command: f[2], Attached: f[3] != "0"}
+		c.PID, _ = strconv.Atoi(f[1])
+		if secs, err := strconv.ParseInt(f[4], 10, 64); err == nil && secs > 0 {
+			c.Created = time.Unix(secs, 0)
+		}
+		chats = append(chats, c)
+	}
+	sort.Slice(chats, func(i, j int) bool { return nums[chats[i].Session] < nums[chats[j].Session] })
+	return chats
+}
+
+// chatIndex parses the <n> out of `grove-chat-<label>-<n>`. Digits only —
+// strconv.Atoi would happily take a signed "+1", and a session named for a
+// label that merely starts with this one is not this workspace's chat.
+func chatIndex(session, prefix string) (int, bool) {
+	rest, ok := strings.CutPrefix(session, prefix)
+	if !ok || rest == "" {
+		return 0, false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
 }

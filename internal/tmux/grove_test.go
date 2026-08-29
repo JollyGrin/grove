@@ -248,3 +248,74 @@ func TestNextChatSession(t *testing.T) {
 		}
 	}
 }
+
+// ParseChatSessions is what `gv audit` reports and `gv park --chats` kills,
+// so its two filters carry weight: the name shape, and the REGISTRY tie-break
+// for the `grove-chat-<label>-<n>` / `grove-<label>` collision (grove-203).
+func TestParseChatSessions(t *testing.T) {
+	// pane_pid, pane_current_command, session_attached, session_created
+	row := func(name, pid, cmd, attached, created string) string {
+		return strings.Join([]string{name, pid, cmd, attached, created}, "\t")
+	}
+	out := strings.Join([]string{
+		row("grove-unbrewed", "100", "gv", "1", "1700000000"), // the cockpit itself
+		row("grove-chat-unbrewed-2", "202", "claude", "0", "1700000200"),
+		row("grove-chat-unbrewed-1", "201", "node", "1", "1700000100"),
+		row("grove-chat-unbrewed-1", "999", "bash", "1", "1700000100"), // a split pane: one row per session
+		row("grove-chat-unbrewed-10", "210", "claude", "0", "1700001000"),
+		row("grove-chat-other-1", "301", "claude", "0", "1700000300"), // another workspace's chat
+		row("grove-chat-unbrewed-x", "400", "claude", "0", "1700000400"),
+		row("grove-chat-unbrewed-", "401", "claude", "0", "1700000400"),
+		row("grove-chat-unbrewedextra-1", "402", "claude", "0", "1700000400"),
+		row("pr-unbrewed-p2p", "500", "claude", "0", "1700000500"),
+		"malformed-without-tabs",
+	}, "\n")
+
+	never := CockpitCheck(func(string) bool { return false })
+	got := ParseChatSessions(out, "unbrewed", never)
+	want := []string{"grove-chat-unbrewed-1", "grove-chat-unbrewed-2", "grove-chat-unbrewed-10"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d chats %v, want %v", len(got), got, want)
+	}
+	for i, w := range want {
+		if got[i].Session != w {
+			t.Errorf("chat %d = %q, want %q (numeric order, not lexical)", i, got[i].Session, w)
+		}
+	}
+	if got[0].PID != 201 || got[0].Command != "node" || !got[0].Attached {
+		t.Errorf("first chat = %+v, want pid 201 / node / attached (the FIRST pane row wins)", got[0])
+	}
+	if got[1].Attached {
+		t.Errorf("session_attached 0 must read detached: %+v", got[1])
+	}
+	if got[0].Created.Unix() != 1700000100 {
+		t.Errorf("created = %v, want the session_created epoch", got[0].Created)
+	}
+
+	// The collision (grove-199's rule, applied to killing rather than
+	// closing): a workspace labelled `unbrewed-2` owns cockpit session
+	// `grove-unbrewed-2`, but a label like `chat-unbrewed-2` owns
+	// `grove-chat-unbrewed-2` — the exact shape of chat 2 of `unbrewed`.
+	// Registered ⇒ cockpit ⇒ never a chat, or park --chats would kill a
+	// dashboard and every worker under it.
+	registered := CockpitCheck(func(s string) bool { return s == "grove-chat-unbrewed-2" })
+	got = ParseChatSessions(out, "unbrewed", registered)
+	for _, c := range got {
+		if c.Session == "grove-chat-unbrewed-2" {
+			t.Fatalf("a REGISTERED cockpit must never be reported as a chat: %v", got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d chats, want 2 with the cockpit reading excluded", len(got))
+	}
+
+	// A nil check answers "cockpit" to everything: an uninjected caller
+	// under-reports rather than over-kills.
+	if got := ParseChatSessions(out, "unbrewed", nil); len(got) != 0 {
+		t.Errorf("nil CockpitCheck must yield no chats, got %v", got)
+	}
+	// No label = the legacy global layer, which owns no chats.
+	if got := ChatSessions("", never); got != nil {
+		t.Errorf("empty label must yield no chats, got %v", got)
+	}
+}
