@@ -198,7 +198,9 @@ func TestWorkspaceStepAndParentScope(t *testing.T) {
 	for _, s := range steps3 {
 		ids = append(ids, s.ID)
 	}
-	if strings.Join(ids, " ") != "workspace provider ntfy hooks" {
+	// The orchestrator brain is workspace-wide — a parent workspace has a
+	// cockpit and a brain too, so its step survives the narrowing.
+	if strings.Join(ids, " ") != "workspace provider ntfy hooks orchestrator-md" {
 		t.Errorf("parent scope steps = %v", ids)
 	}
 
@@ -207,6 +209,33 @@ func TestWorkspaceStepAndParentScope(t *testing.T) {
 	if in3.Doc.Get("workspace", "label") != "unbrewed" || in3.Doc.Get("workspace", "scope") != "parent" {
 		t.Errorf("workspace block not applied: label=%q scope=%q",
 			in3.Doc.Get("workspace", "label"), in3.Doc.Get("workspace", "scope"))
+	}
+}
+
+// The orchestrator brain refresh is safe and local (it never overwrites
+// an existing brain), so it runs by default — --yes included — and only
+// an explicit --no-orchestrator-md turns it off.
+func TestOrchestratorMDStep(t *testing.T) {
+	on, err := Build(freshInput(t, Flags{Yes: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !step(t, on, "orchestrator-md").On {
+		t.Error("--yes should refresh the orchestrator brain (local, never overwrites)")
+	}
+	off, err := Build(freshInput(t, Flags{NoOrchestratorMD: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step(t, off, "orchestrator-md").On {
+		t.Error("--no-orchestrator-md must turn the step off")
+	}
+	only, err := Build(freshInput(t, Flags{Only: "orchestrator-md", Yes: true}))
+	if err != nil || len(only) != 1 || only[0].ID != "orchestrator-md" || !only[0].On {
+		t.Errorf("--only orchestrator-md must resolve to that one step, ON: %v %v", only, err)
+	}
+	if _, err := Build(freshInput(t, Flags{Only: "nonsense"})); err == nil || !strings.Contains(err.Error(), "orchestrator-md") {
+		t.Errorf("unknown --only must list orchestrator-md as valid, got %v", err)
 	}
 }
 

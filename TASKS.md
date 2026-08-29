@@ -9,6 +9,31 @@
 
 ## Now (2026-07-12)
 
+- [x] Refresh path for already-seeded orchestrator brains (grove-190,
+      2026-08-29): grove-189 improved the embedded seed, but
+      `buildCockpit` writes it only when
+      `<workspace>/.grove/orchestrator/CLAUDE.md` is ABSENT — correct (a
+      customized brain must never be clobbered), so the fix reached zero
+      of the nine already-seeded Mac brains. Every seed write now ends
+      with a stamp line `<!-- grove-seed: <short sha256 of the seed
+      body> -->`, and `gv init --only orchestrator-md` is the delivery
+      path: absent → seed it; stamp matches → "up to date"; stamp stale →
+      `CLAUDE.md.new` beside it plus a `diff` hint, **never** an
+      overwrite. Drift is decided from the stamp ALONE, so an operator
+      who edited the prose around it still gets told when the seed moved;
+      a brain with no stamp at all predates stamping, so it is reported
+      as hand-managed and left alone (`--force-orchestrator-md` writes
+      the `.new` when the human asks for it). `gv doctor` gains the
+      "orchestrator brain up to date" warn row with `gv init --only
+      orchestrator-md` as the remedy — green on a fresh seed, on an
+      unseeded workspace (the cockpit seeds it on first run) and on a
+      hand-managed brain; it flags a moved stamp and says when a `.new`
+      is already waiting to be diffed in. Decision logic is pure and
+      tested in `internal/bootstrap` (`PlanBrain`/`RefreshBrain`/
+      `SeedBrain`); `cmd/gv` is glue; `e2e/wizard.sh` covers the four
+      cases end to end. Operator follow-up: one
+      `gv init --only orchestrator-md` pass per Mac workspace.
+
 - [x] Orchestrator seed brain refreshed (grove-189, 2026-08-29): the
       embedded seed `orchestrator/CLAUDE.md` — written into
       `<workspace>/.grove/orchestrator/CLAUDE.md` on first cockpit run —
