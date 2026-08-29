@@ -35,6 +35,17 @@ changes the behavior.
   `session.EncodePath` replaces `/` and `.` with `-`. Reuse the same
   worktree path to preserve resumability; re-creating a worktree at a new
   path orphans the transcript → pickup-prompt fallback.
+- The `.` rule is the one people drop. In shell the encoding is **two**
+  substitutions — `sed -e 's#/#-#g' -e 's#\.#-#g'` — and a dotted path
+  segment doubles the dash: `/home/dean/git/grove/.grove/orchestrator` →
+  `-home-dean-git-grove--grove-orchestrator`, never
+  `…-grove-.grove-orchestrator`. A one-rule sed points at a directory that
+  does not exist, and every consumer then reports "no transcript" rather
+  than an error (grove-202).
+- Transcript **filenames are session UUIDs**, so a directory listing has no
+  chronological meaning. Pick the current transcript by mtime
+  (`max(files, key=os.path.getmtime)`); `sorted(glob(...))[-1]` returns a
+  stale session — verified on a 7-file project dir where the two disagree.
 - `claude --resume <id>` works ≥6 days after the tmux window died, and a
   resumed session fires SessionStart with the **same** session_id — hook
   re-capture needs no special-casing. It opens idle awaiting input; it

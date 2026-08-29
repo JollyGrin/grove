@@ -51,14 +51,28 @@ gv ls --json --no-pr                     # what is in flight here, right now
 Read that workspace's `.grove/config.yaml` for `repos:` (the `--repo`
 names you will emit), `provider.kind` (where the backlog lives), and any
 workspace-level `model_profiles:` overrides. The global
-`~/.config/grove/config.yaml` holds the default profiles and pricing;
-workspaces deep-merge over it.
+`~/.config/grove/config.yaml` holds the default profiles and pricing.
+
+**How the two layers combine** (`internal/config/merge.go`) — this decides
+what you are actually allowed to read out of the global file:
+
+| Section | Behavior when the workspace sets it |
+|---|---|
+| `repos:`, `provider:` | **replaced wholesale** — the global entries vanish, no per-repo or per-sub-field merging |
+| `orchestrator:` | workspace-only; the global block is dropped *even when the workspace sets nothing* |
+| everything else (`model_profiles:`, `cost:`, `hosts:`, `linear:`, `notify:`, …) | deep-merged field-wise, workspace wins on a collision |
+
+So a workspace that lists one repo has exactly one repo — never assume a
+globally-configured repo is reachable from inside a workspace, and never
+emit a `--repo` name you did not read out of the merged view.
 
 If the operator named a host, plan for it: `grab`, `ls`, `answer`,
 `nudge`, `diff`, `pause`, `untrack`, `adopt`, `handoff` all take `--host`,
-so a lane assignment can target the remote box. Note that this skill lives
-in `~/.claude/skills/` — it is **per-machine**, so a remote host needs its
-own copy before an orchestrator there can use it.
+so a lane assignment can target the remote box. Note where this skill
+lives: it is **repo-tracked** at `<workspace>/.claude/skills/model-lanes/`,
+so it travels with a clone but not with a `--host` dispatch — a remote host
+needs the repo checked out (or its own copy under `~/.claude/skills/`)
+before an orchestrator there can load it.
 
 ## Step 1 — read live capacity on every lane
 
@@ -70,9 +84,21 @@ on it — and keep working on everything that does not depend on it.
 
 ```bash
 set -a; . ~/.config/grove/.env; set +a
+: "${ZAI_API_KEY:?not in ~/.config/grove/.env — see below}"
 curl -s -H "Authorization: Bearer $ZAI_API_KEY" \
   https://api.z.ai/api/monitor/usage/quota/limit
 ```
+
+**Where `ZAI_API_KEY` comes from.** The *name* is not special to grove: it
+is whatever the profile's `auth_token_env` says, and the shipped `zai-glm`
+profile says `ZAI_API_KEY` (`auth_token_env` holds the env VAR NAME, never
+the key — see `config.example.yaml`). The *value* lives in
+`~/.config/grove/.env`, the same file `gv` sources when it wraps a worker,
+as `export ZAI_API_KEY=<key from z.ai's API-key page>`. That file is
+per-machine and never committed, so on any host but the one where the plan
+was set up this check **401s silently** and the lane looks capped when it is
+merely unauthenticated. Read the profile's `auth_token_env` first and probe
+that variable; a 401 here means "no key on this box", not "no credits".
 
 `limits[]` carries `unit:3,number:5` (the **5-hour** bucket) and
 `unit:6,number:1` (the **weekly** bucket), each with `usage` (cap),
@@ -106,7 +132,31 @@ sizes), not of the model. Derive it here instead of assuming:
 gv cost --analyze --json    # tokens and turns per ticket, this workspace
 ```
 
-Mean resident context = `total_tokens / turns` over recent tickets. Then:
+There is **no `total_tokens` field**. Each row is a ticket, and the total
+is the sum of the five token counters under `cost:` —
+`input_tokens + output_tokens + cache_create_5m_tokens +
+cache_create_1h_tokens + cache_read_tokens`. (`models[].tokens` is that
+same sum for one model, so never add it to the others — it double-counts.)
+Mean resident context is that total over total turns:
+
+```bash
+gv cost --analyze --json | jq -r '
+  [ .report.rows[].cost | select(.turns > 0) ] as $c
+  | ($c | map(.input_tokens + .output_tokens + .cache_create_5m_tokens
+              + .cache_create_1h_tokens + .cache_read_tokens) | add) as $tok
+  | ($c | map(.turns) | add) as $turns
+  | ($c | map(.cache_read_tokens) | add) as $cache
+  | "tickets      \($c|length)
+turns        \($turns)
+tokens       \($tok)
+resident_k   \(($tok/$turns/1000)|floor)k
+cache share  \((($cache/$tok)*100)|floor)%"'
+```
+
+Live on the grove workspace, 2026-08-29: 16 tickets, ~1,070 turns, ~115M
+tokens → **~108k resident, 95% cache read**. It moves as work lands (the
+same query an hour later read 107k), which is exactly why you re-run it
+rather than quoting this line. Then:
 
 | Lane | credits or $ per turn |
 |---|---|
@@ -118,9 +168,11 @@ Mean resident context = `total_tokens / turns` over recent tickets. Then:
 The `1.26` grosses up cache reads to include fresh input and output.
 Calibrated against a measured grove workspace: 91k resident → 18.6
 credits/turn on GLM-5.3 at peak; 80 turns → 1,485 credits (measured
-1,485). Re-derive the weights for a workspace whose cache-read share is
-far from ~96% — read `cache_read_tokens / total` straight out of
-`gv cost --analyze --json`.
+1,485). Resident context drifts as a repo grows — the same query read 108k
+on 2026-08-29, i.e. ~21.6 credits/turn — so **re-run the query each time**
+rather than reusing a number from a previous proposal. Re-derive the
+weights too for a workspace whose cache-read share is far from ~95%; the
+query above prints it.
 
 ## Step 3 — size the backlog
 
@@ -144,10 +196,39 @@ tickets on a windowed lane. Estimate turns from the body:
 Add the workspace's fixed gate cost (build/vet/test/lint + e2e + docs
 rows) — ~10–15 turns in a Go repo with e2e suites, less in a docs repo.
 
+**Which sizing rule wins.** `ticket-writing` says split anything over ~60
+turns; the table above still carries a 60–90 band because *estimating an
+already-open ticket* is a different act from *writing one*. **The split
+rule wins whenever splitting is still available** — an honest 60–90
+estimate is a ticket-splitting signal first and a routing input second, and
+splitting an oversized ticket is called out in Step 4 as the best use of a
+nearly-drained Claude sub for exactly this reason. Route a 60–90 ticket
+whole only when it is already open, cannot be split without losing
+acceptance criteria that check against main on their own, and the lane's
+ceiling covers it — which at grove's resident size rules out a **peak**
+z.ai window (ceiling ~80 turns) for anything near the top of the band.
+
 Then apply the **windowed-lane ceiling**: a ticket must fit inside the
-5-hour bucket alongside whatever else is in flight. Compute it; do not
-assume. On z.ai Lite (2,000 credits) at grove's resident size that is
-~40 turns at peak, ~80 off-peak.
+5-hour bucket alongside whatever else is in flight. Compute it from the
+credits/turn you calibrated in Step 2; never carry a number over from a
+previous run.
+
+**Worked example** — z.ai Lite, grove at 91k resident. The 5-hour bucket's
+`usage` field reads 2,000 credits (confirmed live 2026-08-29 on the
+`unit:3,number:5` limit):
+
+| | peak | off-peak |
+|---|---:|---:|
+| credits/turn — `91 × 0.20`, halved off-peak | 18.6 | 9.3 |
+| whole bucket ÷ credits/turn | ~107 turns | ~215 turns |
+| **ceiling under the ≤75% in-flight rule** | **~80 turns** | **~160 turns** |
+
+Cross-check: the measured 80-turn ticket cost 1,485 credits — 74% of the
+bucket, i.e. exactly the peak ceiling, which is what makes 80 the number
+rather than a rounding. **Apply the peak multiplier once.** It is already
+baked into the 0.20 credits/k weight; halving a second time for off-peak
+(or doubling a second time for peak) is the arithmetic error that used to
+put this ceiling at 40/80.
 
 ## Step 4 — route
 
@@ -164,14 +245,25 @@ windowed ceiling. Three rules:
 
 1. **Keep in-flight credits under ~75% of the 5-hour bucket.** Fleet width
    is not a constant — it is the bucket divided by what the tickets
-   actually cost, and that swings 2× with peak/off-peak. At peak an
-   average grove ticket is ~74% of the whole bucket, so width really is 1;
-   off-peak the same ticket is ~19% and width 3 is comfortable.
+   actually cost, and that swings 2× with peak/off-peak. At peak the
+   average grove ticket (80 turns, 1,485 credits) is ~74% of the whole
+   2,000-credit bucket, so width really is 1. Off-peak the same ticket is
+   742 credits — **~37%**, not 19% — so width 2 fits (1,484, still ~74%)
+   and width 3 does not (2,226, over the whole bucket).
 2. **Prefer off-peak.** Same work, half the credits.
-3. **Never set `CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"`**, even though
-   z.ai's own Claude Code docs recommend it. Credits ∝ resident context ×
-   turns, so on a credit meter aggressive compaction is *cheaper* — the
-   opposite of the Claude sub.
+3. **Never raise `CLAUDE_CODE_AUTO_COMPACT_WINDOW` on the credit meter**
+   — not to `"1000000"`, even though z.ai's own Claude Code docs recommend
+   it. Credits ∝ resident context × turns, so on a credit meter aggressive
+   compaction is *cheaper* — the opposite of the Claude sub. The shipped
+   `zai-glm` profile correctly sets no such var.
+   **Exception — profiles whose backend requires it.** The shipped `kimi`
+   profile does set `CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"`
+   (README.md, `config.example.yaml`, and the grove-103 `env:` passthrough
+   it exists for): Kimi Code's 1M window needs it to function, and kimi is
+   a pay-per-token lane where the trade is a dollar cost, not a hard
+   window that strands work. The rule is about the **flat-rate credit
+   meter**, not about the variable in general — never strip it from a
+   profile that ships with it.
 
 **OpenRouter** — see the lane reference below. This is where the backlog
 goes when the sub is low **and** the flat plan is capped, and it is the
@@ -235,7 +327,7 @@ single steer or rescue. Sort by capability first and treat everything
 under ~$2/ticket as free. The tiers that have held up:
 
 - **~$0.06/ticket** — `qwen/qwen3.7-flash` is **verified working** on real
-  tickets (see Verified lanes above) and is the default first choice for
+  tickets (see Verified lanes below) and is the default first choice for
   rote work. `z-ai/glm-5.3-flash` is cheapest per credit on the flat plan
   but carries a 46% episode-level no-tool-call rate — probe it on z.ai's
   Anthropic-native endpoint, never a generic one. `deepseek/deepseek-v4-flash`
@@ -292,22 +384,37 @@ it kills lanes that look perfect on price and benchmarks. Dispatch the
 probe, let it take **one turn**, then read the transcript:
 
 ```bash
-TD=~/.claude/projects/$(pwd | sed 's#/#-#g')      # or the worker's worktree path
+# Claude Code's project dir encodes the cwd with BOTH rules: / -> - AND . -> -
+# /home/dean/git/grove/.grove/orchestrator -> -home-dean-git-grove--grove-orchestrator
+TD=~/.claude/projects/$(pwd | sed -e 's#/#-#g' -e 's#\.#-#g')   # or the worker's worktree
 python3 -c "
-import json,sys,glob
-for f in sorted(glob.glob(sys.argv[1]+'/*.jsonl'))[-1:]:
-    tu=txt=0; model=None
-    for l in open(f):
-        try: r=json.loads(l)
-        except: continue
-        if r.get('type')!='assistant': continue
-        model = r['message'].get('model')
-        for b in r['message'].get('content',[]):
-            tu  += b.get('type')=='tool_use'
-            txt += b.get('type')=='text'
-    print(model,'tool_use:',tu,'text:',txt)
+import json,os,sys,glob
+files = glob.glob(sys.argv[1]+'/*.jsonl')
+if not files: sys.exit('no transcript under '+sys.argv[1])
+f = max(files, key=os.path.getmtime)   # newest by mtime: filenames are UUIDs, unordered
+tu=txt=0; model=None
+for l in open(f):
+    try: r=json.loads(l)
+    except: continue
+    if r.get('type')!='assistant': continue
+    model = r['message'].get('model')
+    for b in r['message'].get('content',[]):
+        tu  += b.get('type')=='tool_use'
+        txt += b.get('type')=='text'
+print(os.path.basename(f), model,'tool_use:',tu,'text:',txt)
 " "$TD"
 ```
+
+Two traps in that one command, both of which fail *silently* — a wrong
+directory and a stale transcript both read as `tool_use: 0`, which is the
+kill-the-lane verdict:
+
+- **Encode `.` as well as `/`.** A one-rule `sed 's#/#-#g'` gets the
+  orchestrator's own `.grove` dir wrong and lands on a path that does not
+  exist. Grove's `transcript.EncodePath` applies both rules.
+- **Select by mtime, never `sorted(...)[-1]`.** Transcript filenames are
+  session UUIDs, so lexical order is unrelated to time; sorting can hand
+  you a weeks-old transcript from the same worktree.
 
 **`tool_use: 0` after a turn that clearly intended to act = the lane is
 dead.** Stop immediately; no prompt tuning fixes it. The model emits its
