@@ -293,6 +293,25 @@
 
 ## Go / CLI
 
+- **2026-08-29 · a yaml.v3 "empty document" has two shapes, and only one
+  has empty `Content`** (grove-201, the sibling case #195 left open).
+  Zero-byte, whitespace-only and comment-only files parse to a document
+  with `len(Content) == 0` — the shape every guard in this repo tested.
+  But a file holding `null`, `~` or a bare `---` parses to a document with
+  ONE child: a `!!null` ScalarNode. `len(Content) == 1`, so the guard is
+  skipped, and appending key/value pairs into a *scalar's* `Content` is
+  accepted by the API and silently DISCARDED by the emitter — the write
+  returns nil and the data is gone. `gv init` emitted `null\n` with
+  `WroteConfig` true; a wizard `Save()` dropped every confirmed setting
+  and reported success. **Rule: an empty-doc guard tests the root's
+  `Kind`, never just the length of `Content`** — and the three outcomes
+  are distinct: content-free (no Content, or a lone `!!null` scalar) →
+  replace with a mapping; already a mapping → use it; anything else (a
+  top-level scalar or sequence) → ERROR, because replacing it would
+  clobber real data. The same trap one level down was already known and
+  handled (`config.ensureMap` coerces a bare `orchestrator:` key, which
+  parses as a null scalar) — nobody thought to apply it to the ROOT.
+
 - **2026-08-27 · an empty input box is not proof of delivery — and a long
   paste hides its own echo** (grove-186, closing the three swallowed
   nudges of 2026-08-26). `pasteLanded` deliberately reads an empty input

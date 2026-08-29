@@ -34,19 +34,18 @@ func LoadDoc(path string) (*Doc, error) {
 		if err := yaml.Unmarshal(raw, &d.node); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		// Treat empty/comment-only files as an empty mapping node.
-		// yaml.Unmarshal accepts these without error but produces a node
-		// with empty Content, causing index out of range in root().
-		if len(d.node.Content) == 0 {
-			d.node = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
-				{Kind: yaml.MappingNode, Tag: "!!map"},
-			}}
-		}
 	case os.IsNotExist(err):
 		if err := yaml.Unmarshal([]byte("{}\n"), &d.node); err != nil {
 			return nil, err
 		}
 	default:
+		return nil, err
+	}
+	// Settings-free files (empty, comment-only, `null`, bare `---`) become
+	// an empty mapping so root() has something to write into; a scalar or
+	// sequence root is rejected rather than overwritten. See
+	// ensureRootMapping.
+	if err := ensureRootMapping(&d.node, nil, path); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -109,6 +108,12 @@ func (d *Doc) Dirty() bool { return d.dirty }
 func (d *Doc) Save() error {
 	if !d.dirty {
 		return nil
+	}
+	// Backstop: the emitter silently discards Content hung off a non-mapping
+	// root, so a write that could not land is reported instead of succeeding
+	// with the settings dropped (grove-201). LoadDoc already guarantees this.
+	if len(d.node.Content) != 1 || d.node.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("%s: top level is not a mapping — refusing to write", d.path)
 	}
 	if err := os.MkdirAll(filepath.Dir(d.path), 0o755); err != nil {
 		return err

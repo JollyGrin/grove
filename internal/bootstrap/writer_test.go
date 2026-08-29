@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const handEdited = `# my precious comment
@@ -108,75 +110,92 @@ func TestDocCreatesIntermediateMappings(t *testing.T) {
 	}
 }
 
-func TestDocEmptyConfig(t *testing.T) {
-	// Zero-byte file → Get returns not-found, Set+save round-trips
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	d, err := LoadDoc(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := d.Get("linear", "api_key_env"); got != "" {
-		t.Errorf("Get on empty doc = %q, want empty", got)
-	}
-	d.Set("linear-api", "linear", "api_key_env")
-	d.Set("markdown", "provider", "kind")
-	if err := d.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(path)
-	got := string(raw)
-	if !strings.Contains(got, "linear:") || !strings.Contains(got, "provider:") {
-		t.Errorf("round-trip lost settings:\n%s", got)
+// TestDocSettingsFreeConfig: every shape of a config file that carries no
+// settings must load clean and round-trip a Set. yaml.v3 parses the first
+// three to a document with no Content and the rest to a lone !!null
+// scalar — the shape that slipped the original guard (grove-201).
+func TestDocSettingsFreeConfig(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty", ""},
+		{"comment only", "# just a comment\n"},
+		{"whitespace only", "   \n  \n"},
+		{"null", "null\n"},
+		{"tilde", "~\n"},
+		{"bare doc marker", "---\n"},
+		{"whitespace then doc marker", "  \n---\n"},
+		{"comment then doc marker", "# just a comment\n---\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			d, err := LoadDoc(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := d.Get("linear", "api_key_env"); got != "" {
+				t.Errorf("Get on settings-free doc = %q, want empty", got)
+			}
+			d.Set("linear-api", "linear", "api_key_env")
+			d.Set("markdown", "provider", "kind")
+			if err := d.Save(); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(path)
+			if got := string(raw); !strings.Contains(got, "linear:") || !strings.Contains(got, "provider:") {
+				t.Errorf("round-trip lost settings, file is:\n%s", got)
+			}
+			// Reload: the settings must survive a parse, not just an emit.
+			d2, err := LoadDoc(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := d2.Get("linear", "api_key_env"); got != "linear-api" {
+				t.Errorf("reload: linear.api_key_env = %q, want linear-api", got)
+			}
+			if got := d2.Get("provider", "kind"); got != "markdown" {
+				t.Errorf("reload: provider.kind = %q, want markdown", got)
+			}
+		})
 	}
 }
 
-func TestDocCommentOnlyConfig(t *testing.T) {
-	// Comment-only file → Get returns not-found, Set+save round-trips
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("# just a comment\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	d, err := LoadDoc(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := d.Get("linear", "api_key_env"); got != "" {
-		t.Errorf("Get on comment-only doc = %q, want empty", got)
-	}
-	d.Set("linear-api", "linear", "api_key_env")
-	if err := d.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(path)
-	got := string(raw)
-	if !strings.Contains(got, "linear:") {
-		t.Errorf("round-trip lost setting:\n%s", got)
+// A top-level scalar or sequence holds content a Set would clobber, so it
+// is rejected rather than silently overwritten.
+func TestDocNonMappingRoot(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"scalar", "hello\n"},
+		{"sequence", "- a\n- b\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadDoc(path); err == nil || !strings.Contains(err.Error(), "not a mapping") {
+				t.Fatalf("LoadDoc(%q) err = %v, want a not-a-mapping error", tc.body, err)
+			}
+			raw, _ := os.ReadFile(path)
+			if string(raw) != tc.body {
+				t.Errorf("file was rewritten: %q", string(raw))
+			}
+		})
 	}
 }
 
-func TestDocWhitespaceOnlyConfig(t *testing.T) {
-	// Whitespace-only file → Get returns not-found, Set+save round-trips
+// Save refuses to write a document whose root the emitter would drop,
+// rather than reporting success with the settings gone.
+func TestDocSaveRejectsNonMappingRoot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("   \n  \n"), 0o644); err != nil {
+	d := &Doc{path: path, dirty: true}
+	if err := yaml.Unmarshal([]byte("null\n"), &d.node); err != nil {
 		t.Fatal(err)
 	}
-	d, err := LoadDoc(path)
-	if err != nil {
-		t.Fatal(err)
+	if err := d.Save(); err == nil || !strings.Contains(err.Error(), "not a mapping") {
+		t.Fatalf("Save() err = %v, want a not-a-mapping error", err)
 	}
-	if got := d.Get("linear", "api_key_env"); got != "" {
-		t.Errorf("Get on whitespace-only doc = %q, want empty", got)
-	}
-	d.Set("linear-api", "linear", "api_key_env")
-	if err := d.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(path)
-	got := string(raw)
-	if !strings.Contains(got, "linear:") {
-		t.Errorf("round-trip lost setting:\n%s", got)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("Save() wrote the file anyway: %v", err)
 	}
 }

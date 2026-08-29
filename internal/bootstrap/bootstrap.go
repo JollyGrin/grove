@@ -95,19 +95,19 @@ func ensureConfig(res *Result, path string) error {
 	default:
 		return err
 	}
-	// Treat empty/comment-only files as an empty mapping node.
-	if len(doc.Content) == 0 {
-		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
-			{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
-				{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kind"},
-					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "markdown"},
-				}},
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "repos"},
-				{Kind: yaml.MappingNode, Tag: "!!map"},
-			}},
-		}}
+	// Empty, comment-only, `null` and bare-`---` files all become the
+	// seeded mapping below; anything else non-mapping is an error.
+	seed := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
+		{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kind"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "markdown"},
+		}},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "repos"},
+		{Kind: yaml.MappingNode, Tag: "!!map"},
+	}}
+	if err := ensureRootMapping(&doc, seed, path); err != nil {
+		return err
 	}
 	root := doc.Content[0]
 
@@ -166,6 +166,43 @@ func ensureTasksDir(res *Result, root, created string) error {
 }
 
 // --- yaml.Node helpers ---
+
+// ensureRootMapping normalizes a parsed config document so its root is a
+// mapping node the append helpers can write into, seeding it from seed
+// (an empty mapping when nil) when the file carries no settings.
+//
+// yaml.v3 hands back two shapes for a settings-free file and only one is
+// obvious: zero-byte, whitespace- and comment-only files parse to a
+// document with no Content at all, while `null`, `~` and a bare `---`
+// parse to a document holding one !!null ScalarNode (grove-201). Keys
+// appended to that scalar's Content are dropped by the emitter, so the
+// write reports success and the settings are gone — hence both shapes are
+// replaced, carrying over any comments attached to the discarded node.
+//
+// Any other root — a top-level scalar or sequence — holds content a write
+// would clobber, so it is an error rather than a silent overwrite.
+func ensureRootMapping(doc *yaml.Node, seed *yaml.Node, path string) error {
+	if len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
+		return nil
+	}
+	blank := len(doc.Content) == 0 ||
+		(len(doc.Content) == 1 && doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null")
+	if !blank {
+		return fmt.Errorf("%s: top level is not a mapping", path)
+	}
+	if seed == nil {
+		seed = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+	if len(doc.Content) == 1 {
+		old := doc.Content[0]
+		seed.HeadComment, seed.LineComment, seed.FootComment = old.HeadComment, old.LineComment, old.FootComment
+	}
+	doc.Kind = yaml.DocumentNode
+	doc.Tag = ""
+	doc.Value = ""
+	doc.Content = []*yaml.Node{seed}
+	return nil
+}
 
 func mapValue(m *yaml.Node, key string) *yaml.Node {
 	if m == nil || m.Kind != yaml.MappingNode {

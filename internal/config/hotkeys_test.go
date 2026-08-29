@@ -151,6 +151,27 @@ func TestSaveHotkeyCommentOnlyFile(t *testing.T) {
 	}
 }
 
+// A `null`/`~`/bare-`---` file parses to one null scalar, not an empty
+// document, so it slipped the empty-doc guard and was rejected as
+// "not a mapping" (grove-201).
+func TestSaveHotkeyNullDocument(t *testing.T) {
+	for _, body := range []string{"null\n", "~\n", "---\n", "  \n---\n"} {
+		t.Run(strings.TrimSpace(body), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := SaveHotkey(path, "1", "kimi"); err != nil {
+				t.Fatalf("bind into %q: %v", body, err)
+			}
+			if hk := readHotkeys(t, path); hk["1"] != "kimi" {
+				out, _ := os.ReadFile(path)
+				t.Fatalf("hotkeys = %v, want 1→kimi; file is:\n%s", hk, out)
+			}
+		})
+	}
+}
+
 // A missing file is created with just the hotkeys block — a workspace
 // .grove/ may exist without a config.yaml.
 func TestSaveHotkeyCreatesFile(t *testing.T) {

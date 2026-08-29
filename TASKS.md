@@ -9,6 +9,25 @@
 
 ## Now (2026-07-12)
 
+- [x] `null` / bare `---` config.yaml no longer slips the empty-doc guard
+      (grove-201, 2026-08-29): grove-129 fixed the *empty* config panic by
+      testing `len(doc.Content) == 0`, but yaml.v3 parses a file holding
+      `null`, `~` or a bare `---` into a document with ONE `!!null`
+      ScalarNode — length 1, so the guard was skipped and `appendKey` /
+      `Doc.Set` wrote into a scalar's `Content`, which the emitter
+      discards. Both write paths reported success while losing everything:
+      `gv init` emitted `null` with `WroteConfig` true, and a wizard
+      `Save()` dropped every confirmed setting, no error. One
+      `ensureRootMapping` helper now normalizes the root for both sites —
+      content-free (no Content, or a lone null scalar) is replaced by the
+      seed mapping, carrying the discarded node's comments; a scalar or
+      sequence root holds real data, so it is an ERROR, never an
+      overwrite. `Save()` keeps a backstop check so a write that could not
+      land can never report success. `config.SaveHotkey` had the same
+      guard and the same blind spot (symptom: a spurious "top level is not
+      a mapping" on a `null` config) — its root is now coerced in place,
+      exactly as `ensureMap` already did for null sections.
+
 - [x] Refresh path for already-seeded orchestrator brains (grove-190,
       2026-08-29): grove-189 improved the embedded seed, but
       `buildCockpit` writes it only when
