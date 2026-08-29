@@ -56,10 +56,17 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       status, in their own border color; local panes are unchanged.
       Keypress-driven throughout — no poll, no goroutine (the cockpit RAM
       rule). Also fixes the #200-review follow-up: a `grove-chat-*` session
-      can now self-close via `gv orchestrator close` (`closablePane`
-      exempts chat sessions — their single pane is the orchestrator, not a
-      dashboard), so a fire-and-forget remote chat no longer strands its
-      claude process alive on the host. `e2e/cockpit.sh` gained a workspace
+      can now self-close via `gv orchestrator close` (its single pane is
+      the orchestrator, not a dashboard), so a fire-and-forget remote chat
+      no longer strands its claude process alive on the host. The
+      exemption is decided by the workspace REGISTRY, not the name shape
+      (#204 review): a workspace labelled `chat-app` owns cockpit session
+      `grove-chat-app`, the same string a chat session produces, so
+      `closablePane` takes an injected `tmux.CockpitCheck`
+      (`cockpitSessionCheck`, built from the registered labels) and an
+      ambiguous name collapses to COCKPIT — a nil check treats every
+      session as one, so forgetting to inject is only ever
+      over-protective. `e2e/cockpit.sh` gained a workspace
       cockpit driving `@`+digit against a fake ssh (relay argv, the local
       ssh-attach pane command, the pane's identity tags, and an error path
       that spawns no pane); `e2e/chat.sh` covers the self-close.

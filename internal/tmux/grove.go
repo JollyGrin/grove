@@ -532,7 +532,7 @@ func DisableAutoRename(target string) error {
 // its own $TMUX_PANE, in the cockpit window), and every worker window's
 // first pane is the protected worktree shell, so no worker pane is ever at
 // risk.
-func closablePane(session string, index, first int) error {
+func closablePane(session string, index, first int, isCockpit CockpitCheck) error {
 	if session != "grove" && !strings.HasPrefix(session, "grove-") {
 		return fmt.Errorf("pane is in session %q, not a grove cockpit — refusing to close", session)
 	}
@@ -542,7 +542,16 @@ func closablePane(session string, index, first int) error {
 	// dispatch-and-dismiss. The first-pane rule would refuse it with a message
 	// about protecting a dashboard that does not exist there, stranding the
 	// chat's claude process alive on the host forever (grove-199).
-	if strings.HasPrefix(session, chatSessionMarker) {
+	//
+	// The name ALONE cannot decide that, though: labels are
+	// `[a-z0-9][a-z0-9_-]*`, so a workspace labelled `chat-app` has the
+	// cockpit session `grove-chat-app` — the chat shape and a real cockpit
+	// are the same string. The registry breaks the tie (isCockpit), and
+	// when both readings are live (`grove-chat-app-2` is chat 2 of
+	// `chat-app` AND the cockpit of `chat-app-2`) the COCKPIT reading wins:
+	// the cost of being wrong is a dead dashboard one way and a chat the
+	// operator closes by hand the other.
+	if strings.HasPrefix(session, chatSessionMarker) && !isCockpit.cockpit(session) {
 		return nil
 	}
 	if index == first {
@@ -551,14 +560,30 @@ func closablePane(session string, index, first int) error {
 	return nil
 }
 
+// CockpitCheck answers "is this tmux session a workspace COCKPIT?" — i.e.
+// does its window's first pane hold a dashboard the guard must protect.
+// Only the workspace registry knows (cockpit sessions are `grove-<label>`
+// for any registered label), and the registry lives above this package, so
+// the caller injects the answer. A nil CockpitCheck says yes to everything:
+// an uninjected caller can only ever be MORE protective, never less.
+type CockpitCheck func(session string) bool
+
+func (c CockpitCheck) cockpit(session string) bool {
+	if c == nil {
+		return true
+	}
+	return c(session)
+}
+
 // PaneClosable reports whether pane (e.g. "%23") is a cockpit orchestrator
 // pane safe to kill — queries its session/index plus its window's lowest
-// pane index and runs closablePane. Fails closed: if the window's panes
+// pane index and runs closablePane against the caller's CockpitCheck (nil
+// = treat every session as a cockpit). Fails closed: if the window's panes
 // can't be listed, the guard refuses rather than guessing which pane is
 // the dashboard. Callers check this BEFORE any irreversible side effect
 // (e.g. logging the dismissal) so a guard rejection never leaves a
 // half-done record.
-func PaneClosable(pane string) error {
+func PaneClosable(pane string, isCockpit CockpitCheck) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
 	}
@@ -584,7 +609,7 @@ func PaneClosable(pane string) error {
 	if !ok {
 		return fmt.Errorf("cannot list panes of %s's window — refusing to close", pane)
 	}
-	return closablePane(parts[0], index, first)
+	return closablePane(parts[0], index, first, isCockpit)
 }
 
 // lowestPaneIndex parses list-panes "#{pane_index}" output and returns the
@@ -607,8 +632,8 @@ func lowestPaneIndex(out string) (int, bool) {
 // PaneClosable. The caller passes its own $TMUX_PANE, so this is how a
 // fire-and-forget orchestrator dismisses itself: killing the pane also
 // takes down the claude process running in it.
-func ClosePane(pane string) error {
-	if err := PaneClosable(pane); err != nil {
+func ClosePane(pane string, isCockpit CockpitCheck) error {
+	if err := PaneClosable(pane, isCockpit); err != nil {
 		return err
 	}
 	_, err := run("kill-pane", "-t", pane)

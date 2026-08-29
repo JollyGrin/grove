@@ -427,8 +427,17 @@
   `gv orchestrator close` for dispatch-and-dismiss. A fire-and-forget
   remote chat grabbed its ticket, failed to close with a message about
   protecting a dashboard that does not exist there, and left its claude
-  process alive on the host indefinitely. The guard now exempts sessions
-  named `grove-chat-*` by prefix; cockpit dashboards are untouched.
+  process alive on the host indefinitely. **The name alone cannot decide
+  it** (caught in review of the first fix): labels are
+  `[a-z0-9][a-z0-9_-]*` with only `grove`/`mobile`/`dash` reserved, so a
+  workspace labelled `chat-app` owns cockpit session `grove-chat-app` —
+  the chat shape and a real cockpit are the same string, and no shape
+  regex separates them (`chat-app-2` is both chat 2 of `chat-app` and the
+  cockpit of `chat-app-2`). The guard now takes an injected
+  `CockpitCheck` resolved from the workspace REGISTRY, and an ambiguous
+  name collapses to COCKPIT: a chat the operator closes by hand costs
+  less than a dead dashboard. Nil check = everything is a cockpit, so a
+  caller that forgets to inject can only be over-protective.
 
 - **2026-08-26 · live handoff shakedown (grove-187, Mac ↔ Frankfurt VPS):
   a remote host is GLOBAL-layer only — repos AND `provider:` must live in

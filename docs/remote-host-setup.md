@@ -145,7 +145,13 @@ gv workspaces                                   # the label must be listed, no �
   inside a `grove-chat-*` session kills its pane — and with it the
   session and the claude process — which is what the seeded brain's
   dispatch-and-dismiss instruction assumes. A real cockpit dashboard pane
-  is still protected.
+  is still protected: whether a session is a cockpit is answered by the
+  workspace registry, not by the name, because a workspace labelled
+  `chat-app` owns the session `grove-chat-app` — the same shape a chat
+  produces. An ambiguous name is treated as a cockpit, so such a chat
+  must be closed by hand (`C-b :kill-session`, or `tmux kill-session -t
+  =<session>`); avoid `chat-`-prefixed workspace labels if you want the
+  self-close.
 
 ### From the cockpit: `@` (grove-199)
 

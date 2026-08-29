@@ -268,3 +268,39 @@ func TestRemoteSpawnError(t *testing.T) {
 		}
 	}
 }
+
+// cockpitSessionCheck answers the guard's one question from the REGISTRY,
+// never from the session name's shape (grove-199): a workspace labelled
+// `chat-app` owns the cockpit session `grove-chat-app`, which is also
+// exactly the shape of a chat session. Registered ⇒ cockpit ⇒ its first
+// pane is a dashboard the guard must keep protecting.
+func TestCockpitSessionCheck(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mkTwin(t, home, "unbrewed")
+	mkTwin(t, home, "chat-app")
+
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		t.Fatalf("cockpitSessionCheck: %v", err)
+	}
+	cases := []struct {
+		session string
+		want    bool
+		why     string
+	}{
+		{"grove", true, "the legacy global cockpit"},
+		{"grove-mobile", true, "the phone cockpit's single pane is its dashboard"},
+		{"grove-unbrewed", true, "a registered workspace's cockpit"},
+		{"grove-chat-app", true, "the cockpit of the workspace labelled chat-app — NOT a chat session"},
+		{"grove-chat-unbrewed-1", false, "a chat session: chat-unbrewed-1 is no registered label"},
+		{"grove-chat-app-1", false, "chat 1 of the chat-app workspace"},
+		{"grove-nosuch", false, "no such workspace is registered"},
+		{"pr-unbrewed-p2p", false, "not a grove session at all"},
+	}
+	for _, tc := range cases {
+		if got := isCockpit(tc.session); got != tc.want {
+			t.Errorf("isCockpit(%q) = %v, want %v — %s", tc.session, got, tc.want, tc.why)
+		}
+	}
+}

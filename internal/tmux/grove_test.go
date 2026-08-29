@@ -120,36 +120,64 @@ func TestClosablePane(t *testing.T) {
 		session string
 		index   int
 		first   int
+		// cockpit is what the injected registry check answers for this
+		// session name — the ONLY thing that can tell a cockpit from a
+		// chat session, since the two name shapes overlap.
+		cockpit bool
 		ok      bool
 	}{
-		{"legacy cockpit orchestrator pane", "grove", 1, 0, true},
-		{"workspace cockpit orchestrator pane", "grove-unbrewed", 2, 0, true},
-		{"dashboard pane refused", "grove", 0, 0, false},
-		{"workspace dashboard pane refused", "grove-unbrewed", 0, 0, false},
+		{"legacy cockpit orchestrator pane", "grove", 1, 0, true, true},
+		{"workspace cockpit orchestrator pane", "grove-unbrewed", 2, 0, true, true},
+		{"dashboard pane refused", "grove", 0, 0, true, false},
+		{"workspace dashboard pane refused", "grove-unbrewed", 0, 0, true, false},
 		// pane-base-index 1 (grove-168): the dashboard sits at index 1 —
 		// the old `index == 0` guard silently stopped protecting it.
-		{"dashboard at pane-base-index 1 refused", "grove", 1, 1, false},
-		{"orchestrator above a base-1 dashboard allowed", "grove-unbrewed", 2, 1, true},
-		{"non-cockpit session refused", "pr-unbrewed-p2p", 1, 0, false},
-		{"lookalike session refused", "grovething", 1, 0, false},
+		{"dashboard at pane-base-index 1 refused", "grove", 1, 1, true, false},
+		{"orchestrator above a base-1 dashboard allowed", "grove-unbrewed", 2, 1, true, true},
+		{"non-cockpit session refused", "pr-unbrewed-p2p", 1, 0, false, false},
+		{"lookalike session refused", "grovething", 1, 0, false, false},
 		// grove-199: a detached chat session (grove-198) has no dashboard —
 		// its single pane IS the orchestrator, and its seeded brain instructs
 		// `gv orchestrator close` for dispatch-and-dismiss. The first-pane
 		// rule would strand that claude process alive forever.
-		{"chat session's only pane closable", "grove-chat-unbrewed-1", 0, 0, true},
-		{"chat session under pane-base-index 1 closable", "grove-chat-unbrewed-2", 1, 1, true},
-		// …and the exemption is by session name, so a real cockpit dashboard
-		// is still protected right next to it.
-		{"cockpit dashboard still refused", "grove-chatty", 0, 0, false},
+		{"chat session's only pane closable", "grove-chat-unbrewed-1", 0, 0, false, true},
+		{"chat session under pane-base-index 1 closable", "grove-chat-unbrewed-2", 1, 1, false, true},
+		// …but the chat SHAPE is not proof: labels are [a-z0-9][a-z0-9_-]*,
+		// so a workspace labelled `chat-app` has cockpit session
+		// `grove-chat-app` and one labelled `chat-app-2` has
+		// `grove-chat-app-2` — indistinguishable from chat 2 of `chat-app`
+		// by name alone. The registry decides, and a registered label means
+		// COCKPIT: its dashboard stays protected.
+		{"true collision: workspace labelled chat-app", "grove-chat-app", 0, 0, true, false},
+		{"true collision under pane-base-index 1", "grove-chat-app", 1, 1, true, false},
+		{"true collision: label chat-app-2 vs chat 2 of chat-app", "grove-chat-app-2", 0, 0, true, false},
+		{"a second pane in a colliding cockpit is still closable", "grove-chat-app", 2, 0, true, true},
+		// The near-miss that is NOT a collision: `grove-chatty` is
+		// grove-chat + ty, no separating hyphen, so it never reads as a
+		// chat session in the first place.
+		{"near-miss cockpit dashboard refused", "grove-chatty", 0, 0, true, false},
 	}
 	for _, tc := range cases {
-		err := closablePane(tc.session, tc.index, tc.first)
+		err := closablePane(tc.session, tc.index, tc.first, func(string) bool { return tc.cockpit })
 		if tc.ok && err != nil {
 			t.Errorf("%s: closablePane(%q, %d, %d) = %v, want nil", tc.name, tc.session, tc.index, tc.first, err)
 		}
 		if !tc.ok && err == nil {
 			t.Errorf("%s: closablePane(%q, %d, %d) = nil, want error", tc.name, tc.session, tc.index, tc.first)
 		}
+	}
+}
+
+// An uninjected guard (nil CockpitCheck) treats EVERY session as a cockpit:
+// a caller that forgot to resolve the registry can only be over-protective,
+// never the reverse. The chat's own pane is then refused — the operator
+// closes it by hand — but no dashboard is ever at risk.
+func TestClosablePaneNilCheckFailsSafe(t *testing.T) {
+	if err := closablePane("grove-chat-unbrewed-1", 0, 0, nil); err == nil {
+		t.Error("nil CockpitCheck: chat pane closed without a registry answer — the guard must fail safe")
+	}
+	if err := closablePane("grove-unbrewed", 2, 0, nil); err != nil {
+		t.Errorf("nil CockpitCheck must not refuse a non-first pane: %v", err)
 	}
 }
 
