@@ -60,6 +60,7 @@ payload under one named key.
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
 | `gv workspaces --json` | `workspaces` | array — `{root, label, scope}` |
 | `gv doctor --json` | `rows` | array — connection checks |
+| `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
 
 ```sh
 $ gv ls --json --no-pr --no-cost
@@ -91,6 +92,19 @@ Since grove-178 (the remote-overflow train) two additive row fields:
   twice). Plugins that only want runnable rows: skip rows with
   `handed_off_to`.
 
+Since grove-205 one more additive row field:
+
+- `sentinel_at` — when the `agent_status` event that set the row's CURRENT
+  `sentinel` landed (RFC3339). `updated` moves for *any* event, so it
+  cannot distinguish "done just now" from "done an hour ago";
+  `sentinel_at` lets a **poll-based** consumer (a phone plugin, a remote
+  monitor that cannot hold a `gv watch` stream) edge-detect against a
+  cutoff it already has, with no baseline of its own. Present only while
+  there is a sentinel to date: a plain idle stop reports `sentinel:
+  "none"` — the absence of a sentinel — and omits the field, as do adopt
+  and handoff, which clear the sentinel. Absent on rows from older logs.
+  If you can hold a stream, prefer `gv watch`.
+
 Since grove-191 (workspace transparency) one more additive row field:
 
 - `workspace` — the label of the workspace that owns the task. `gv ls`
@@ -102,12 +116,55 @@ Since grove-191 (workspace transparency) one more additive row field:
   `host` and `workspace` — the host says which machine, the workspace
   which grove on it owns the task.
 
-## React: tail `events.jsonl`
+## React: `gv watch`, or tail `events.jsonl`
 
-Each workspace's `.grove/state/events.jsonl` is an append-only,
-flock-guarded JSONL file — tailing it is the sanctioned subscription
-mechanism (`tail -F`, or remember your byte offset and read new lines on
-a timer). One record per line:
+`gv watch` (grove-205) is the supported subscription: grove does the
+tailing, the offset bookkeeping and the torn-line handling, and hands you
+one event per stdout line.
+
+```
+gv watch [--json] [--ticket X]... [--type agent_status,notification,…]
+         [--sentinel done,question,blocked] [--since <RFC3339> | --replay]
+         [--until done]
+```
+
+- **Pure read**, workspace-scoped: it follows the ambient workspace's log,
+  resolved exactly as `gv ls` resolves it. Run it from inside the
+  workspace (at the global layer it says so on stderr and names the
+  workspaces).
+- **From-now by default** — only events appended after the process
+  started. `--since <RFC3339>` resumes from a cutoff, `--replay` includes
+  the whole history. This is what makes a "before" snapshot impossible to
+  sample late; do not rebuild one yourself.
+- **`--until <sentinel>` exits 0 exactly when that transition lands**
+  (`question|blocked|done|none`). One notification, no polling
+  arithmetic. A non-zero exit means the wait ended some other way — exit 0
+  always means the transition happened.
+- **Default type set** — the terminal/actionable states, so a crashed or
+  wedged worker is never silent: `agent_status` (every sentinel,
+  *including* an idle stop with no STATUS line), `notification`,
+  `session_ended`, `task_done`, `task_untracked`, `task_paused`. `--type`
+  takes an explicit list (or `all`); an unknown type or sentinel is an
+  error, never an empty stream.
+- **Line-flushed** — os.Stdout is unbuffered, so each event is on the pipe
+  as it lands (`gv watch | cat` shows it immediately). This is the
+  contract a per-line notification consumer needs.
+- `--json` emits the **raw record, byte-for-byte**, so a field a newer
+  grove adds passes straight through. The default is a human row:
+  `HH:MM  ticket  done  <first line of the message>`.
+
+**Never derive a task's completion from its tmux pane.** The kickoff
+prompt ends with all three `STATUS: QUESTION|BLOCKED|DONE — …` lines
+verbatim, so every worker's pane contains all three sentinels from second
+zero; a pane grep fires instantly, on every task, forever (it produced two
+false DONEs in one minute on 2026-08-29 — grove-205). What `gv watch`
+streams is the Stop hook's classification of the agent's OWN last message,
+which never sees the prompt.
+
+If you would rather do it yourself: each workspace's
+`.grove/state/events.jsonl` is an append-only, flock-guarded JSONL file,
+and tailing it directly stays supported (`tail -F`, or remember your byte
+offset and read new lines on a timer). One record per line:
 
 ```json
 {"time":"2026-07-13T10:00:00Z","type":"agent_status","ticket":"grove-75","data":{"status":"waiting","sentinel":"question","question":"Tabs or spaces?"},"v":1}
@@ -136,9 +193,11 @@ over time — skip what you don't know.
 The last line may be torn mid-write; skip lines that fail to parse (grove
 itself does the same).
 
-Polling vs tailing: at e-ink/bot cadence, polling `gv ls --json` every
-30–60s and tailing events.jsonl for wake-ups is sufficient. There is no
-streaming API and none is planned until more than one plugin needs it.
+Polling vs streaming: at e-ink/bot cadence, polling `gv ls --json` every
+30–60s and using `gv watch` (or your own tail) for wake-ups is sufficient.
+`gv watch` is the whole streaming surface — a line-oriented subprocess, not
+a socket or an ABI; a consumer that cannot hold a long-lived process polls
+`gv ls --json` and edge-detects on `sentinel_at`.
 
 ## Steer: shell out to `gv`, never around it
 

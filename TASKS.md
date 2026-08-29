@@ -72,6 +72,26 @@ flow is issue → `gv grab grove-N --repo grove` → PR → merge → `gv done`.
       that spawns no pane); `e2e/chat.sh` covers the self-close.
       Nested-tmux prefix capture on the attach pane is the accepted
       tradeoff (documented in the `?` overlay, as with worker attach).
+- [x] `gv watch` — a transition stream monitors can trust (grove-205,
+      2026-08-29): new read-only `internal/watch` + `gv watch [--json]
+      [--ticket X]... [--type t,…] [--sentinel s,…] [--since <RFC3339> |
+      --replay] [--until <sentinel>]`, tailing the ambient workspace's
+      events.jsonl one flushed line per event. Baseline is FROM NOW by
+      construction (the offset is taken at process start), so the
+      "before-snapshot sampled after the fact" failure is gone as a
+      category; `--until done` exits 0 exactly when that transition lands
+      (the one-notification shape). Default type set covers every
+      terminal/actionable state — agent_status incl. the idle stop with no
+      STATUS line, notification, session_ended, task_done, task_untracked,
+      task_paused — so a crashed worker is never silent. Additive
+      `sentinel_at` on the task view for poll-based consumers. Filed by two
+      false DONEs in one minute on 2026-08-29, both from a pane grep for
+      `STATUS: DONE` — a string the kickoff prompt plants in every worker's
+      pane from second zero. Templates deliberately unchanged; the fix is
+      making the pane unnecessary. Docs: orchestrator/CLAUDE.md Monitoring
+      section, docs/plugins.md, tmux-discipline skill, LEARNINGS.md. New
+      `e2e/watch.sh` (in `e2e/all.sh`) greps the live pane to prove the
+      trap, then proves watch is immune.
 - [x] Remote orchestrator chat: `gv orchestrator new --host` (grove-198,
       2026-08-28, part 1 of the remote-orchestrator pair; the cockpit `@`
       prefix + attach pane is #199): starts an orchestrator chat ON a host,

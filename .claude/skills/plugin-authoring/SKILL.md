@@ -26,11 +26,25 @@ repo wins.
 | `gv cost --analyze --json` | `report` | outcome-priced ledger |
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |
 | `gv doctor --json` | `rows` | connection checks |
+| `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
 
-**React.** Tail `<workspace-root>/.grove/state/events.jsonl` — an
+**React.** `gv watch [--json] [--ticket X] [--sentinel done] [--until done]`
+streams the workspace's transitions, one event per flushed stdout line —
+grove does the tailing, the offset bookkeeping and the torn-line handling.
+Default is FROM NOW (`--replay` / `--since` for history), so a baseline can
+never be sampled after the fact, and `--until <sentinel>` exits 0 exactly
+when that transition lands. The default type set covers every terminal
+state — including an idle stop with no STATUS line and `session_ended` — so
+a crashed worker is never silent. **Never derive completion from a tmux
+pane**: the kickoff prompt ends with all three `STATUS:` sentinel lines
+verbatim, so a pane grep fires on every task from second zero (grove-205).
+A poll-only consumer edge-detects on the `sentinel_at` row field (when the
+current sentinel landed) instead of keeping its own baseline.
+
+Or tail it yourself: `<workspace-root>/.grove/state/events.jsonl` — an
 append-only JSONL log, one record per line:
 `{"time", "type", "ticket", "data"{...}, "v"}`. Records without `v` are
 v1. Task-scoped types: `task_created`, `session_started`, `agent_status`,
@@ -72,9 +86,10 @@ equivalent.
 ## Polling vs tailing
 
 At e-ink/bot cadence: poll `gv ls --json --no-pr --no-cost` every 30–60s
-(cheap; add PR/cost columns only when you render them) and tail
-events.jsonl (`tail -F`, or byte-offset + timer) for wake-ups. There is
-no streaming API; don't build around one appearing.
+(cheap; add PR/cost columns only when you render them) and use `gv watch`
+(or your own tail) for wake-ups. `gv watch` is the whole streaming
+surface — a line-oriented subprocess, not a socket or an ABI; don't build
+around anything richer appearing.
 
 ## Long-form content
 

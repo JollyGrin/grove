@@ -97,9 +97,18 @@ type Task struct {
 	// handed to — a forwarding tombstone. Set by task_handed_off (which
 	// also untracks), cleared by a local task_created/task_adopted (the
 	// task came back). Additive & optional.
-	HandedOffTo string    `json:"handed_off_to,omitempty"`
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	HandedOffTo string `json:"handed_off_to,omitempty"`
+	// SentinelAt (grove-205) is when the agent_status event that set the
+	// CURRENT sentinel landed. Updated moves for any event, so it cannot
+	// tell "done just now" from "done an hour ago"; a poll-based consumer
+	// (phone plugin, remote monitor that cannot hold a `gv watch` stream)
+	// edge-detects against a known cutoff with this and no baseline of its
+	// own. A pointer, not a bare time.Time: `omitempty` does not omit a
+	// zero struct, and absent must mean "no sentinel". Additive & optional
+	// — events predating the field fold to nil.
+	SentinelAt *time.Time `json:"sentinel_at,omitempty"`
+	Created    time.Time  `json:"created"`
+	Updated    time.Time  `json:"updated"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -233,6 +242,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Agent = d["status"]
 		t.Sentinel = d["sentinel"]
 		t.Question = d["question"]
+		t.SentinelAt = sentinelStamp(d["sentinel"], ev.Time)
 		if m := d["message"]; m != "" {
 			t.LastMessage = m
 		}
@@ -263,7 +273,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		// question or working glyph would point orchestrators at a task
 		// `gv answer` can no longer reach.
 		t.Agent = AgentIdle
-		t.Sentinel, t.Question = "", ""
+		t.Sentinel, t.Question, t.SentinelAt = "", "", nil
 		if b := d["branch"]; b != "" {
 			t.Branch = b
 		}
@@ -304,8 +314,19 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Paused = false
 		t.HandedOffTo = ""
 		t.Agent = AgentSetup
-		t.Sentinel, t.Question = "", ""
+		t.Sentinel, t.Question, t.SentinelAt = "", "", nil
 	}
+}
+
+// sentinelStamp is when the current sentinel was set — nil while there is
+// no sentinel to timestamp. A classified stop with no STATUS line reports
+// sentinel "none" (internal/hooks.classify), which is the absence of a
+// sentinel, not one of its own: it clears the stamp rather than dating it.
+func sentinelStamp(sentinel string, at time.Time) *time.Time {
+	if sentinel == "" || sentinel == "none" {
+		return nil
+	}
+	return &at
 }
 
 // Label is the single most-actionable status string for table rows.

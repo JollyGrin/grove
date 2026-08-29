@@ -67,6 +67,12 @@ const usage = `gv — grove
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
   gv ls [--json]                              fleet table
+  gv watch [--json] [--ticket X]...           follow this workspace's transition stream, one event
+      [--type t,…] [--sentinel s,…]           per line, flushed as it lands (pure read). Default is
+      [--since <RFC3339> | --replay]          FROM NOW — never a baseline sampled after the fact.
+      [--until <sentinel>]                    --until exits 0 exactly when that sentinel lands.
+                                              Never derive completion from a pane: the kickoff prompt
+                                              contains all three STATUS lines verbatim.
       … --host <name>                         run the verb over ssh on a configured remote host (hosts: in
                                               config.yaml) — grab/ls/adopt/handoff/answer/nudge/diff/
                                               pause/untrack; answer/nudge match --host only before the
@@ -380,6 +386,8 @@ func main() {
 		err = cmdGrab(args)
 	case "ls":
 		err = cmdLs(args)
+	case "watch":
+		err = cmdWatch(args)
 	case "audit":
 		err = cmdAudit(args)
 	case "cost":
