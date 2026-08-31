@@ -68,6 +68,27 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+func TestErrDevBuildMessagePointsAtForce(t *testing.T) {
+	got, err := Decide("dev", "v9.9.9", false)
+	if !errors.Is(err, ErrDevBuild) {
+		t.Fatalf("Decide(dev, v9.9.9, false) err = %v, want ErrDevBuild", err)
+	}
+	if got != UpToDate {
+		t.Fatalf("Decide(dev, v9.9.9, false) = %v, want UpToDate", got)
+	}
+	msg := ErrDevBuild.Error()
+	if !strings.Contains(msg, "gv update --yes --force") {
+		t.Fatalf("ErrDevBuild message %q does not mention `gv update --yes --force`", msg)
+	}
+	if strings.Contains(msg, "go install ./cmd/gv") {
+		t.Fatalf("ErrDevBuild message %q still tells the operator to `go install ./cmd/gv` (grove-233)", msg)
+	}
+
+	if got, err := Decide("dev", "v9.9.9", true); err != nil || got != Update {
+		t.Fatalf("Decide(dev, v9.9.9, true) = %v, %v, want Update, nil", got, err)
+	}
+}
+
 func TestAssetName(t *testing.T) {
 	if got := AssetName("darwin", "arm64"); got != "gv_darwin_arm64" {
 		t.Fatalf("AssetName = %q", got)
