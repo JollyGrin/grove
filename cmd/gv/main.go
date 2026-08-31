@@ -107,6 +107,10 @@ const usage = `gv — grove
   gv chat ls [--workspace L] [--json]         orchestrator chats in every registered workspace: live
                                               detached chats, the cockpit's own (read-only) panes, and
                                               archived transcripts — the writable field says which take input
+  gv chat tail <s> [--follow] [--since N]     that chat's transcript as JSONL ({seq,role,kind,text,tool,ts});
+                                              --follow streams appends, --since N resumes after entry N
+  gv chat send <s> "<text>"                   relay text into a live chat and verify it SUBMITTED
+  gv chat keys <s> <chars>                    raw keystroke, no Enter (option pickers / permission prompts)
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks

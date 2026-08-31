@@ -168,22 +168,26 @@ func IsOrchestratorPane(paneDir, orchDir string) bool {
 // before archived transcripts, then chat number, then newest first. Stable
 // across calls so a client can diff two `ls` runs.
 func Sort(rows []Row) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if a.Workspace != b.Workspace {
-			return a.Workspace < b.Workspace
-		}
-		if a.Kind != b.Kind {
-			return kindOrder(a.Kind) < kindOrder(b.Kind)
-		}
-		if a.N != b.N {
-			return a.N < b.N
-		}
-		if !a.Created.Equal(b.Created) {
-			return a.Created.After(b.Created)
-		}
-		return a.Label < b.Label
-	})
+	sort.SliceStable(rows, func(i, j int) bool { return Less(rows[i], rows[j]) })
+}
+
+// Less is Sort's comparator, exported so a caller holding rows PLUS the
+// impure details behind them (a pane id, a project dir) can order its own
+// slice the same way rather than sorting a projection and losing the join.
+func Less(a, b Row) bool {
+	if a.Workspace != b.Workspace {
+		return a.Workspace < b.Workspace
+	}
+	if a.Kind != b.Kind {
+		return kindOrder(a.Kind) < kindOrder(b.Kind)
+	}
+	if a.N != b.N {
+		return a.N < b.N
+	}
+	if !a.Created.Equal(b.Created) {
+		return a.Created.After(b.Created)
+	}
+	return a.Label < b.Label
 }
 
 func kindOrder(kind string) int {

@@ -26,19 +26,25 @@ import (
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
-// cmdChat dispatches the `gv chat` verbs. `ls` is the only one today;
-// unknown subcommands fail loudly rather than defaulting, because the later
-// verbs (tail, send) are write-shaped and a typo must never fall through to
-// something else.
+// cmdChat dispatches the `gv chat` verbs. An unknown subcommand fails
+// loudly rather than defaulting to anything: half these verbs are
+// write-shaped (they paste into a live agent), and a typo must never fall
+// through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls [--workspace <label>] [--json]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>")
 	}
 	switch args[0] {
 	case "ls":
 		return cmdChatLs(args[1:])
+	case "tail":
+		return cmdChatTail(args[1:])
+	case "send":
+		return cmdChatSend(args[1:])
+	case "keys":
+		return cmdChatKeys(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys)", args[0])
 	}
 }
 
@@ -107,8 +113,28 @@ type livePane struct {
 	pane tmux.LivePane
 }
 
-// chatRows builds the whole report: live chats, cockpit orchestrator panes,
-// then the archived transcripts nothing live claims.
+// chatRecord is one report row PLUS the two impure handles the other `gv
+// chat` verbs need and the contract row deliberately does not carry: the
+// pane to paste into, and the cwd whose encoded project dir holds the
+// transcript. `ls` throws both away; `tail`/`send`/`keys` ARE that join.
+type chatRecord struct {
+	Row  chat.Row
+	Pane string // %id — the immutable paste target, "" for an archived row
+	Dir  string // the chat's cwd, which is its transcript project-dir key
+}
+
+// chatRows is the `ls` projection: records without their handles.
+func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tmux.CockpitCheck, stamp func(pane, id string) error) []chat.Row {
+	recs := chatRecords(targets, panes, isCockpit, stamp)
+	rows := make([]chat.Row, 0, len(recs))
+	for _, r := range recs {
+		rows = append(rows, r.Row)
+	}
+	return rows
+}
+
+// chatRecords builds the whole report: live chats, cockpit orchestrator
+// panes, then the archived transcripts nothing live claims.
 //
 // Order of operations matters and is the point of the ticket:
 //
@@ -122,7 +148,7 @@ type livePane struct {
 //
 // stamp is injected (tmux.SetPaneChatSession in production) so the whole
 // join is testable without a tmux server.
-func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tmux.CockpitCheck, stamp func(pane, id string) error) []chat.Row {
+func chatRecords(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tmux.CockpitCheck, stamp func(pane, id string) error) []chatRecord {
 	claimed := map[string]bool{}
 	for _, p := range panes {
 		if p.ChatSession != "" {
@@ -173,7 +199,7 @@ func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tm
 		return s
 	}
 
-	var rows []chat.Row
+	var recs []chatRecord
 	for _, lp := range pending {
 		id, label := lp.pane.ChatSession, ""
 		sessions := scan(lp.pane.Dir)
@@ -192,11 +218,11 @@ func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tm
 		if id != "" && label == "" {
 			label = transcriptLabel(sessions, id)
 		}
-		rows = append(rows, chat.Live{
+		recs = append(recs, chatRecord{Row: chat.Live{
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
 			SessionID: id, Label: label,
-		}.Row())
+		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir})
 	}
 	for _, ws := range targets {
 		for _, dir := range orchestratorProjectDirs(ws) {
@@ -205,12 +231,12 @@ func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tm
 					continue
 				}
 				claimed[s.ID] = true
-				rows = append(rows, chat.ArchivedRow(ws.Label, s))
+				recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir})
 			}
 		}
 	}
-	chat.Sort(rows)
-	return rows
+	sort.SliceStable(recs, func(i, j int) bool { return chat.Less(recs[i].Row, recs[j].Row) })
+	return recs
 }
 
 // orchestratorProjectDirs is where a workspace's chats have run: its brain

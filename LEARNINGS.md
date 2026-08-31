@@ -26,6 +26,21 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-08-31 · a transcript line is not a message — and three of its
+  fields decide what a chat READS like** (grove-216, projecting `.jsonl` →
+  `gv chat tail`). Verified against live transcripts: (1) one line holds
+  MANY content blocks — an assistant turn routinely carries a `thinking`
+  block plus two `tool_use` blocks — so "one line = one message" collapses a
+  turn a phone needs separated; (2) a `tool_result` names only the opaque
+  `tool_use_id` it answers, never the tool, so the NAME has to be
+  remembered from the `tool_use` that came before it or every result
+  renders anonymous; (3) `isSidechain: true` marks a SUBAGENT's private
+  conversation — real entries, but not this chat's, and interleaving them
+  makes a Task agent's tool spam read as the orchestrator talking to
+  itself. Also: a `thinking` block can arrive with a signature and NO text
+  (redacted), so an empty-text block is chrome to skip, not content to
+  emit. Distilled into the claude-code-facts skill.
+
 - **2026-08-27/29 · the cheap-lane probe results, and why the probe
   protocol is worth its cost** — four OpenRouter lanes dispatched on real
   grove tickets, ~91k resident context: `qwen/qwen3.7-flash` $0.056 —
@@ -387,6 +402,17 @@
   same path: a malformed id (it is interpolated into the pane's shell
   command) and an id a live pane already holds (two claude processes
   appending to one transcript).
+
+- **2026-08-31 · following an append-only file means consuming COMPLETE
+  lines only, with a Reader and never a Scanner** (grove-216): `gv chat
+  tail --follow` advances a byte offset over lines that ended in `\n` and
+  leaves a terminatorless trailing line for the next pass — a 15KB
+  `tool_result` lands in two writes, and projecting the first half would
+  emit a broken entry AND desync every later `seq`. `bufio.Scanner` is the
+  other half of the trap: it silently DROPS a line past its buffer (64KB by
+  default), which is the same silent-truncation class already logged
+  against the transcript/event readers. The e2e proves it by appending half
+  a JSON object, asserting nothing is emitted, then completing it.
 
 - **2026-08-29 · a yaml.v3 "empty document" has two shapes, and only one
   has empty `Content`** (grove-201, the sibling case #195 left open).

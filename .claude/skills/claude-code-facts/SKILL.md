@@ -50,6 +50,21 @@ changes the behavior.
   resumed session fires SessionStart with the **same** session_id — hook
   re-capture needs no special-casing. It opens idle awaiting input; it
   does not auto-continue.
+- **A transcript LINE is not a message.** One line holds many content
+  blocks — an assistant turn routinely carries `thinking` plus two
+  `tool_use` blocks — so project one entry per BLOCK, not per line. A
+  `tool_result` names only the opaque `tool_use_id` it answers, never the
+  tool, so pair it back to the `tool_use` that came before it or every
+  result renders anonymous. `isSidechain: true` is a SUBAGENT's private
+  conversation (skip it in a chat view); `isMeta: true` is injected
+  context, not something anyone said. A `thinking` block can arrive with a
+  signature and NO text (redacted) — an empty-text block is chrome.
+  `internal/chat` (grove-216) is the worked implementation.
+- **Following a transcript is a byte offset, not a diff** — it is
+  append-only. Consume COMPLETE lines only (a terminatorless trailing line
+  is the writer mid-append), with `bufio.Reader`; `bufio.Scanner` silently
+  drops a line past its buffer and a `tool_result` routinely runs past
+  64KB.
 - Never resume via `sessions-index.json` (it points at the parent repo
   and silently misses worktree sessions) — always explicit
   `--resume <id>`.

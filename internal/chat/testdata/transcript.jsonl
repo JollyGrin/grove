@@ -1,0 +1,13 @@
+{"type":"mode","mode":"normal","sessionId":"eeeb1111-2222-3333-4444-555566667777"}
+{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"eeeb1111-2222-3333-4444-555566667777"}
+{"type":"user","timestamp":"2026-08-31T09:00:00.000Z","cwd":"/w/.grove/orchestrator","gitBranch":"main","message":{"role":"user","content":"triage the artgen backlog"}}
+{"type":"assistant","timestamp":"2026-08-31T09:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"three open tickets, one is stale","signature":"abc"},{"type":"text","text":"Looking at the backlog now."}]}}
+{"type":"assistant","timestamp":"2026-08-31T09:00:05.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"gv ls --json","description":"list tasks"}}]}}
+{"type":"user","timestamp":"2026-08-31T09:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"grove-90  working\ngrove-91  review"}]}}
+{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}
+{"type":"user","timestamp":"2026-08-31T09:00:07.000Z","isMeta":true,"message":{"role":"user","content":"<system-reminder>ignore me</system-reminder>"}}
+{"type":"assistant","timestamp":"2026-08-31T09:00:08.000Z","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"subagent chatter"}]}}
+{"type":"assistant","timestamp":"2026-08-31T09:00:09.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"redacted"},{"type":"text","text":""},{"type":"text","text":"Two tickets are live; grove-91 is waiting on review."}]}}
+{"type":"user","timestamp":"2026-08-31T09:00:10.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_99","content":[{"type":"text","text":"an unpaired result"},{"type":"image","source":{}}]}]}}
+not json at all
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"no timestamp on this one"}]}}

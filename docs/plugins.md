@@ -60,6 +60,7 @@ payload under one named key.
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
 | `gv workspaces --json` | `workspaces` | array — `{root, label, scope}` |
 | `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, writable}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id, **null** while a chat is still booting; `label` is the transcript's first prompt. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input |
+| `gv chat tail <s> [--follow] [--since N]` | *(none — a stream)* | JSONL, one transcript entry per line: `{seq, role, kind, text, tool, ts}` (grove-216). `role` is `user`/`assistant`; `kind` is `text`, `tool_use`, `tool_result` or `thinking`; `tool` is the tool's NAME (a `tool_result` is paired back to the `tool_use` it answers); `ts` is null on a line that carries no timestamp. `seq` is 1-based over EMITTED entries and stable for an append-only transcript, so `--since N` resumes exactly where a client stopped; `--follow` streams appends (~250ms poll). Read on any kind — an archived transcript and a cockpit pane are readable, only writing is gated. Entries are never truncated: a 200KB `tool_result` arrives whole |
 | `gv doctor --json` | `rows` | array — connection checks |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
 
@@ -214,6 +215,16 @@ tmux pane, do bracketed-paste injection, and append the event for you:
   (Single-character text is sent as a raw key for option pickers; longer
   text is pasted with Enter.)
 - `gv grab <ticket>` — start a new task from the backlog.
+- `gv chat send <session> "<text>"` — relay prose into a live orchestrator
+  chat. Refuses any row whose `writable` is false (`kind: cockpit` or
+  `archived`) with a reason and the verb to use instead, and exits non-zero
+  if the text was delivered but never SUBMITTED — delivered is not
+  submitted (grove-144/216). `<session>` is a tmux session name, a Claude
+  session id, or 4+ characters of one; an ambiguous prefix is refused, never
+  picked.
+- `gv chat keys <session> <chars>` — one raw keystroke, no Enter, for the
+  permission prompts and option pickers a prose box cannot drive. Same
+  `writable` gate; a newline is refused (that is `send`'s job).
 
 Never write `tasks.json` (derived), never append to `events.jsonl`
 yourself (gv owns the lock and the `v` stamp), never inject tmux keys

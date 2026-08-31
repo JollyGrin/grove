@@ -32,6 +32,13 @@
 #      writable true), a profiled conversation revives in ITS own cwd, and
 #      an unknown / malformed / already-live id spawns nothing — including
 #      over the relay, where an ssh-255 retry still spawns exactly once
+#  10. (grove-216) `gv chat tail|send|keys`: tail reproduces a transcript in
+#       order with stable seq (bookkeeping and isMeta lines project to
+#       nothing), `--since N` resumes at N+1, `--follow` emits an append
+#       within ~1s; send lands AND submits on a live chat — proven by the
+#       TRANSCRIPT, via a fake claude that appends what it is given — and
+#       refuses every `writable: false` row; keys delivers a raw char with no
+#       Enter and refuses a newline
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -355,6 +362,158 @@ rc=0
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --workspace nope ) > "$SCRATCH/ls6.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "an unregistered --workspace label must exit non-zero"
 grep -q 'no registered workspace' "$SCRATCH/ls6.out" || { cat "$SCRATCH/ls6.out"; fail "wrong unknown-workspace error"; }
+
+
+say "grove-216: gv chat tail reads the TRANSCRIPT, in order, with stable seq"
+# Never the pane: a capture is ANSI soup wrapped at pane width. Give chat 1's
+# transcript a real conversation shape — text, thinking, a tool call and its
+# result — and one line that must project to NOTHING.
+AAAA="$(proj_dir "$ORCH")/aaaa1111.jsonl"
+cat >> "$AAAA" <<EOF
+{"type":"assistant","timestamp":"2026-08-31T09:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"three tickets, one stale","signature":"s"},{"type":"text","text":"Looking at the backlog now."}]}}
+{"type":"assistant","timestamp":"2026-08-31T09:00:05.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"gv ls --json"}}]}}
+{"type":"user","timestamp":"2026-08-31T09:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"grove-90 working"}]}}
+{"type":"user","timestamp":"2026-08-31T09:00:07.000Z","isMeta":true,"message":{"role":"user","content":"<system-reminder>not conversation</system-reminder>"}}
+{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}
+EOF
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail grove-chat-chatws-1 ) > "$SCRATCH/tail1.jsonl" 2> "$SCRATCH/tail1.err"
+cat "$SCRATCH/tail1.err"
+[ "$(wc -l < "$SCRATCH/tail1.jsonl")" -eq 5 ] \
+  || { cat "$SCRATCH/tail1.jsonl"; fail "tail must emit 5 entries (isMeta + bookkeeping lines project to nothing)"; }
+sed -n 1p "$SCRATCH/tail1.jsonl" | grep -q '^{"seq":1,"role":"user","kind":"text","text":"triage the artgen backlog"' \
+  || { cat "$SCRATCH/tail1.jsonl"; fail "entry 1 must be the first prompt"; }
+sed -n 2p "$SCRATCH/tail1.jsonl" | grep -q '"seq":2,"role":"assistant","kind":"thinking"' || fail "entry 2 must be the thinking block"
+sed -n 3p "$SCRATCH/tail1.jsonl" | grep -q '"seq":3,"role":"assistant","kind":"text","text":"Looking at the backlog now."' || fail "entry 3 wrong"
+sed -n 4p "$SCRATCH/tail1.jsonl" | grep -q '"seq":4,"role":"assistant","kind":"tool_use","text":"{\\"command\\":\\"gv ls --json\\"}","tool":"Bash"' \
+  || { sed -n 4p "$SCRATCH/tail1.jsonl"; fail "entry 4 must be the tool_use, carrying its input and tool name"; }
+sed -n 5p "$SCRATCH/tail1.jsonl" | grep -q '"seq":5,"role":"user","kind":"tool_result","text":"grove-90 working","tool":"Bash"' \
+  || { sed -n 5p "$SCRATCH/tail1.jsonl"; fail "entry 5 must be the tool_result, paired back to the tool NAME"; }
+grep -q 'system-reminder' "$SCRATCH/tail1.jsonl" && fail "an isMeta line is not conversation and must not be emitted" || true
+
+say "--since N resumes at N+1, and a session-id prefix names the same chat"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail aaaa1111 --since 3 ) > "$SCRATCH/tail2.jsonl" 2>&1
+[ "$(wc -l < "$SCRATCH/tail2.jsonl")" -eq 2 ] || { cat "$SCRATCH/tail2.jsonl"; fail "--since 3 must leave 2 entries"; }
+head -1 "$SCRATCH/tail2.jsonl" | grep -q '^{"seq":4,' || { cat "$SCRATCH/tail2.jsonl"; fail "--since 3 must resume at seq 4"; }
+# An archived transcript is read-only, not unreadable.
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail cccc3333 ) > "$SCRATCH/tail3.jsonl" 2>&1
+grep -q '"text":"last tuesday"' "$SCRATCH/tail3.jsonl" || { cat "$SCRATCH/tail3.jsonl"; fail "an archived chat must still be tailable"; }
+# An ambiguous target is refused, never picked: this ends in somebody's agent.
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail nosuchchat ) > "$SCRATCH/tail4.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "an unknown chat target must exit non-zero"
+grep -q 'no chat matching' "$SCRATCH/tail4.out" || { cat "$SCRATCH/tail4.out"; fail "wrong unknown-chat error"; }
+
+say "--follow emits an appended entry within ~1s"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" timeout 5 "$GV" chat tail aaaa1111 --follow --since 5 ) > "$SCRATCH/follow.jsonl" 2>&1 &
+FOLLOW_PID=$!
+sleep 0.6
+printf '%s\n' '{"type":"assistant","timestamp":"2026-08-31T09:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"appended while following"}]}}' >> "$AAAA"
+FOUND=0
+for _ in $(seq 1 10); do
+  if grep -q 'appended while following' "$SCRATCH/follow.jsonl" 2>/dev/null; then FOUND=1; break; fi
+  sleep 0.1
+done
+kill "$FOLLOW_PID" 2>/dev/null || true
+wait "$FOLLOW_PID" 2>/dev/null || true   # timeout 5 is the belt to this braces
+[ "$FOUND" -eq 1 ] || { cat "$SCRATCH/follow.jsonl" 2>/dev/null; fail "--follow did not emit the appended entry within 1s"; }
+grep -q '"seq":6,' "$SCRATCH/follow.jsonl" || { cat "$SCRATCH/follow.jsonl"; fail "a followed append must keep counting seq (6)"; }
+[ "$(wc -l < "$SCRATCH/follow.jsonl")" -eq 1 ] || { cat "$SCRATCH/follow.jsonl"; fail "--since 5 must not replay the first five entries"; }
+# Put chat 1's transcript back where its mtime was: the appends above made
+# it the NEWEST in this dir, and grove-217's spawn-time-stamp test needs
+# dddd4444 to hold that spot or it stops being a tripwire.
+touch -d "@$((NOW - 3000))" "$AAAA"
+
+say "grove-216: send/keys refuse every chat that is not writable"
+# The gate is the `writable` FIELD (grove-215), so the CLI and a phone can
+# never disagree about which chats take input.
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send cccc3333 "wake up" ) > "$SCRATCH/send-arch.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "sending to an ARCHIVED transcript must exit non-zero"
+grep -q 'writable: false' "$SCRATCH/send-arch.out" || { cat "$SCRATCH/send-arch.out"; fail "the refusal must name the contract field"; }
+grep -q 'gv orchestrator new --resume cccc3333' "$SCRATCH/send-arch.out" || fail "an archived refusal must point at the revive verb"
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send grove-chatws "wake up" ) > "$SCRATCH/send-cock.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || { cat "$SCRATCH/send-cock.out"; fail "sending to the COCKPIT's own orchestrator pane must exit non-zero"; }
+grep -q 'kind cockpit' "$SCRATCH/send-cock.out" || { cat "$SCRATCH/send-cock.out"; fail "wrong cockpit refusal"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat keys grove-chatws 2 ) > "$SCRATCH/keys-cock.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "keys must honour the same writable gate as send"
+grep -q 'writable: false' "$SCRATCH/keys-cock.out" || { cat "$SCRATCH/keys-cock.out"; fail "wrong keys refusal"; }
+
+say "grove-216: spawn → send → tail sees the message (the whole loop)"
+# A stand-in for claude that writes its transcript where Claude Code would
+# and appends every line the relay SUBMITS — so "the message landed" is
+# proven by the transcript, the same source `gv chat tail` reads, rather
+# than by a scrape of the pane.
+SENDWS="$SCRATCH/sendws"
+mkrepo "$SENDWS"
+( cd "$SENDWS" && "$GV" init --yes --label sendws > /dev/null )
+cat > "$SCRATCH/bin/fakeclaude" <<EOF
+#!/usr/bin/env bash
+# Project dir = the ENCODED cwd, two substitutions (/ and .), the rule
+# people drop — a one-rule sed points at a directory that does not exist.
+cwd="\$(pwd)"
+enc="\$(printf '%s' "\$cwd" | sed -e 's#/#-#g' -e 's#\.#-#g')"
+dir="$GV_CLAUDE_CONFIG_DIR/projects/\$enc"
+mkdir -p "\$dir"
+f="\$dir/f0f0aaaa.jsonl"
+printf '{"type":"user","cwd":"%s","gitBranch":"main","message":{"role":"user","content":"fake chat boot"}}\n' "\$cwd" >> "\$f"
+while IFS= read -r line; do
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"%s"}}\n' "\$cwd" "\$line" >> "\$f"
+  printf '{"type":"assistant","cwd":"%s","message":{"role":"assistant","content":[{"type":"text","text":"ack: %s"}]}}\n' "\$cwd" "\$line" >> "\$f"
+done
+EOF
+chmod +x "$SCRATCH/bin/fakeclaude"
+cat >> "$SENDWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/fakeclaude
+EOF
+( cd "$WS" && "$GV" orchestrator new --host pc --workspace sendws ) > "$SCRATCH/sendspawn.out" 2>&1
+grep -q 'grove-chat-sendws-1' "$SCRATCH/sendspawn.out" || { cat "$SCRATCH/sendspawn.out"; fail "the sendws chat did not spawn"; }
+SENDF="$(proj_dir "$SENDWS/.grove/orchestrator")/f0f0aaaa.jsonl"
+for _ in $(seq 1 30); do [ -s "$SENDF" ] && break; sleep 0.1; done
+[ -s "$SENDF" ] || fail "the chat never wrote its transcript"
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls7.json" 2>&1
+[ "$(row_field "$SCRATCH/ls7.json" grove-chat-sendws-1 session_id)" = "f0f0aaaa" ] \
+  || { cat "$SCRATCH/ls7.json"; fail "the sendws chat did not resolve its session id"; }
+[ "$(row_field "$SCRATCH/ls7.json" grove-chat-sendws-1 writable)" = "true" ] || fail "a live chat must be writable"
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send grove-chat-sendws-1 "ship the release notes" ) \
+  > "$SCRATCH/send.out" 2>&1 || { cat "$SCRATCH/send.out"; fail "gv chat send to a live chat must succeed"; }
+cat "$SCRATCH/send.out"
+grep -q '✓ sent to grove-chat-sendws-1' "$SCRATCH/send.out" || fail "send must confirm the chat it reached"
+for _ in $(seq 1 30); do grep -q 'ship the release notes' "$SENDF" && break; sleep 0.1; done
+grep -q 'ship the release notes' "$SENDF" || { cat "$SENDF"; fail "the message never reached the agent — delivered is not submitted"; }
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail grove-chat-sendws-1 ) > "$SCRATCH/tail5.jsonl" 2>&1
+cat "$SCRATCH/tail5.jsonl"
+grep -q '"seq":1,"role":"user","kind":"text","text":"fake chat boot"' "$SCRATCH/tail5.jsonl" || fail "tail lost the chat's first prompt"
+grep -q '"seq":2,"role":"user","kind":"text","text":"ship the release notes"' "$SCRATCH/tail5.jsonl" \
+  || fail "tail must show the message gv chat send submitted"
+grep -q '"seq":3,"role":"assistant","kind":"text","text":"ack: ship the release notes"' "$SCRATCH/tail5.jsonl" \
+  || fail "tail must show the agent's answer"
+
+say "gv chat keys delivers a raw char with NO Enter"
+# The relay rule's own exception: a picker acts on the keypress itself, so
+# there is nothing to submit — and nothing may reach the transcript.
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat keys grove-chat-sendws-1 7 ) > "$SCRATCH/keys.out" 2>&1 \
+  || { cat "$SCRATCH/keys.out"; fail "gv chat keys to a live chat must succeed"; }
+grep -q 'raw, no Enter' "$SCRATCH/keys.out" || { cat "$SCRATCH/keys.out"; fail "keys must say it sent no Enter"; }
+sleep 0.5
+remote_tmux capture-pane -p -t '=grove-chat-sendws-1:chat' > "$SCRATCH/keypane.txt"
+LASTLINE="$(grep -v '^[[:space:]]*$' "$SCRATCH/keypane.txt" | tail -1)"
+[ "$LASTLINE" = "7" ] || { cat "$SCRATCH/keypane.txt"; fail "the raw char must be sitting UNSUBMITTED on the input line, got '$LASTLINE'"; }
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail grove-chat-sendws-1 ) > "$SCRATCH/tail6.jsonl" 2>&1
+[ "$(wc -l < "$SCRATCH/tail6.jsonl")" -eq "$(wc -l < "$SCRATCH/tail5.jsonl")" ] \
+  || { cat "$SCRATCH/tail6.jsonl"; fail "a raw key must not submit anything"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat keys grove-chat-sendws-1 "$(printf 'hi\nthere')" ) > "$SCRATCH/keys2.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "keys must refuse a newline rather than translate it into a submit"
+grep -q 'gv chat send' "$SCRATCH/keys2.out" || { cat "$SCRATCH/keys2.out"; fail "the newline refusal must point at send"; }
+
+# Leave the suite the tmux server the later sections expect.
+remote_tmux kill-session -t '=grove-chat-sendws-1' 2>/dev/null || true
 
 # Hand the rest of the suite the tmux server it expects: no cockpit session.
 remote_tmux kill-session -t '=grove-chatws'

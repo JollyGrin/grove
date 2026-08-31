@@ -137,6 +137,39 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] `gv chat tail` + `gv chat send` (grove-216, 2026-08-31): train 2/4
+      of `gv chat` (design: `docs/plans/2026-08-31-gv-chat-design.md`
+      §3–4). `gv chat tail <session> [--follow] [--since N]` emits the
+      chat's transcript as JSONL — `{seq, role, kind, text, tool, ts}`, one
+      entry per CONTENT BLOCK so a client can collapse tools without
+      losing the prose beside them. Read from the transcript, never the
+      pane: the `.jsonl` is append-only, so following it is a byte offset
+      and a 250ms poll, with no tmux, no ANSI and none of the chrome that
+      has changed under us twice. `seq` counts emitted entries in file
+      order, which is what makes it stable enough for `--since N` to
+      resume; bookkeeping lines, `isMeta` injections and `isSidechain`
+      subagent traffic project to nothing, and only COMPLETE lines are
+      consumed, so a 200KB `tool_result` landing in two writes is never
+      half-parsed (bufio.Reader, never Scanner — a Scanner silently drops
+      the long line). A `tool_result` is paired back to the NAME of the
+      `tool_use` it answers, since the raw block carries only an opaque
+      id. `gv chat send <session> "<text>"` reuses `tmux.PasteText`
+      wholesale — the grove-144 sequence (server-global `gv-relay` buffer,
+      BRACKETED paste, settle, a SEPARATE Enter, then a scrape that proves
+      the submit landed, one retry, then a loud non-zero) — aimed at the
+      immutable `%N` pane id, never a name that could prefix-match a
+      sibling (grove-116/78). `gv chat keys <session> <chars>` is that
+      rule's own exception: a picker keystroke, raw and un-Enter-wrapped,
+      because a permission prompt acts on the keypress itself. Both write
+      verbs gate on the row's `writable` FIELD (grove-215) rather than a
+      second reading of `kind`, so the CLI and a phone can never disagree;
+      a cockpit pane's refusal points at `tmux attach`, an archived one's
+      at `gv orchestrator new --resume`. `e2e/chat.sh` now covers the
+      whole loop against a stand-in claude that appends what it is given:
+      spawn → ls → send → **tail sees the message**, plus `--since`,
+      `--follow` inside 1s, both refusals, and a raw key that leaves the
+      transcript untouched.
+
 - [x] Chat identity + `gv chat ls --json` (grove-215, 2026-08-31): train
       1/4 of `gv chat` (design: `docs/plans/2026-08-31-gv-chat-design.md`
       §1–2). `tmux.ChatSessions` knew a workspace's live chat sessions and
