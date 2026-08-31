@@ -22,6 +22,14 @@ gofmt -l .                                        # must be empty
 - The same trap in reverse: `cmd | grep -q` flakes under
   `set -o pipefail` (grep exits at first match, the producer SIGPIPEs).
   E2E assertions capture to a file first, then grep the file.
+- **Write e2e shell for BSD userland too — the operator runs it on a Mac.**
+  No GNU-only flags (`touch -d @<epoch>` is GNU; BSD needs
+  `-t YYYYMMDDhhmm.SS`), and resolve the scratch root with
+  `SCRATCH="$(cd "$(mktemp -d /tmp/…)" && pwd -P)"` — on macOS `/tmp` is a
+  symlink, so a tmux pane reports its cwd as `/private/tmp/…` and any
+  assertion against a bare `$SCRATCH` path fails on that alone. Both bit
+  `e2e/chat.sh`, which read green on Linux while its whole `chat ls` half
+  had never executed on the Mac (grove-228).
 
 ## E2E: the dummy-data pattern
 

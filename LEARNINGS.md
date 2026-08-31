@@ -406,6 +406,32 @@
 
 ## Go / CLI
 
+- **2026-08-31 · A zero `time.Time` crosses JSON as year 0001 — which is
+  TRUTHY in JavaScript, so `a || b` is not a fallback** (grove-228). A
+  Go time field with no value marshals to `"0001-01-01T00:00:00Z"`, a
+  perfectly good non-empty string: the natural client fallback
+  `c.last_active || c.created` therefore takes the zero and renders
+  "739000d ago" rather than falling back at all. The fix is a VALUE check,
+  not a truthiness one — `new Date(t).getTime() > 0`, since every real
+  timestamp is after the epoch and year 1 is hugely negative. Applies to
+  any additive optional time on the plugin contract: emitting `null`
+  instead would have been a different contract shape (the field must be on
+  every row), so the zero is deliberate and the client owes it a real
+  guard. Verified against the live cockpit row.
+
+- **2026-08-31 · `e2e/chat.sh` had never run past its first transcript on
+  macOS** (grove-228). Two BSD/GNU splits, both silent until you look:
+  `touch -d "@<epoch>"` is GNU-only (BSD touch wants `-t YYYYMMDDhhmm.SS`,
+  and errors out), and `mktemp -d /tmp/...` returns a path that a tmux
+  pane's `#{pane_current_path}` reports back as `/private/tmp/...`, so a
+  cwd assertion against `$SCRATCH` fails on the symlink alone. The whole
+  `gv chat ls` half of the suite — the join every chat ticket lands on —
+  was dark on the operator's own machine while reading green on Linux.
+  Fixed with a `set_mtime` helper that tries GNU then BSD, and
+  `cd "$(mktemp -d …)" && pwd -P` for the scratch root. Lesson for any new
+  suite: resolve the scratch dir with `pwd -P` and never reach for GNU
+  flags in a shared e2e script.
+
 - **2026-08-31 · `http.ServeFile`/`ServeFileFS` REDIRECT any request whose
   path ends in `/index.html`** (grove-218). Go's file helpers answer
   `/index.html` with a 301 to `./` — "to make the canonical path

@@ -501,3 +501,74 @@ func writeTranscriptIn(t *testing.T, configDir, cwd, id, prompt string, mod time
 		t.Fatal(err)
 	}
 }
+
+// grove-228: a live row's `created` is its PANE's birth and its
+// `last_active` is its TRANSCRIPT's mtime — two different questions, and
+// the report answers both. On groveremote the cockpit pane had been alive
+// for four days while its agent worked all morning; the row said "4d ago",
+// so the busiest chat read as the deadest one.
+func TestChatRowsLastActiveIsTranscriptMtime(t *testing.T) {
+	ws, orch := chatFixture(t)
+	born := time.Unix(1756000000, 0)   // the pane: days old
+	spoken := time.Unix(1756900000, 0) // the conversation: minutes old
+	writeTranscript(t, orch, "1111-active", "triage the artgen backlog", spoken)
+
+	panes := []tmux.LivePane{
+		{Session: "grove-chat-unbrewed-1", Pane: "%7", PID: 100, Dir: orch, Command: "claude", Created: born, ChatSession: "1111-active"},
+		// A pane grove cannot name: no stamp, no process, and a rival for
+		// the dir — so no transcript, and no activity to report either.
+		{Session: "grove-chat-unbrewed-2", Pane: "%8", PID: 200, Dir: orch, Command: "claude", Created: born},
+		{Session: "grove-chat-unbrewed-3", Pane: "%9", PID: 300, Dir: orch, Command: "claude", Created: born},
+	}
+	_, stamp := recordStamps()
+	rows := chatRows([]workspace.Workspace{ws}, look(panes, neverCockpit, stamp))
+
+	byN := map[int]chat.Row{}
+	for _, r := range rows {
+		if r.Kind == chat.KindChat {
+			byN[r.N] = r
+		}
+	}
+	live := byN[1]
+	if !live.Created.Equal(born) {
+		t.Errorf("created must still be pane birth: %v, want %v", live.Created, born)
+	}
+	if live.LastActive.Unix() != spoken.Unix() {
+		t.Errorf("last_active = %v, want the transcript mtime %v", live.LastActive, spoken)
+	}
+	if live.Activity().Unix() != spoken.Unix() {
+		t.Errorf("Activity = %v, want %v", live.Activity(), spoken)
+	}
+
+	// The unidentified rivals (grove-222 refuses to pair them) carry a zero
+	// last_active — never their own birth dressed up as activity — and fall
+	// back to `created`, which is what the client does with the null.
+	for _, n := range []int{2, 3} {
+		r := byN[n]
+		if r.SessionID != nil {
+			t.Fatalf("chat %d was expected to stay unidentified, got %q", n, *r.SessionID)
+		}
+		if !r.LastActive.IsZero() {
+			t.Errorf("chat %d must emit a zero last_active, got %v", n, r.LastActive)
+		}
+		if !r.Activity().Equal(born) {
+			t.Errorf("chat %d must fall back to created, got %v", n, r.Activity())
+		}
+	}
+}
+
+// The human table ages a row on ACTIVITY, so the row the operator is
+// steering never reads as the oldest thing on the list.
+func TestChatAgeReadsActivityNotBirth(t *testing.T) {
+	born := time.Now().Add(-96 * time.Hour)
+	row := chat.Row{Created: born, LastActive: time.Now().Add(-30 * time.Second)}
+	if got := chatAge(row); got != "just now" {
+		t.Errorf("chatAge on a chat spoken to 30s ago = %q, want \"just now\"", got)
+	}
+	if got := chatAge(chat.Row{Created: born}); got != "4d ago" {
+		t.Errorf("chatAge with no transcript falls back to birth: %q, want \"4d ago\"", got)
+	}
+	if got := chatAge(chat.Row{}); got != "" {
+		t.Errorf("a row with no times at all must print nothing, got %q", got)
+	}
+}

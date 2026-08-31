@@ -322,22 +322,28 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 
 	var recs []chatRecord
 	for _, lp := range pending {
-		id, label := lp.pane.ChatSession, ""
+		id := lp.pane.ChatSession
 		sessions := scan(lp.configDir, lp.pane.Dir)
 		if id == "" {
 			if s, ok := chat.Resolve(sessions, claimed, rivals[lp.pane.Dir]); ok {
-				id, label = s.ID, s.FirstPrompt
+				id = s.ID
 				claimed[id] = true
 				stampChatPane(look.stamp, lp.pane.Pane, lp.pane.Session, id)
 			}
 		}
-		if id != "" && label == "" {
-			label = transcriptLabel(sessions, id)
+		// The pane's transcript answers both of the row's transcript-shaped
+		// fields: its label and — grove-228 — when the chat was last spoken
+		// to. A pane whose id is still null has neither, and says so with a
+		// zero time rather than reporting its own birth as activity.
+		var label string
+		var lastActive time.Time
+		if s, ok := transcriptFor(sessions, id); ok {
+			label, lastActive = s.FirstPrompt, s.ModTime
 		}
 		recs = append(recs, chatRecord{Row: chat.Live{
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
-			SessionID: id, Label: label,
+			SessionID: id, Label: label, LastActive: lastActive,
 		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir})
 	}
 	for _, ws := range targets {
@@ -405,16 +411,20 @@ func orchestratorProjectDirs(ws workspace.Workspace) []string {
 	return dirs
 }
 
-// transcriptLabel is the list label of an already-stamped id: its
-// transcript's FirstPrompt. An id whose .jsonl is gone keeps the id and
-// loses only the label.
-func transcriptLabel(sessions []transcript.Session, id string) string {
+// transcriptFor finds a stamped id's transcript among the ones scanned for
+// its project dir. An id whose .jsonl is gone (or a pane with no id at all)
+// keeps the id and loses only what the transcript would have said: the
+// label and the last-active time.
+func transcriptFor(sessions []transcript.Session, id string) (transcript.Session, bool) {
+	if id == "" {
+		return transcript.Session{}, false
+	}
 	for _, s := range sessions {
 		if s.ID == id {
-			return s.FirstPrompt
+			return s, true
 		}
 	}
-	return ""
+	return transcript.Session{}, false
 }
 
 // printChatRows is the human table. `?` for an unresolved id is the same
@@ -424,7 +434,7 @@ func printChatRows(rows []chat.Row) {
 		fmt.Println("no orchestrator chats — `gv orchestrator new --workspace <label>` starts one")
 		return
 	}
-	fmt.Printf("%-14s %-24s %-9s %-10s %s\n", "WORKSPACE", "SESSION", "KIND", "SESSION", "LABEL")
+	fmt.Printf("%-14s %-24s %-9s %-10s %s\n", "WORKSPACE", "SESSION", "KIND", "SESSION", "ACTIVE")
 	for _, r := range rows {
 		id := "?"
 		if r.SessionID != nil {
@@ -451,11 +461,25 @@ func printChatRows(rows []chat.Row) {
 	}
 }
 
-// chatAge renders `created` compactly; a zero time (a pane on a tmux that
-// reported none) prints nothing rather than year 1.
+// chatAge renders how long ago the chat was last SPOKEN TO (grove-228),
+// not when its pane was born: the cockpit pane the operator is steering
+// right now read "2026-08-27" while it worked, which made the busiest row
+// look like the deadest one. A zero time (a pane on a tmux that reported
+// no birth, with no transcript either) prints nothing rather than year 1.
 func chatAge(r chat.Row) string {
-	if r.Created.IsZero() {
+	at := r.Activity()
+	if at.IsZero() {
 		return ""
 	}
-	return r.Created.Local().Format(time.RFC3339)
+	d := time.Since(at)
+	switch {
+	case d < 90*time.Second:
+		return "just now"
+	case d < 90*time.Minute:
+		return fmt.Sprintf("%dm ago", int(d.Round(time.Minute)/time.Minute))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Round(time.Hour)/time.Hour))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Round(24*time.Hour)/(24*time.Hour)))
+	}
 }

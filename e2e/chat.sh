@@ -67,7 +67,7 @@ say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRATCH="$(mktemp -d /tmp/grove-chat.XXXXXX)"
+SCRATCH="$(cd "$(mktemp -d /tmp/grove-chat.XXXXXX)" && pwd -P)"
 
 say "build gv"
 GV="$SCRATCH/gv"
@@ -303,14 +303,19 @@ say "grove-215/222: gv chat ls joins live panes to Claude session ids"
 ORCH="$WS/.grove/orchestrator"
 export GV_CLAUDE_CONFIG_DIR="$SCRATCH/claude"
 proj_dir() { printf '%s/projects/%s\n' "$GV_CLAUDE_CONFIG_DIR" "$(printf '%s' "$1" | sed 's#[/.]#-#g')"; }
+# Stamp an mtime from an epoch, on either touch: GNU takes `-d @<epoch>`,
+# BSD (macOS, where the operator runs this suite) only takes `-t`.
+set_mtime() { # <file> <epoch>
+  touch -d "@$2" "$1" 2>/dev/null || touch -t "$(date -r "$2" +%Y%m%d%H%M.%S)" "$1"
+}
 write_transcript() { # <cwd> <session-id> <first prompt> <epoch mtime>
   local d; d="$(proj_dir "$1")"
   mkdir -p "$d"
   printf '{"type":"user","cwd":"%s","gitBranch":"main","message":{"role":"user","content":"%s"}}\n' "$1" "$3" > "$d/$2.jsonl"
-  touch -d "@$4" "$d/$2.jsonl"
+  set_mtime "$d/$2.jsonl" "$4"
 }
 # Field of a row, read out of the pretty envelope: row_field <file> <session> <field>
-row_field() { grep -A 12 "\"session\": \"$2\"" "$1" | grep -m1 "\"$3\":" | sed 's/.*: //; s/[",]//g'; }
+row_field() { grep -A 14 "\"session\": \"$2\"" "$1" | grep -m1 "\"$3\":" | sed 's/.*: //; s/[",]//g'; }
 # The identity stamp on a chat session's single pane, and the command line
 # that was typed into it (scrollback, newlines stripped — the typed line
 # hard-wraps at pane width, so a bare grep would miss it).
@@ -363,6 +368,31 @@ grep -q '"chats"' "$SCRATCH/ls1.json" || fail "chat ls --json must key its paylo
 [ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 writable)" = "true" ] || fail "a live chat must be writable"
 [ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 workspace)" = "chatws" ] || fail "every row carries its workspace"
 
+say "grove-228: every row carries last_active — activity, not pane birth"
+# A row's field, read off session_id instead of session: an archived row has
+# no tmux session to grep for.
+id_field() { grep -A 10 "\"session_id\": \"$2\"" "$1" | grep -m1 "\"$3\":" | sed 's/.*: //; s/[",]//g'; }
+[ "$(grep -c '"last_active":' "$SCRATCH/ls1.json")" -eq "$(grep -c '"created":' "$SCRATCH/ls1.json")" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "last_active must be on EVERY row, beside created"; }
+# The three live chats have minted ids but no transcript yet: no activity to
+# report, so the zero time — never the pane's own birth dressed up as one.
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 last_active)" = "0001-01-01T00:00:00Z" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "a chat with no transcript must emit a zero last_active (the client falls back to created)"; }
+# An archived row was always honest: its birth IS its last activity.
+[ "$(id_field "$SCRATCH/ls1.json" aaaa1111 last_active)" = "$(id_field "$SCRATCH/ls1.json" aaaa1111 created)" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "an archived row's last_active must equal its created"; }
+# And with a transcript in hand the two fields SEPARATE: the pane was born
+# seconds ago, the conversation was last spoken to a day ago.
+write_transcript "$ORCH" "$ID1" "the steered chat" $((NOW - 90000))
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/active.json" 2>&1
+ACT="$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 last_active)"
+BIRTH="$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 created)"
+[ "$ACT" != "0001-01-01T00:00:00Z" ] \
+  || { cat "$SCRATCH/active.json"; fail "a live chat with a transcript must report its mtime as last_active"; }
+[ "$ACT" != "$BIRTH" ] \
+  || { cat "$SCRATCH/active.json"; fail "last_active must be the transcript's mtime, not the pane's birth ($BIRTH)"; }
+rm -f "$(proj_dir "$ORCH")/$ID1.jsonl"
+
 say "grove-222: the decoy transcripts are NOT handed to a live pane"
 # aaaa1111 (older) and bbbb2222 (newer) are exactly the pair mtime order
 # would have handed to chatws-3 and chatws-1. Nothing running claims them.
@@ -403,7 +433,7 @@ remote_tmux kill-session -t '=grove-chat-chatws-8'
 say "a transcript with no live pane is kind archived, read-only"
 grep -B 2 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"kind": "archived"' \
   || { cat "$SCRATCH/ls2.json"; fail "an unclaimed transcript must be kind archived"; }
-grep -A 6 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"writable": false' \
+grep -A 8 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"writable": false' \
   || fail "an archived transcript must never be writable"
 grep -q '"session_id": "aaaa1111"' "$SCRATCH/ls2.json" || fail "aaaa1111 vanished from the report"
 [ "$(grep -c '"session_id": "cccc3333"' "$SCRATCH/ls2.json")" -eq 1 ] \
@@ -505,7 +535,7 @@ grep -q '"seq":6,' "$SCRATCH/follow.jsonl" || { cat "$SCRATCH/follow.jsonl"; fai
 # Put chat 1's transcript back where its mtime was: the appends above made
 # it the NEWEST in this dir, and grove-217's spawn-time-stamp test needs
 # dddd4444 to hold that spot or it stops being a tripwire.
-touch -d "@$((NOW - 3000))" "$AAAA"
+set_mtime "$AAAA" $((NOW - 3000))
 
 say "grove-216: send/keys refuse every chat that is not writable"
 # The gate is the `writable` FIELD (grove-215), so the CLI and a phone can

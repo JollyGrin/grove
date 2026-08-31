@@ -72,13 +72,22 @@ func TestResolve(t *testing.T) {
 // A live pane's row: `writable` and `busy` are derived, never passed in.
 func TestLiveRow(t *testing.T) {
 	created := time.Unix(1756600000, 0)
+	spoken := time.Unix(1756900000, 0)
 	row := Live{
 		Session: "grove-chat-unbrewed-1", Workspace: "unbrewed", N: 1, Kind: KindChat,
 		Command: "claude", Attached: false, Created: created,
-		SessionID: "eeeb", Label: "triage the artgen backlog",
+		SessionID: "eeeb", Label: "triage the artgen backlog", LastActive: spoken,
 	}.Row()
 	if !row.Writable || !row.Busy {
 		t.Errorf("a live chat running claude must be writable and busy: %+v", row)
+	}
+	// grove-228: birth and activity are different questions and a live row
+	// answers BOTH — `created` still means pane birth, and must not drift.
+	if !row.Created.Equal(created) {
+		t.Errorf("created must stay pane birth: %v, want %v", row.Created, created)
+	}
+	if !row.LastActive.Equal(spoken) || !row.Activity().Equal(spoken) {
+		t.Errorf("last_active must be the transcript mtime: %v, want %v", row.LastActive, spoken)
 	}
 	if row.SessionID == nil || *row.SessionID != "eeeb" {
 		t.Errorf("session_id lost: %+v", row.SessionID)
@@ -100,12 +109,25 @@ func TestLiveRow(t *testing.T) {
 	if starting.Busy {
 		t.Error("a shell prompt is not busy")
 	}
+	// A pane with no transcript has no activity to report: the zero time,
+	// and Activity falls back to birth so nothing renders year 1.
+	if !starting.LastActive.IsZero() {
+		t.Errorf("an unresolved chat must emit a zero last_active, got %v", starting.LastActive)
+	}
+	if !starting.Activity().Equal(starting.Created) {
+		t.Errorf("a zero last_active must fall back to created: %v", starting.Activity())
+	}
 	raw, err := json.Marshal(starting)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !containsSub(string(raw), `"session_id":null`) {
 		t.Errorf("an unresolved chat must marshal session_id as null: %s", raw)
+	}
+	// The contract field is on EVERY row, present even when it is zero —
+	// the client's fallback is a value check, not a presence check.
+	if !containsSub(string(raw), `"last_active":`) {
+		t.Errorf("every row must carry last_active: %s", raw)
 	}
 }
 
@@ -118,6 +140,10 @@ func TestArchivedRow(t *testing.T) {
 	}
 	if row.SessionID == nil || *row.SessionID != "ccc" || row.Label != "yesterday" || !row.Created.Equal(mod) {
 		t.Errorf("archived row lost its identity: %+v", row)
+	}
+	// An archived row was already honest: its birth IS its last activity.
+	if !row.LastActive.Equal(mod) {
+		t.Errorf("archived last_active must be the transcript mtime: %v, want %v", row.LastActive, mod)
 	}
 }
 
@@ -189,6 +215,83 @@ func TestSort(t *testing.T) {
 	}
 	if rows[0].N != 1 || rows[1].N != 2 {
 		t.Errorf("live chats must sort by number: %v, %v", rows[0].N, rows[1].N)
+	}
+}
+
+// grove-228: within a kind, the order is LAST ACTIVITY first — the report
+// used to lead with whatever was born most recently, which put the chat
+// nobody has touched since Tuesday above the one answering right now.
+func TestLessOrdersByActivity(t *testing.T) {
+	old, mid, recent := time.Unix(1000, 0), time.Unix(2000, 0), time.Unix(3000, 0)
+	zero := time.Time{}
+	cases := []struct {
+		name string
+		a, b Row
+		want bool // Less(a, b)
+	}{
+		{"the more recently active row leads",
+			Row{Kind: KindArchived, Created: old, LastActive: recent},
+			Row{Kind: KindArchived, Created: recent, LastActive: mid}, true},
+		{"…and the idle one follows, whatever its birth",
+			Row{Kind: KindArchived, Created: recent, LastActive: mid},
+			Row{Kind: KindArchived, Created: old, LastActive: recent}, false},
+		{"a zero last_active falls back to created (older loses)",
+			Row{Kind: KindArchived, Created: old, LastActive: zero},
+			Row{Kind: KindArchived, Created: mid, LastActive: zero}, false},
+		{"a zero last_active falls back to created (newer leads)",
+			Row{Kind: KindArchived, Created: recent, LastActive: zero},
+			Row{Kind: KindArchived, Created: mid, LastActive: zero}, true},
+		{"an unresolved live pane is ranked on its birth against an active row",
+			Row{Kind: KindChat, Created: recent, LastActive: zero},
+			Row{Kind: KindChat, Created: old, LastActive: mid}, true},
+		{"…and loses to one active since it was born",
+			Row{Kind: KindChat, Created: mid, LastActive: zero},
+			Row{Kind: KindChat, Created: old, LastActive: recent}, false},
+		{"workspace still outranks activity",
+			Row{Workspace: "a", Kind: KindArchived, LastActive: old},
+			Row{Workspace: "b", Kind: KindArchived, LastActive: recent}, true},
+		{"kind still outranks activity",
+			Row{Kind: KindChat, LastActive: old},
+			Row{Kind: KindArchived, LastActive: recent}, true},
+		{"chat number still outranks activity",
+			Row{Kind: KindChat, N: 1, LastActive: old},
+			Row{Kind: KindChat, N: 2, LastActive: recent}, true},
+		{"equal activity falls through to the label tiebreak",
+			Row{Kind: KindArchived, Created: mid, LastActive: mid, Label: "a"},
+			Row{Kind: KindArchived, Created: mid, LastActive: mid, Label: "b"}, true},
+	}
+	for _, c := range cases {
+		if got := Less(c.a, c.b); got != c.want {
+			t.Errorf("%s: Less = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	// And through Sort: three archived rows whose births are the exact
+	// inverse of their activity — the list must read newest-touched first.
+	rows := []Row{
+		{Kind: KindArchived, Created: recent, LastActive: old, Label: "stale"},
+		{Kind: KindArchived, Created: old, LastActive: recent, Label: "live"},
+		{Kind: KindArchived, Created: mid, LastActive: mid, Label: "middling"},
+	}
+	Sort(rows)
+	if rows[0].Label != "live" || rows[1].Label != "middling" || rows[2].Label != "stale" {
+		t.Errorf("Sort must lead with what was touched last: %v, %v, %v",
+			rows[0].Label, rows[1].Label, rows[2].Label)
+	}
+}
+
+// Activity is the single answer both the ordering and every "how old is
+// this" display read, so a zero last_active can never render year 1.
+func TestActivity(t *testing.T) {
+	born, spoken := time.Unix(1000, 0), time.Unix(2000, 0)
+	if got := (Row{Created: born, LastActive: spoken}).Activity(); !got.Equal(spoken) {
+		t.Errorf("Activity = %v, want the transcript mtime %v", got, spoken)
+	}
+	if got := (Row{Created: born}).Activity(); !got.Equal(born) {
+		t.Errorf("Activity with no transcript = %v, want created %v", got, born)
+	}
+	if got := (Row{}).Activity(); !got.IsZero() {
+		t.Errorf("a row with neither time stays zero, got %v", got)
 	}
 }
 

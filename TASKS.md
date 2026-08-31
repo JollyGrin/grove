@@ -137,6 +137,34 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] Chat rows age on ACTIVITY, not pane birth (grove-228, 2026-08-31):
+      every chat in the phone list read as days old, the busy ones worst of
+      all — the groveremote cockpit said "4d ago" while its agent worked,
+      because `created` meant two different things by kind (tmux pane birth
+      on a live row, transcript ModTime on an archived one) and nothing was
+      ordered by recency at all. `chat.Row` gains **`last_active`**: the
+      transcript's mtime on EVERY kind, zero on a live pane whose
+      `session_id` is still null (never its own birth dressed up as
+      activity), with `Row.Activity()` the one fallback both the ordering
+      and every display read. **Additive only** — `created` keeps its exact
+      meaning, which is what `e2e/plugin.sh` guards. `chat.Less` sorts on
+      activity ahead of the `created` tiebreak (workspace → kind → n
+      unchanged above it), `chatAge` renders a relative age off it, and the
+      phone falls back to `created` on the zero (year 0001 is truthy in JS
+      — `c.last_active || c.created` would have aged it as 739000d) while
+      the project card gains the workspace's freshest activity, so the
+      projects screen finally answers "where was I?". The label is
+      deliberately untouched: showing the newest turn instead of the first
+      prompt changes what a row IS and is a separate call. Live on the Mac:
+      the attached, busy `grove-grove-repo` cockpit reports
+      `created 10:07` and `last_active 13:43` on the same row — 4h of pane
+      age and 11 minutes of silence, told apart at last. **`e2e/chat.sh`
+      only ever ran on GNU userland** — `touch -d @<epoch>` and a
+      `/tmp`-vs-`/private/tmp` scratch path both fail on macOS, so the
+      whole `chat ls` half of the suite was dark on the operator's own
+      machine; both are fixed here (`set_mtime`, `pwd -P`) and it is green
+      on the Mac for the first time.
+
 - [x] `gv chat` resolves the Claude config dir PER WORKSPACE (grove-227,
       2026-08-31): `internal/transcript` resolved it once per process
       (`GV_CLAUDE_CONFIG_DIR`, else `~/.claude`), so the reader — and

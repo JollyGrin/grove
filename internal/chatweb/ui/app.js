@@ -97,6 +97,18 @@ function ago(iso) {
   return Math.round(s / 86400) + 'd ago';
 }
 
+/* activeAt is when the chat was last SPOKEN TO — `last_active` (the
+ * transcript's mtime, on every kind since grove-228), falling back to
+ * `created` when there is no transcript to read: a live pane grove cannot
+ * name yet emits the zero time, which serialises as year 0001 and would
+ * otherwise age as "739000d ago". `created` still means BIRTH — pane birth
+ * on a live row — so it is the fallback, never the display value. */
+function activeAt(c) {
+  var t = c.last_active;
+  if (!t || !(new Date(t).getTime() > 0)) return c.created;
+  return t;
+}
+
 /* A row's label is its transcript's first prompt, which is empty until the
  * chat has said something — and empty forever for a chat grove cannot
  * identify (grove-222 leaves `session_id` null rather than guessing). Both
@@ -140,10 +152,17 @@ function screenProjects() {
     var rows = by[label];
     var live = rows.filter(function (c) { return c.kind === 'chat'; }).length;
     var arch = rows.length - live;
+    /* The card answers "where was I?", which counts alone never could:
+     * the freshest activity in the project, across all three kinds. */
+    var last = rows.reduce(function (best, c) {
+      var t = new Date(activeAt(c)).getTime();
+      return t > best ? t : best;
+    }, 0);
     var b = h('button', 'row');
     b.append(h('div', 'title', label));
     var meta = h('div', 'meta');
     meta.append(h('span', '', live + ' live'), h('span', '', arch + ' other'));
+    if (last > 0) meta.append(h('span', '', ago(new Date(last).toISOString())));
     if (rows.some(function (c) { return c.busy; })) meta.append(h('span', 'dot'));
     b.append(meta);
     b.onclick = function () { location.hash = '#/w/' + encodeURIComponent(label); };
@@ -181,7 +200,7 @@ function screenWorkspace(label) {
     var meta = h('div', 'meta');
     meta.append(h('span', 'badge ' + c.kind, c.kind));
     if (c.session) meta.append(h('span', '', c.session));
-    meta.append(h('span', '', ago(c.created)));
+    meta.append(h('span', '', ago(activeAt(c))));
     if (c.busy) meta.append(h('span', 'dot'));
     if (!c.writable) meta.append(h('span', '', 'read-only'));
     if (!c.session_id) meta.append(h('span', '', 'unidentified'));

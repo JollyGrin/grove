@@ -44,6 +44,15 @@ const (
 // Row is one `gv chat ls` row. Contract shape (docs/plugins.md): additive
 // only. SessionID is a pointer so an unresolved chat emits `null` rather
 // than an empty string a client could mistake for an id.
+//
+// Created and LastActive are DIFFERENT questions and grove-228 exists
+// because one field was answering both. `created` is birth — a live row's
+// tmux pane age, an archived row's transcript mtime — and it keeps that
+// meaning exactly (the contract is additive-only). `last_active` is the
+// transcript's mtime on EVERY kind: the last time the chat was actually
+// spoken to. A cockpit pane born four days ago and steered ten seconds ago
+// reports both, and a list that sorts or ages on `created` alone shows the
+// busiest rows as the oldest.
 type Row struct {
 	Session   string    `json:"session"`
 	Workspace string    `json:"workspace"`
@@ -55,7 +64,22 @@ type Row struct {
 	Busy      bool      `json:"busy"`
 	Attached  bool      `json:"attached"`
 	Created   time.Time `json:"created"`
-	Writable  bool      `json:"writable"`
+	// LastActive is the transcript's ModTime, or the zero time when the row
+	// has no transcript to read (a live pane whose `session_id` is still
+	// null). A client falls back to Created on the zero — Activity does it
+	// for Go callers.
+	LastActive time.Time `json:"last_active"`
+	Writable   bool      `json:"writable"`
+}
+
+// Activity is the row's recency: last_active, falling back to created when
+// the chat has no transcript yet. The one function every ordering and every
+// "how old is this" display goes through, so they can never disagree.
+func (r Row) Activity() time.Time {
+	if r.LastActive.IsZero() {
+		return r.Created
+	}
+	return r.LastActive
 }
 
 // Writable answers the one question a client must never guess: may this row
@@ -77,37 +101,45 @@ type Live struct {
 	Created   time.Time
 	SessionID string // "" = not resolved yet → session_id: null
 	Label     string // the transcript's FirstPrompt, "" while unresolved
+	// LastActive is the transcript's ModTime; zero while unresolved, since
+	// a pane with no transcript has no activity to report and guessing one
+	// (the pane's own birth) would re-tell exactly the grove-228 lie.
+	LastActive time.Time
 }
 
 // Row projects a live pane into the contract shape.
 func (l Live) Row() Row {
 	return Row{
-		Session:   l.Session,
-		Workspace: l.Workspace,
-		N:         l.N,
-		Kind:      l.Kind,
-		SessionID: idOrNull(l.SessionID),
-		Label:     l.Label,
-		Command:   l.Command,
-		Busy:      busy(l.Command),
-		Attached:  l.Attached,
-		Created:   l.Created,
-		Writable:  Writable(l.Kind),
+		Session:    l.Session,
+		Workspace:  l.Workspace,
+		N:          l.N,
+		Kind:       l.Kind,
+		SessionID:  idOrNull(l.SessionID),
+		Label:      l.Label,
+		Command:    l.Command,
+		Busy:       busy(l.Command),
+		Attached:   l.Attached,
+		Created:    l.Created,
+		LastActive: l.LastActive,
+		Writable:   Writable(l.Kind),
 	}
 }
 
 // ArchivedRow projects a transcript with no live pane. Its `created` is the
 // transcript's ModTime — the last time the chat was actually spoken to,
-// which is what a "pick yesterday's chat back up" list sorts on.
+// which is what a "pick yesterday's chat back up" list sorts on — and its
+// `last_active` is the same value, which is why an archived row was the
+// only honest one on the list before grove-228.
 func ArchivedRow(workspace string, s transcript.Session) Row {
 	id := s.ID
 	return Row{
-		Workspace: workspace,
-		Kind:      KindArchived,
-		SessionID: idOrNull(id),
-		Label:     s.FirstPrompt,
-		Created:   s.ModTime,
-		Writable:  Writable(KindArchived),
+		Workspace:  workspace,
+		Kind:       KindArchived,
+		SessionID:  idOrNull(id),
+		Label:      s.FirstPrompt,
+		Created:    s.ModTime,
+		LastActive: s.ModTime,
+		Writable:   Writable(KindArchived),
 	}
 }
 
@@ -183,8 +215,8 @@ func IsOrchestratorPane(paneDir, orchDir string) bool {
 }
 
 // Sort orders the report: workspace, then live chats before cockpit panes
-// before archived transcripts, then chat number, then newest first. Stable
-// across calls so a client can diff two `ls` runs.
+// before archived transcripts, then chat number, then most recently ACTIVE
+// first. Stable across calls so a client can diff two `ls` runs.
 func Sort(rows []Row) {
 	sort.SliceStable(rows, func(i, j int) bool { return Less(rows[i], rows[j]) })
 }
@@ -201,6 +233,11 @@ func Less(a, b Row) bool {
 	}
 	if a.N != b.N {
 		return a.N < b.N
+	}
+	// Recency, not birth (grove-228): a chat steered two minutes ago belongs
+	// above one that has been idle since Tuesday, whatever their pane ages.
+	if actA, actB := a.Activity(), b.Activity(); !actA.Equal(actB) {
+		return actA.After(actB)
 	}
 	if !a.Created.Equal(b.Created) {
 		return a.Created.After(b.Created)
