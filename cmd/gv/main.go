@@ -102,6 +102,9 @@ const usage = `gv — grove
   gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
                                               this workspace — prints the ssh line that attaches to it
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
+  gv chat ls [--workspace L] [--json]         orchestrator chats in every registered workspace: live
+                                              detached chats, the cockpit's own (read-only) panes, and
+                                              archived transcripts — the writable field says which take input
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
@@ -431,6 +434,8 @@ func main() {
 		default:
 			err = cmdUI()
 		}
+	case "chat":
+		err = cmdChat(args)
 	case "mobile":
 		err = cmdMobile()
 	case "doctor":

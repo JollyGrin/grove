@@ -53,12 +53,13 @@ payload under one named key.
 | Command | Payload key | Shape |
 |---|---|---|
 | `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`, `host`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
-| `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes + `chat_sessions` (live detached orchestrator chats, grove-203) |
+| `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes + `chat_sessions` (live detached orchestrator chats, grove-203; each row also carries `n`, `pane`, `dir` and the resolved `session_id` since grove-215) |
 | `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
 | `gv workspaces --json` | `workspaces` | array — `{root, label, scope}` |
+| `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, writable}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id, **null** while a chat is still booting; `label` is the transcript's first prompt. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input |
 | `gv doctor --json` | `rows` | array — connection checks |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
 

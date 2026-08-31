@@ -137,6 +137,33 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] Chat identity + `gv chat ls --json` (grove-215, 2026-08-31): train
+      1/4 of `gv chat` (design: `docs/plans/2026-08-31-gv-chat-design.md`
+      §1–2). `tmux.ChatSessions` knew a workspace's live chat sessions and
+      `transcript.ListSessions` knew the session ids in its orchestrator
+      project dir, and **nothing joined them** — "newest .jsonl" is
+      ambiguous the moment a workspace has two chats, because they share
+      one project dir. Now a chat's Claude session id is resolved lazily
+      (the id is minted by claude on boot, not known at spawn) as the
+      newest UNCLAIMED transcript whose cwd matches the pane's, then
+      stamped once on the pane as the user option `@grove_chat_session` and
+      never re-derived — a pane user option is durable where a pane title
+      is not (Claude Code overwrites titles on boot). `gv chat ls
+      [--workspace L] [--json]` reports all three states a chat can be in:
+      `chat` (live detached, the only `writable: true` kind), `cockpit`
+      (the cockpit's own orchestrator pane — identified by cwd, since the
+      dashboard and a grove-199 remote pane both sit at the workspace root)
+      and `archived` (a transcript with no live pane). No `--workspace` =
+      every registered workspace, each row carrying its own (grove-191's
+      workspace-transparent shape); an unresolved chat reports `session_id:
+      null` and resolves on the next call. The `kind: chat` filter still
+      routes through the registry's cockpit answer, so a nil `CockpitCheck`
+      keeps under-reporting — `gv park --chats` kills what chat rows
+      describe. `e2e/chat.sh` covers spawn → ls (distinct + stable ids for
+      two chats in one project dir, null for a booting one, the cockpit
+      pane read-only, an archived transcript, cross-workspace rows) and now
+      runs in the hostile-tmux-conf pass too.
+
 - [x] Paste-able attach hints survive zsh (grove-207, 2026-08-29): a word
       that STARTS with `=` is equals-expanded by zsh (macOS's default
       shell), so the printed `tmux attach -t =grove-chat-<label>-<n>` died

@@ -901,16 +901,91 @@ func CreateChatSession(session, dir, cmd string) error {
 // them, which is exactly why they have to be enumerable.
 type ChatSession struct {
 	Session  string    `json:"session"`
+	N        int       `json:"n"`       // the <n> in grove-chat-<label>-<n>
 	PID      int       `json:"pid"`     // the chat pane's process — claude runs under it
 	Command  string    `json:"command"` // pane_current_command ("claude"/"node" while the agent runs)
 	Attached bool      `json:"attached"`
 	Created  time.Time `json:"created"`
+	// grove-215: the pane's immutable %id, its cwd, and the Claude session
+	// id stamped on it (@grove_chat_session, "" until resolved). Additive:
+	// `gv audit --json` carries them too, and a client that ignores them
+	// sees exactly what it saw before.
+	Pane      string `json:"pane"`
+	Dir       string `json:"dir"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
-// chatListFormat asks list-panes for everything a chat report needs in one
+// paneListFormat asks list-panes for everything a chat report needs in one
 // call: session_* format variables resolve in a pane context too, so no
-// second list-sessions is needed to learn attachment or start time.
-const chatListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}"
+// second list-sessions is needed to learn attachment or start time. The
+// first five fields are grove-203's original order — new fields are only
+// ever APPENDED, because a tmux too old to expand a variable, or a trailing
+// EMPTY field (an unstamped pane), simply shortens the line.
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}"
+
+// LivePane is one live pane of the whole server: which session it belongs
+// to, what it is running, where, and grove's own identity stamp. The single
+// shape every chat-shaped report is built from (grove-215) — a chat session's
+// only pane, a cockpit's orchestrator pane, and a dashboard pane all arrive
+// here and are told apart by the CALLER, never by name-shape alone.
+type LivePane struct {
+	Session     string
+	PID         int
+	Command     string
+	Attached    bool
+	Created     time.Time
+	Pane        string // %id — the immutable target (grove-99/168)
+	Index       int    // pane_index, honoring the user's pane-base-index
+	Dir         string // pane_current_path
+	ChatSession string // @grove_chat_session, "" when unstamped
+}
+
+// Panes lists every pane on the server. A tmux that isn't running is an
+// empty list, not an error (SessionNames' rule).
+func Panes() []LivePane {
+	out, err := run("list-panes", "-a", "-F", paneListFormat)
+	if err != nil || out == "" {
+		return nil
+	}
+	return ParsePanes(out)
+}
+
+// ParsePanes is the pure half of Panes. Fields are read by index through
+// paneField, so a short line (an old tmux, or an unstamped pane whose empty
+// trailing field the trim ate) yields zero values rather than a dropped
+// pane.
+func ParsePanes(out string) []LivePane {
+	var panes []LivePane
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimSpace(line), "\t")
+		if len(f) < 5 || f[0] == "" {
+			continue
+		}
+		p := LivePane{
+			Session:     f[0],
+			Command:     paneField(f, 2),
+			Attached:    paneField(f, 3) != "0",
+			Pane:        paneField(f, 5),
+			Dir:         paneField(f, 7),
+			ChatSession: paneField(f, 8),
+		}
+		p.PID, _ = strconv.Atoi(paneField(f, 1))
+		p.Index, _ = strconv.Atoi(paneField(f, 6))
+		if secs, err := strconv.ParseInt(paneField(f, 4), 10, 64); err == nil && secs > 0 {
+			p.Created = time.Unix(secs, 0)
+		}
+		panes = append(panes, p)
+	}
+	return panes
+}
+
+// paneField is the bounds-checked field read: absent = "".
+func paneField(f []string, i int) string {
+	if i < len(f) {
+		return f[i]
+	}
+	return ""
+}
 
 // ChatSessions lists the live chat sessions belonging to one workspace
 // label, oldest number first. A tmux that isn't running is an empty list,
@@ -921,11 +996,7 @@ func ChatSessions(label string, isCockpit CockpitCheck) []ChatSession {
 	if label == "" {
 		return nil
 	}
-	out, err := run("list-panes", "-a", "-F", chatListFormat)
-	if err != nil || out == "" {
-		return nil
-	}
-	return ParseChatSessions(out, label, isCockpit)
+	return ChatSessionsIn(Panes(), label, isCockpit)
 }
 
 // ParseChatSessions is the pure half — testable without a tmux server.
@@ -944,32 +1015,58 @@ func ChatSessions(label string, isCockpit CockpitCheck) []ChatSession {
 // One row per session: a chat has a single pane by construction, but an
 // operator who split it must not be reported (or killed) twice.
 func ParseChatSessions(out, label string, isCockpit CockpitCheck) []ChatSession {
-	prefix := chatSessionPrefix(label)
-	nums := map[string]int{}
-	var chats []ChatSession
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Split(strings.TrimSpace(line), "\t")
-		if len(f) < 5 {
-			continue
-		}
-		name := f[0]
-		if _, dup := nums[name]; dup {
-			continue
-		}
-		n, ok := chatIndex(name, prefix)
-		if !ok || isCockpit.cockpit(name) {
-			continue
-		}
-		nums[name] = n
-		c := ChatSession{Session: name, Command: f[2], Attached: f[3] != "0"}
-		c.PID, _ = strconv.Atoi(f[1])
-		if secs, err := strconv.ParseInt(f[4], 10, 64); err == nil && secs > 0 {
-			c.Created = time.Unix(secs, 0)
-		}
-		chats = append(chats, c)
+	return ChatSessionsIn(ParsePanes(out), label, isCockpit)
+}
+
+// ChatSessionsIn is ParseChatSessions over already-parsed panes, so one
+// list-panes call can feed both the chat rows and the cockpit-pane rows
+// `gv chat ls` reports beside them (grove-215).
+func ChatSessionsIn(panes []LivePane, label string, isCockpit CockpitCheck) []ChatSession {
+	if label == "" {
+		return nil
 	}
-	sort.Slice(chats, func(i, j int) bool { return nums[chats[i].Session] < nums[chats[j].Session] })
+	prefix := chatSessionPrefix(label)
+	seen := map[string]bool{}
+	var chats []ChatSession
+	for _, p := range panes {
+		if seen[p.Session] {
+			continue
+		}
+		n, ok := chatIndex(p.Session, prefix)
+		if !ok || isCockpit.cockpit(p.Session) {
+			continue
+		}
+		seen[p.Session] = true
+		chats = append(chats, ChatSession{
+			Session: p.Session, N: n, PID: p.PID, Command: p.Command,
+			Attached: p.Attached, Created: p.Created,
+			Pane: p.Pane, Dir: p.Dir, SessionID: p.ChatSession,
+		})
+	}
+	sort.Slice(chats, func(i, j int) bool { return chats[i].N < chats[j].N })
 	return chats
+}
+
+// Claudeish reports whether a pane_current_command is the agent itself
+// (claude presents as claude/node/bun, or a bare version string depending
+// on the install) — what `busy` means in a chat report. Exported so the
+// chat rows and the worker-pane resolver share one answer.
+func Claudeish(command string) bool { return isClaudeish(command) }
+
+// SetPaneChatSession stamps a pane with the Claude session id of the chat
+// running in it (@grove_chat_session, grove-215). The id is minted by
+// claude on boot, not known at spawn, so it is resolved lazily from the
+// transcript and then stamped ONCE — a pane user option is durable in the
+// way the join needs: the foreground program cannot clobber it (a pane
+// TITLE it would, on boot), and it survives every re-layout and re-attach.
+// An empty id clears the stamp.
+func SetPaneChatSession(pane, id string) error {
+	if id == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_chat_session")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_chat_session", id)
+	return err
 }
 
 // chatIndex parses the <n> out of `grove-chat-<label>-<n>`. Digits only —

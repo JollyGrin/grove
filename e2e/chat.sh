@@ -21,6 +21,11 @@
 #      `gv park` names the ones it leaves running, `gv park --chats` kills
 #      them — and neither path touches the colliding `grove-chat-app`
 #      cockpit
+#   8. (grove-215) `gv chat ls [--json]` joins live panes to Claude session
+#      ids: two chats sharing ONE orchestrator project dir get distinct,
+#      STABLE ids (stamped on the pane as @grove_chat_session), a chat with
+#      no transcript yet reports null, the cockpit's own pane is kind
+#      cockpit / writable false, and an unclaimed transcript is archived
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -65,6 +70,27 @@ cleanup() {
   rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; rm -rf "$SCRATCH" 2>/dev/null || true; }
 }
 trap cleanup EXIT
+
+# Hostile tmux config mode (grove-168, extended to this suite by grove-215):
+# GROVE_E2E_TMUX_CONF=hostile boots BOTH isolated servers with the common
+# dotfiles pair base-index 1 + pane-base-index 1, which turns every literal
+# ".0"/".1" pane target into a failure. `gv chat ls` resolves panes by %id
+# and stamps them by %id, so this is the mode that proves it. -f only applies
+# at server boot, so start them now (exit-empty off keeps them alive with no
+# sessions) and every later tmux call joins them with the hostile options
+# already global.
+if [ "${GROVE_E2E_TMUX_CONF:-}" = "hostile" ]; then
+  say "hostile tmux conf (base-index 1, pane-base-index 1) on both servers"
+  cat > "$SCRATCH/hostile.conf" <<'EOF'
+set -g base-index 1
+set -g pane-base-index 1
+set -g renumber-windows on
+set -g allow-rename on
+set -g exit-empty off
+EOF
+  env -u TMUX TMUX_TMPDIR="$TMUX_TMPDIR" tmux -f "$SCRATCH/hostile.conf" start-server
+  env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux -f "$SCRATCH/hostile.conf" start-server
+fi
 
 say "fake ssh on PATH (target-checked, global-layer cwd, second tmux server)"
 # Parses like the real thing and REQUIRES the configured hosts.pc.ssh value
@@ -228,6 +254,104 @@ rc=0
 ( cd "$WS" && "$GV" orchestrator close --host pc ) > "$SCRATCH/close.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "orchestrator close --host must exit non-zero"
 grep -q 'only supported for `gv orchestrator new`' "$SCRATCH/close.out" || { cat "$SCRATCH/close.out"; fail "wrong subcommand error"; }
+
+say "grove-215: gv chat ls joins live panes to Claude session ids"
+# Live right now: chatws-1 and chatws-3 in the brain dir, chatws-2 in the
+# per-profile dir. The two sharing ONE project dir are the case the ticket
+# exists for — "the newest .jsonl" cannot separate them.
+ORCH="$WS/.grove/orchestrator"
+export GV_CLAUDE_CONFIG_DIR="$SCRATCH/claude"
+proj_dir() { printf '%s/projects/%s\n' "$GV_CLAUDE_CONFIG_DIR" "$(printf '%s' "$1" | sed 's#[/.]#-#g')"; }
+write_transcript() { # <cwd> <session-id> <first prompt> <epoch mtime>
+  local d; d="$(proj_dir "$1")"
+  mkdir -p "$d"
+  printf '{"type":"user","cwd":"%s","gitBranch":"main","message":{"role":"user","content":"%s"}}\n' "$1" "$3" > "$d/$2.jsonl"
+  touch -d "@$4" "$d/$2.jsonl"
+}
+# Field of a row, read out of the pretty envelope: row_field <file> <session> <field>
+row_field() { grep -A 12 "\"session\": \"$2\"" "$1" | grep -m1 "\"$3\":" | sed 's/.*: //; s/[",]//g'; }
+NOW="$(date +%s)"
+write_transcript "$ORCH" aaaa1111 "triage the artgen backlog" $((NOW - 3000))
+write_transcript "$ORCH" bbbb2222 "write the release notes"   $((NOW - 1000))
+write_transcript "$ORCH" cccc3333 "last tuesday"              $((NOW - 90000))
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls1.json" 2> "$SCRATCH/ls1.err"
+cat "$SCRATCH/ls1.err"
+grep -q '"schema_version"' "$SCRATCH/ls1.json" || { cat "$SCRATCH/ls1.json"; fail "chat ls --json must carry the contract envelope"; }
+grep -q '"chats"' "$SCRATCH/ls1.json" || fail "chat ls --json must key its payload on chats"
+
+ID1="$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 session_id)"
+ID3="$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-3 session_id)"
+[ -n "$ID1" ] && [ -n "$ID3" ] || { cat "$SCRATCH/ls1.json"; fail "both live chats must appear in chat ls"; }
+[ "$ID1" != "$ID3" ] || { cat "$SCRATCH/ls1.json"; fail "two chats in one project dir took the SAME session id ($ID1)"; }
+[ "$ID3" = "bbbb2222" ] || { cat "$SCRATCH/ls1.json"; fail "the NEWEST chat must take the newest transcript, got $ID3"; }
+[ "$ID1" = "aaaa1111" ] || { cat "$SCRATCH/ls1.json"; fail "chat 1 = $ID1, want aaaa1111"; }
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 label)" = "triage the artgen backlog" ] \
+  || fail "the row label must be the transcript's first prompt"
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 kind)" = "chat" ] || fail "a live detached chat is kind chat"
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 writable)" = "true" ] || fail "a live chat must be writable"
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 workspace)" = "chatws" ] || fail "every row carries its workspace"
+# The profiled chat's own project dir has no transcript yet: null, not a
+# borrowed id from the dir next door.
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-2 session_id)" = "null" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "an unresolved chat must report session_id null"; }
+
+say "the ids are STAMPED on the panes (@grove_chat_session) — durable identity"
+STAMP1="$(remote_tmux list-panes -t '=grove-chat-chatws-1:chat' -F '#{@grove_chat_session}')"
+[ "$STAMP1" = "aaaa1111" ] || fail "pane user option @grove_chat_session = '$STAMP1', want aaaa1111"
+
+say "a second ls returns the SAME ids (never re-derived)"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls2.json" 2>&1
+[ "$(row_field "$SCRATCH/ls2.json" grove-chat-chatws-1 session_id)" = "$ID1" ] || fail "chat 1's id moved between calls"
+[ "$(row_field "$SCRATCH/ls2.json" grove-chat-chatws-3 session_id)" = "$ID3" ] || fail "chat 3's id moved between calls"
+
+say "a transcript with no live pane is kind archived, read-only"
+grep -B 2 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"kind": "archived"' \
+  || { cat "$SCRATCH/ls2.json"; fail "an unclaimed transcript must be kind archived"; }
+grep -A 6 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"writable": false' \
+  || fail "an archived transcript must never be writable"
+grep -q '"session_id": "aaaa1111"' "$SCRATCH/ls2.json" || fail "chat 1 lost its id"
+[ "$(grep -c '"session_id": "aaaa1111"' "$SCRATCH/ls2.json")" -eq 1 ] \
+  || fail "a transcript a live pane owns must not ALSO be listed as archived"
+
+say "the cockpit's own orchestrator pane is kind cockpit, never kind chat"
+# The dashboard pane sits at the workspace root; the orchestrator pane's cwd
+# IS the brain dir — that cwd, not the name, is what tells them apart.
+remote_tmux new-session -d -s grove-chatws -n cockpit -c "$WS"
+remote_tmux split-window -d -t '=grove-chatws:cockpit' -c "$ORCH"
+write_transcript "$ORCH" dddd4444 "the cockpit conversation" $((NOW - 100))
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls3.json" 2>&1
+[ "$(row_field "$SCRATCH/ls3.json" grove-chatws kind)" = "cockpit" ] \
+  || { cat "$SCRATCH/ls3.json"; fail "the cockpit's orchestrator pane must be kind cockpit"; }
+[ "$(row_field "$SCRATCH/ls3.json" grove-chatws writable)" = "false" ] || fail "a cockpit pane must never be writable"
+[ "$(row_field "$SCRATCH/ls3.json" grove-chatws session_id)" = "dddd4444" ] \
+  || fail "the cockpit pane resolves its own transcript"
+[ "$(row_field "$SCRATCH/ls3.json" grove-chat-chatws-1 session_id)" = "$ID1" ] || fail "the cockpit pane stole a chat's id"
+grep -q '"session": "grove-chatws"' "$SCRATCH/ls3.json" || fail "the cockpit row vanished"
+# The human table says read-only too.
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls ) > "$SCRATCH/ls3.txt" 2>&1
+cat "$SCRATCH/ls3.txt"
+grep -q 'cockpit.*read-only' "$SCRATCH/ls3.txt" || fail "the table must mark a cockpit pane read-only"
+
+say "no --workspace = every registered workspace; --workspace narrows"
+OTHER="$SCRATCH/otherws"
+mkrepo "$OTHER"
+( cd "$OTHER" && "$GV" init --yes --label otherws > /dev/null )
+mkdir -p "$OTHER/.grove/orchestrator"
+write_transcript "$OTHER/.grove/orchestrator" eeee5555 "the other workspace's chat" $((NOW - 5000))
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls4.json" 2>&1
+grep -q '"workspace": "otherws"' "$SCRATCH/ls4.json" || { cat "$SCRATCH/ls4.json"; fail "ls with no --workspace must span every registered workspace"; }
+grep -q '"workspace": "chatws"' "$SCRATCH/ls4.json" || fail "ls dropped the ambient workspace's rows"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --workspace chatws --json ) > "$SCRATCH/ls5.json" 2>&1
+grep -q '"workspace": "otherws"' "$SCRATCH/ls5.json" && fail "--workspace must narrow to one workspace" || true
+grep -q '"workspace": "chatws"' "$SCRATCH/ls5.json" || fail "--workspace chatws returned nothing"
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --workspace nope ) > "$SCRATCH/ls6.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "an unregistered --workspace label must exit non-zero"
+grep -q 'no registered workspace' "$SCRATCH/ls6.out" || { cat "$SCRATCH/ls6.out"; fail "wrong unknown-workspace error"; }
+
+# Hand the rest of the suite the tmux server it expects: no cockpit session.
+remote_tmux kill-session -t '=grove-chatws'
 
 say "grove-199: a chat session self-closes (gv orchestrator close from its pane)"
 # The seeded brain instructs exactly this for dispatch-and-dismiss, and the

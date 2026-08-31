@@ -319,3 +319,69 @@ func TestParseChatSessions(t *testing.T) {
 		t.Errorf("empty label must yield no chats, got %v", got)
 	}
 }
+
+// ParsePanes is the single parser every chat-shaped report is built from
+// (grove-215). The field ORDER is a compatibility contract: grove-203's
+// five fields first, the identity fields appended — a short line (an old
+// tmux, or the trim eating an EMPTY trailing stamp) must degrade to zero
+// values, never drop the pane.
+func TestParsePanes(t *testing.T) {
+	full := strings.Join([]string{
+		// session, pid, cmd, attached, created, pane, index, dir, @grove_chat_session
+		strings.Join([]string{"grove-chat-unbrewed-1", "201", "claude", "0", "1700000100", "%7", "1", "/ws/.grove/orchestrator", "eeeb-1111"}, "\t"),
+		// unstamped: the trailing empty field is trimmed away by the line trim
+		strings.Join([]string{"grove-chat-unbrewed-2", "202", "node", "1", "1700000200", "%8", "1", "/ws/.grove/orchestrator", ""}, "\t"),
+		// grove-203-era line (five fields only): still a pane
+		strings.Join([]string{"grove-unbrewed", "100", "gv", "1", "1700000000"}, "\t"),
+		"",
+		"malformed-without-tabs",
+	}, "\n")
+
+	panes := ParsePanes(full)
+	if len(panes) != 3 {
+		t.Fatalf("got %d panes, want 3: %+v", len(panes), panes)
+	}
+	if panes[0].Pane != "%7" || panes[0].Dir != "/ws/.grove/orchestrator" || panes[0].ChatSession != "eeeb-1111" {
+		t.Errorf("stamped pane wrong: %+v", panes[0])
+	}
+	if panes[0].Index != 1 || panes[0].PID != 201 || panes[0].Command != "claude" || panes[0].Attached {
+		t.Errorf("grove-203's first five fields must keep their meaning: %+v", panes[0])
+	}
+	if panes[0].Created.Unix() != 1700000100 {
+		t.Errorf("created = %v, want the session_created epoch", panes[0].Created)
+	}
+	if panes[1].ChatSession != "" || panes[1].Pane != "%8" {
+		t.Errorf("an unstamped pane must still carry its pane id: %+v", panes[1])
+	}
+	if !panes[1].Attached {
+		t.Errorf("session_attached 1 must read attached: %+v", panes[1])
+	}
+	if panes[2].Pane != "" || panes[2].Dir != "" || panes[2].ChatSession != "" {
+		t.Errorf("a short line must degrade to zero values, not drop: %+v", panes[2])
+	}
+	if ParsePanes("") != nil {
+		t.Error("no output must yield no panes")
+	}
+}
+
+// The identity fields ride out on ChatSession too (grove-215) — `gv chat
+// ls` resolves ids per PANE and stamps the pane id it is handed here.
+func TestChatSessionsInCarriesIdentity(t *testing.T) {
+	out := strings.Join([]string{
+		strings.Join([]string{"grove-chat-unbrewed-2", "202", "claude", "0", "1700000200", "%8", "1", "/ws/.grove/orchestrator/glm", "bbbb"}, "\t"),
+		strings.Join([]string{"grove-chat-unbrewed-1", "201", "claude", "1", "1700000100", "%7", "1", "/ws/.grove/orchestrator", ""}, "\t"),
+	}, "\n")
+	got := ChatSessionsIn(ParsePanes(out), "unbrewed", CockpitCheck(func(string) bool { return false }))
+	if len(got) != 2 {
+		t.Fatalf("got %d chats, want 2: %+v", len(got), got)
+	}
+	if got[0].N != 1 || got[0].Pane != "%7" || got[0].Dir != "/ws/.grove/orchestrator" || got[0].SessionID != "" {
+		t.Errorf("chat 1 = %+v, want n=1 / %%7 / the brain dir / unstamped", got[0])
+	}
+	if got[1].N != 2 || got[1].Pane != "%8" || got[1].SessionID != "bbbb" {
+		t.Errorf("chat 2 = %+v, want n=2 / %%8 / its stamp", got[1])
+	}
+	if got[1].Dir != "/ws/.grove/orchestrator/glm" {
+		t.Errorf("a profiled chat must report its OWN cwd (its project dir): %+v", got[1])
+	}
+}

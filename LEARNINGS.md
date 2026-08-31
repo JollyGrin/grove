@@ -125,6 +125,31 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-08-31 · `session_created` has one-second resolution, so two chats
+  spawned back-to-back TIE** (grove-215): the lazy join between a live chat
+  pane and its Claude session id resolves "newest unclaimed transcript
+  first", which needs the panes ordered youngest-first — and `#{session_created}`
+  is whole seconds, so `e2e/chat.sh` spawned three chats inside one second
+  and the order collapsed to whatever the input order was, handing chat 1
+  the transcript chat 3 had just written. Tie-break on the chat number
+  (`grove-chat-<label>-<n>`): `NextChatSession` hands `<n>` out in order, so
+  within one second the higher `<n>` is the younger. (A REUSED slot — n=1
+  freed by a closed chat — breaks that rule, but a reused slot is minutes
+  old and never ties.) The general lesson: any ordering read off a tmux
+  timestamp needs a deterministic tie-break, because scripted spawns are
+  always sub-second.
+
+- **2026-08-31 · a pane user option is the only durable place for a chat's
+  identity** (grove-215, confirming grove-36 T1 from the other side): the
+  Claude session id is minted by claude on boot, so it cannot be passed at
+  spawn — it has to be resolved from the transcript afterwards and then
+  written somewhere that survives the agent. `set-option -p @grove_chat_session`
+  survives claude's OSC title write, re-layouts, re-attaches and detaches;
+  it is read back in the same `list-panes -F` call that reports the pane's
+  cwd and command, so the join costs zero extra tmux round-trips. A pane
+  TITLE would have been clobbered on boot, and a sidecar file would have to
+  be reconciled against panes that die without notice.
+
 - **2026-08-29 · `pane-border-style` is a PANE option since tmux 3.2, and
   `#{?…}` conditionals nest** (grove-199): `tmux set-option -p -t %N
   pane-border-style fg=colour110` is accepted and read back by
