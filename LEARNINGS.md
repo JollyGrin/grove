@@ -406,6 +406,46 @@
 
 ## Go / CLI
 
+- **2026-08-31 · `http.ServeFile`/`ServeFileFS` REDIRECT any request whose
+  path ends in `/index.html`** (grove-218). Go's file helpers answer
+  `/index.html` with a 301 to `./` — "to make the canonical path
+  obvious". So the obvious way to serve an embedded shell (rewrite `/` to
+  `/index.html`, hand it to the file server) is an infinite redirect loop,
+  and serving `/index.html` directly is a 301 the service worker then
+  caches as the shell. **What it changed:** `chatweb.serveAsset`
+  normalises BOTH `/` and `/index.html` to `/` on a cloned request before
+  calling `ServeFileFS(…, "index.html")`. Caught by a test asserting
+  `GET /` is 200, which is the assertion worth writing — a redirect is not
+  a failure to `curl -L`, so a hand-check would have passed.
+
+- **2026-08-31 · a `Content-Type: application/json` requirement IS the
+  CSRF defense for a localhost API** (grove-218, `gv chat serve`). A
+  cross-origin request that skips CORS preflight can only send
+  `text/plain`, `application/x-www-form-urlencoded` or
+  `multipart/form-data` — so requiring `application/json` on every
+  mutating route forces a preflight, which a server that sends no
+  `Access-Control-Allow-Origin` never grants. That is the whole defense
+  against a page in another tab typing into the operator's agent, it needs
+  no configuration and no secret, and it costs a legitimate client one
+  header. **What it changed:** `chatweb.GuardWrite` runs before any
+  handler, and the two facts it leans on (no CORS headers anywhere, no
+  preflight answered) are pinned by tests — either one appearing later
+  would make the gate decorative without failing anything else. Note an
+  Origin/Host check is NOT the missing piece: under DNS rebinding the
+  browser sends the attacker's name in BOTH headers, so they agree.
+
+- **2026-08-31 · marked does not sanitize (the option went away in v8) —
+  the Content-Security-Policy is the sanitizer** (grove-218). Rendering an
+  agent's markdown as HTML means rendering whatever the agent read out of
+  a file, and on a page that can POST into a live pane that matters. A CSP
+  of `default-src 'none'; script-src 'self'` (no `'unsafe-inline'`) makes
+  an injected `<img onerror=…>` and a `javascript:` href inert, because
+  the browser refuses to run any script the server did not serve as a
+  file. **What it changed:** the page's logic lives in `app.js` rather
+  than an inline `<script>` specifically so the policy can stay strict —
+  an inline script would need `'unsafe-inline'` and take the whole net
+  down with it. A test asserts `script-src` never gains it.
+
 - **2026-08-31 · a model profile's launch is a SUBSHELL, so flags append
   to the wrong thing** (grove-217). `config.WrapProfile` renders
   `( . <secrets> && export ANTHROPIC_… && exec <cmd> )` — the profiled

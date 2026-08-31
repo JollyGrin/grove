@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>gv chat</title>
+<meta name="theme-color" content="#0a0f0b" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>" />
+<!--
+  gv chat — the phone client for grove's orchestrator chats (grove-218).
+
+  Hand-written, no build step, no npm: the repo has zero JS toolchain and
+  must still have zero after this. The only third-party byte on the page is
+  the vendored, version-pinned marked.min.js.
+
+  The page's own safety net is the Content-Security-Policy the server sends
+  with it (`script-src 'self'`, no 'unsafe-inline'). That, NOT marked, is
+  what makes it safe to render agent output as markdown: an <img onerror>
+  or a javascript: href smuggled through a file the agent happened to read
+  is inert, because the browser refuses to run any script this server did
+  not serve as a file. Keep the app's logic in app.js for exactly that
+  reason — an inline <script> would need 'unsafe-inline' and take the net
+  down with it.
+-->
+<style>
+:root {
+  --bg: #0a0f0b; --surface: #101812; --surface-alt: #0d130e;
+  --border: #1c2a1e; --border-bright: #2c4030;
+  --text: #d6e2d6; --dim: #8fa392; --dimmer: #5c6f5e;
+  --green: #7fbf7f; --green-bright: #a8e6a3; --green-deep: #4a7c59; --amber: #e0b458; --red: #d98b7c;
+  --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  --pad: env(safe-area-inset-bottom, 0px);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--text); font-family: var(--mono);
+  font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+a { color: var(--green-bright); }
+
+/* ---- chrome ---- */
+#app { display: flex; flex-direction: column; height: 100%; }
+header {
+  display: flex; align-items: center; gap: 10px; flex: none;
+  padding: max(env(safe-area-inset-top, 0px), 10px) 12px 10px;
+  background: var(--surface-alt); border-bottom: 1px solid var(--border);
+}
+header .back { font-size: 20px; line-height: 1; padding: 4px 8px; color: var(--dim); }
+header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .sub { font-size: 11px; color: var(--dimmer); }
+header .grow { flex: 1; min-width: 0; }
+#offline { display: none; flex: none; background: #3a2418; color: var(--amber); font-size: 12px; padding: 6px 12px; text-align: center; }
+body.offline #offline { display: block; }
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px; padding-bottom: calc(12px + var(--pad)); }
+
+/* ---- lists (screens 1 + 2) ---- */
+.row {
+  display: block; width: 100%; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 10px;
+}
+.row:active { border-color: var(--border-bright); }
+.row .title { font-weight: 600; color: var(--green-bright); overflow-wrap: anywhere; }
+.row .meta { font-size: 11.5px; color: var(--dimmer); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.badge { border: 1px solid var(--border-bright); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; color: var(--dim); }
+.badge.chat { color: var(--green); border-color: var(--green-deep); }
+.badge.cockpit { color: var(--amber); }
+.badge.archived { color: var(--dimmer); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
+.new { color: var(--green); border: 1px dashed var(--border-bright); }
+.empty { color: var(--dimmer); text-align: center; padding: 32px 12px; font-size: 13px; }
+.err { color: var(--red); border: 1px solid #4a2a26; background: #1a100e; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; overflow-wrap: anywhere; }
+
+/* ---- transcript (screen 3) ---- */
+.msg { margin-bottom: 14px; overflow-wrap: anywhere; }
+.msg.user { background: var(--surface); border-left: 2px solid var(--green-deep); border-radius: 0 8px 8px 0; padding: 8px 12px; white-space: pre-wrap; }
+.msg.assistant :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 .7em; }
+.msg.assistant :is(h1, h2, h3, h4) { font-size: 1em; margin: .9em 0 .35em; color: var(--green-bright); }
+.msg.assistant code { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+.msg.assistant pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
+.msg.assistant pre code { background: none; border: none; padding: 0; }
+.msg.assistant li { margin-left: 1.2em; }
+details.tool { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details.tool > summary::-webkit-details-marker { display: none; }
+details.tool > pre { padding: 0 10px 10px; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; }
+details.think > summary { font-style: italic; color: var(--dimmer); }
+
+/* ---- composer ---- */
+footer { flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
+#keys { display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
+body.picker #keys { display: flex; }
+#keys .label { font-size: 11px; color: var(--amber); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#keys button { border: 1px solid var(--amber); color: var(--amber); border-radius: 8px; padding: 6px 14px; min-width: 44px; }
+.compose { display: flex; gap: 8px; align-items: flex-end; }
+#text {
+  flex: 1; resize: none; font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; max-height: 40vh;
+}
+#text:focus { outline: none; border-color: var(--border-bright); }
+#send { border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 9px 16px; }
+#send:disabled, #text:disabled { opacity: .45; }
+#why { font-size: 12px; color: var(--dimmer); padding: 4px 2px; overflow-wrap: anywhere; }
+#resume { width: 100%; border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 11px; margin-top: 6px; }
+.busy { opacity: .5; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button class="back" id="back" hidden aria-label="back">‹</button>
+    <div class="grow">
+      <h1 id="title">gv chat</h1>
+      <div class="sub" id="subtitle">orchestrator chats</div>
+    </div>
+    <button class="back" id="refresh" aria-label="refresh">⟳</button>
+  </header>
+  <div id="offline">not connected — showing what was last loaded</div>
+  <main id="main"></main>
+  <footer id="footer" hidden>
+    <div id="keys"></div>
+    <div id="why"></div>
+    <div class="compose">
+      <textarea id="text" rows="1" placeholder="message this chat…" enterkeyhint="send"></textarea>
+      <button id="send">send</button>
+    </div>
+    <button id="resume" hidden>revive this chat</button>
+  </footer>
+</div>
+<script src="marked.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

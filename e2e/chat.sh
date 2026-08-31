@@ -46,6 +46,15 @@
 #       its RUNNING process, two unidentifiable rivals in one project dir
 #       both report null rather than guess, and `gv chat restamp` clears or
 #       re-points a stamp by hand
+#  12. (grove-218) `gv chat serve`: the default bind is LOOPBACK and says how
+#       to expose it (a non-loopback bind names what it exposes); the shell,
+#       app.js and the PINNED marked.min.js are served with the CSP that
+#       sanitizes rendered agent markdown; `/api/chats` is grove-215's
+#       payload; a browser POST spawns a chat, reaches a live agent and gets
+#       its reply back over SSE in the SAME bytes `gv chat tail` prints;
+#       an archived chat revives over HTTP; and the closed route table 404s
+#       everything fleet-shaped — there is no path to done/untrack from a
+#       phone
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -80,6 +89,10 @@ remote_tmux() { env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux "$@"; }
 chat_sessions() { remote_tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^grove-chat-$1-" || true; }
 
 cleanup() {
+  # grove-218: the HTTP listener is the one thing here that is not a tmux
+  # session, so nothing else would reap it if an assertion fails mid-suite.
+  [ -n "${SERVE_PID:-}" ] && kill "$SERVE_PID" 2>/dev/null || true
+  [ -n "${SERVE2_PID:-}" ] && kill "$SERVE2_PID" 2>/dev/null || true
   env -u TMUX TMUX_TMPDIR="$TMUX_TMPDIR" tmux kill-server 2>/dev/null || true   # isolated servers only
   env -u TMUX TMUX_TMPDIR="$REMOTE_TMUX" tmux kill-server 2>/dev/null || true
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -816,6 +829,190 @@ grep -q 'needs a workspace' "$SCRATCH/nolabel2.out" || { cat "$SCRATCH/nolabel2.
 
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true
+
+# ---------------------------------------------------------------------------
+# grove-218: `gv chat serve` — the phone UI's listener.
+#
+# The point of testing it HERE rather than only in httptest: the httptest
+# suite proves the server's own behavior against a fake backend, and this
+# proves the backend is really wired to tmux, the registry and the
+# transcript — an end-to-end message from an HTTP POST into a live agent,
+# and its reply back out over SSE.
+# ---------------------------------------------------------------------------
+
+say "grove-218: gv chat serve binds LOOPBACK by default and serves the shell"
+pick_port() {
+  local p
+  for _ in $(seq 1 40); do
+    p=$((20000 + RANDOM % 20000))
+    (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && { exec 3>&- 3<&-; continue; }
+    echo "$p"; return 0
+  done
+  fail "could not find a free port"
+}
+# The API is compact JSON (the CLI's is pretty-printed, so row_field cannot
+# read it). Empty for a `session_id: null` row — grove-222 leaves that null
+# rather than guessing, and a client must read it as absent, not as "".
+api_field() { # <file> <session> <field>
+  sed 's/},{/}\n{/g' "$1" | grep -F "\"session\":\"$2\"" | grep -o "\"$3\":\"[^\"]*\"" | head -1 | sed 's/.*:"//; s/"$//' || true
+}
+
+# A conversation nothing live is holding: by now every transcript the
+# earlier sections wrote has been REVIVED, so a read-only assertion needs
+# its own archived row rather than one of theirs.
+write_transcript "$ORCH" dddd4444 "an archived conversation" $((NOW - 100000))
+PORT="$(pick_port)"
+SERVE_LOG="$SCRATCH/serve.log"
+( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat serve --port "$PORT" ) > "$SERVE_LOG" 2>&1 &
+SERVE_PID=$!
+serve_stop() { kill "$SERVE_PID" 2>/dev/null || true; wait "$SERVE_PID" 2>/dev/null || true; }
+for _ in $(seq 1 60); do
+  curl -fsS -o /dev/null "http://127.0.0.1:$PORT/api/chats" 2>/dev/null && break
+  kill -0 "$SERVE_PID" 2>/dev/null || { cat "$SERVE_LOG"; fail "gv chat serve died on startup"; }
+  sleep 0.2
+done
+curl -fsS -o /dev/null "http://127.0.0.1:$PORT/api/chats" || { cat "$SERVE_LOG"; fail "gv chat serve never came up"; }
+cat "$SERVE_LOG"
+grep -q 'tailscale serve --bg' "$SERVE_LOG" || { cat "$SERVE_LOG"; fail "a loopback bind must print the sanctioned exposure"; }
+grep -q 'funnel' "$SERVE_LOG" || fail "the loopback banner must say funnel is never correct"
+
+# The three screens are one page: shell, app, and the vendored markdown lib.
+curl -fsS -D "$SCRATCH/idx.h" "http://127.0.0.1:$PORT/" > "$SCRATCH/idx.html" || fail "GET / failed"
+grep -q '<title>gv chat</title>' "$SCRATCH/idx.html" || { head -5 "$SCRATCH/idx.html"; fail "GET / did not serve the embedded shell"; }
+grep -qi "content-security-policy: default-src 'none'" "$SCRATCH/idx.h" || { cat "$SCRATCH/idx.h"; fail "the shell must carry the CSP that sanitizes rendered agent markdown"; }
+curl -fsS "http://127.0.0.1:$PORT/app.js" > "$SCRATCH/app.js" || fail "app.js is not served"
+curl -fsS "http://127.0.0.1:$PORT/marked.min.js" > "$SCRATCH/marked.js" || fail "marked.min.js is not served"
+grep -q 'marked v12.0.2' "$SCRATCH/marked.js" || fail "the vendored marked must stay pinned at v12.0.2"
+curl -fsS "http://127.0.0.1:$PORT/sw.js" > /dev/null || fail "the service worker is not served"
+
+say "GET /api/chats is the grove-215 payload, byte-compatible with chat ls --json"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/api-chats.json" || fail "GET /api/chats failed"
+grep -q '"schema_version"' "$SCRATCH/api-chats.json" || { cat "$SCRATCH/api-chats.json"; fail "the API must carry the contract envelope"; }
+grep -q '"chats"' "$SCRATCH/api-chats.json" || fail "the API must key its payload on chats"
+grep -q '"session":"grove-chat-chatws-1"' "$SCRATCH/api-chats.json" \
+  || { cat "$SCRATCH/api-chats.json"; fail "the API must report the live chats the CLI reports"; }
+grep -q '"kind":"archived"' "$SCRATCH/api-chats.json" || fail "the API must report archived transcripts too"
+
+say "the scope boundary is a 404, not a comment: no route reaches done/untrack"
+for path in /api/done /api/tasks /api/chats/grove-chat-chatws-1/done /api/chats/grove-chat-chatws-1/kill; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$path")"
+  [ "$code" = "404" ] || fail "POST $path answered $code — gv chat serve serves orchestrator chats ONLY"
+done
+
+say "a write with a form content-type is refused (a cross-origin form must not steer an agent)"
+code="$(curl -s -o "$SCRATCH/ct.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: text/plain' -d '{"text":"hi"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-chatws-1/send")"
+[ "$code" = "415" ] || { cat "$SCRATCH/ct.out"; fail "a text/plain POST answered $code, want 415"; }
+
+say "read-only chats refuse writes over HTTP with the CLI's own words"
+ARCHIVED_ID=dddd4444
+code="$(curl -s -o "$SCRATCH/ro.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -d '{"text":"hi"}' \
+  "http://127.0.0.1:$PORT/api/chats/$ARCHIVED_ID/send")"
+[ "$code" = "409" ] || { cat "$SCRATCH/ro.out"; fail "a write to an archived chat answered $code, want 409"; }
+grep -q 'archived transcript' "$SCRATCH/ro.out" || { cat "$SCRATCH/ro.out"; fail "the refusal must be chat.WriteRefusal's own text"; }
+grep -q 'gv orchestrator new --resume' "$SCRATCH/ro.out" || fail "the refusal must name the way out (revive it)"
+
+say "POST /api/workspaces/<l>/new spawns a chat and names it back"
+SERVEWS="$SCRATCH/servews"
+mkrepo "$SERVEWS"
+( cd "$SERVEWS" && "$GV" init --yes --label servews > /dev/null )
+cat >> "$SERVEWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/fakeclaude
+EOF
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new.json" || { cat "$SERVE_LOG"; fail "POST new failed"; }
+cat "$SCRATCH/new.json"
+grep -q '"session":"grove-chat-servews-1"' "$SCRATCH/new.json" \
+  || { cat "$SCRATCH/new.json"; fail "the spawn must answer with the session it created, so the phone can open it"; }
+remote_tmux has-session -t '=grove-chat-servews-1' 2>/dev/null || fail "no chat session was actually created"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/api2.json"
+grep -q '"session":"grove-chat-servews-1"' "$SCRATCH/api2.json" || fail "the new chat is missing from /api/chats"
+# grove-222: a chat grove spawned carries the id grove MINTED, stamped on
+# the pane before the agent booted — so the phone reads the transcript's
+# name out of the report instead of guessing a filename, and a chat that
+# has said nothing yet is still fully addressable.
+SERVE_SID="$(api_field "$SCRATCH/api2.json" grove-chat-servews-1 session_id)"
+case "$SERVE_SID" in
+  ????????-????-????-????-????????????) : ;;
+  *) cat "$SCRATCH/api2.json"; fail "the served row must carry the minted session id, got '$SERVE_SID'" ;;
+esac
+SERVEF="$(proj_dir "$SERVEWS/.grove/orchestrator")/$SERVE_SID.jsonl"
+for _ in $(seq 1 30); do [ -s "$SERVEF" ] && break; sleep 0.1; done
+[ -s "$SERVEF" ] || { ls -la "$(proj_dir "$SERVEWS/.grove/orchestrator")" 2>&1; fail "the spawned chat never wrote a transcript at its minted id"; }
+
+say "a message POSTed from the browser reaches the live agent"
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"ship the release notes"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/send" > "$SCRATCH/send.json" \
+  || { cat "$SCRATCH/send.json" "$SERVE_LOG"; fail "POST send failed"; }
+for _ in $(seq 1 50); do grep -q 'ship the release notes' "$SERVEF" && break; sleep 0.1; done
+grep -q 'ship the release notes' "$SERVEF" \
+  || { cat "$SERVEF"; fail "the browser's message never reached the agent — delivered is not submitted"; }
+
+say "…and its reply streams back over SSE"
+# --max-time, not a pipe: --follow keeps the stream open forever by design,
+# and a piped curl would report the PIPE's status rather than curl's.
+curl -sN --max-time 4 "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/events" > "$SCRATCH/sse.txt" 2>/dev/null || true
+cat "$SCRATCH/sse.txt"
+grep -q '^event: entry$' "$SCRATCH/sse.txt" || { fail "the stream emitted no entry events"; }
+grep -q '"text":"ship the release notes"' "$SCRATCH/sse.txt" || fail "SSE lost the message the browser sent"
+grep -q '"text":"ack: ship the release notes"' "$SCRATCH/sse.txt" || fail "SSE lost the agent's reply"
+# The SSE payload IS the `gv chat tail` line: same bytes, so a browser and a
+# pipe parse the same thing.
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail grove-chat-servews-1 ) > "$SCRATCH/sse-cli.jsonl" 2>&1
+while IFS= read -r line; do
+  grep -qF "data: $line" "$SCRATCH/sse.txt" || { echo "$line"; fail "an SSE frame is not the CLI's own tail line"; }
+done < "$SCRATCH/sse-cli.jsonl"
+
+say "?since=N resumes where a client left off"
+curl -sN --max-time 3 "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/events?since=2&follow=0" > "$SCRATCH/sse2.txt" 2>/dev/null || true
+grep -q '"seq":1' "$SCRATCH/sse2.txt" && fail "--since must suppress entries the client already has" || true
+grep -q '"seq":3' "$SCRATCH/sse2.txt" || { cat "$SCRATCH/sse2.txt"; fail "--since 2 must resume at seq 3"; }
+
+say "raw keys: only a picker key, never free text"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys" > /dev/null || fail "a picker key must be accepted"
+sleep 0.5
+remote_tmux capture-pane -p -t '=grove-chat-servews-1:chat' > "$SCRATCH/servekeys.txt"
+LASTLINE="$(grep -v '^[[:space:]]*$' "$SCRATCH/servekeys.txt" | tail -1)"
+[ "$LASTLINE" = "7" ] || { cat "$SCRATCH/servekeys.txt"; fail "the raw key must sit UNSUBMITTED on the input line, got '$LASTLINE'"; }
+for bad in '{"key":"gv done"}' '{"key":"\n"}' '{"key":"Enter"}'; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$bad" \
+    "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys")"
+  [ "$code" = "400" ] || fail "keys $bad answered $code — a raw-key endpoint must not take free text"
+done
+
+say "POST /api/chats/<s>/resume revives an archived chat (grove-217 through HTTP)"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$ARCHIVED_ID/resume" > "$SCRATCH/resume-http.json" \
+  || { cat "$SCRATCH/resume-http.json" "$SERVE_LOG"; fail "POST resume failed"; }
+cat "$SCRATCH/resume-http.json"
+grep -q '"session":"grove-chat-chatws-' "$SCRATCH/resume-http.json" \
+  || { cat "$SCRATCH/resume-http.json"; fail "a revival must answer with the session it landed in"; }
+REVIVED="$(sed 's/.*"session":"\([^"]*\)".*/\1/' "$SCRATCH/resume-http.json")"
+remote_tmux capture-pane -p -S - -t "=$REVIVED:chat" | tr -d '\n' > "$SCRATCH/revived.pane"
+grep -q -- "--resume $ARCHIVED_ID" "$SCRATCH/revived.pane" || { cat "$SCRATCH/revived.pane"; fail "the revived pane's launch must carry --resume"; }
+
+serve_stop
+
+say "a non-loopback bind requires the flag AND warns about what it exposes"
+PORT2="$(pick_port)"
+( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat serve --port "$PORT2" --bind 0.0.0.0 ) > "$SCRATCH/serve2.log" 2>&1 &
+SERVE2_PID=$!
+for _ in $(seq 1 40); do grep -q 'NOT loopback' "$SCRATCH/serve2.log" && break; sleep 0.1; done
+kill "$SERVE2_PID" 2>/dev/null || true
+wait "$SERVE2_PID" 2>/dev/null || true
+cat "$SCRATCH/serve2.log"
+grep -q 'NOT loopback' "$SCRATCH/serve2.log" || fail "a non-loopback bind must warn"
+grep -q 'spawn new Claude sessions' "$SCRATCH/serve2.log" || fail "the warning must NAME what someone on that network could do"
+grep -q 'tailscale funnel' "$SCRATCH/serve2.log" || fail "the warning must say funnel is never correct"
+# The default is the loopback one: no flag, no warning.
+grep -q 'NOT loopback' "$SERVE_LOG" && fail "the DEFAULT bind must be loopback and must not warn" || true
+
+remote_tmux kill-session -t '=grove-chat-servews-1' 2>/dev/null || true
 
 say "real tmux server untouched (canary)"
 [ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "the REAL tmux server's session list changed — the suite leaked out of isolation"

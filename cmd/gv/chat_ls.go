@@ -33,7 +33,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys|restamp …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat restamp <session> [<session-id>]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
 	}
 	switch args[0] {
 	case "ls":
@@ -46,8 +46,10 @@ func cmdChat(args []string) error {
 		return cmdChatKeys(args[1:])
 	case "restamp":
 		return cmdChatRestamp(args[1:])
+	case "serve":
+		return cmdChatServe(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, restamp)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, restamp, serve)", args[0])
 	}
 }
 

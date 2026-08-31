@@ -137,6 +137,41 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] `gv chat serve` — the phone UI (grove-218, 2026-08-31): train 4/4
+      of `gv chat` (design §6–8), and grove's **first HTTP listener** (it
+      used net/http as a client only). One `net/http` server plus one
+      embedded page — `index.html` + `app.js` + a vendored, version-pinned
+      `marked.min.js`, hand-written in the spirit of `site/` and served
+      from `embed.FS`, so the repo still has **zero JS toolchain**: no npm,
+      no lockfile, no node on the host, no bundler. Three screens
+      (projects → a project's chats → the chat) over seven routes that are
+      exactly the `gv chat` verbs: `/api/chats` is grove-215's payload
+      verbatim, `/api/chats/<s>/events` is grove-216's `tail --follow`
+      forwarded as SSE **byte for byte** (so a browser parses what a pipe
+      would), `send`/`keys` are the relay path unchanged, and
+      `workspaces/<l>/new` + `chats/<s>/resume` are grove-198/217. Chats
+      are addressed by tmux SESSION NAME wherever they have one — that
+      comes straight from tmux, while an id can be absent: grove-222 leaves
+      `session_id` null rather than guessing which conversation a pane it
+      did not spawn is running, so such a row still LISTS and still takes
+      input (its pane is real) and only its history is unavailable, with
+      the UI naming `gv chat restamp` as the fix. Bind safety is the ticket: **loopback by default**
+      (`tailscale serve` in front of it is the whole auth story; any other
+      bind prints a paragraph naming what someone on that network could
+      do), off unless invoked, and a **closed route table** — no `done`,
+      no `untrack --rm`, no backend mutation, asserted by a test and by
+      e2e 404s rather than described in a comment. Mutating requests must
+      carry `Content-Type: application/json`, which is what stops a page
+      in another tab driving the server (no preflight is answered, no CORS
+      header is sent); the shell ships a strict CSP, which — not marked —
+      is what makes rendering agent markdown safe. The one pane scrape in
+      the whole subsystem is modal detection for the raw-key row, and it
+      is falsified against the shapes that must NOT fire (a markdown list
+      above the box, digits typed mid-sentence, an idle box). Handlers via
+      `httptest` with a fake backend; `e2e/chat.sh` covers the real wiring
+      end to end — a browser POST spawns a chat, reaches a live agent, and
+      its reply comes back over SSE. Zero new Go dependencies.
+
 - [x] `gv chat tail` + `gv chat send` (grove-216, 2026-08-31): train 2/4
       of `gv chat` (design: `docs/plans/2026-08-31-gv-chat-design.md`
       §3–4). `gv chat tail <session> [--follow] [--since N]` emits the

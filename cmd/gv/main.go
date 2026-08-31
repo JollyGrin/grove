@@ -112,6 +112,9 @@ const usage = `gv — grove
                                               --follow streams appends, --since N resumes after entry N
   gv chat send <s> "<text>"                   relay text into a live chat and verify it SUBMITTED
   gv chat keys <s> <chars>                    raw keystroke, no Enter (option pickers / permission prompts)
+  gv chat serve [--port 3000] [--bind ADDR]   phone UI for those chats on http://127.0.0.1:3000 — loopback by
+                                              default and no auth of its own, so put it behind
+                                              "tailscale serve --bg 3000". Off unless invoked; ^C stops it
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks

@@ -144,6 +144,45 @@ a repo to make it that repo's default; `--profile anthropic` strips it.
 Secrets are self-sourced from `~/.config/grove/.env` at launch — never
 inherited from the shell — and only the env var *name* appears in config.
 
+## Chats from a phone (`gv chat serve`)
+
+Read, continue and start orchestrator chats in every registered workspace
+from a phone browser, with no terminal. Two commands:
+
+```sh
+gv chat serve                 # binds 127.0.0.1:3000, prints its URL, ^C stops it
+tailscale serve --bg 3000     # tailnet-only HTTPS in front of it
+```
+
+→ `https://<your-host>.<tailnet>.ts.net`: three screens — projects, the
+chats in a project, the chat itself — with live replies streaming in,
+`+ new chat`, `revive` for an archived one, and a raw-key row when the
+agent hits a permission prompt. It is one Go binary and one embedded page
+(no npm, no node, no build step), so `gv update` ships it.
+
+**Read this before exposing it.** `gv chat serve` types into live agent
+panes and spawns Claude sessions, and it has **no authentication of its
+own** — `tailscale serve` is the entire auth story, which is why the
+default bind is loopback and any other bind prints a warning naming what
+someone on that network could do. `tailscale funnel` publishes to the
+whole internet and is **never** correct here.
+
+Two prerequisites, both operator-side:
+
+- **HTTPS enabled for the tailnet** (Tailscale admin → DNS → HTTPS
+  Certificates). Without it there is no secure origin, so the service
+  worker and any PWA install are off. Note this publishes the host's
+  MagicDNS name to public Certificate Transparency logs — a name leak, not
+  access.
+- **Key expiry disabled for the host.** A node key that expires drops the
+  machine off the tailnet silently, taking ssh and `gv --host` with it.
+
+`gv chat serve` serves **orchestrator chats only** — read, relay, spawn.
+There is no route to `gv done`, `gv untrack --rm`, or any task-backend
+mutation, and fleet-shaped surfaces (task rows, cost charts, audit, sweep)
+stay in the TUI or go to an external plugin against `--json`. It is off
+unless invoked: no daemon, no autostart, nothing in the cockpit starts it.
+
 ## Doc map
 
 | Doc | What |
@@ -153,6 +192,7 @@ inherited from the shell — and only the env var *name* appears in config.
 | [.claude/skills/](.claude/skills/) | Distilled hard-won rules, auto-loaded by workers: tmux discipline, shipping gates, Claude Code integration facts, plugin authoring (copyable) |
 | [DESIGN.md](DESIGN.md) | Founding spec: architecture, TaskProvider, routing, workspaces, phasing |
 | [docs/plugins.md](docs/plugins.md) | Surface-plugin contract: `--json` + events.jsonl are the API; build a `gv-<surface>` repo, tag it `grove-plugin` |
+| [docs/plans/2026-08-31-gv-chat-design.md](docs/plans/2026-08-31-gv-chat-design.md) | `gv chat`: chat identity, the four verbs, and the phone UI behind `tailscale serve` |
 | [docs/grove-connections-design.md](docs/grove-connections-design.md) | Wizard, doctor, drift detection, connections manifest, pack system, parity gate |
 | [docs/grove-learnings-design.md](docs/grove-learnings-design.md) | Layered learnings/memory system |
 | [docs/grove-cockpit-design.md](docs/grove-cockpit-design.md) | Cockpit UX: activity feed, parallel orchestrators |

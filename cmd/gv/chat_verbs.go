@@ -49,19 +49,10 @@ import (
 // `gv chat tail` on a fresh chat stamps its pane exactly like the first `ls`
 // would.
 func findChat(target string) (chatRecord, error) {
-	list, err := workspace.LoadRegistry()
+	recs, err := chatReport()
 	if err != nil {
 		return chatRecord{}, err
 	}
-	targets, err := chatWorkspaces(list, "")
-	if err != nil {
-		return chatRecord{}, err
-	}
-	isCockpit, err := cockpitSessionCheck()
-	if err != nil {
-		return chatRecord{}, err
-	}
-	recs := chatRecords(targets, liveChatLookup(isCockpit))
 	rows := make([]chat.Row, len(recs))
 	for i, r := range recs {
 		rows[i] = r.Row
@@ -71,6 +62,29 @@ func findChat(target string) (chatRecord, error) {
 		return chatRecord{}, err
 	}
 	return recs[i], nil
+}
+
+// chatReport is findChat's first half, split out so `gv chat serve`
+// (grove-218) answers `/api/chats` from the SAME report every other verb
+// resolves against — one registry read, one identity pass, one answer about
+// which chat is which. A second implementation of this walk is how a phone
+// and a terminal start disagreeing, and since grove-222 that walk also
+// SELF-HEALS a wrong stamp off the running agent's argv, so a served page
+// must not be reading a staler copy of it than the CLI is.
+func chatReport() ([]chatRecord, error) {
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	targets, err := chatWorkspaces(list, "")
+	if err != nil {
+		return nil, err
+	}
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return nil, err
+	}
+	return chatRecords(targets, liveChatLookup(isCockpit)), nil
 }
 
 // transcriptPath is where this chat's conversation lives on disk: the
