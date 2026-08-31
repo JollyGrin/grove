@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/workspace"
@@ -112,10 +113,11 @@ func chatWorkspaces(list []workspace.Workspace, label string) ([]workspace.Works
 // livePane is one pane awaiting identity: everything the row needs except
 // the session id, which is resolved (and stamped) below.
 type livePane struct {
-	ws   workspace.Workspace
-	kind string
-	n    int
-	pane tmux.LivePane
+	ws        workspace.Workspace
+	configDir string // ws's Claude config dir ("" = ambient default)
+	kind      string
+	n         int
+	pane      tmux.LivePane
 }
 
 // chatRecord is one report row PLUS the two impure handles the other `gv
@@ -127,6 +129,40 @@ type chatRecord struct {
 	Pane string // %id — the immutable paste target, "" for an archived row
 	Dir  string // the chat's cwd, which is its transcript project-dir key
 	PID  int    // the pane's process — the root of the walk that finds its agent
+	// ConfigDir is the Claude config dir Dir's project dir lives under —
+	// this chat's WORKSPACE answer, resolved once here and carried rather
+	// than re-derived (grove-227). "" is the ambient default, which is every
+	// workspace but one.
+	ConfigDir string
+}
+
+// workspaceClaudeConfigDir resolves a workspace's claude_config_dir: the
+// dir whose projects/ holds the transcripts of agents launched by THIS
+// workspace's orchestrator command. Empty for every workspace that does not
+// set the key (the whole fleet bar thegrid, whose orchestrator is ccwork),
+// and empty when the config cannot be loaded at all — the reader degrades to
+// today's ambient path, never to an error.
+func workspaceClaudeConfigDir(ws workspace.Workspace) string {
+	cfg, err := config.LoadAt(ws.Root)
+	if err != nil {
+		return ""
+	}
+	return cfg.ClaudeConfigDir
+}
+
+// configDirResolver memoizes workspaceClaudeConfigDir per workspace root:
+// one report touches each workspace's config once, however many panes and
+// project dirs it holds.
+func configDirResolver() func(workspace.Workspace) string {
+	seen := map[string]string{}
+	return func(ws workspace.Workspace) string {
+		if d, ok := seen[ws.Root]; ok {
+			return d
+		}
+		d := workspaceClaudeConfigDir(ws)
+		seen[ws.Root] = d
+		return d
+	}
 }
 
 // chatLookup is the impure half of the report, injected in one bundle so
@@ -194,11 +230,13 @@ func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
 // Everything impure arrives in look, so the whole join is table-tested
 // without a tmux server or a real `ps`.
 func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
+	configDirOf := configDirResolver()
 	var pending []livePane
 	for _, ws := range targets {
 		orchDir := orchestratorDirAt(ws.Root)
+		cfgDir := configDirOf(ws)
 		for _, c := range tmux.ChatSessionsIn(look.panes, ws.Label, look.isCockpit) {
-			pending = append(pending, livePane{ws: ws, kind: chat.KindChat, n: c.N, pane: tmux.LivePane{
+			pending = append(pending, livePane{ws: ws, configDir: cfgDir, kind: chat.KindChat, n: c.N, pane: tmux.LivePane{
 				Session: c.Session, PID: c.PID, Command: c.Command, Attached: c.Attached,
 				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID,
 			}})
@@ -208,7 +246,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 			if p.Session != cockpit || !chat.IsOrchestratorPane(p.Dir, orchDir) {
 				continue
 			}
-			pending = append(pending, livePane{ws: ws, kind: chat.KindCockpit, n: p.Index, pane: p})
+			pending = append(pending, livePane{ws: ws, configDir: cfgDir, kind: chat.KindCockpit, n: p.Index, pane: p})
 		}
 	}
 	// Deterministic order so two runs over the same server produce the same
@@ -266,23 +304,26 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		}
 	}
 
-	scans := map[string][]transcript.Session{}
-	scan := func(dir string) []transcript.Session {
-		if s, ok := scans[dir]; ok {
+	// Keyed on the PAIR: the same cwd read under two config dirs is two
+	// different transcript sets, and a workspace's dir is only ever its own.
+	scans := map[[2]string][]transcript.Session{}
+	scan := func(configDir, dir string) []transcript.Session {
+		key := [2]string{configDir, dir}
+		if s, ok := scans[key]; ok {
 			return s
 		}
-		s, err := transcript.ListSessions(dir)
+		s, err := transcript.ListSessionsIn(configDir, dir)
 		if err != nil {
 			s = nil
 		}
-		scans[dir] = s
+		scans[key] = s
 		return s
 	}
 
 	var recs []chatRecord
 	for _, lp := range pending {
 		id, label := lp.pane.ChatSession, ""
-		sessions := scan(lp.pane.Dir)
+		sessions := scan(lp.configDir, lp.pane.Dir)
 		if id == "" {
 			if s, ok := chat.Resolve(sessions, claimed, rivals[lp.pane.Dir]); ok {
 				id, label = s.ID, s.FirstPrompt
@@ -297,16 +338,17 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
 			SessionID: id, Label: label,
-		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID})
+		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir})
 	}
 	for _, ws := range targets {
+		cfgDir := configDirOf(ws)
 		for _, dir := range orchestratorProjectDirs(ws) {
-			for _, s := range scan(dir) {
+			for _, s := range scan(cfgDir, dir) {
 				if s.ID == "" || claimed[s.ID] {
 					continue
 				}
 				claimed[s.ID] = true
-				recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir})
+				recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir, ConfigDir: cfgDir})
 			}
 		}
 	}

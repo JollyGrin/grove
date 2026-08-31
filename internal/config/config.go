@@ -66,10 +66,19 @@ type Config struct {
 		APIKeyEnv string `yaml:"api_key_env"`
 		Team      string `yaml:"team"`
 	} `yaml:"linear"`
-	Repos         map[string]*Repo         `yaml:"repos"`
-	ModelProfiles map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
-	Hosts         map[string]*Host         `yaml:"hosts"`          // grove-176: named remote grove hosts for --host passthrough
-	Orchestrator  struct {
+	// ClaudeConfigDir is the Claude Code config dir this workspace's agents
+	// run under — the dir whose projects/ holds their transcripts. Empty
+	// (the normal case) means today's resolution: GV_CLAUDE_CONFIG_DIR, else
+	// ~/.claude. Set it only where the workspace's orchestrator.claude is a
+	// wrapper that exports a different CLAUDE_CONFIG_DIR (grove-227: thegrid
+	// runs ccwork, i.e. ~/.cc-work). Workspace layer only — merge.go drops
+	// it from the global layer so no global key can redirect every
+	// workspace's reader at one subscription's transcripts.
+	ClaudeConfigDir string                   `yaml:"claude_config_dir"`
+	Repos           map[string]*Repo         `yaml:"repos"`
+	ModelProfiles   map[string]*ModelProfile `yaml:"model_profiles"` // grove-36: named non-Anthropic backends; nil/absent = today's behavior
+	Hosts           map[string]*Host         `yaml:"hosts"`          // grove-176: named remote grove hosts for --host passthrough
+	Orchestrator    struct {
 		Dir string `yaml:"dir"`
 		// Hotkeys maps cockpit digit keys "1".."8" to model profile names
 		// (grove-105): pressing the digit spawns that profile's orchestrator
@@ -224,6 +233,9 @@ func parse(raw []byte, src string) (*Config, error) {
 	}
 	if c.Linear.APIKeyEnv == "" {
 		c.Linear.APIKeyEnv = "LINEAR_API_KEY"
+	}
+	if c.ClaudeConfigDir != "" {
+		c.ClaudeConfigDir = expand(c.ClaudeConfigDir)
 	}
 	for name, r := range c.Repos {
 		if r == nil {

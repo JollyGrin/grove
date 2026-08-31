@@ -731,3 +731,58 @@ func TestHostsValidation(t *testing.T) {
 		t.Errorf("no-hosts lookup err = %v", err)
 	}
 }
+
+// grove-227: claude_config_dir is workspace-scoped with a sharper edge than
+// orchestrator — it names WHICH subscription's transcripts `gv chat` opens.
+// A global value must never be inherited, or one key would redirect every
+// workspace's reader at one profile.
+func TestClaudeConfigDirIsWorkspaceScoped(t *testing.T) {
+	home := setHome(t)
+	globalRepo := t.TempDir()
+	writeGlobal(t, `
+claude_config_dir: ~/.cc-work
+repos:
+  g:
+    path: `+globalRepo+`
+`)
+
+	// Workspace that does not set the key: the global one is dropped, so
+	// the reader falls back to today's ambient path.
+	root := newWorkspace(t, `
+workspace:
+  label: personal
+  scope: parent
+`)
+	c, err := LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ClaudeConfigDir != "" {
+		t.Errorf("workspace claude_config_dir = %q, want empty (global must not leak)", c.ClaudeConfigDir)
+	}
+
+	// A workspace that sets it wins, with ~/ expanded.
+	root2 := newWorkspace(t, `
+workspace:
+  label: grid
+  scope: parent
+claude_config_dir: ~/.cc-work
+`)
+	c, err = LoadAt(root2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".cc-work"); c.ClaudeConfigDir != want {
+		t.Errorf("workspace claude_config_dir = %q, want %q", c.ClaudeConfigDir, want)
+	}
+
+	// Legacy global load still reads it — LoadAt("") is Load(), and an
+	// ovs-style single-config machine has no workspace layer to put it in.
+	c, err = LoadAt("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".cc-work"); c.ClaudeConfigDir != want {
+		t.Errorf("global claude_config_dir = %q, want %q", c.ClaudeConfigDir, want)
+	}
+}

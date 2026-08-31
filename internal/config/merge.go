@@ -43,6 +43,12 @@ func LoadAt(root string) (*Config, error) {
 	// Dropped from the global layer, not wholesale-merged, so it stays
 	// out even when the workspace sets no orchestrator block at all.
 	delete(global, "orchestrator")
+	// claude_config_dir is workspace-scoped for the same reason and with a
+	// sharper edge (grove-227): it names WHICH subscription's transcripts a
+	// reader opens. A global value would silently redirect every workspace's
+	// `gv chat` at one profile — the exact blindness this key exists to fix,
+	// inverted. Dropped from the global layer, never inherited.
+	delete(global, "claude_config_dir")
 	ws, wErr := readLayer(wsPath)
 	if wErr != nil && !errors.Is(wErr, fs.ErrNotExist) {
 		return nil, wErr

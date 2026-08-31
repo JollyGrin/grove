@@ -436,3 +436,68 @@ func TestChatWorkspacesSelection(t *testing.T) {
 		t.Error("an unregistered label must be an error")
 	}
 }
+
+// grove-227: the report resolves the Claude config dir PER WORKSPACE. A
+// workspace whose orchestrator runs on a different subscription (thegrid's
+// ccwork, i.e. ~/.cc-work) sets claude_config_dir in its own .grove layer,
+// and its transcripts are read from there — while the ambient
+// GV_CLAUDE_CONFIG_DIR, which is all one `gv chat serve` process could ever
+// offer, points somewhere else entirely.
+func TestChatRecordsResolveConfigDirPerWorkspace(t *testing.T) {
+	ws, orch := chatFixture(t) // sets GV_CLAUDE_CONFIG_DIR to a scratch dir
+	ccwork := filepath.Join(t.TempDir(), "cc-work")
+	if err := os.WriteFile(filepath.Join(ws.Root, ".grove", "config.yaml"),
+		[]byte("workspace:\n  label: thegrid\n  scope: parent\nclaude_config_dir: "+ccwork+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// One transcript under the workspace's own config dir, one under the
+	// ambient default. Only the first belongs to this workspace.
+	writeTranscriptIn(t, ccwork, orch, "1111-work", "on the work sub", time.Now().Add(-time.Hour))
+	writeTranscript(t, orch, "2222-personal", "wrong subscription", time.Now().Add(-time.Hour))
+
+	_, stamp := recordStamps()
+	recs := chatRecords([]workspace.Workspace{ws}, look(nil, neverCockpit, stamp))
+	if len(recs) != 1 {
+		t.Fatalf("records = %+v, want exactly the one transcript under %s", recs, ccwork)
+	}
+	rec := recs[0]
+	if chatName(rec.Row) != "1111-work" {
+		t.Errorf("record = %s, want 1111-work (the ambient-dir transcript is another workspace's)", chatName(rec.Row))
+	}
+	if rec.ConfigDir != ccwork {
+		t.Errorf("rec.ConfigDir = %q, want %q", rec.ConfigDir, ccwork)
+	}
+	// And the join the phone actually reads through lands in that dir.
+	got, err := rec.transcriptPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(transcript.ProjectDirIn(ccwork, orch), "1111-work.jsonl"); got != want {
+		t.Errorf("transcriptPath = %q, want %q", got, want)
+	}
+}
+
+// writeTranscriptIn is writeTranscript under an explicitly named Claude
+// config dir rather than the ambient one.
+func writeTranscriptIn(t *testing.T, configDir, cwd, id, prompt string, mod time.Time) {
+	t.Helper()
+	dir := transcript.ProjectDirIn(configDir, cwd)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(map[string]any{
+		"type": "user", "cwd": cwd, "gitBranch": "main",
+		"message": map[string]any{"role": "user", "content": prompt},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, id+".jsonl")
+	if err := os.WriteFile(path, append(line, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, mod, mod); err != nil {
+		t.Fatal(err)
+	}
+}

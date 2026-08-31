@@ -386,9 +386,10 @@ func resumeTarget(ws *workspace.Workspace, id string, panes []tmux.LivePane) (pr
 		return "", s, fmt.Errorf("--resume %q is not a Claude session id — `gv chat ls --workspace %s` lists them", id, ws.Label)
 	}
 	orchDir := orchestratorDirAt(ws.Root)
+	configDir := workspaceClaudeConfigDir(*ws)
 	var dirs []chat.ProjectDir
 	for _, dir := range orchestratorProjectDirs(*ws) {
-		sessions, err := transcript.ListSessions(dir)
+		sessions, err := transcript.ListSessionsIn(configDir, dir)
 		if err != nil {
 			continue
 		}

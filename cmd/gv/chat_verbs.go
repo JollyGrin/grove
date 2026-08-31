@@ -98,7 +98,7 @@ func (r chatRecord) transcriptPath() (string, error) {
 	if r.Dir == "" {
 		return "", fmt.Errorf("%s has no known working directory — nothing to read a transcript from", chatName(r.Row))
 	}
-	return filepath.Join(transcript.ProjectDir(r.Dir), *r.Row.SessionID+".jsonl"), nil
+	return filepath.Join(transcript.ProjectDirIn(r.ConfigDir, r.Dir), *r.Row.SessionID+".jsonl"), nil
 }
 
 // chatName is how an error names a chat: its tmux session where it has one,
@@ -283,7 +283,7 @@ func cmdChatRestamp(args []string) error {
 	// that names a conversation the pane's cwd cannot hold sends `tail` at a
 	// file that will never exist and `send` at the wrong agent — the exact
 	// failure this verb repairs.
-	sessions, err := transcript.ListSessions(rec.Dir)
+	sessions, err := transcript.ListSessionsIn(rec.ConfigDir, rec.Dir)
 	if err != nil {
 		return fmt.Errorf("reading the transcripts under %s: %w", rec.Dir, err)
 	}

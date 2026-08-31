@@ -64,6 +64,16 @@ orchestrator:
   #   "2": openrouter-kimi  # `)` picker (which always opens when any profile exists) —
   #                         # the picker writes this block back for you.
 
+# Workspace-scoped, like orchestrator above and for a sharper reason
+# (grove-227): claude_config_dir names WHICH Claude Code config dir holds a
+# workspace's transcripts — i.e. which subscription `gv chat` reads. Set it
+# ONLY in a workspace's own <root>/.grove/config.yaml, and only where that
+# workspace's orchestrator.claude is a wrapper exporting a different
+# CLAUDE_CONFIG_DIR (a work-sub wrapper, say). merge.go drops it from this
+# global layer, so no hobby workspace can inherit a work profile's reader.
+# Unset (the normal case) = GV_CLAUDE_CONFIG_DIR, else ~/.claude.
+# claude_config_dir: ~/.cc-work
+
 audit:
   stale_days: 7   # no-PR tasks with a dead/idle agent older than this classify `abandoned`
   idle_after: 30m # done/waiting workers quiet longer than this classify `idle` (suggest `gv pause`); zero/invalid falls back to 30m

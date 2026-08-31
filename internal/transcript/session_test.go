@@ -117,3 +117,75 @@ func TestListSessions_NoDir(t *testing.T) {
 		t.Errorf("expected nil, got %v", sessions)
 	}
 }
+
+// grove-227: the regression guard. The chat reader now resolves a Claude
+// config dir PER WORKSPACE and passes it down; a workspace that sets no
+// claude_config_dir passes "" and must land on exactly the path today's
+// code computes. Asserted against the literal expected path — comparing
+// against ProjectDir would pass even if both drifted together.
+func TestProjectDirIn_EmptyIsTodaysDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "")
+
+	const wt = "/Users/dev/git/acme/.trees/dev-1301"
+	want := filepath.Join(home, ".claude", "projects", "-Users-dev-git-acme--trees-dev-1301")
+	if got := ProjectDirIn("", wt); got != want {
+		t.Errorf("ProjectDirIn(\"\", %q) = %q, want %q", wt, got, want)
+	}
+}
+
+// "" also means "keep honouring the env" — the e2e harness and ovs-style
+// repos point discovery with GV_CLAUDE_CONFIG_DIR and must be unaffected.
+func TestProjectDirIn_EmptyKeepsEnv(t *testing.T) {
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "/custom/cc")
+	want := filepath.Join("/custom/cc", "projects", "-Users-dev-git-acme")
+	if got := ProjectDirIn("", "/Users/dev/git/acme"); got != want {
+		t.Errorf("ProjectDirIn(\"\", …) = %q, want %q", got, want)
+	}
+}
+
+// An explicit dir wins over the env, deliberately: thegrid's transcripts
+// live under ~/.cc-work whatever environment `gv chat serve` was started
+// in, and one process serves every workspace.
+func TestProjectDirIn_ExplicitBeatsEnv(t *testing.T) {
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "/custom/cc")
+	want := filepath.Join("/work/cc-work", "projects", "-Users-dev-git-acme")
+	if got := ProjectDirIn("/work/cc-work", "/Users/dev/git/acme"); got != want {
+		t.Errorf("ProjectDirIn(\"/work/cc-work\", …) = %q, want %q", got, want)
+	}
+}
+
+// ListSessionsIn reads the project dir under the config dir it is handed,
+// and sees nothing under any other.
+func TestListSessionsIn_ExplicitConfigDir(t *testing.T) {
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", "")
+	cc := t.TempDir()
+	wt := t.TempDir()
+
+	projDir := ProjectDirIn(cc, wt)
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","cwd":"` + wt + `","message":{"role":"user","content":"hello"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(projDir, "abc.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListSessionsIn(cc, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "abc" {
+		t.Fatalf("ListSessionsIn(%q, …) = %+v, want the one session under that config dir", cc, got)
+	}
+	// The same worktree under a different config dir holds nothing — the
+	// blindness this ticket fixes, in reverse.
+	other, err := ListSessionsIn(t.TempDir(), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Errorf("ListSessionsIn(other config dir) = %+v, want none", other)
+	}
+}

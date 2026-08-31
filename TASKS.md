@@ -137,6 +137,33 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] `gv chat` resolves the Claude config dir PER WORKSPACE (grove-227,
+      2026-08-31): `internal/transcript` resolved it once per process
+      (`GV_CLAUDE_CONFIG_DIR`, else `~/.claude`), so the reader — and
+      therefore `gv chat serve`, ONE process serving every workspace — was
+      blind to thegrid, whose orchestrator runs on the work subscription
+      (`ccwork`, i.e. `CLAUDE_CONFIG_DIR=~/.cc-work`). thegrid showed one
+      unidentified read-only cockpit card and no history; the env var could
+      only move the blind spot, never close it. `claude_config_dir` was
+      already written in `~/git/thegrid/.grove/config.yaml` saying exactly
+      this — and was inert, on no struct and read by nothing. Now it is a
+      real top-level `config.Config` field (`~/` expanded), **workspace
+      layer only**: `merge.go` drops it from the global layer beside
+      `orchestrator`, so no global key can ever redirect every workspace's
+      reader at one subscription's transcripts. `transcript` grows
+      `ProjectDirIn`/`ListSessionsIn`; the old names are wrappers passing
+      `""`, which still means GV_CLAUDE_CONFIG_DIR-else-`~/.claude`, so
+      every non-chat caller (adopt, cost, hooks, worker spawn) computes a
+      byte-identical path. Only the four chat call sites change; a
+      `chatRecord` now CARRIES its `ConfigDir` rather than re-deriving it.
+      Precedence at the resolver is workspace key → env → `~/.claude`: the
+      key wins deliberately, so thegrid reads the same in any environment
+      while the env keeps serving the e2e harness. Writability is untouched
+      — a cockpit row stays read-only everywhere. Live on the Mac, no env
+      var, one command: thegrid archived **0 → 107** and its cockpit gained
+      a label, while grove-repo 37, unbrewed 116, waterhouse 19, warcraft 4,
+      xteink 2 all held exactly still (182 → 289 rows, +107 exactly).
+
 - [x] Profile picker for phone-spawned chats (grove-225, 2026-08-31): the
       phone could only spawn on the host's default lane — `+ new chat`
       POSTed an empty body and `chatSpawnReq.Profile` stayed "" — while the
