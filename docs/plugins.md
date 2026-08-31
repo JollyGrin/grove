@@ -184,11 +184,15 @@ relays and the cockpit keep appending `answered` with no `data`, exactly
 as before.
 Workspace-scoped (empty `ticket`): `workspace_parked`,
 `orchestrator_closed`, `orchestrator_spawned` (grove-198, additive: data
-`{workspace, session, profile?, op_id?}` — a detached orchestrator chat
-started for a workspace by `gv orchestrator new --workspace <label>`, the
-receiving half of `--host`; `session` is its `grove-chat-<label>-<n>` tmux
-session and `op_id` the relayed hop's receipt, so a retried hop reprints
-the first spawn instead of making a second one). New types will appear
+`{workspace, session, profile?, op_id?, resume?}` — a detached
+orchestrator chat started for a workspace by `gv orchestrator new
+--workspace <label>`, the receiving half of `--host`; `session` is its
+`grove-chat-<label>-<n>` tmux session and `op_id` the relayed hop's
+receipt, so a retried hop reprints the first spawn instead of making a
+second one. `resume` (grove-217, additive) carries the Claude session id
+when the spawn REVIVED an archived chat rather than starting a fresh one
+— that id is stamped on the new pane, so `gv chat ls` reports the revived
+chat under the same `session_id` it had while `kind: archived`). New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove

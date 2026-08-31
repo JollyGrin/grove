@@ -3,9 +3,11 @@ package chat
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
 )
 
@@ -192,4 +194,88 @@ func containsSub(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestValidSessionID is a safety test as much as a shape test: the id ends
+// up inside the shell command tmux runs in the new chat pane (grove-217).
+func TestValidSessionID(t *testing.T) {
+	for _, id := range []string{
+		"eeeb1a2b-3c4d-5e6f-8a9b-0c1d2e3f4a5b",
+		"aaaa1111",
+		"A_b-9",
+	} {
+		if !ValidSessionID(id) {
+			t.Errorf("ValidSessionID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{
+		"", " ", "a b", "id;rm -rf /", "$(whoami)", "`id`", "a'b", `a"b`,
+		"--dangerously-skip-permissions", "../../etc/passwd", "a/b",
+		strings.Repeat("a", 65),
+	} {
+		if ValidSessionID(id) {
+			t.Errorf("ValidSessionID(%q) = true, want false", id)
+		}
+	}
+}
+
+// TestFindSession: the dir is the load-bearing half — a profiled chat can
+// only be resumed from the cwd it ran in.
+func TestFindSession(t *testing.T) {
+	dirs := []ProjectDir{
+		{Dir: "/w/.grove/orchestrator", Sessions: []transcript.Session{
+			{ID: "bbbb2222", FirstPrompt: "release notes"},
+			{ID: "aaaa1111", FirstPrompt: "triage the backlog"},
+		}},
+		{Dir: "/w/.grove/orchestrator/glm", Sessions: []transcript.Session{
+			{ID: "cccc3333", FirstPrompt: "the cheap lane"},
+		}},
+	}
+	d, s, ok := FindSession(dirs, "aaaa1111")
+	if !ok || d.Dir != "/w/.grove/orchestrator" || s.FirstPrompt != "triage the backlog" {
+		t.Fatalf("FindSession(aaaa1111) = %q/%+v/%v", d.Dir, s, ok)
+	}
+	d, _, ok = FindSession(dirs, "cccc3333")
+	if !ok || d.Dir != "/w/.grove/orchestrator/glm" {
+		t.Fatalf("a profiled chat must resolve to ITS dir, got %q (ok=%v)", d.Dir, ok)
+	}
+	if _, _, ok := FindSession(dirs, "nope"); ok {
+		t.Error("an unknown id must not resolve")
+	}
+	if _, _, ok := FindSession(nil, "aaaa1111"); ok {
+		t.Error("no dirs, no answer")
+	}
+}
+
+func TestProfileForDir(t *testing.T) {
+	orch := "/w/.grove/orchestrator"
+	if name, ok := ProfileForDir(orch, orch); !ok || name != "" {
+		t.Errorf("brain dir = %q/%v, want the operator's own Claude", name, ok)
+	}
+	if name, ok := ProfileForDir(orch, orch+"/openrouter-glm"); !ok || name != "openrouter-glm" {
+		t.Errorf("profile dir = %q/%v", name, ok)
+	}
+	if name, ok := ProfileForDir(orch, orch+"/a/b"); ok {
+		t.Errorf("a nested dir is not a profile dir, got %q/%v", name, ok)
+	}
+	if _, ok := ProfileForDir(orch, "/elsewhere"); ok {
+		t.Error("a dir outside the brain dir is not a profile dir")
+	}
+}
+
+func TestLiveHolder(t *testing.T) {
+	panes := []tmux.LivePane{
+		{Session: "grove-chat-w-1", ChatSession: "aaaa1111"},
+		{Session: "grove-chat-w-2"},
+	}
+	if got := LiveHolder(panes, "aaaa1111"); got != "grove-chat-w-1" {
+		t.Errorf("LiveHolder = %q, want the holding session", got)
+	}
+	if got := LiveHolder(panes, "bbbb2222"); got != "" {
+		t.Errorf("LiveHolder(unheld) = %q, want empty", got)
+	}
+	// An unstamped pane must never match the empty id.
+	if got := LiveHolder(panes, ""); got != "" {
+		t.Errorf("LiveHolder(\"\") = %q, want empty", got)
+	}
 }

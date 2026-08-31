@@ -99,6 +99,8 @@ const usage = `gv — grove
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new [--profile p]           add an orchestrator chat pane (O in the TUI; ) for a profiled one);
                                               --profile opens it on a model profile instead of Claude
+  gv orchestrator new --resume <id>           revive an archived chat by Claude session id, detached in its
+                                              own grove-chat-<label>-<n> (it opens idle, awaiting input)
   gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
                                               this workspace — prints the ssh line that attaches to it
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
@@ -989,7 +991,16 @@ func orchestratorCmd(cfg *config.Config, root string) string {
 // exists only for the cockpit's first pane (orchestratorCmd), which is
 // always the default Anthropic orchestrator and never profiled.
 func orchestratorLaunchProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
-	return config.WrapProfile(orchestratorLaunch(cfg, root), p, config.SecretsPath())
+	return wrapOrchestratorLaunch(orchestratorLaunch(cfg, root), p)
+}
+
+// wrapOrchestratorLaunch wraps an already-composed orchestrator launch in
+// a profile's backend env (a nil profile leaves it untouched). Shared with
+// chatSpawnPlan, whose `--resume` variant must compose the flags onto the
+// bare launch BEFORE this wrap — WrapProfile ends in `exec <cmd> )`, so a
+// flag appended afterwards lands outside the subshell.
+func wrapOrchestratorLaunch(launch string, p *config.ModelProfile) string {
+	return config.WrapProfile(launch, p, config.SecretsPath())
 }
 
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
@@ -1000,14 +1011,31 @@ func cmdOrchestratorNew(args []string) error {
 	fs := flag.NewFlagSet("orchestrator new", flag.ExitOnError)
 	profileFlag := fs.String("profile", "", "open this orchestrator on a model profile (e.g. openrouter-glm) instead of Claude")
 	wsFlag := fs.String("workspace", "", "spawn detached in this REGISTERED workspace's own grove-chat-<label>-<n> session (the receiving half of --host)")
+	resumeFlag := fs.String("resume", "", "revive the archived chat with this Claude session id (`gv chat ls` lists them) instead of starting fresh")
 	opFlag := fs.String("op-id", "", "idempotency receipt for a relayed spawn — the same id twice spawns once")
 	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
 	_ = fs.Parse(args)
 
+	if err := chatResumeConflict(*profileFlag, *resumeFlag); err != nil {
+		return err
+	}
+	// grove-217: a revival is ALWAYS the detached shape (design §5) — it
+	// allocates its own grove-chat-<label>-<n>, never a cockpit pane — so
+	// an unlabelled --resume takes the ambient workspace, exactly as the
+	// --host half does, and refuses when there is none.
+	label := *wsFlag
+	if label == "" && *resumeFlag != "" {
+		if label = wsLabel(); label == "" {
+			return fmt.Errorf("`gv orchestrator new --resume %s` needs a workspace — run it from inside one, or pass --workspace <label>", *resumeFlag)
+		}
+	}
 	// grove-198: --workspace is the receiving half — a detached chat in a
 	// registered workspace twin, not a pane in this machine's cockpit.
-	if *wsFlag != "" {
-		return spawnWorkspaceChat(*wsFlag, *profileFlag, *opFlag, *asFlag)
+	if label != "" {
+		return spawnWorkspaceChat(chatSpawnReq{
+			Label: label, Profile: *profileFlag, Resume: *resumeFlag,
+			OpID: *opFlag, Host: *asFlag,
+		})
 	}
 
 	cfg, err := loadCfg()

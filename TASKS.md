@@ -164,6 +164,35 @@
       pane read-only, an archived transcript, cross-workspace rows) and now
       runs in the hostile-tmux-conf pass too.
 
+- [x] `gv orchestrator new --resume <session-id>` revives an archived chat
+      (grove-217, 2026-08-31): train 3/4 of `gv chat` (design §5). Most
+      orchestrator chats on a host are transcripts with no live pane —
+      readable history and nothing else. `--resume` is `gv adopt`'s pattern
+      applied to chats: it allocates the next `grove-chat-<label>-<n>` and
+      launches the orchestrator command with `--resume <id>` in it, same
+      detached shape as grove-198. Claude Code re-fires SessionStart with
+      the **same** session id (verified ≥6 days after the pane died), so
+      identity survives — and because the id is known at spawn time (the
+      one case where it is), the pane is stamped `@grove_chat_session`
+      immediately rather than left to grove-215's lazy resolver, which
+      would otherwise hand a revived chat the newest transcript in the dir.
+      `gv chat ls` then shows the same id as `kind: chat, writable: true`.
+      The conversation's own cwd decides its backend (Claude Code keys
+      resume by project dir, and a profiled chat has its own — grove-36
+      T4), so the profile is INFERRED from where the transcript lives and
+      `--resume` with `--profile` is a hard error rather than a precedence
+      rule; the flag lands inside `WrapProfile`'s `exec`, never after it.
+      Everything is refused before anything is created: an unknown id (a
+      revival from the wrong dir is looking in a project dir that does not
+      hold it, in a DETACHED pane nobody is reading), a malformed one (the
+      id reaches a shell command line), and one a live pane already holds
+      (two claude processes on one append-only transcript). Composes with `--host`: the
+      id is one more NAME that travels, resolved against the HOST's
+      transcripts, and the op-id receipt still makes an ssh-255 retry spawn
+      exactly once. Unlabelled, `--resume` takes the ambient workspace.
+      `e2e/chat.sh` covers spawn → park → revive → identity continuity,
+      both plain and relayed, in both tmux-conf modes.
+
 - [x] Paste-able attach hints survive zsh (grove-207, 2026-08-29): a word
       that STARTS with `=` is equals-expanded by zsh (macOS's default
       shell), so the printed `tmux attach -t =grove-chat-<label>-<n>` died

@@ -358,6 +358,36 @@
 
 ## Go / CLI
 
+- **2026-08-31 · a model profile's launch is a SUBSHELL, so flags append
+  to the wrong thing** (grove-217). `config.WrapProfile` renders
+  `( . <secrets> && export ANTHROPIC_… && exec <cmd> )` — the profiled
+  chat command every `--profile` spawn runs. Building a variant by
+  appending to the finished string (`plan.Cmd + " --resume " + id`) puts
+  the flag *outside* the closing paren, where the pane's shell reads it as
+  a second command rather than claude reading it as an argument: no error,
+  a chat that opens on an empty conversation, and an operator who believes
+  they revived yesterday's. **Rule: compose the bare launch first, wrap
+  LAST** — `chatSpawnPlan` builds `orchestratorLaunch(...) + " --resume
+  <id>"` and hands that to `WrapProfile`. Pinned by a test asserting the
+  profiled command ends in `--resume <id> )`, paren included; the same
+  trap waits for any future flag (`--model`, `--append-system-prompt`).
+
+- **2026-08-31 · a resumable conversation is (id, cwd), never id alone**
+  (grove-217). Transcripts key on the encoded cwd, and grove keeps one cwd
+  per orchestrator backend (grove-36 T4): a GLM chat's transcript lives
+  under `<brain>/<profile>`, the default one's under `<brain>`. So
+  `claude --resume <id>` launched from the wrong dir is looking in a
+  project dir that does not hold that id — whatever it then does, it is
+  not resuming the operator's conversation, and the pane is detached, so
+  nobody reads the message either way. A revival therefore RESOLVES the id
+  to the dir that holds it and infers the backend from that dir, before
+  spawning; an id it cannot place is refused rather than launched
+  hopefully, and `--resume` with `--profile` is a hard error because the
+  conversation already carries its backend. Two refusals belong on the
+  same path: a malformed id (it is interpolated into the pane's shell
+  command) and an id a live pane already holds (two claude processes
+  appending to one transcript).
+
 - **2026-08-29 · a yaml.v3 "empty document" has two shapes, and only one
   has empty `Content`** (grove-201, the sibling case #195 left open).
   Zero-byte, whitespace-only and comment-only files parse to a document

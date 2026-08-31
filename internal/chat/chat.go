@@ -13,6 +13,7 @@ package chat
 
 import (
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -194,4 +195,81 @@ func kindOrder(kind string) int {
 	default:
 		return 2
 	}
+}
+
+// --- grove-217: reviving an archived chat (`gv orchestrator new --resume`) ---
+
+// sessionIDRe is the shape gate for a `--resume` id. Claude Code mints
+// UUIDs, but the e2e fixtures (and any future id scheme) are plainer, so
+// this is deliberately a CHARACTER-CLASS gate rather than a UUID parser.
+// It is also a safety gate: the id is interpolated into the shell command
+// tmux runs in the new chat pane, so anything a shell could read as
+// syntax — a space, a quote, `$`, `;`, a leading dash — never gets there.
+var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// ValidSessionID reports whether id is shaped like a Claude session id and
+// is safe to interpolate into the pane's launch command.
+func ValidSessionID(id string) bool { return sessionIDRe.MatchString(id) }
+
+// ProjectDir is one directory a workspace's chats have run in — the brain
+// dir or a per-profile subdir of it — paired with the transcripts found
+// there. The caller does the scanning (filesystem); this package decides.
+type ProjectDir struct {
+	Dir      string
+	Sessions []transcript.Session
+}
+
+// FindSession locates the transcript of id among a workspace's project
+// dirs. The DIR is the load-bearing half of the answer: `claude --resume`
+// looks the id up in the project dir of its cwd, so a conversation that
+// ran under <brain>/<profile> can only be revived from that same dir —
+// resuming it from the brain dir finds nothing and starts a fresh chat
+// wearing the wrong backend.
+func FindSession(dirs []ProjectDir, id string) (ProjectDir, transcript.Session, bool) {
+	for _, d := range dirs {
+		for _, s := range d.Sessions {
+			if s.ID == id {
+				return d, s, true
+			}
+		}
+	}
+	return ProjectDir{}, transcript.Session{}, false
+}
+
+// ProfileForDir names the model profile a project dir belongs to: "" for
+// the brain dir itself (the operator's own Claude), the subdir name for a
+// profiled chat (the grove-36 T4 convention — one cwd per backend). ok is
+// false for a dir that is not the brain dir or an immediate child of it,
+// which is a caller bug rather than an operator one.
+func ProfileForDir(orchDir, dir string) (string, bool) {
+	orch, d := filepath.Clean(orchDir), filepath.Clean(dir)
+	if orch == d {
+		return "", true
+	}
+	rel, err := filepath.Rel(orch, d)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || strings.ContainsRune(rel, filepath.Separator) {
+		return "", false
+	}
+	return rel, true
+}
+
+// LiveHolder returns the tmux session already running chat id, "" when
+// nothing does. Reviving a conversation a live pane is already holding
+// would put two claude processes on one append-only transcript, so the
+// caller refuses it.
+//
+// Best-effort by construction: a pane carries its id only once `gv chat
+// ls` has stamped it (@grove_chat_session), so a chat spawned seconds ago
+// and never listed is invisible here. It catches the case that actually
+// happens — reviving from a list that just showed the chat as live.
+func LiveHolder(panes []tmux.LivePane, id string) string {
+	if id == "" {
+		return ""
+	}
+	for _, p := range panes {
+		if p.ChatSession == id {
+			return p.Session
+		}
+	}
+	return ""
 }

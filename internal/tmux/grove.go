@@ -872,16 +872,21 @@ func SessionNames() []string {
 	return strings.Split(out, "\n")
 }
 
+// chatWindow is the single window a detached chat session has. Named, not
+// indexed: `base-index 1` is a real operator config, so `<session>:0` is
+// not a target this repo is allowed to type (grove-168).
+const chatWindow = "chat"
+
 // CreateChatSession creates the detached chat session rooted at dir and
 // types cmd into its single pane. Typed (SendKeys) rather than passed to
 // new-session for the same reasons as SpawnPane: shell aliases in the
 // orchestrator command keep working, and the pane survives the command
 // exiting. The pane id is resolved, never assumed at an index (grove-168).
 func CreateChatSession(session, dir, cmd string) error {
-	if _, err := run("new-session", "-d", "-s", session, "-n", "chat", "-c", dir); err != nil {
+	if _, err := run("new-session", "-d", "-s", session, "-n", chatWindow, "-c", dir); err != nil {
 		return err
 	}
-	window := Exact(session) + ":chat"
+	window := Exact(session) + ":" + chatWindow
 	if err := DisableAutoRename(window); err != nil {
 		return err
 	}
@@ -1067,6 +1072,20 @@ func SetPaneChatSession(pane, id string) error {
 	}
 	_, err := run("set-option", "-p", "-t", pane, "@grove_chat_session", id)
 	return err
+}
+
+// StampChatSession stamps a freshly created chat session's single pane
+// with the Claude session id it was launched on (grove-217). A REVIVED
+// chat is the one case where the id is known at spawn time — `--resume`
+// carried it — so the lazy transcript resolution grove-215 needs for a
+// fresh chat is skipped entirely and the revived pane wears its identity
+// from the first second, before any `gv chat ls` has run.
+func StampChatSession(session, id string) error {
+	pane, err := FirstPaneID(Exact(session) + ":" + chatWindow)
+	if err != nil {
+		return err
+	}
+	return SetPaneChatSession(pane, id)
 }
 
 // chatIndex parses the <n> out of `grove-chat-<label>-<n>`. Digits only —

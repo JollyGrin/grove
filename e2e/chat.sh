@@ -26,6 +26,12 @@
 #      STABLE ids (stamped on the pane as @grove_chat_session), a chat with
 #      no transcript yet reports null, the cockpit's own pane is kind
 #      cockpit / writable false, and an unclaimed transcript is archived
+#   9. (grove-217) `gv orchestrator new --resume <id>` revives an ARCHIVED
+#      chat: the launch carries --resume, the pane is stamped with that id
+#      at spawn (so `gv chat ls` reports the SAME id, now kind chat /
+#      writable true), a profiled conversation revives in ITS own cwd, and
+#      an unknown / malformed / already-live id spawns nothing — including
+#      over the relay, where an ssh-255 retry still spawns exactly once
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -431,6 +437,107 @@ grep -q '"chats_killed":"true"' "$EVENTS" || fail "the parked event must record 
 # The name-shape collision, on the KILLING path this time: grove-chat-app is
 # the REGISTERED cockpit of `chat-app`, not chat <n> of anything.
 remote_tmux has-session -t '=grove-chat-app' 2>/dev/null || fail "park --chats killed a registered COCKPIT that merely looks like a chat"
+
+say "grove-217: --resume revives an archived chat (identity survives)"
+# Everything spawned above is dead now, so every transcript is archived —
+# the state the ticket exists for ("pick up yesterday's grove chat").
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/pre-resume.json" 2>&1
+grep -B 2 '"session_id": "aaaa1111"' "$SCRATCH/pre-resume.json" | grep -q '"kind": "archived"' \
+  || { cat "$SCRATCH/pre-resume.json"; fail "precondition: aaaa1111 must be archived before the revival"; }
+[ "$(chat_sessions chatws)" -eq 0 ] || fail "precondition: no live chats, got $(chat_sessions chatws)"
+
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --resume aaaa1111 ) \
+  > "$SCRATCH/resume1.out" 2>&1 || { cat "$SCRATCH/resume1.out"; fail "the revival failed"; }
+cat "$SCRATCH/resume1.out"
+grep -q '✓ orchestrator chat grove-chat-chatws-1 — workspace chatws, resumed aaaa1111 (triage the artgen backlog)' "$SCRATCH/resume1.out" \
+  || fail "the success line must name the revived conversation by id AND first prompt"
+grep -q 'resumed idle' "$SCRATCH/resume1.out" || fail "a revival must say it opens idle — it does not auto-continue"
+remote_tmux has-session -t '=grove-chat-chatws-1' 2>/dev/null || fail "the revived chat session is missing"
+
+say "the launched command carries --resume <id>"
+# Scrollback + newlines stripped (grove-75): the typed line hard-wraps at
+# pane width, so a bare capture-pane grep would miss it.
+remote_tmux capture-pane -p -S - -t '=grove-chat-chatws-1:chat' | tr -d '\n' > "$SCRATCH/resume1.pane"
+grep -q -- '--resume aaaa1111' "$SCRATCH/resume1.pane" \
+  || { cat "$SCRATCH/resume1.pane"; fail "the chat pane's command must carry --resume aaaa1111"; }
+
+say "the pane wears the id from second ZERO (stamped at spawn, before any ls)"
+# dddd4444 is the NEWEST transcript in this dir: without the spawn-time
+# stamp, grove-215's lazy resolver would hand this pane that id instead.
+STAMP_R="$(remote_tmux list-panes -t '=grove-chat-chatws-1:chat' -F '#{@grove_chat_session}')"
+[ "$STAMP_R" = "aaaa1111" ] || fail "@grove_chat_session = '$STAMP_R', want aaaa1111 stamped at spawn"
+
+say "gv chat ls now reports it as a live, writable chat — with the SAME id"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/resume-ls.json" 2>&1
+[ "$(row_field "$SCRATCH/resume-ls.json" grove-chat-chatws-1 session_id)" = "aaaa1111" ] \
+  || { cat "$SCRATCH/resume-ls.json"; fail "the revived chat must keep the id it had while archived"; }
+[ "$(row_field "$SCRATCH/resume-ls.json" grove-chat-chatws-1 kind)" = "chat" ] || fail "a revived chat is kind chat"
+[ "$(row_field "$SCRATCH/resume-ls.json" grove-chat-chatws-1 writable)" = "true" ] || fail "a revived chat must be writable"
+[ "$(row_field "$SCRATCH/resume-ls.json" grove-chat-chatws-1 label)" = "triage the artgen backlog" ] \
+  || fail "the revived chat must keep its transcript's label"
+[ "$(grep -c '"session_id": "aaaa1111"' "$SCRATCH/resume-ls.json")" -eq 1 ] \
+  || fail "aaaa1111 must be listed ONCE — live now, no longer archived"
+grep -q '"resume":"aaaa1111"' "$EVENTS" || fail "the spawn event must record which conversation was revived"
+
+say "a PROFILED conversation revives in its own cwd, on its own backend"
+write_transcript "$ORCH/e2e-glm" ffff6666 "the cheap lane" $((NOW - 2000))
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --resume ffff6666 ) \
+  > "$SCRATCH/resume2.out" 2>&1 || { cat "$SCRATCH/resume2.out"; fail "the profiled revival failed"; }
+cat "$SCRATCH/resume2.out"
+grep -q 'profile e2e-glm' "$SCRATCH/resume2.out" \
+  || fail "the backend must be inferred from the conversation's own cwd, not asked for"
+PANE_CWD_R="$(remote_tmux display-message -p -t '=grove-chat-chatws-2:' '#{pane_current_path}')"
+[ "$PANE_CWD_R" = "$ORCH/e2e-glm" ] || fail "profiled revival cwd = $PANE_CWD_R, want the profile dir"
+remote_tmux capture-pane -p -S - -t '=grove-chat-chatws-2:chat' | tr -d '\n' > "$SCRATCH/resume2.pane"
+grep -q -- '--resume ffff6666 )' "$SCRATCH/resume2.pane" \
+  || { cat "$SCRATCH/resume2.pane"; fail "the flag must land INSIDE the backend wrapper's exec, not after it"; }
+grep -q 'ANTHROPIC_BASE_URL' "$SCRATCH/resume2.pane" || fail "a profiled revival must run wrapped in its backend"
+
+say "unknown / malformed / already-live ids spawn nothing"
+for bad in "nosuchid:nothing to resume" "aaaa1111:already live"; do
+  id="${bad%%:*}"; want="${bad#*:}"
+  rc=0
+  ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --resume "$id" ) \
+    > "$SCRATCH/badresume.out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || { cat "$SCRATCH/badresume.out"; fail "--resume $id must exit non-zero"; }
+  grep -q "$want" "$SCRATCH/badresume.out" || { cat "$SCRATCH/badresume.out"; fail "--resume $id: wrong error, want '$want'"; }
+done
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --resume 'x; touch /tmp/gv-217-pwned' ) \
+  > "$SCRATCH/hostile.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || { cat "$SCRATCH/hostile.out"; fail "a shell-hostile session id must be refused"; }
+grep -q 'not a Claude session id' "$SCRATCH/hostile.out" || { cat "$SCRATCH/hostile.out"; fail "wrong shape refusal"; }
+[ ! -e /tmp/gv-217-pwned ] || { rm -f /tmp/gv-217-pwned; fail "a --resume id reached the pane's shell as syntax"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --resume bbbb2222 --profile e2e-glm ) \
+  > "$SCRATCH/bothflags.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || { cat "$SCRATCH/bothflags.out"; fail "--resume with --profile must be refused"; }
+grep -q 'mutually exclusive' "$SCRATCH/bothflags.out" || { cat "$SCRATCH/bothflags.out"; fail "wrong flag-conflict error"; }
+[ "$(chat_sessions chatws)" -eq 2 ] || fail "every refused revival must create nothing, got $(chat_sessions chatws)"
+
+say "--resume composes with --host (only the id travels)"
+( cd "$WS" && "$GV" orchestrator new --host pc --resume bbbb2222 ) > "$SCRATCH/resume3.out" 2> "$SCRATCH/resume3.err"
+cat "$SCRATCH/resume3.out" "$SCRATCH/resume3.err"
+grep -Eq "\[fake ssh\] $GV orchestrator new --op-id [0-9a-f]{32} --as pc --workspace chatws --resume bbbb2222\$" "$SCRATCH/resume3.err" \
+  || fail "relayed argv wrong — want the resumed id appended after --workspace"
+grep -q 'resumed bbbb2222 (write the release notes)' "$SCRATCH/resume3.out" || fail "the relayed revival must name the conversation"
+remote_tmux has-session -t '=grove-chat-chatws-3' 2>/dev/null || fail "the relayed revival spawned no session"
+
+say "a relayed revival is idempotent too (ssh 255 must not double-spawn)"
+echo 0 > "$SCRATCH/ssh-op-hops"
+touch "$SCRATCH/ssh-fail-first"
+( cd "$WS" && "$GV" orchestrator new --host pc --resume cccc3333 ) > "$SCRATCH/resume4.out" 2> "$SCRATCH/resume4.err"
+cat "$SCRATCH/resume4.out" "$SCRATCH/resume4.err"
+rm -f "$SCRATCH/ssh-fail-first"
+grep -q 'already applied' "$SCRATCH/resume4.out" || fail "the retried revival did not hit the op-id receipt"
+[ "$(cat "$SCRATCH/ssh-op-hops")" -eq 2 ] || fail "expected exactly 2 ssh hops, got $(cat "$SCRATCH/ssh-op-hops")"
+[ "$(chat_sessions chatws)" -eq 4 ] || fail "the retry double-spawned: $(chat_sessions chatws) chat sessions, want 4"
+
+say "outside a workspace, --resume needs an explicit label"
+rc=0
+( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --resume aaaa1111 ) > "$SCRATCH/nolabel2.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a labelless --resume must exit non-zero"
+grep -q 'needs a workspace' "$SCRATCH/nolabel2.out" || { cat "$SCRATCH/nolabel2.out"; fail "wrong no-workspace error"; }
 
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true

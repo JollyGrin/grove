@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
@@ -18,19 +19,51 @@ import (
 // NAMES travel — the host resolves the workspace label and the profile
 // name against its own registry and config.
 func TestChatHopArgs(t *testing.T) {
-	got := chatHopArgs("deadbeef", "groveremote", "unbrewed", "")
+	req := chatSpawnReq{Label: "unbrewed", OpID: "deadbeef", Host: "groveremote"}
+	got := chatHopArgs(req)
 	want := []string{"new", "--op-id", "deadbeef", "--as", "groveremote", "--workspace", "unbrewed"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("chatHopArgs = %v, want %v", got, want)
 	}
-	got = chatHopArgs("deadbeef", "groveremote", "unbrewed", "openrouter-glm")
-	want = append(want, "--profile", "openrouter-glm")
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("chatHopArgs(profile) = %v, want %v", got, want)
+	profiled := req
+	profiled.Profile = "openrouter-glm"
+	got = chatHopArgs(profiled)
+	if !reflect.DeepEqual(got, append(append([]string{}, want...), "--profile", "openrouter-glm")) {
+		t.Fatalf("chatHopArgs(profile) = %v", got)
 	}
-	manual := chatManualRetry("deadbeef", "groveremote", "unbrewed", "openrouter-glm")
+	manual := chatManualRetry(profiled)
 	if manual != "gv orchestrator new --host groveremote --op-id deadbeef --workspace unbrewed --profile openrouter-glm" {
 		t.Fatalf("chatManualRetry = %q", manual)
+	}
+	// grove-217: the resumed id is one more NAME that travels — the host
+	// resolves it against its own transcripts. Same fixed order, so a retry
+	// is byte-equal to the hop it repeats.
+	revive := req
+	revive.Resume = "eeeb1a2b-3c4d"
+	got = chatHopArgs(revive)
+	if !reflect.DeepEqual(got, append(append([]string{}, want...), "--resume", "eeeb1a2b-3c4d")) {
+		t.Fatalf("chatHopArgs(resume) = %v", got)
+	}
+	if manual := chatManualRetry(revive); manual != "gv orchestrator new --host groveremote --op-id deadbeef --workspace unbrewed --resume eeeb1a2b-3c4d" {
+		t.Fatalf("chatManualRetry(resume) = %q", manual)
+	}
+}
+
+// TestChatResumeConflict: --resume carries its own backend, so pairing it
+// with --profile is a hard error rather than a precedence rule.
+func TestChatResumeConflict(t *testing.T) {
+	if err := chatResumeConflict("", ""); err != nil {
+		t.Errorf("neither flag = no conflict, got %v", err)
+	}
+	if err := chatResumeConflict("glm", ""); err != nil {
+		t.Errorf("--profile alone = no conflict, got %v", err)
+	}
+	if err := chatResumeConflict("", "aaaa1111"); err != nil {
+		t.Errorf("--resume alone = no conflict, got %v", err)
+	}
+	err := chatResumeConflict("glm", "aaaa1111")
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("both flags = %v, want a mutual-exclusion refusal", err)
 	}
 }
 
@@ -50,7 +83,7 @@ func TestChatSpawnPlan(t *testing.T) {
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 
-	plan, err := chatSpawnPlan(cfg, ws, "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", nil)
 	if err != nil {
 		t.Fatalf("default plan: %v", err)
 	}
@@ -67,7 +100,7 @@ func TestChatSpawnPlan(t *testing.T) {
 		t.Errorf("cmd must --add-dir the twin's root, got %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", []string{"grove-chat-unbrewed-1"})
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", []string{"grove-chat-unbrewed-1"})
 	if err != nil {
 		t.Fatalf("profiled plan: %v", err)
 	}
@@ -86,8 +119,52 @@ func TestChatSpawnPlan(t *testing.T) {
 
 	// A profile the HOST doesn't have is a hard error — decided before any
 	// dir or session exists.
-	if _, err := chatSpawnPlan(cfg, ws, "nope", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
+	if _, err := chatSpawnPlan(cfg, ws, "nope", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
 		t.Fatalf("unknown profile = %v, want an unknown-model-profile error", err)
+	}
+}
+
+// TestChatSpawnPlanResume (grove-217): a revival's launch carries
+// `--resume <id>`, and for a PROFILED conversation the flag must land
+// INSIDE the backend wrapper — WrapProfile ends in `exec <cmd> )`, so a
+// flag appended after the wrap would be handed to the shell, not claude.
+func TestChatSpawnPlanResume(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"openrouter-glm": {
+			BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+			Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+		},
+	}
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+
+	plan, err := chatSpawnPlan(cfg, ws, "", "aaaa1111", nil)
+	if err != nil {
+		t.Fatalf("resume plan: %v", err)
+	}
+	if plan.Resume != "aaaa1111" || !strings.HasSuffix(plan.Cmd, "--resume aaaa1111") {
+		t.Errorf("resume cmd = %q (resume %q)", plan.Cmd, plan.Resume)
+	}
+	if strings.Contains(plan.Cmd, "--continue") {
+		t.Errorf("a revival resumes one NAMED conversation, never --continue: %q", plan.Cmd)
+	}
+
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "bbbb2222", nil)
+	if err != nil {
+		t.Fatalf("profiled resume plan: %v", err)
+	}
+	if !strings.HasSuffix(plan.Cmd, "--resume bbbb2222 )") {
+		t.Errorf("the flag must be inside the backend wrapper's exec: %q", plan.Cmd)
+	}
+	if plan.Dir != filepath.Join("/w/unbrewed", ".grove", "orchestrator", "openrouter-glm") {
+		t.Errorf("a profiled conversation resumes in ITS cwd, got %q", plan.Dir)
+	}
+
+	// The id reaches a shell command line, so a malformed one never gets
+	// past the plan — belt to internal/chat's braces.
+	if _, err := chatSpawnPlan(cfg, ws, "", "a; rm -rf /", nil); err == nil {
+		t.Error("a shell-hostile --resume id must be refused before anything is created")
 	}
 }
 
@@ -118,7 +195,7 @@ func mkTwin(t *testing.T, home, label string) string {
 func TestSpawnWorkspaceChatRefusesMissingTwin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GROVE_STATE_DIR", "")
-	err := spawnWorkspaceChat("unbrewed", "", "", "groveremote")
+	err := spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", Host: "groveremote"})
 	if err == nil || !strings.Contains(err.Error(), "no workspace 'unbrewed' on @groveremote") {
 		t.Fatalf("missing twin = %v, want the hard refusal", err)
 	}
@@ -144,7 +221,7 @@ func TestSpawnWorkspaceChatDedupsOpID(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		if err := spawnWorkspaceChat("unbrewed", "", "op-1", "groveremote"); err != nil {
+		if err := spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", OpID: "op-1", Host: "groveremote"}); err != nil {
 			t.Fatalf("re-run with a seen op id: %v", err)
 		}
 	})
@@ -191,7 +268,7 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = spawnWorkspaceChat("unbrewed", "", "op-1", "groveremote")
+		err = spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", OpID: "op-1", Host: "groveremote"})
 	})
 	if err == nil {
 		t.Fatalf("a foreign op id must be refused, got nil (stdout %q)", out)
@@ -214,9 +291,93 @@ func TestSpawnWorkspaceChatRejectsForeignOpID(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := spawnWorkspaceChat("unbrewed", "", "op-2", "groveremote"); err == nil ||
+	if err := spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", OpID: "op-2", Host: "groveremote"}); err == nil ||
 		!strings.Contains(err.Error(), "names no session") {
 		t.Fatalf("sessionless receipt = %v, want a refusal", err)
+	}
+}
+
+// --- grove-217: reviving an archived chat ---
+
+// TestResumeTarget: which cwd a conversation gets revived in is the whole
+// question — transcripts key on the encoded cwd, so `--resume` from the
+// wrong dir is looking somewhere the id is not. Unknown ids, malformed
+// ones and already-live ones are refused instead of launched hopefully.
+func TestResumeTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROVE_STATE_DIR", "")
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", filepath.Join(home, "claude"))
+	root := mkTwin(t, home, "unbrewed")
+	orch := filepath.Join(root, ".grove", "orchestrator")
+	glm := filepath.Join(orch, "openrouter-glm")
+	if err := os.MkdirAll(glm, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, orch, "aaaa1111", "triage the artgen backlog", time.Now())
+	writeTranscript(t, glm, "bbbb2222", "the cheap lane", time.Now())
+	ws := &workspace.Workspace{Root: root, Label: "unbrewed", Scope: workspace.ScopeRepo}
+
+	profile, s, err := resumeTarget(ws, "aaaa1111", nil)
+	if err != nil || profile != "" || s.FirstPrompt != "triage the artgen backlog" {
+		t.Fatalf("brain-dir chat = %q/%+v/%v, want the operator's own Claude", profile, s, err)
+	}
+	if profile, _, err := resumeTarget(ws, "bbbb2222", nil); err != nil || profile != "openrouter-glm" {
+		t.Fatalf("profiled chat = %q/%v, want its own backend inferred from its cwd", profile, err)
+	}
+
+	_, _, err = resumeTarget(ws, "cccc3333", nil)
+	if err == nil || !strings.Contains(err.Error(), "no chat cccc3333 in workspace unbrewed") {
+		t.Fatalf("unknown id = %v, want a hard refusal naming the workspace", err)
+	}
+	if _, _, err := resumeTarget(ws, "a; rm -rf /", nil); err == nil ||
+		!strings.Contains(err.Error(), "not a Claude session id") {
+		t.Fatalf("shell-hostile id = %v, want a shape refusal", err)
+	}
+	// A conversation a live pane already holds: two claude processes on one
+	// append-only transcript is not a revival, it is corruption.
+	held := []tmux.LivePane{{Session: "grove-chat-unbrewed-2", ChatSession: "aaaa1111"}}
+	if _, _, err := resumeTarget(ws, "aaaa1111", held); err == nil ||
+		!strings.Contains(err.Error(), "already live in grove-chat-unbrewed-2") {
+		t.Fatalf("live id = %v, want a refusal naming the holder", err)
+	}
+}
+
+// An unknown id must die BEFORE anything is created — no session, no dir,
+// no event. (The spawn would need a tmux server; this never reaches one.)
+func TestSpawnWorkspaceChatRefusesUnknownResume(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROVE_STATE_DIR", "")
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", filepath.Join(home, "claude"))
+	root := mkTwin(t, home, "unbrewed")
+
+	err := spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", Resume: "nosuchid", Host: "groveremote"})
+	if err == nil || !strings.Contains(err.Error(), "nothing to resume") {
+		t.Fatalf("unknown --resume = %v, want a hard refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".grove", "state", "events.jsonl")); err == nil {
+		t.Error("a refused revival must leave no event behind")
+	}
+	// --profile is refused for a resume before the registry is even read.
+	err = spawnWorkspaceChat(chatSpawnReq{Label: "unbrewed", Profile: "glm", Resume: "aaaa1111"})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("--resume with --profile = %v, want the refusal", err)
+	}
+}
+
+// The success line names the revived conversation by id AND by first
+// prompt: the id is what a client joins on, the prompt is what a human
+// recognises.
+func TestChatResumeSuffix(t *testing.T) {
+	if got := chatResumeSuffix("", ""); got != "" {
+		t.Errorf("a fresh chat says nothing about resuming, got %q", got)
+	}
+	if got, want := chatResumeSuffix("aaaa1111", "triage"), ", resumed aaaa1111 (triage)"; got != want {
+		t.Errorf("chatResumeSuffix = %q, want %q", got, want)
+	}
+	if got, want := chatResumeSuffix("aaaa1111", ""), ", resumed aaaa1111"; got != want {
+		t.Errorf("a labelless transcript = %q, want %q", got, want)
 	}
 }
 
