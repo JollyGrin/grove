@@ -161,12 +161,15 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 // chatPlan is everything the spawn needs, decided before anything is
 // created: which session name, which cwd, which command.
 type chatPlan struct {
-	Session string // grove-chat-<label>-<n>
-	OrchDir string // the twin's brain dir (CLAUDE.md lives here)
-	Dir     string // the chat pane's cwd: OrchDir, or OrchDir/<profile>
-	Cmd     string // the orchestrator launch command
-	Profile string // resolved profile name ("" = the host's own Claude)
-	Resume  string // the Claude session id being revived ("" = a fresh chat)
+	Session   string // grove-chat-<label>-<n>
+	OrchDir   string // the twin's brain dir (CLAUDE.md lives here)
+	Dir       string // the chat pane's cwd: OrchDir, or OrchDir/<profile>
+	Cmd       string // the orchestrator launch command
+	Profile   string // resolved profile name ("" = the host's own Claude)
+	Resume    string // the Claude session id being revived ("" = a fresh chat)
+	SessionID string // grove-222: the id this chat WILL run on — minted here for a
+	// fresh chat, the revived id for a --resume — so the pane can be stamped
+	// at creation instead of guessed at later.
 }
 
 // chatSpawnPlan resolves the profile against the TWIN's config (its claude
@@ -192,16 +195,29 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume 
 	}
 	orchDir := orchestratorDirFor(ws, cfg)
 	launch := orchestratorLaunch(cfg, ws.Root)
-	if resume != "" {
+	// grove-222: a FRESH chat gets its id minted here and handed to claude
+	// (`--session-id <uuid>`), so the pane's identity is known before the
+	// agent boots. A revival already has one — its own — and the two flags
+	// are mutually exclusive by construction: --resume names the id.
+	id := resume
+	if resume == "" {
+		minted, err := chat.NewSessionID()
+		if err != nil {
+			return chatPlan{}, err
+		}
+		id = minted
+		launch += " --session-id " + minted
+	} else {
 		launch += " --resume " + resume
 	}
 	plan := chatPlan{
-		Session: tmux.NextChatSession(ws.Label, sessions),
-		OrchDir: orchDir,
-		Dir:     orchDir,
-		Cmd:     launch,
-		Profile: name,
-		Resume:  resume,
+		Session:   tmux.NextChatSession(ws.Label, sessions),
+		OrchDir:   orchDir,
+		Dir:       orchDir,
+		Cmd:       launch,
+		Profile:   name,
+		Resume:    resume,
+		SessionID: id,
 	}
 	if p != nil {
 		plan.Dir = filepath.Join(orchDir, name)
@@ -305,15 +321,14 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	if err := tmux.CreateChatSession(plan.Session, plan.Dir, plan.Cmd); err != nil {
 		return err
 	}
-	// A revived chat is the one case where the session id is known at spawn
-	// time, so stamp it now instead of leaving grove-215's lazy resolver to
-	// guess: the pane wears the right identity from the first `gv chat ls`,
-	// even with a sibling chat in the same project dir. Best-effort — a
-	// tmux too old for pane user options must not fail the spawn, and the
-	// resolver still converges on the same id.
-	if plan.Resume != "" {
-		if err := tmux.StampChatSession(plan.Session, plan.Resume); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not stamp %s with session id %s: %v\n", plan.Session, plan.Resume, err)
+	// The pane wears its identity from second zero (grove-222): the id was
+	// either minted for this launch or carried by --resume, so nothing is
+	// ever inferred from transcript mtime for a chat grove spawned.
+	// Best-effort — a tmux too old for pane user options must not fail the
+	// spawn, and the id is still recoverable from the running claude's argv.
+	if plan.SessionID != "" {
+		if err := tmux.StampChatSession(plan.Session, plan.SessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not stamp %s with session id %s: %v\n", plan.Session, plan.SessionID, err)
 		}
 	}
 	data := map[string]string{"workspace": label, "session": plan.Session}

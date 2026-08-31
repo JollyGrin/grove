@@ -31,7 +31,7 @@ func TestChatRecordsCarryPaneAndTranscriptPath(t *testing.T) {
 		{Session: "grove-chat-unbrewed-2", Pane: "%8", Dir: profileDir, Command: "claude", Created: time.Unix(1700000200, 0)},
 	}
 	_, stamp := recordStamps()
-	recs := chatRecords([]workspace.Workspace{ws}, panes, neverCockpit, stamp)
+	recs := chatRecords([]workspace.Workspace{ws}, look(panes, neverCockpit, stamp))
 
 	byName := map[string]chatRecord{}
 	for _, r := range recs {
@@ -65,7 +65,7 @@ func TestChatRecordsCarryPaneAndTranscriptPath(t *testing.T) {
 	}
 
 	// And the report a caller matches against is still exactly `ls`'s.
-	rows := chatRows([]workspace.Workspace{ws}, panes, neverCockpit, stamp)
+	rows := chatRows([]workspace.Workspace{ws}, look(panes, neverCockpit, stamp))
 	if len(rows) != len(recs) {
 		t.Fatalf("chatRows dropped rows: %d vs %d records", len(rows), len(recs))
 	}

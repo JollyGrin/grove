@@ -23,7 +23,10 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 
-	got := orchestratorLaunchProfile(cfg, "", p)
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), p)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if strings.Contains(got, "--continue") {
 		t.Errorf("profiled spawn must start fresh, found --continue: %s", got)
@@ -34,18 +37,27 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 	if !strings.Contains(got, "exec claude --dangerously-skip-permissions") {
 		t.Errorf("launch does not exec the orchestrator command: %s", got)
 	}
+	// grove-222: the pane's identity is minted here, and the flag must land
+	// INSIDE the wrapper's exec — after the `)` it is the shell's argument,
+	// not claude's, and the chat spawns with no id at all.
+	if id == "" || !strings.Contains(got, "--session-id "+id+" )") {
+		t.Errorf("the minted --session-id %q must be inside the profile wrapper's exec: %s", id, got)
+	}
 }
 
 // TestOrchestratorLaunchProfileNilIsUnchanged pins that a nil profile
 // produces today's exact unprofiled fresh launch, unwrapped — the same
-// command spawnOrchestrator uses.
+// command spawnOrchestrator uses, plus the minted id it is stamped with.
 func TestOrchestratorLaunchProfileNilIsUnchanged(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
-	got := orchestratorLaunchProfile(cfg, "", nil)
-	want := orchestratorLaunch(cfg, "")
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := orchestratorLaunch(cfg, "") + " --session-id " + id
 	if got != want {
-		t.Errorf("orchestratorLaunchProfile(nil) = %q, want %q", got, want)
+		t.Errorf("unprofiled minted launch = %q, want %q", got, want)
 	}
 }
 

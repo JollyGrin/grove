@@ -28,8 +28,9 @@ func TestWritable(t *testing.T) {
 	}
 }
 
-// Resolve is the join the ticket exists for: two chats sharing one project
-// dir must not both take the newest transcript.
+// Resolve is the fallback, and its whole job is knowing when NOT to answer:
+// one candidate pane per project dir it can pair, rivals it must refuse
+// (grove-222 — ordering rivals by transcript mtime inverted a live pair).
 func TestResolve(t *testing.T) {
 	newest := transcript.Session{ID: "aaa", FirstPrompt: "triage the backlog"}
 	middle := transcript.Session{ID: "bbb", FirstPrompt: "write the plan"}
@@ -39,27 +40,31 @@ func TestResolve(t *testing.T) {
 	cases := []struct {
 		name    string
 		claimed map[string]bool
+		rivals  int
 		want    string
 		ok      bool
 	}{
-		{"nothing claimed takes the newest", map[string]bool{}, "aaa", true},
-		{"newest claimed falls to the next", map[string]bool{"aaa": true}, "bbb", true},
-		{"two claimed falls to the third", map[string]bool{"aaa": true, "bbb": true}, "ccc", true},
-		{"all claimed resolves nothing", map[string]bool{"aaa": true, "bbb": true, "ccc": true}, "", false},
-		{"a nil claim set is empty, not a panic", nil, "aaa", true},
+		{"the sole candidate takes the newest", map[string]bool{}, 1, "aaa", true},
+		{"newest claimed falls to the next", map[string]bool{"aaa": true}, 1, "bbb", true},
+		{"two claimed falls to the third", map[string]bool{"aaa": true, "bbb": true}, 1, "ccc", true},
+		{"all claimed resolves nothing", map[string]bool{"aaa": true, "bbb": true, "ccc": true}, 1, "", false},
+		{"a nil claim set is empty, not a panic", nil, 1, "aaa", true},
+		{"two rival panes: refuse, never guess", map[string]bool{}, 2, "", false},
+		{"three rivals: still a refusal", map[string]bool{}, 3, "", false},
+		{"no candidate at all is not a claim", map[string]bool{}, 0, "", false},
 	}
 	for _, c := range cases {
-		got, ok := Resolve(sessions, c.claimed)
+		got, ok := Resolve(sessions, c.claimed, c.rivals)
 		if ok != c.ok || got.ID != c.want {
 			t.Errorf("%s: Resolve = (%q, %v), want (%q, %v)", c.name, got.ID, ok, c.want, c.ok)
 		}
 	}
 	// A booting chat has no .jsonl at all: null, not a wrong id.
-	if _, ok := Resolve(nil, map[string]bool{}); ok {
+	if _, ok := Resolve(nil, map[string]bool{}, 1); ok {
 		t.Error("Resolve over no transcripts must resolve nothing (session_id: null)")
 	}
 	// An id-less transcript is skipped rather than handed out as "".
-	if got, ok := Resolve([]transcript.Session{{}, newest}, map[string]bool{}); !ok || got.ID != "aaa" {
+	if got, ok := Resolve([]transcript.Session{{}, newest}, map[string]bool{}, 1); !ok || got.ID != "aaa" {
 		t.Errorf("Resolve skipped past an empty id wrong: (%q, %v)", got.ID, ok)
 	}
 }

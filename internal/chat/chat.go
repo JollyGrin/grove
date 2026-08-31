@@ -6,9 +6,13 @@
 // `grove-chat-<label>-<n>` sessions, and Claude Code's transcript dir knows
 // the session ids that ran in the orchestrator's cwd — and nothing joined
 // them, because "the newest .jsonl in the dir" is ambiguous the moment a
-// workspace has two chats (they share one project dir). Resolve pairs a
-// live pane with a transcript ONCE; the caller stamps the answer on the
-// pane (tmux.SetPaneChatSession) and never re-derives it.
+// workspace has two chats (they share one project dir).
+//
+// Since grove-222 the join is answered by CONSTRUCTION rather than by
+// inference: grove mints the session id, passes it to `claude --session-id`
+// and stamps the pane at spawn (identity.go). Resolve is what is left for a
+// pane grove did not spawn — and it answers only when there is exactly one
+// candidate, never by ordering rivals on transcript mtime.
 package chat
 
 import (
@@ -126,18 +130,32 @@ func busy(command string) bool {
 // Busy is busy's exported twin, for callers projecting rows themselves.
 func Busy(command string) bool { return busy(command) }
 
-// Resolve picks the transcript a live chat pane owns: the newest one whose
-// id nothing else has claimed. sessions must be newest-first (what
-// transcript.ListSessions returns) and already cwd-filtered — a chat's cwd
-// IS its project dir, so a profiled chat under <brain>/<profile> resolves
-// against its own dir and can never steal the default pane's transcript.
+// Resolve pairs a live pane with a transcript, and REFUSES to when the
+// answer would be a guess.
 //
-// The claim set is what makes two chats in one workspace separable: caller
-// seeds it with every id already stamped on a pane, then adds each id as it
-// is handed out. Resolving newest pane first pairs the newest chat with the
-// newest transcript. Nothing found = "" = `session_id: null`, and the next
-// `gv chat ls` tries again — a chat that is still booting has no .jsonl yet.
-func Resolve(sessions []transcript.Session, claimed map[string]bool) (transcript.Session, bool) {
+// rivals is how many unstamped panes are competing for this project dir.
+// Exactly one is the only case this can answer: that pane is the sole live
+// candidate, so "the newest transcript nothing else has claimed" names it.
+// Two or more and the answer is `false` — session_id stays null — because
+// ordering rivals by transcript mtime is precisely the grove-222 bug: mtime
+// is LAST WRITE, so an older pane still working outranks a younger one gone
+// idle, and the pair comes back inverted. A null id costs a client a `tail`
+// button; a wrong one pastes the operator's words into the wrong agent.
+//
+// sessions must be newest-first (what transcript.ListSessions returns) and
+// already cwd-filtered — a chat's cwd IS its project dir, so a profiled chat
+// under <brain>/<profile> resolves against its own dir and can never steal
+// the default pane's transcript. The claim set holds every id already spoken
+// for: stamped on a pane, or read off a running process (identity.go).
+//
+// This is the FALLBACK path. Every chat grove spawns carries a minted
+// `--session-id` and is stamped before it boots, so it never reaches here;
+// what does is the cockpit's own `--continue` pane and anything started by
+// hand.
+func Resolve(sessions []transcript.Session, claimed map[string]bool, rivals int) (transcript.Session, bool) {
+	if rivals != 1 {
+		return transcript.Session{}, false
+	}
 	for _, s := range sessions {
 		if s.ID == "" || claimed[s.ID] {
 			continue

@@ -39,6 +39,13 @@
 #       TRANSCRIPT, via a fake claude that appends what it is given — and
 #       refuses every `writable: false` row; keys delivers a raw char with no
 #       Enter and refuses a newline
+#  11. (grove-222) identity is known by CONSTRUCTION, never by mtime: every
+#       spawned chat carries a minted `--session-id` into claude and is
+#       stamped at creation, the decoy transcripts recency would have paired
+#       with the wrong panes stay archived, an unstamped pane re-derives from
+#       its RUNNING process, two unidentifiable rivals in one project dir
+#       both report null rather than guess, and `gv chat restamp` clears or
+#       re-points a stamp by hand
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -268,10 +275,12 @@ rc=0
 [ "$rc" -ne 0 ] || fail "orchestrator close --host must exit non-zero"
 grep -q 'only supported for `gv orchestrator new`' "$SCRATCH/close.out" || { cat "$SCRATCH/close.out"; fail "wrong subcommand error"; }
 
-say "grove-215: gv chat ls joins live panes to Claude session ids"
+say "grove-215/222: gv chat ls joins live panes to Claude session ids"
 # Live right now: chatws-1 and chatws-3 in the brain dir, chatws-2 in the
 # per-profile dir. The two sharing ONE project dir are the case the ticket
-# exists for — "the newest .jsonl" cannot separate them.
+# exists for — "the newest .jsonl" cannot separate them, and grove-222 is
+# the proof that it must not try: these transcripts are decoys, written so
+# that mtime order would pair them with the wrong panes.
 ORCH="$WS/.grove/orchestrator"
 export GV_CLAUDE_CONFIG_DIR="$SCRATCH/claude"
 proj_dir() { printf '%s/projects/%s\n' "$GV_CLAUDE_CONFIG_DIR" "$(printf '%s' "$1" | sed 's#[/.]#-#g')"; }
@@ -283,49 +292,103 @@ write_transcript() { # <cwd> <session-id> <first prompt> <epoch mtime>
 }
 # Field of a row, read out of the pretty envelope: row_field <file> <session> <field>
 row_field() { grep -A 12 "\"session\": \"$2\"" "$1" | grep -m1 "\"$3\":" | sed 's/.*: //; s/[",]//g'; }
+# The identity stamp on a chat session's single pane, and the command line
+# that was typed into it (scrollback, newlines stripped — the typed line
+# hard-wraps at pane width, so a bare grep would miss it).
+pane_stamp() { remote_tmux list-panes -t "=$1:chat" -F '#{@grove_chat_session}'; }
+pane_cmd()   { remote_tmux capture-pane -p -S - -t "=$1:chat" | tr -d '\n'; }
 NOW="$(date +%s)"
 write_transcript "$ORCH" aaaa1111 "triage the artgen backlog" $((NOW - 3000))
 write_transcript "$ORCH" bbbb2222 "write the release notes"   $((NOW - 1000))
 write_transcript "$ORCH" cccc3333 "last tuesday"              $((NOW - 90000))
+
+say "grove-222: each chat wears the id it was LAUNCHED on, from second zero"
+# Known by construction: grove mints the UUID, hands it to `claude
+# --session-id`, and stamps the pane at creation — no `ls` has run yet.
+ID1="$(pane_stamp grove-chat-chatws-1)"
+ID2="$(pane_stamp grove-chat-chatws-2)"
+ID3="$(pane_stamp grove-chat-chatws-3)"
+for pair in "1:$ID1" "2:$ID2" "3:$ID3"; do
+  n="${pair%%:*}"; id="${pair#*:}"
+  [ -n "$id" ] || fail "chat $n was never stamped with a session id at spawn"
+  case "$id" in
+    [0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*) ;;
+    *) fail "chat $n's minted id is not a UUID: '$id'" ;;
+  esac
+done
+[ "$ID1" != "$ID3" ] && [ "$ID1" != "$ID2" ] && [ "$ID2" != "$ID3" ] \
+  || fail "three chats must carry three DIFFERENT ids ($ID1 / $ID2 / $ID3)"
+# The stamp is only worth anything if claude was actually told that id.
+pane_cmd grove-chat-chatws-1 | grep -q -- "--session-id $ID1" \
+  || fail "chat 1's launch does not carry --session-id $ID1"
+pane_cmd grove-chat-chatws-3 | grep -q -- "--session-id $ID3" \
+  || fail "chat 3's launch does not carry --session-id $ID3"
+# And on the profiled chat the flag must land INSIDE the backend wrapper's
+# exec — WrapProfile ends in `exec <cmd> )`, so anything appended after the
+# wrap is handed to the shell instead of to claude.
+pane_cmd grove-chat-chatws-2 | grep -q -- "--session-id $ID2 )" \
+  || { pane_cmd grove-chat-chatws-2; fail "the profiled chat's --session-id landed outside the wrapper"; }
 
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls1.json" 2> "$SCRATCH/ls1.err"
 cat "$SCRATCH/ls1.err"
 grep -q '"schema_version"' "$SCRATCH/ls1.json" || { cat "$SCRATCH/ls1.json"; fail "chat ls --json must carry the contract envelope"; }
 grep -q '"chats"' "$SCRATCH/ls1.json" || fail "chat ls --json must key its payload on chats"
 
-ID1="$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 session_id)"
-ID3="$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-3 session_id)"
-[ -n "$ID1" ] && [ -n "$ID3" ] || { cat "$SCRATCH/ls1.json"; fail "both live chats must appear in chat ls"; }
-[ "$ID1" != "$ID3" ] || { cat "$SCRATCH/ls1.json"; fail "two chats in one project dir took the SAME session id ($ID1)"; }
-[ "$ID3" = "bbbb2222" ] || { cat "$SCRATCH/ls1.json"; fail "the NEWEST chat must take the newest transcript, got $ID3"; }
-[ "$ID1" = "aaaa1111" ] || { cat "$SCRATCH/ls1.json"; fail "chat 1 = $ID1, want aaaa1111"; }
-[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 label)" = "triage the artgen backlog" ] \
-  || fail "the row label must be the transcript's first prompt"
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 session_id)" = "$ID1" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "chat 1's row must report the id it runs on ($ID1)"; }
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-2 session_id)" = "$ID2" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "chat 2's row must report the id it runs on ($ID2)"; }
+[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-3 session_id)" = "$ID3" ] \
+  || { cat "$SCRATCH/ls1.json"; fail "chat 3's row must report the id it runs on ($ID3)"; }
 [ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 kind)" = "chat" ] || fail "a live detached chat is kind chat"
 [ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 writable)" = "true" ] || fail "a live chat must be writable"
 [ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-1 workspace)" = "chatws" ] || fail "every row carries its workspace"
-# The profiled chat's own project dir has no transcript yet: null, not a
-# borrowed id from the dir next door.
-[ "$(row_field "$SCRATCH/ls1.json" grove-chat-chatws-2 session_id)" = "null" ] \
-  || { cat "$SCRATCH/ls1.json"; fail "an unresolved chat must report session_id null"; }
 
-say "the ids are STAMPED on the panes (@grove_chat_session) — durable identity"
-STAMP1="$(remote_tmux list-panes -t '=grove-chat-chatws-1:chat' -F '#{@grove_chat_session}')"
-[ "$STAMP1" = "aaaa1111" ] || fail "pane user option @grove_chat_session = '$STAMP1', want aaaa1111"
+say "grove-222: the decoy transcripts are NOT handed to a live pane"
+# aaaa1111 (older) and bbbb2222 (newer) are exactly the pair mtime order
+# would have handed to chatws-3 and chatws-1. Nothing running claims them.
+for decoy in aaaa1111 bbbb2222 cccc3333; do
+  grep -B 2 "\"session_id\": \"$decoy\"" "$SCRATCH/ls1.json" | grep -q '"kind": "archived"' \
+    || { cat "$SCRATCH/ls1.json"; fail "$decoy was claimed by a live pane — mtime pairing is back"; }
+done
+grep -A 4 '"session_id": "aaaa1111"' "$SCRATCH/ls1.json" | grep -q 'triage the artgen backlog' \
+  || fail "an archived row keeps its transcript's first prompt as its label"
 
 say "a second ls returns the SAME ids (never re-derived)"
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls2.json" 2>&1
 [ "$(row_field "$SCRATCH/ls2.json" grove-chat-chatws-1 session_id)" = "$ID1" ] || fail "chat 1's id moved between calls"
 [ "$(row_field "$SCRATCH/ls2.json" grove-chat-chatws-3 session_id)" = "$ID3" ] || fail "chat 3's id moved between calls"
 
+say "grove-222: two panes grove did not spawn refuse to guess between rivals"
+# Hand-made sessions with the brain dir as cwd and no stamp: two unstamped
+# rivals in ONE project dir with no ground truth to separate them. The old
+# resolver ordered them by transcript mtime and inverted a live pair; the
+# only honest answer is null.
+remote_tmux new-session -d -s grove-chat-chatws-8 -n chat -c "$ORCH"
+remote_tmux new-session -d -s grove-chat-chatws-9 -n chat -c "$ORCH"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/rivals.json" 2>&1
+for n in 8 9; do
+  [ "$(row_field "$SCRATCH/rivals.json" "grove-chat-chatws-$n" session_id)" = "null" ] \
+    || { cat "$SCRATCH/rivals.json"; fail "chat $n guessed an id between two unidentifiable rivals"; }
+  [ -z "$(pane_stamp "grove-chat-chatws-$n")" ] || fail "a guess must never be stamped onto chat $n"
+done
+say "…but ONE such pane is answerable: it is the only candidate in its dir"
+remote_tmux kill-session -t '=grove-chat-chatws-9'
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/sole.json" 2>&1
+[ "$(row_field "$SCRATCH/sole.json" grove-chat-chatws-8 session_id)" = "bbbb2222" ] \
+  || { cat "$SCRATCH/sole.json"; fail "the sole unidentified pane must take the newest unclaimed transcript"; }
+remote_tmux kill-session -t '=grove-chat-chatws-8'
+# Put bbbb2222 back on the shelf for the assertions below: the stamp died
+# with the pane, so the next ls sees it unclaimed again.
+
 say "a transcript with no live pane is kind archived, read-only"
 grep -B 2 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"kind": "archived"' \
   || { cat "$SCRATCH/ls2.json"; fail "an unclaimed transcript must be kind archived"; }
 grep -A 6 '"session_id": "cccc3333"' "$SCRATCH/ls2.json" | grep -q '"writable": false' \
   || fail "an archived transcript must never be writable"
-grep -q '"session_id": "aaaa1111"' "$SCRATCH/ls2.json" || fail "chat 1 lost its id"
-[ "$(grep -c '"session_id": "aaaa1111"' "$SCRATCH/ls2.json")" -eq 1 ] \
-  || fail "a transcript a live pane owns must not ALSO be listed as archived"
+grep -q '"session_id": "aaaa1111"' "$SCRATCH/ls2.json" || fail "aaaa1111 vanished from the report"
+[ "$(grep -c '"session_id": "cccc3333"' "$SCRATCH/ls2.json")" -eq 1 ] \
+  || fail "a transcript must be listed exactly once"
 
 say "the cockpit's own orchestrator pane is kind cockpit, never kind chat"
 # The dashboard pane sits at the workspace root; the orchestrator pane's cwd
@@ -365,9 +428,11 @@ grep -q 'no registered workspace' "$SCRATCH/ls6.out" || { cat "$SCRATCH/ls6.out"
 
 
 say "grove-216: gv chat tail reads the TRANSCRIPT, in order, with stable seq"
-# Never the pane: a capture is ANSI soup wrapped at pane width. Give chat 1's
-# transcript a real conversation shape — text, thinking, a tool call and its
-# result — and one line that must project to NOTHING.
+# Never the pane: a capture is ANSI soup wrapped at pane width. Give an
+# archived conversation a real shape — text, thinking, a tool call and its
+# result — and one line that must project to NOTHING. It is named by its id,
+# because a LIVE chat now wears the id grove minted for it (grove-222), not
+# whichever transcript happens to sit newest in its dir.
 AAAA="$(proj_dir "$ORCH")/aaaa1111.jsonl"
 cat >> "$AAAA" <<EOF
 {"type":"assistant","timestamp":"2026-08-31T09:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"three tickets, one stale","signature":"s"},{"type":"text","text":"Looking at the backlog now."}]}}
@@ -376,7 +441,7 @@ cat >> "$AAAA" <<EOF
 {"type":"user","timestamp":"2026-08-31T09:00:07.000Z","isMeta":true,"message":{"role":"user","content":"<system-reminder>not conversation</system-reminder>"}}
 {"type":"file-history-snapshot","messageId":"m1","snapshot":{}}
 EOF
-( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail grove-chat-chatws-1 ) > "$SCRATCH/tail1.jsonl" 2> "$SCRATCH/tail1.err"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat tail aaaa1111 ) > "$SCRATCH/tail1.jsonl" 2> "$SCRATCH/tail1.err"
 cat "$SCRATCH/tail1.err"
 [ "$(wc -l < "$SCRATCH/tail1.jsonl")" -eq 5 ] \
   || { cat "$SCRATCH/tail1.jsonl"; fail "tail must emit 5 entries (isMeta + bookkeeping lines project to nothing)"; }
@@ -456,7 +521,18 @@ cwd="\$(pwd)"
 enc="\$(printf '%s' "\$cwd" | sed -e 's#/#-#g' -e 's#\.#-#g')"
 dir="$GV_CLAUDE_CONFIG_DIR/projects/\$enc"
 mkdir -p "\$dir"
-f="\$dir/f0f0aaaa.jsonl"
+# grove-222: honour --session-id exactly as claude does — the transcript is
+# named by the id its LAUNCH was given, which is the whole mechanism under
+# test (grove mints it, hands it over, and stamps the pane with it).
+id=f0f0aaaa
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --session-id) id="\$2"; shift 2 ;;
+    --session-id=*) id="\${1#--session-id=}"; shift ;;
+    *) shift ;;
+  esac
+done
+f="\$dir/\$id.jsonl"
 printf '{"type":"user","cwd":"%s","gitBranch":"main","message":{"role":"user","content":"fake chat boot"}}\n' "\$cwd" >> "\$f"
 while IFS= read -r line; do
   printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"%s"}}\n' "\$cwd" "\$line" >> "\$f"
@@ -470,13 +546,17 @@ orchestrator:
 EOF
 ( cd "$WS" && "$GV" orchestrator new --host pc --workspace sendws ) > "$SCRATCH/sendspawn.out" 2>&1
 grep -q 'grove-chat-sendws-1' "$SCRATCH/sendspawn.out" || { cat "$SCRATCH/sendspawn.out"; fail "the sendws chat did not spawn"; }
-SENDF="$(proj_dir "$SENDWS/.grove/orchestrator")/f0f0aaaa.jsonl"
+# The id grove minted at spawn is the one the agent runs on: it reached the
+# program (which names its transcript after it) and the pane wears it.
+SENDID="$(pane_stamp grove-chat-sendws-1)"
+[ -n "$SENDID" ] || fail "the sendws chat was never stamped at spawn"
+SENDF="$(proj_dir "$SENDWS/.grove/orchestrator")/$SENDID.jsonl"
 for _ in $(seq 1 30); do [ -s "$SENDF" ] && break; sleep 0.1; done
-[ -s "$SENDF" ] || fail "the chat never wrote its transcript"
+[ -s "$SENDF" ] || { ls -la "$(proj_dir "$SENDWS/.grove/orchestrator")"; fail "the chat never wrote the transcript grove named for it ($SENDID)"; }
 
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls7.json" 2>&1
-[ "$(row_field "$SCRATCH/ls7.json" grove-chat-sendws-1 session_id)" = "f0f0aaaa" ] \
-  || { cat "$SCRATCH/ls7.json"; fail "the sendws chat did not resolve its session id"; }
+[ "$(row_field "$SCRATCH/ls7.json" grove-chat-sendws-1 session_id)" = "$SENDID" ] \
+  || { cat "$SCRATCH/ls7.json"; fail "the sendws chat must report the id it was launched on ($SENDID)"; }
 [ "$(row_field "$SCRATCH/ls7.json" grove-chat-sendws-1 writable)" = "true" ] || fail "a live chat must be writable"
 
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send grove-chat-sendws-1 "ship the release notes" ) \
@@ -511,6 +591,42 @@ rc=0
 ( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat keys grove-chat-sendws-1 "$(printf 'hi\nthere')" ) > "$SCRATCH/keys2.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "keys must refuse a newline rather than translate it into a submit"
 grep -q 'gv chat send' "$SCRATCH/keys2.out" || { cat "$SCRATCH/keys2.out"; fail "the newline refusal must point at send"; }
+
+say "grove-222: a cleared stamp re-derives from the RUNNING process, not mtime"
+# Wipe the identity and drop a decoy transcript NEWER than the chat's own.
+# Recency says the decoy; the live agent's argv says otherwise, and it wins.
+# This is the inversion from the ticket, reproduced with a real process.
+SENDPANE="$(remote_tmux list-panes -t '=grove-chat-sendws-1:chat' -F '#{pane_id}')"
+remote_tmux set-option -p -t "$SENDPANE" -u @grove_chat_session
+[ -z "$(pane_stamp grove-chat-sendws-1)" ] || fail "precondition: the stamp must be cleared"
+write_transcript "$SENDWS/.grove/orchestrator" f0f0dec0 "the decoy" $(( $(date +%s) + 60 ))
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/rederive.json" 2>&1
+[ "$(row_field "$SCRATCH/rederive.json" grove-chat-sendws-1 session_id)" = "$SENDID" ] \
+  || { cat "$SCRATCH/rederive.json"; fail "an unstamped pane must re-derive $SENDID from its process, not the newest .jsonl"; }
+[ "$(pane_stamp grove-chat-sendws-1)" = "$SENDID" ] || fail "the re-derived id must be written back to the pane"
+
+say "grove-222: gv chat restamp corrects an identity by hand"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat restamp grove-chat-sendws-1 ) > "$SCRATCH/restamp1.out" 2>&1 \
+  || { cat "$SCRATCH/restamp1.out"; fail "gv chat restamp with no id must clear the stamp"; }
+grep -q 'cleared' "$SCRATCH/restamp1.out" || { cat "$SCRATCH/restamp1.out"; fail "the clear must say so"; }
+[ -z "$(pane_stamp grove-chat-sendws-1)" ] || fail "restamp with no id must leave the pane unstamped"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat restamp grove-chat-sendws-1 f0f0dec0 ) > "$SCRATCH/restamp2.out" 2>&1 \
+  || { cat "$SCRATCH/restamp2.out"; fail "restamping to a transcript in the chat's OWN dir must succeed"; }
+[ "$(pane_stamp grove-chat-sendws-1)" = "f0f0dec0" ] || fail "the hand-written stamp did not land"
+grep -q "was launched on $SENDID" "$SCRATCH/restamp2.out" \
+  || { cat "$SCRATCH/restamp2.out"; fail "restamping against a live process must warn that the process wins"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat restamp grove-chat-sendws-1 nosuchid ) > "$SCRATCH/restamp3.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "restamping to an id with no transcript in the chat's dir must exit non-zero"
+grep -q 'no transcript nosuchid' "$SCRATCH/restamp3.out" || { cat "$SCRATCH/restamp3.out"; fail "wrong unknown-id refusal"; }
+# The refusal itself wrote nothing — but the lookup behind it is the same
+# report `ls` runs, so the hand stamp that contradicts the live agent has
+# already been corrected back. The process outranks the hand, everywhere.
+[ "$(pane_stamp grove-chat-sendws-1)" = "$SENDID" ] \
+  || fail "the stamp after a refused restamp = '$(pane_stamp grove-chat-sendws-1)', want the running agent's $SENDID"
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/restamp-ls.json" 2>&1
+[ "$(row_field "$SCRATCH/restamp-ls.json" grove-chat-sendws-1 session_id)" = "$SENDID" ] \
+  || { cat "$SCRATCH/restamp-ls.json"; fail "ground truth must correct a hand stamp that contradicts the running agent"; }
 
 # Leave the suite the tmux server the later sections expect.
 remote_tmux kill-session -t '=grove-chat-sendws-1' 2>/dev/null || true

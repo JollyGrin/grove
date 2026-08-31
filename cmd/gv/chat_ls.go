@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,7 +33,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|restamp …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat restamp <session> [<session-id>]")
 	}
 	switch args[0] {
 	case "ls":
@@ -43,8 +44,10 @@ func cmdChat(args []string) error {
 		return cmdChatSend(args[1:])
 	case "keys":
 		return cmdChatKeys(args[1:])
+	case "restamp":
+		return cmdChatRestamp(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, restamp)", args[0])
 	}
 }
 
@@ -73,7 +76,7 @@ func cmdChatLs(args []string) error {
 	if err != nil {
 		return err
 	}
-	rows := chatRows(targets, tmux.Panes(), isCockpit, tmux.SetPaneChatSession)
+	rows := chatRows(targets, liveChatLookup(isCockpit))
 	if *asJSON {
 		return emitJSON("chats", rows)
 	}
@@ -121,11 +124,47 @@ type chatRecord struct {
 	Row  chat.Row
 	Pane string // %id — the immutable paste target, "" for an archived row
 	Dir  string // the chat's cwd, which is its transcript project-dir key
+	PID  int    // the pane's process — the root of the walk that finds its agent
+}
+
+// chatLookup is the impure half of the report, injected in one bundle so
+// the whole join is testable without a tmux server or a process table: the
+// server's panes, the registry's cockpit test, the stamp writer, and the
+// process table the grove-222 ground-truth pass reads.
+type chatLookup struct {
+	panes     []tmux.LivePane
+	isCockpit tmux.CockpitCheck
+	stamp     func(pane, id string) error
+	// procs is scanned LAZILY and at most once per report: `ps` is one exec,
+	// and a report with no live pane needs none at all.
+	procs func() []chat.Proc
+}
+
+// liveChatLookup is the production bundle: this machine's tmux server and
+// its process table.
+func liveChatLookup(isCockpit tmux.CockpitCheck) chatLookup {
+	return chatLookup{
+		panes:     tmux.Panes(),
+		isCockpit: isCockpit,
+		stamp:     tmux.SetPaneChatSession,
+		procs:     scanProcs,
+	}
+}
+
+// scanProcs reads the machine's process table in the two columns the chat
+// join needs plus argv. A `ps` that fails is an empty table, not an error —
+// the report degrades to "no ground truth", never to a wrong pairing.
+func scanProcs() []chat.Proc {
+	out, err := exec.Command("ps", "-Ao", "pid,ppid,args").Output()
+	if err != nil {
+		return nil
+	}
+	return chat.ParseProcs(string(out))
 }
 
 // chatRows is the `ls` projection: records without their handles.
-func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tmux.CockpitCheck, stamp func(pane, id string) error) []chat.Row {
-	recs := chatRecords(targets, panes, isCockpit, stamp)
+func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
+	recs := chatRecords(targets, look)
 	rows := make([]chat.Row, 0, len(recs))
 	for _, r := range recs {
 		rows = append(rows, r.Row)
@@ -136,55 +175,94 @@ func chatRows(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tm
 // chatRecords builds the whole report: live chats, cockpit orchestrator
 // panes, then the archived transcripts nothing live claims.
 //
-// Order of operations matters and is the point of the ticket:
+// Order of operations matters and is the point of grove-222:
 //
-//  1. seed the claim set with every id ALREADY stamped on a pane, across
-//     the whole server — an id another chat wears is never re-handed-out;
-//  2. resolve the unstamped panes newest-first, so the newest chat takes
-//     the newest transcript, and stamp each answer on its pane so the join
-//     is decided exactly once (a pane user option survives claude's boot,
-//     re-layouts, and re-attaches; a pane title would not);
-//  3. whatever transcript is left over has no live pane — it is archived.
+//  1. GROUND TRUTH FIRST. Every live pane is asked what its agent was
+//     actually launched on (chat.PaneSessionID, off the process table). That
+//     answer beats whatever the pane is wearing, so a pane mis-stamped by
+//     the old mtime resolver corrects itself on the next `ls` instead of
+//     staying wrong forever;
+//  2. seed the claim set with every id now spoken for, across the whole
+//     server — an id another chat wears is never re-handed-out;
+//  3. only then resolve the panes that still have no id, and only where
+//     exactly ONE unstamped pane competes for a project dir (chat.Resolve).
+//     Rivals stay null: ordering them by transcript mtime is the bug;
+//  4. whatever transcript is left over has no live pane — it is archived.
 //
-// stamp is injected (tmux.SetPaneChatSession in production) so the whole
-// join is testable without a tmux server.
-func chatRecords(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit tmux.CockpitCheck, stamp func(pane, id string) error) []chatRecord {
-	claimed := map[string]bool{}
-	for _, p := range panes {
-		if p.ChatSession != "" {
-			claimed[p.ChatSession] = true
-		}
-	}
+// Everything impure arrives in look, so the whole join is table-tested
+// without a tmux server or a real `ps`.
+func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 	var pending []livePane
 	for _, ws := range targets {
 		orchDir := orchestratorDirAt(ws.Root)
-		for _, c := range tmux.ChatSessionsIn(panes, ws.Label, isCockpit) {
+		for _, c := range tmux.ChatSessionsIn(look.panes, ws.Label, look.isCockpit) {
 			pending = append(pending, livePane{ws: ws, kind: chat.KindChat, n: c.N, pane: tmux.LivePane{
-				Session: c.Session, Command: c.Command, Attached: c.Attached,
+				Session: c.Session, PID: c.PID, Command: c.Command, Attached: c.Attached,
 				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID,
 			}})
 		}
 		cockpit := cockpitSessionForLabel(ws.Label)
-		for _, p := range panes {
+		for _, p := range look.panes {
 			if p.Session != cockpit || !chat.IsOrchestratorPane(p.Dir, orchDir) {
 				continue
 			}
 			pending = append(pending, livePane{ws: ws, kind: chat.KindCockpit, n: p.Index, pane: p})
 		}
 	}
-	// Newest pane first: with two unstamped chats in one project dir, the
-	// newer one owns the newer transcript. session_created has one-second
-	// resolution, so two chats spawned back-to-back tie — and there the
-	// higher <n> is the younger, because NextChatSession hands numbers out
-	// in order. (A reused slot breaks that, but a reused slot is minutes
-	// old, never a tie.)
+	// Deterministic order so two runs over the same server produce the same
+	// report. Nothing depends on it any more — the panes no longer RACE for
+	// transcripts — which is exactly why the old newest-pane-first sort (and
+	// the false assumption in its comment) is gone.
 	sort.SliceStable(pending, func(i, j int) bool {
 		a, b := pending[i], pending[j]
-		if !a.pane.Created.Equal(b.pane.Created) {
-			return a.pane.Created.After(b.pane.Created)
+		if a.ws.Label != b.ws.Label {
+			return a.ws.Label < b.ws.Label
 		}
-		return a.n > b.n
+		if a.kind != b.kind {
+			return a.kind < b.kind
+		}
+		return a.n < b.n
 	})
+
+	procs := procScanner(look.procs, len(pending) > 0)
+	for i := range pending {
+		lp := &pending[i]
+		id := chat.PaneSessionID(procs(), lp.pane.PID)
+		if id == "" || id == lp.pane.ChatSession {
+			continue
+		}
+		// The running process disagrees with the stamp (or the pane wears
+		// none): believe the process, and write the correction back so every
+		// later reader — `tail`, `send`, the phone — sees it too.
+		lp.pane.ChatSession = id
+		stampChatPane(look.stamp, lp.pane.Pane, lp.pane.Session, id)
+	}
+
+	// The claim set: every id spoken for right now. Panes this report is
+	// building rows for contribute their CORRECTED id — never the stale one
+	// they were wearing, which would otherwise keep a transcript that nobody
+	// is running out of the archived list forever.
+	reported := map[string]bool{}
+	claimed := map[string]bool{}
+	for _, lp := range pending {
+		reported[lp.pane.Pane] = true
+		if lp.pane.ChatSession != "" {
+			claimed[lp.pane.ChatSession] = true
+		}
+	}
+	for _, p := range look.panes {
+		if p.ChatSession != "" && !reported[p.Pane] {
+			claimed[p.ChatSession] = true
+		}
+	}
+	// How many still-unidentified panes compete for each project dir: one is
+	// answerable, more than one is a guess (chat.Resolve refuses).
+	rivals := map[string]int{}
+	for _, lp := range pending {
+		if lp.pane.ChatSession == "" {
+			rivals[lp.pane.Dir]++
+		}
+	}
 
 	scans := map[string][]transcript.Session{}
 	scan := func(dir string) []transcript.Session {
@@ -204,15 +282,10 @@ func chatRecords(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit
 		id, label := lp.pane.ChatSession, ""
 		sessions := scan(lp.pane.Dir)
 		if id == "" {
-			if s, ok := chat.Resolve(sessions, claimed); ok {
+			if s, ok := chat.Resolve(sessions, claimed, rivals[lp.pane.Dir]); ok {
 				id, label = s.ID, s.FirstPrompt
 				claimed[id] = true
-				// Best-effort: a tmux too old for the option, or a pane
-				// that died between listing and stamping, must not fail
-				// the whole report — the next `ls` re-resolves.
-				if err := stamp(lp.pane.Pane, id); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not stamp %s with its session id: %v\n", lp.pane.Session, err)
-				}
+				stampChatPane(look.stamp, lp.pane.Pane, lp.pane.Session, id)
 			}
 		}
 		if id != "" && label == "" {
@@ -222,7 +295,7 @@ func chatRecords(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
 			SessionID: id, Label: label,
-		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir})
+		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID})
 	}
 	for _, ws := range targets {
 		for _, dir := range orchestratorProjectDirs(ws) {
@@ -237,6 +310,34 @@ func chatRecords(targets []workspace.Workspace, panes []tmux.LivePane, isCockpit
 	}
 	sort.SliceStable(recs, func(i, j int) bool { return chat.Less(recs[i].Row, recs[j].Row) })
 	return recs
+}
+
+// procScanner memoizes the process-table read so one report shells out to
+// `ps` at most once — and not at all when there is no live pane to identify
+// or no scanner injected.
+func procScanner(scan func() []chat.Proc, wanted bool) func() []chat.Proc {
+	var procs []chat.Proc
+	done := false
+	return func() []chat.Proc {
+		if done || !wanted || scan == nil {
+			return procs
+		}
+		done = true
+		procs = scan()
+		return procs
+	}
+}
+
+// stampChatPane writes a resolved id onto its pane. Best-effort: a tmux too
+// old for the option, or a pane that died between listing and stamping, must
+// not fail the whole report — the next `ls` re-derives.
+func stampChatPane(stamp func(pane, id string) error, pane, session, id string) {
+	if stamp == nil || pane == "" {
+		return
+	}
+	if err := stamp(pane, id); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not stamp %s with its session id: %v\n", session, err)
+	}
 }
 
 // orchestratorProjectDirs is where a workspace's chats have run: its brain

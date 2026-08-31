@@ -26,6 +26,39 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-08-31 · `claude --session-id <uuid>` exists — mint identity, never
+  infer it; and a claude holds NO fd on its transcript** (grove-222, fixing
+  the grove-215 resolver). Two facts, both verified live. (1) The CLI takes
+  `--session-id <uuid>` (`claude --help`; the value must be a real UUID),
+  so the session id of a chat grove spawns is grove's to DECIDE — the whole
+  class of "which transcript belongs to which pane" evaporates, exactly as
+  `--resume` already made it evaporate for a revival. (2) The fallback
+  everyone reaches for first does not work: on a machine running four live
+  claude sessions, `ls -l /proc/<pid>/fd` showed **zero** open `.jsonl`
+  handles — Claude Code opens, appends and closes, so there is no fd to
+  correlate a pane with. What IS readable is the argv: an agent launched
+  with `--session-id`/`--resume` carries its id there for its whole life,
+  under a pane pid that is a SHELL (the launch is typed in), so the lookup
+  is a descendant walk over `ps -Ao pid,ppid,args`, not a look at the pane
+  process itself. Changed: grove mints and stamps at spawn, corrects a
+  wrong stamp from the running argv, and refuses to pair rivals at all.
+
+- **2026-08-31 · transcript mtime is LAST WRITE, so "newest pane owns
+  newest transcript" is false — and a stable wrong answer is the worst
+  kind** (grove-222; the grove-215 regression, found on groveremote by
+  live verification, never by the suites). Two live chats in one project
+  dir came back with each other's ids: chat-2 (younger pane) had gone idle
+  at 02:41 while chat-1 (older, still working) wrote until 02:56, so the
+  newest `.jsonl` was the OLDER pane's and the newest-pane-first sort
+  handed it over. The ids were distinct and stable across repeated calls —
+  which is all the acceptance criteria asked for, and is why unit tests,
+  e2e and a human reading the output all passed it. Two rules out of it:
+  an inferred identity must be checked against something the inference
+  cannot see (here: grepping each transcript for text unique to the
+  conversation in the pane), and where an id is DURABLE and steers writes,
+  `null` beats a guess — a missing id costs a client a button, a wrong one
+  delivers the operator's words to the wrong agent.
+
 - **2026-08-31 · a transcript line is not a message — and three of its
   fields decide what a chat READS like** (grove-216, projecting `.jsonl` →
   `gv chat tail`). Verified against live transcripts: (1) one line holds

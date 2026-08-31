@@ -59,7 +59,7 @@ payload under one named key.
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
 | `gv workspaces --json` | `workspaces` | array — `{root, label, scope}` |
-| `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, writable}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id, **null** while a chat is still booting; `label` is the transcript's first prompt. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input |
+| `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, writable}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id — minted by grove at spawn and stamped on the pane before the agent boots (grove-222), so a chat grove started carries it from second zero; it is **null** only when grove cannot know it without guessing (a pane grove did not spawn, sharing a project dir with another such pane) — a null is honest, never a placeholder to fill in from the newest transcript; `label` is the transcript's first prompt. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input |
 | `gv chat tail <s> [--follow] [--since N]` | *(none — a stream)* | JSONL, one transcript entry per line: `{seq, role, kind, text, tool, ts}` (grove-216). `role` is `user`/`assistant`; `kind` is `text`, `tool_use`, `tool_result` or `thinking`; `tool` is the tool's NAME (a `tool_result` is paired back to the `tool_use` it answers); `ts` is null on a line that carries no timestamp. `seq` is 1-based over EMITTED entries and stable for an append-only transcript, so `--since N` resumes exactly where a client stopped; `--follow` streams appends (~250ms poll). Read on any kind — an archived transcript and a cockpit pane are readable, only writing is gated. Entries are never truncated: a 200KB `tool_result` arrives whole |
 | `gv doctor --json` | `rows` | array — connection checks |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
@@ -225,6 +225,13 @@ tmux pane, do bracketed-paste injection, and append the event for you:
 - `gv chat keys <session> <chars>` — one raw keystroke, no Enter, for the
   permission prompts and option pickers a prose box cannot drive. Same
   `writable` gate; a newline is refused (that is `send`'s job).
+- `gv chat restamp <session> [<session-id>]` — operator escape hatch
+  (grove-222): re-point a live chat's identity stamp, or clear it (no id)
+  so the next `gv chat ls` re-derives one. For the two cases nothing can
+  re-derive — a pane mis-stamped before grove minted ids, and a
+  conversation replaced inside a living pane. A pane whose agent carries an
+  explicit `--session-id`/`--resume` is corrected back from that argv on
+  the next report: the running process outranks a typed-in answer.
 
 Never write `tasks.json` (derived), never append to `events.jsonl`
 yourself (gv owns the lock and the `v` stamp), never inject tmux keys

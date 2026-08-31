@@ -226,6 +226,38 @@
       `e2e/chat.sh` covers spawn → park → revive → identity continuity,
       both plain and relayed, in both tmux-conf modes.
 
+- [x] Chat identity is known by CONSTRUCTION, not inferred (grove-222,
+      2026-08-31): grove-215's resolver sorted live panes newest-created
+      first and handed each the newest unclaimed transcript. Wrong, and
+      found only by live verification on groveremote: transcript recency is
+      LAST WRITE, so an older pane still working outranks a younger one gone
+      idle — two live chats came back stamped with each other's ids, stably
+      (all #215's acceptance demanded) and durably (the stamp is never
+      re-derived), which pointed `gv chat tail` at the wrong conversation
+      and `gv chat send` at the wrong agent. Now: grove MINTS the session id
+      (`chat.NewSessionID`), passes it to `claude --session-id <uuid>` and
+      stamps the pane at creation — every chat grove spawns, detached
+      (`spawnWorkspaceChat`) or cockpit (`spawnOrchestrator`,
+      `spawnOrchestratorProfile`), wears its identity from second zero, and
+      the flag goes on BEFORE `WrapProfile`'s `exec` like `--resume` does.
+      For a pane grove did not spawn, GROUND TRUTH replaces recency: the id
+      the pane's agent was launched on, read out of its argv through the
+      process tree (`chat.PaneSessionID` over `ps -Ao pid,ppid,args`; the
+      pane pid is a shell, so the walk is over descendants). That pass also
+      SELF-HEALS a stamp that is already wrong. What is left of inference
+      answers only when it cannot guess: `chat.Resolve` pairs a pane with a
+      transcript only where exactly ONE unstamped pane competes for a
+      project dir (the cockpit's `--continue` pane, whose id grove cannot
+      mint) — rivals stay `session_id: null`, because a missing id costs a
+      client a button and a wrong one pastes into the wrong agent. `gv chat
+      restamp <session> [<id>]` clears or re-points a stamp by hand for the
+      cases neither source can reach. Unit tests pin the exact live
+      inversion (younger pane idle, older pane active) and fail under mtime
+      pairing; `e2e/chat.sh` proves the minted id reaches the program, that
+      the decoy transcripts recency would have paired stay archived, that an
+      unstamped pane re-derives from its RUNNING process, and that two
+      unidentifiable rivals both report null.
+
 - [x] Paste-able attach hints survive zsh (grove-207, 2026-08-29): a word
       that STARTS with `=` is equals-expanded by zsh (macOS's default
       shell), so the printed `tmux attach -t =grove-chat-<label>-<n>` died

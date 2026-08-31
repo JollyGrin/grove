@@ -23,6 +23,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/audit"
 	"github.com/JollyGrin/grove/internal/bootstrap"
+	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
@@ -987,17 +988,6 @@ func orchestratorCmd(cfg *config.Config, root string) string {
 	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
 }
 
-// orchestratorLaunchProfile is orchestratorLaunch wrapped in a profile's
-// backend env — the FRESH profiled spawn command. No `--continue` limb:
-// fresh spawns () / orchestrator new --profile) always start clean, exactly
-// like the unprofiled spawnOrchestrator (grove-43 — the --continue twin made
-// every profiled spawn resume the previous conversation). Resume-on-spawn
-// exists only for the cockpit's first pane (orchestratorCmd), which is
-// always the default Anthropic orchestrator and never profiled.
-func orchestratorLaunchProfile(cfg *config.Config, root string, p *config.ModelProfile) string {
-	return wrapOrchestratorLaunch(orchestratorLaunch(cfg, root), p)
-}
-
 // wrapOrchestratorLaunch wraps an already-composed orchestrator launch in
 // a profile's backend env (a nil profile leaves it untouched). Shared with
 // chatSpawnPlan, whose `--resume` variant must compose the flags onto the
@@ -1086,10 +1076,53 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		})
 	}
 
-	if _, err := tmux.SpawnPane(session, dir, orchestratorLaunch(cfg, root)); err != nil {
+	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), nil)
+	if err != nil {
 		return "", err
 	}
+	paneID, err := tmux.SpawnPane(session, dir, launch)
+	if err != nil {
+		return "", err
+	}
+	stampOrchestratorPane(paneID, id)
 	return "✓ new orchestrator chat pane", nil
+}
+
+// mintedOrchestratorLaunch is grove-222 applied to a cockpit pane: mint the
+// session id, hand it to claude, and return both so the caller can stamp the
+// pane it spawns. p (nil for the unprofiled pane) wraps the launch in a
+// backend's env — and the flag must go on BEFORE that wrap, because
+// WrapProfile ends in `exec <cmd> )` and anything appended afterwards lands
+// outside the subshell, in the shell's lap rather than claude's.
+//
+// No `--continue` limb, ever: a fresh spawn (`)` / `orchestrator new
+// --profile`) starts clean (grove-43 — the --continue twin made every
+// profiled spawn resume the previous conversation).
+//
+// The cockpit's FIRST pane is deliberately not routed through here: it
+// launches `--continue`, which adopts the id of whatever conversation it
+// resumes, so there is nothing to mint. That pane is the one live case
+// chat.Resolve still answers — and, as the only unstamped pane in its
+// project dir, it is the case Resolve can answer without guessing.
+func mintedOrchestratorLaunch(launch string, p *config.ModelProfile) (string, string, error) {
+	id, err := chat.NewSessionID()
+	if err != nil {
+		return "", "", err
+	}
+	return wrapOrchestratorLaunch(launch+" --session-id "+id, p), id, nil
+}
+
+// stampOrchestratorPane records a spawned chat's identity on its pane.
+// Best-effort by design (the grove-215 stamp rule): a tmux too old for pane
+// user options must never fail a spawn, and the id stays recoverable from
+// the running claude's argv.
+func stampOrchestratorPane(pane, id string) {
+	if pane == "" || id == "" {
+		return
+	}
+	if err := tmux.SetPaneChatSession(pane, id); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not stamp %s with session id %s: %v\n", pane, id, err)
+	}
 }
 
 // spawnOrchestratorProfile is spawnOrchestrator's profile-aware twin
@@ -1141,10 +1174,15 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	if err := os.MkdirAll(paneDir, 0o755); err != nil {
 		return "", err
 	}
-	paneID, err := tmux.SpawnPane(session, paneDir, orchestratorLaunchProfile(cfg, root, p))
+	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), p)
 	if err != nil {
 		return "", err
 	}
+	paneID, err := tmux.SpawnPane(session, paneDir, launch)
+	if err != nil {
+		return "", err
+	}
+	stampOrchestratorPane(paneID, id)
 	// Best-effort visual tag: label the new pane with its profile and turn on
 	// the cockpit window's pane borders so a profiled orchestrator is
 	// distinguishable from the default Anthropic pane it shares the window

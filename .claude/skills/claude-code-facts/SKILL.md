@@ -68,6 +68,19 @@ changes the behavior.
 - Never resume via `sessions-index.json` (it points at the parent repo
   and silently misses worktree sessions) — always explicit
   `--resume <id>`.
+- **Mint the session id, never infer it.** `claude --session-id <uuid>`
+  (a real UUID) sets the conversation's id at launch, so anything spawning
+  a session should DECIDE the id and record it, not work out afterwards
+  which transcript belongs to which pane. Inference by transcript recency
+  is wrong on its face: an mtime is LAST WRITE, so an older session still
+  working outranks a younger one gone idle (grove-222 shipped that bug —
+  two live chats stamped with each other's ids, stably).
+- **A claude keeps NO fd open on its transcript** (verified 2026-08-31
+  across four live sessions): it opens, appends and closes, so
+  `/proc/<pid>/fd` correlates nothing. The id a running session is on is
+  readable from its ARGV instead (`--session-id`/`--resume`) — and a tmux
+  pane's pid is the SHELL the launch was typed into, so look at
+  descendants (`ps -Ao pid,ppid,args`), never the pane process itself.
 - State never forgets a session id: `untrack` clears nothing, so
   `gv adopt` always resumes the stored conversation. When the OLD
   conversation is the problem, `gv adopt --manual` is the guaranteed-fresh

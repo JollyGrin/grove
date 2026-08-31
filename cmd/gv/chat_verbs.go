@@ -61,7 +61,7 @@ func findChat(target string) (chatRecord, error) {
 	if err != nil {
 		return chatRecord{}, err
 	}
-	recs := chatRecords(targets, tmux.Panes(), isCockpit, tmux.SetPaneChatSession)
+	recs := chatRecords(targets, liveChatLookup(isCockpit))
 	rows := make([]chat.Row, len(recs))
 	for i, r := range recs {
 		rows[i] = r.Row
@@ -225,4 +225,75 @@ func writableChat(target string) (pane string, row chat.Row, err error) {
 		return "", chat.Row{}, fmt.Errorf("%s has no live pane to write to", chatName(rec.Row))
 	}
 	return rec.Pane, rec.Row, nil
+}
+
+// --- gv chat restamp (grove-222) ---
+
+// cmdChatRestamp is the escape hatch for a chat wearing the wrong identity:
+// point a live pane at the conversation actually running in it, or clear the
+// stamp and let the next `gv chat ls` re-derive one.
+//
+// It exists because two things cannot be re-derived. A pane mis-stamped by
+// the old mtime resolver whose agent was launched without an explicit id has
+// no ground truth left to read; and a conversation REPLACED inside a living
+// pane (a `/clear` starts a fresh one) changes neither the argv nor the
+// stamp. Both are one-line fixes for a human who can see the pane.
+//
+// A pane whose claude carries an explicit `--session-id`/`--resume` is
+// re-corrected from that argv on the next report — the process outranks a
+// typed-in answer, deliberately — so restamping such a pane to something
+// else does not stick, and says so.
+func cmdChatRestamp(args []string) error {
+	if len(args) == 0 || len(args) > 2 {
+		return fmt.Errorf("usage: gv chat restamp <session> [<session-id>]   (no id clears the stamp; the next `gv chat ls` re-derives it)")
+	}
+	rec, err := findChat(args[0])
+	if err != nil {
+		return err
+	}
+	if rec.Pane == "" {
+		return fmt.Errorf("%s has no live pane — only a running chat wears an identity stamp", chatName(rec.Row))
+	}
+	if len(args) == 1 {
+		if err := tmux.SetPaneChatSession(rec.Pane, ""); err != nil {
+			return fmt.Errorf("clearing the stamp on %s: %w", rec.Pane, err)
+		}
+		fmt.Printf("✓ cleared %s's session id — the next `gv chat ls` re-derives it\n", chatName(rec.Row))
+		return nil
+	}
+	id := args[1]
+	if !chat.ValidSessionID(id) {
+		return fmt.Errorf("%q is not a Claude session id — `gv chat ls` prints the ids this machine has", id)
+	}
+	// Refuse an id with no transcript in THIS chat's project dir: a stamp
+	// that names a conversation the pane's cwd cannot hold sends `tail` at a
+	// file that will never exist and `send` at the wrong agent — the exact
+	// failure this verb repairs.
+	sessions, err := transcript.ListSessions(rec.Dir)
+	if err != nil {
+		return fmt.Errorf("reading the transcripts under %s: %w", rec.Dir, err)
+	}
+	if !hasSession(sessions, id) {
+		return fmt.Errorf("no transcript %s in %s — a chat's cwd is its project dir, so an id from another dir can never be the one running here (`gv chat ls` lists them)", id, rec.Dir)
+	}
+	if err := tmux.SetPaneChatSession(rec.Pane, id); err != nil {
+		return fmt.Errorf("stamping %s: %w", rec.Pane, err)
+	}
+	fmt.Printf("✓ %s → %s\n", chatName(rec.Row), id)
+	if live := chat.PaneSessionID(scanProcs(), rec.PID); live != "" && live != id {
+		fmt.Fprintf(os.Stderr, "warning: the claude running in %s was launched on %s — the next `gv chat ls` corrects the stamp back to it\n", rec.Pane, live)
+	}
+	return nil
+}
+
+// hasSession reports whether id is among these transcripts — the membership
+// test transcriptLabel cannot make on its own, because a conversation whose
+// first line is not a prompt has a real transcript and an empty label.
+func hasSession(sessions []transcript.Session, id string) bool {
+	for _, s := range sessions {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
 }
