@@ -157,7 +157,10 @@ tailscale serve --bg 3000     # tailnet-only HTTPS in front of it
 → `https://<your-host>.<tailnet>.ts.net`: three screens — projects, the
 chats in a project, the chat itself — with live replies streaming in,
 `+ new chat`, `revive` for an archived one, and a raw-key row when the
-agent hits a permission prompt. It is one Go binary and one embedded page
+agent hits a permission prompt. Where the host has `model_profiles`
+configured, `+ new chat` asks which backend to spawn on (the host's own
+Claude, or any configured profile) — the same choice the cockpit's `)`
+hotkey offers at the desk; with none configured there is no picker. It is one Go binary and one embedded page
 (no npm, no node, no build step), so `gv update` ships it.
 
 **Read this before exposing it.** `gv chat serve` types into live agent

@@ -2,12 +2,18 @@ package chatweb
 
 // grove-218: the API surface, as a pure parse.
 //
-// SCOPE BOUNDARY, and it is deliberate: these seven routes are READ, RELAY
+// SCOPE BOUNDARY, and it is deliberate: the routes below are READ, RELAY
 // and SPAWN. There is no route to `gv done`, `gv untrack --rm`, `gv grab`,
 // or any task-backend mutation, and none may be added — propose-then-dispose
 // applies harder to a phone than to a desk, and a fleet surface (task rows,
 // cost charts, audit, sweep) belongs in the TUI or an external plugin
 // against `--json`, never here (design §"Scope boundary").
+//
+// grove-225 added ONE route to that closed table, deliberately and within
+// the boundary: /api/profiles is a READ of the host's configured model
+// profiles, so the phone can pick the backend a new chat runs on instead
+// of always taking the host's default. It reaches nothing the spawn route
+// could not already reach.
 //
 // Parsing lives away from net/http so the whole table — including every
 // path that must 404 — is testable without a listener.
@@ -22,6 +28,8 @@ const (
 	RouteKeys   = "keys"   // POST /api/chats/<s>/keys
 	RouteNew    = "new"    // POST /api/workspaces/<l>/new
 	RouteResume = "resume" // POST /api/chats/<s>/resume
+	// grove-225: the profile picker's list. Read-only, no target.
+	RouteProfiles = "profiles" // GET  /api/profiles
 )
 
 // Route is a parsed API request. Target is the chat address for the chat
@@ -57,6 +65,8 @@ func ParseRoute(path string) (r Route, api bool) {
 	switch {
 	case len(parts) == 1 && parts[0] == "chats":
 		return Route{Kind: RouteChats, Method: "GET"}, true
+	case len(parts) == 1 && parts[0] == "profiles":
+		return Route{Kind: RouteProfiles, Method: "GET"}, true
 	case len(parts) == 3 && parts[0] == "chats" && parts[1] != "":
 		target := parts[1]
 		switch parts[2] {

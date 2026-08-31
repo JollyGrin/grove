@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -63,8 +64,15 @@ type Backend interface {
 	// garnish: an unreadable pane is the zero Picker, never an error.
 	Picker(target string) Picker
 	// NewChat spawns a fresh chat in a registered workspace and returns
-	// the `grove-chat-<label>-<n>` it created.
-	NewChat(label string) (string, error)
+	// the `grove-chat-<label>-<n>` it created. profile is a model-profile
+	// name, "" for the host's own Claude — the same axis `gv orchestrator
+	// new --profile` moves on, and an unknown one is the CLI's own refusal
+	// rather than a fallback to the default (grove-225).
+	NewChat(label, profile string) (string, error)
+	// Profiles is the host's configured model profile names, sorted, on
+	// ResolveOrchestratorProfile's semantics: none configured is an empty
+	// list, which the phone renders as no picker at all.
+	Profiles() ([]string, error)
 	// Resume revives an archived chat and returns the session it landed in.
 	Resume(target string) (string, error)
 }
@@ -123,6 +131,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch route.Kind {
 	case RouteChats:
 		s.handleChats(w)
+	case RouteProfiles:
+		s.handleProfiles(w)
 	case RouteEvents:
 		s.handleEvents(w, r, route.Target)
 	case RouteSend:
@@ -130,7 +140,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RouteKeys:
 		s.handleKeys(w, r, route.Target)
 	case RouteNew:
-		s.handleSpawn(w, route.Target, s.backend.NewChat)
+		s.handleNew(w, r, route.Target)
 	case RouteResume:
 		s.handleSpawn(w, route.Target, s.backend.Resume)
 	}
@@ -181,6 +191,28 @@ func (s *Server) handleChats(w http.ResponseWriter) {
 		rows = []chat.Row{}
 	}
 	writeJSON(w, http.StatusOK, schema.Envelope("chats", rows))
+}
+
+// handleProfiles lists the model profiles a new chat can be spawned on
+// (grove-225). Sorted names in the contract envelope, and an EMPTY LIST
+// where none are configured rather than a 404 or an error — a host with
+// one lane is the common case, and the phone renders zero profiles as no
+// picker at all, so `+ New chat` behaves exactly as it did before.
+//
+// The list is names only. A profile's base_url, its auth env var and its
+// model map stay on the host: the phone never needs them to pick one, and
+// a route that served them would put an operator's backend config on a
+// screen that leaves the house.
+func (s *Server) handleProfiles(w http.ResponseWriter) {
+	names, err := s.backend.Profiles()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	writeJSON(w, http.StatusOK, schema.Envelope("profiles", names))
 }
 
 // --- SSE ---
@@ -366,9 +398,39 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 	writeJSON(w, http.StatusOK, map[string]any{"key": body.Key})
 }
 
-// handleSpawn serves both spawn routes — `+ New chat` in a project and
-// Resume on an archived one — because they differ only in which backend
-// call runs and what the target names.
+// newBody is `POST /workspaces/<l>/new`'s payload, and every field of it
+// is OPTIONAL — an absent body, `{}` and a `{"profile":""}` all mean the
+// same spawn the route did before grove-225, on the host's own Claude.
+// That byte-compatibility is the point: a client written against grove-218
+// keeps working, and "no choice made" is spelled the same way as "the
+// default was chosen".
+type newBody struct {
+	Profile string `json:"profile"`
+}
+
+// handleNew is `+ New chat`. The profile travels straight into the same
+// chatSpawnReq the desk's `gv orchestrator new --profile` fills, so an
+// unknown name comes back as the CLI's own refusal ("unknown model profile
+// %q (configured: …)") with a 409 — never a quiet fallback to the default
+// lane, which is the one failure a phone spawn must not have: an operator
+// would find out which backend they were billed for a day later.
+func (s *Server) handleNew(w http.ResponseWriter, r *http.Request, label string) {
+	var body newBody
+	if err := decodeOptional(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	session, err := s.backend.NewChat(label, body.Profile)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": session})
+}
+
+// handleSpawn serves the Resume route: it takes no body, because an
+// archived conversation already CARRIES its backend (the cwd it ran in
+// decides it — see chatResumeConflict), so there is nothing to choose.
 func (s *Server) handleSpawn(w http.ResponseWriter, target string, spawn func(string) (string, error)) {
 	session, err := spawn(target)
 	if err != nil {
@@ -389,6 +451,23 @@ func decode(r *http.Request, into any) error {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
+		return fmt.Errorf("bad request body: %w", err)
+	}
+	return nil
+}
+
+// decodeOptional is decode for a route whose body is entirely optional:
+// an EMPTY body leaves every field at its zero instead of failing. Same
+// cap, same DisallowUnknownFields — a typo'd key is still a 400 rather
+// than a silently ignored choice, which on the profile route would mean
+// spawning on the wrong backend and saying nothing.
+func decodeOptional(r *http.Request, into any) error {
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
 		return fmt.Errorf("bad request body: %w", err)
 	}
 	return nil

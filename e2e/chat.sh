@@ -55,6 +55,12 @@
 #       an archived chat revives over HTTP; and the closed route table 404s
 #       everything fleet-shaped — there is no path to done/untrack from a
 #       phone
+#  13. (grove-225) the phone picks a backend: GET /api/profiles lists the
+#       host's model profiles sorted and names-only, POST .../new takes an
+#       OPTIONAL {"profile"} that runs the chat in that backend's wrapper
+#       and its own cwd, a bodyless spawn is byte-compatible with grove-218,
+#       and an unknown profile (or a typo'd body key) refuses in the CLI's
+#       own words having spawned nothing
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -861,6 +867,7 @@ api_field() { # <file> <session> <field>
 # earlier sections wrote has been REVIVED, so a read-only assertion needs
 # its own archived row rather than one of theirs.
 write_transcript "$ORCH" dddd4444 "an archived conversation" $((NOW - 100000))
+
 PORT="$(pick_port)"
 SERVE_LOG="$SCRATCH/serve.log"
 ( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat serve --port "$PORT" ) > "$SERVE_LOG" 2>&1 &
@@ -971,6 +978,115 @@ say "?since=N resumes where a client left off"
 curl -sN --max-time 3 "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/events?since=2&follow=0" > "$SCRATCH/sse2.txt" 2>/dev/null || true
 grep -q '"seq":1' "$SCRATCH/sse2.txt" && fail "--since must suppress entries the client already has" || true
 grep -q '"seq":3' "$SCRATCH/sse2.txt" || { cat "$SCRATCH/sse2.txt"; fail "--since 2 must resume at seq 3"; }
+
+say "grove-225: zero model_profiles is an empty list, not a 404 or a 500"
+# Nothing has written a global config yet, and the serve process runs from
+# $SCRATCH (no .grove marker) — so this is the no-config host, which must
+# answer [] and let the page render no picker at all.
+curl -fsS "http://127.0.0.1:$PORT/api/profiles" > "$SCRATCH/profiles0.json" || fail "GET /api/profiles failed with no config"
+cat "$SCRATCH/profiles0.json"
+grep -q '"profiles":\[\]' "$SCRATCH/profiles0.json" \
+  || { cat "$SCRATCH/profiles0.json"; fail "no profiles configured must be [], so the phone shows no picker"; }
+
+say "grove-225: GET /api/profiles lists the host's model profiles, sorted"
+# The picker lists what the SERVE PROCESS can see, and this one is in the
+# global layer. Written here rather than in a workspace on purpose: the
+# same layer merges into every workspace (config.LoadAt), which is what
+# makes a profile picked on the phone resolvable where the spawn lands.
+# The handler re-reads config per request, so no restart is needed.
+mkdir -p "$HOME/.config/grove"
+cat > "$HOME/.config/grove/config.yaml" <<EOF
+model_profiles:
+  e2e-zeta:
+    base_url: https://zeta.example/api
+    auth_token_env: ZETA_API_KEY
+    opus: zeta/one
+    sonnet: zeta/one
+    haiku: zeta/one
+  e2e-glm:
+    base_url: https://openrouter.ai/api
+    auth_token_env: OPENROUTER_API_KEY
+    opus: z-ai/glm-5.2
+    sonnet: z-ai/glm-5.2
+    haiku: z-ai/glm-4.5-air
+EOF
+curl -fsS "http://127.0.0.1:$PORT/api/profiles" > "$SCRATCH/profiles.json" || fail "GET /api/profiles failed"
+cat "$SCRATCH/profiles.json"
+grep -q '"schema_version"' "$SCRATCH/profiles.json" || fail "the profiles route must carry the contract envelope"
+grep -q '"profiles":\["e2e-glm","e2e-zeta"\]' "$SCRATCH/profiles.json" \
+  || { cat "$SCRATCH/profiles.json"; fail "want the two configured profiles, SORTED, and names only"; }
+# Names only: a phone never needs a profile's backend, and this page leaves
+# the house.
+grep -q 'ZETA_API_KEY\|openrouter.ai' "$SCRATCH/profiles.json" \
+  && { cat "$SCRATCH/profiles.json"; fail "the profiles route must not serve base_url / auth env — names only"; } || true
+# The route is a READ. Nothing on the closed table grew a write here.
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/api/profiles")"
+[ "$code" = "405" ] || fail "POST /api/profiles answered $code, want 405"
+# The page that ships must actually use it: the embedded app is the only
+# client, and a UI that drifted off this route would look identical from
+# here (the sheet just never opens).
+grep -q "/api/profiles" "$SCRATCH/app.js" || fail "the embedded page never asks for the profile list"
+grep -q 'Claude (host default)' "$SCRATCH/app.js" || fail "the sheet must offer the host default as its first row"
+
+say "grove-225: a spawn WITH a profile runs the chat inside that backend's wrapper"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"profile":"e2e-glm"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-profiled.json" \
+  || { cat "$SERVE_LOG"; fail "a profiled POST new failed"; }
+cat "$SCRATCH/new-profiled.json"
+grep -q '"session":"grove-chat-servews-2"' "$SCRATCH/new-profiled.json" \
+  || { cat "$SCRATCH/new-profiled.json"; fail "the profiled spawn must answer with the session it created"; }
+PROFILED_CWD="$(remote_tmux display-message -p -t '=grove-chat-servews-2:' '#{pane_current_path}')"
+[ "$PROFILED_CWD" = "$SERVEWS/.grove/orchestrator/e2e-glm" ] \
+  || fail "phone-spawned profiled chat cwd = $PROFILED_CWD, want the per-profile dir"
+pane_cmd grove-chat-servews-2 > "$SCRATCH/profiled.pane"
+grep -q 'ANTHROPIC_BASE_URL' "$SCRATCH/profiled.pane" \
+  || { cat "$SCRATCH/profiled.pane"; fail "the phone-spawned chat must run wrapped in the picked backend"; }
+
+say "grove-225: a spawn with NO body at all is byte-compatible with grove-218"
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-nobody.json" \
+  || { cat "$SERVE_LOG"; fail "a bodyless POST new failed — the profile field is OPTIONAL"; }
+grep -q '"session":"grove-chat-servews-3"' "$SCRATCH/new-nobody.json" \
+  || { cat "$SCRATCH/new-nobody.json"; fail "a bodyless spawn must behave exactly as it did before"; }
+NOBODY_CWD="$(remote_tmux display-message -p -t '=grove-chat-servews-3:' '#{pane_current_path}')"
+[ "$NOBODY_CWD" = "$SERVEWS/.grove/orchestrator" ] \
+  || fail "a bodyless spawn must land on the host default, got cwd $NOBODY_CWD"
+
+say "grove-225: an unknown profile is the CLI's own refusal, and spawns nothing"
+BEFORE_UNKNOWN="$(chat_sessions servews)"
+code="$(curl -s -o "$SCRATCH/badprofile.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -d '{"profile":"nope"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new")"
+cat "$SCRATCH/badprofile.out"
+[ "$code" = "409" ] || fail "an unknown profile answered $code, want 409"
+grep -q 'unknown model profile' "$SCRATCH/badprofile.out" \
+  || fail "the refusal must be the CLI's own words (cfg.ResolveProfile)"
+grep -q 'configured: e2e-glm, e2e-zeta' "$SCRATCH/badprofile.out" \
+  || { cat "$SCRATCH/badprofile.out"; fail "the refusal must name what IS configured, as the CLI does"; }
+[ "$(chat_sessions servews)" = "$BEFORE_UNKNOWN" ] || fail "a refused profile must create no session"
+# `gv orchestrator new --profile nope` says the same thing — same code path,
+# proven rather than asserted by eye.
+rc=0
+( cd "$SERVEWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace servews --profile nope ) \
+  > "$SCRATCH/badprofile-cli.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "the CLI must refuse an unknown profile too"
+CLI_REFUSAL="$(grep -o 'unknown model profile.*' "$SCRATCH/badprofile-cli.out" | head -1)"
+# The API carries it as a JSON string, so the quotes around the bad name
+# arrive escaped — unescape before comparing, or this passes on nothing.
+sed 's/\\"/"/g' "$SCRATCH/badprofile.out" > "$SCRATCH/badprofile.txt"
+grep -qF "$CLI_REFUSAL" "$SCRATCH/badprofile.txt" \
+  || { cat "$SCRATCH/badprofile.txt" "$SCRATCH/badprofile-cli.out"; fail "the HTTP refusal must be the CLI's text verbatim"; }
+
+say "grove-225: a typo'd body key is refused, never a silent spawn on the default"
+BEFORE_TYPO="$(chat_sessions servews)"
+code="$(curl -s -o "$SCRATCH/typo.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -d '{"prof":"e2e-glm"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new")"
+[ "$code" = "400" ] || { cat "$SCRATCH/typo.out"; fail "an unknown body field answered $code, want 400"; }
+[ "$(chat_sessions servews)" = "$BEFORE_TYPO" ] || fail "a refused body must create no session"
+
+remote_tmux kill-session -t '=grove-chat-servews-2' 2>/dev/null || true
+remote_tmux kill-session -t '=grove-chat-servews-3' 2>/dev/null || true
 
 say "raw keys: only a picker key, never free text"
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
