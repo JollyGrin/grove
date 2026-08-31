@@ -63,8 +63,16 @@ widths — grove-79's panic lived only at heights the tests never visited.
   go build -o /tmp/gv-<ticket> ./cmd/gv
   ```
 
-  Hand over that path. `go install ./cmd/gv` happens from main, after
-  merge.
+  Hand over that path.
+
+- **After a merge, the operator's binary is refreshed with
+  `gv update --yes` — never `go install ./cmd/gv`.** A push to main
+  auto-cuts a release within ~a minute, so the just-merged code is in
+  `gv update`'s reach almost immediately. `go install` stamps the binary
+  `dev`, which is precisely what `gv update` refuses (`ErrDevBuild`) —
+  every `go install` breaks the next update and invites another one. A
+  binary already stamped `dev` escapes once with
+  `gv update --yes --force`, then plain `--yes` forever after.
 
 ## Merging and cleanup
 

@@ -46,11 +46,19 @@ operator now runs grove exclusively.
 
 - `go build ./... && go vet ./... && go test ./...` must be green;
   `gofmt -l .` empty.
-- `go install ./cmd/gv` refreshes `~/go/bin/gv` in place (hooks reference
-  the absolute path, so no re-install of hooks after rebuilds) — but only
-  from main. For operator testing of an unmerged branch, the default is a
-  throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`, hand over that
-  path — the installed gv and live sessions stay untouched.
+- **`gv update --yes` is the ONLY way to refresh the operator's
+  `~/go/bin/gv`. Never `go install ./cmd/gv` for that.** A push to main
+  auto-cuts a GitHub release within ~a minute (main pushed 15:20:39Z →
+  v0.1.30 published 15:21:41Z, 2026-08-31), so after a merge you wait,
+  then update. `go install` stamps the binary `dev`, which is exactly
+  what `gv update` refuses (`ErrDevBuild`, internal/update/update.go) —
+  so each `go install` guarantees the next one refuses too. To escape a
+  binary already stamped `dev`: `gv update --yes --force` once. Hooks
+  reference the absolute path, so no re-install of hooks either way.
+- For operator testing of an UNMERGED branch, neither applies — the
+  default is a throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`,
+  hand over that path — the installed gv and live sessions stay
+  untouched.
 - `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
   scratch everything (the dummy-data pattern) — run it before merging
   anything that touches the task lifecycle. `e2e/all.sh` runs all ten
