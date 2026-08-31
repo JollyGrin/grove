@@ -61,6 +61,10 @@ const usage = `gv — grove
 
   gv version | gv --version                    print the build version
   gv update [--yes] [--force]                 self-update from the latest GitHub release
+                                              (after a real update: the brain sweep below, report-only)
+  gv brains [--json]                          every registered workspace's orchestrator brain vs the
+                                              seed this binary carries — pure read, names the refresh
+                                              command per workspace; grove never overwrites a brain
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)
@@ -393,6 +397,8 @@ func main() {
 		cmdVersion()
 	case "update":
 		err = cmdUpdate(args)
+	case "brains":
+		err = cmdBrains(args)
 	case "init":
 		err = cmdInit(args)
 	case "grab":
@@ -565,7 +571,8 @@ func cmdUpdate(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	opts := update.Options{Current: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Force: *force}
+	applied := false
+	opts := update.Options{Current: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Force: *force, Applied: &applied}
 	if !*yes {
 		sc := bufio.NewScanner(os.Stdin)
 		opts.Confirm = func(_, _ string) bool {
@@ -573,7 +580,17 @@ func cmdUpdate(args []string) error {
 			return sc.Scan() && strings.ToLower(strings.TrimSpace(sc.Text())) == "y"
 		}
 	}
-	return update.Run(opts)
+	if err := update.Run(opts); err != nil {
+		return err
+	}
+	// grove-236: a new binary means a new orchestrator seed, so say which
+	// workspaces are now behind. Only after a REAL replace — an
+	// already-current box stays quiet — and never fatal: the sweep is a
+	// report hung off a finished update, not part of it.
+	if applied {
+		reportBrainSweepAfterUpdate(opts.Target)
+	}
+	return nil
 }
 
 // cmdDashboard runs the TUI. Attach is handled after the tea loop exits
@@ -827,7 +844,7 @@ func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
 // what a cockpit opened there would use. `gv init` works on the root it
 // just configured, which may not be the ambient workspace.
 func orchestratorDirAt(root string) string {
-	return filepath.Join(root, ".grove", "orchestrator")
+	return bootstrap.OrchestratorDirAt(root)
 }
 
 // brainStateOf reports the orchestrator brain's drift state for the
