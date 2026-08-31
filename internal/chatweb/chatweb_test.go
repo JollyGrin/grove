@@ -34,10 +34,13 @@ type fakeBackend struct {
 	sendErr, keysErr, spawnErr error
 	picker                     chatweb.Picker
 	newSession                 string
+	profiles                   []string
+	profilesErr                error
 
 	sentTo, sentText string
 	keyTo, keyLit    string
 	spawned, resumed string
+	spawnProfile     string
 	tailTarget       string
 	tailSince        int
 	tailFollow       bool
@@ -75,10 +78,12 @@ func (f *fakeBackend) Keys(target, literal string) error {
 
 func (f *fakeBackend) Picker(string) chatweb.Picker { return f.picker }
 
-func (f *fakeBackend) NewChat(label string) (string, error) {
-	f.spawned = label
+func (f *fakeBackend) NewChat(label, profile string) (string, error) {
+	f.spawned, f.spawnProfile = label, profile
 	return f.newSession, f.spawnErr
 }
+
+func (f *fakeBackend) Profiles() ([]string, error) { return f.profiles, f.profilesErr }
 
 func (f *fakeBackend) Resume(target string) (string, error) {
 	f.resumed = target
@@ -349,6 +354,81 @@ func TestNewChatAndResume(t *testing.T) {
 	w = post(t, h, "/api/chats/eeeb1234/resume", `{}`)
 	if w.Code != 200 || b.resumed != "eeeb1234" {
 		t.Fatalf("resume: %d %s (resumed %q)", w.Code, w.Body, b.resumed)
+	}
+}
+
+// grove-225: the profile a phone picked must reach the spawn UNCHANGED,
+// and "no choice" must stay byte-compatible with what grove-218 sent — an
+// absent body, `{}` and an empty profile are all the host's own Claude.
+func TestNewChatCarriesTheProfile(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		code    int
+		profile string
+	}{
+		{"no body at all (a grove-218 client)", "", 200, ""},
+		{"empty object", `{}`, 200, ""},
+		{"explicit default", `{"profile":""}`, 200, ""},
+		{"a named profile", `{"profile":"openrouter-glm"}`, 200, "openrouter-glm"},
+		// DisallowUnknownFields, same as /send and /keys: a typo'd key on
+		// THIS route would otherwise spawn on the wrong backend silently.
+		{"unknown field", `{"prof":"openrouter-glm"}`, 400, ""},
+		{"not json", `nope`, 400, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := &fakeBackend{newSession: "grove-chat-unbrewed-2"}
+			w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", c.body)
+			if w.Code != c.code {
+				t.Fatalf("status %d, want %d (%s)", w.Code, c.code, w.Body)
+			}
+			if b.spawnProfile != c.profile {
+				t.Fatalf("spawned on profile %q, want %q", b.spawnProfile, c.profile)
+			}
+			if c.code != 200 && b.spawned != "" {
+				t.Fatalf("a refused body still spawned a chat in %q", b.spawned)
+			}
+		})
+	}
+}
+
+// An unknown profile is the CLI's own refusal, verbatim and with a 409 —
+// never a quiet fall-back to the default lane.
+func TestUnknownProfileIsTheCLIsRefusal(t *testing.T) {
+	b := &fakeBackend{spawnErr: fmt.Errorf(`unknown model profile "nope" (configured: kimi, openrouter-glm)`)}
+	w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", `{"profile":"nope"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `unknown model profile \"nope\" (configured: kimi, openrouter-glm)`) {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestProfiles(t *testing.T) {
+	// N profiles: the sorted names, in the contract envelope.
+	b := &fakeBackend{profiles: []string{"kimi", "openrouter-glm"}}
+	w := get(t, chatweb.NewServer(b), "/api/profiles")
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Version  int      `json:"schema_version"`
+		Profiles []string `json:"profiles"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", w.Body, err)
+	}
+	if got.Version != 1 || len(got.Profiles) != 2 || got.Profiles[0] != "kimi" || got.Profiles[1] != "openrouter-glm" {
+		t.Fatalf("got %+v", got)
+	}
+	// Zero profiles is [] and a 200 — the phone renders no picker, and the
+	// spawn button keeps behaving exactly as it did before grove-225.
+	w = get(t, chatweb.NewServer(&fakeBackend{}), "/api/profiles")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"profiles":[]`) {
+		t.Fatalf("empty: %d %s", w.Code, w.Body)
+	}
+	// Read-only route: a POST cannot reach it.
+	if w = post(t, chatweb.NewServer(&fakeBackend{}), "/api/profiles", `{}`); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/profiles = %d, want 405", w.Code)
 	}
 }
 

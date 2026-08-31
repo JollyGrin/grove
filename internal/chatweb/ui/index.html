@@ -108,6 +108,22 @@ body.picker #keys { display: flex; }
 #why { font-size: 12px; color: var(--dimmer); padding: 4px 2px; overflow-wrap: anywhere; }
 #resume { width: 100%; border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 11px; margin-top: 6px; }
 .busy { opacity: .5; pointer-events: none; }
+
+/* ---- profile sheet (grove-225) ----
+   A bottom sheet rather than a menu: on a phone the reachable third of the
+   screen is the bottom, and this is the one choice here that spends money
+   on the wrong backend when it is mis-tapped. It exists only when the host
+   has model profiles — zero profiles renders no sheet at all. */
+#sheet { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; z-index: 10; }
+#sheet[hidden] { display: none; }
+#sheet-panel {
+  width: 100%; max-height: 80%; overflow-y: auto;
+  background: var(--surface-alt); border-top: 1px solid var(--border-bright);
+  border-radius: 14px 14px 0 0; padding: 14px 12px calc(14px + var(--pad));
+}
+#sheet-panel .sheet-title { font-size: 12px; color: var(--dim); padding: 0 2px 10px; }
+#sheet-panel .row { margin-bottom: 8px; }
+#sheet-panel .cancel { width: 100%; color: var(--dimmer); padding: 10px; }
 </style>
 </head>
 <body>
@@ -132,6 +148,7 @@ body.picker #keys { display: flex; }
     <button id="resume" hidden>revive this chat</button>
   </footer>
 </div>
+<div id="sheet" hidden><div id="sheet-panel"></div></div>
 <script src="marked.min.js"></script>
 <script src="app.js"></script>
 </body>

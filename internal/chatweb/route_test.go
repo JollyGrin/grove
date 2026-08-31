@@ -20,6 +20,8 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/grove-chat-unbrewed-1/keys", true, chatweb.RouteKeys, "grove-chat-unbrewed-1", "POST"},
 		{"/api/chats/eeeb1234/resume", true, chatweb.RouteResume, "eeeb1234", "POST"},
 		{"/api/workspaces/unbrewed/new", true, chatweb.RouteNew, "unbrewed", "POST"},
+		// grove-225: the one route added to the closed table, and a READ.
+		{"/api/profiles", true, chatweb.RouteProfiles, "", "GET"},
 
 		// Not the API: the embedded UI's files.
 		{"/", false, "", "", ""},
@@ -34,6 +36,9 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/x/y/z", true, "", "", ""},
 		{"/api/workspaces/unbrewed", true, "", "", ""},
 		{"/api/workspaces//new", true, "", "", ""},
+		{"/api/profiles/", true, "", "", ""},
+		{"/api/profiles/openrouter-glm", true, "", "", ""},
+		{"/api/workspaces/unbrewed/profiles", true, "", "", ""},
 
 		// The scope boundary, asserted rather than described: nothing that
 		// finishes a task, deletes a worktree or mutates a backend has a

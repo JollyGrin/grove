@@ -15,7 +15,7 @@
 'use strict';
 
 var el = function (id) { return document.getElementById(id); };
-var view = { chats: [], loaded: false, es: null, maxSeq: 0, addr: null };
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null };
 
 /* ---------------- transport ---------------- */
 
@@ -50,6 +50,19 @@ function loadChats() {
     view.chats = j.chats || [];
     view.loaded = true;
     return view.chats;
+  });
+}
+
+/* The host's model profiles (grove-225). Garnish, like the picker scrape:
+ * a host with none configured answers [] and the page then shows no sheet
+ * at all, so a FAILED fetch degrades to the same place — `+ new chat`
+ * spawns on the host default, exactly as it did before this existed. A
+ * broken lane list must never be a broken new-chat button. */
+function loadProfiles() {
+  return api('/api/profiles').then(function (j) {
+    view.profiles = j.profiles || [];
+  }, function () {
+    view.profiles = [];
   });
 }
 
@@ -148,18 +161,15 @@ function screenWorkspace(label) {
 
   var add = h('button', 'row new');
   add.append(h('div', 'title', '+ new chat'));
-  add.append(h('div', 'meta', 'spawns grove-chat-' + label + '-<n> and opens it'));
+  add.append(h('div', 'meta', view.profiles.length
+    ? 'spawns grove-chat-' + label + '-<n> on a backend you pick'
+    : 'spawns grove-chat-' + label + '-<n> and opens it'));
+  /* With profiles configured the choice is always SHOWN, never inferred —
+   * the desk's own rule (grove-105: `)` opens the picker even for a lone
+   * profile). Zero profiles: no sheet, straight to the host default. */
   add.onclick = function () {
-    add.classList.add('busy');
-    add.querySelector('.title').textContent = 'starting a chat…';
-    api('/api/workspaces/' + encodeURIComponent(label) + '/new', {})
-      .then(function (j) {
-        return loadChats().then(function () {
-          location.hash = j.session ? '#/c/' + encodeURIComponent(j.session) : '#/w/' + encodeURIComponent(label);
-          if (!j.session) render();
-        });
-      })
-      .catch(function (e) { render(); showError(e); });
+    if (view.profiles.length) return openProfileSheet(label, add);
+    spawnChat(label, '', add);
   };
   main.append(add);
 
@@ -180,6 +190,60 @@ function screenWorkspace(label) {
     main.append(b);
   });
 }
+
+/* spawnChat is the one place `+ new chat` reaches the server, whichever
+ * row was tapped. An empty profile sends NO profile key at all, so the
+ * request is byte-identical to the one grove-218 sent and the host spawns
+ * on its own Claude. */
+function spawnChat(label, profile, add) {
+  add.classList.add('busy');
+  add.querySelector('.title').textContent = 'starting a chat…';
+  var body = {};
+  if (profile) body.profile = profile;
+  return api('/api/workspaces/' + encodeURIComponent(label) + '/new', body)
+    .then(function (j) {
+      return loadChats().then(function () {
+        location.hash = j.session ? '#/c/' + encodeURIComponent(j.session) : '#/w/' + encodeURIComponent(label);
+        if (!j.session) render();
+      });
+    })
+    .catch(function (e) { render(); showError(e); });
+}
+
+/* The profile sheet: the host default first, then one row per configured
+ * profile, in the order the server sent them (sorted there, not here — the
+ * server decides, the page renders). The names are the ONLY thing the page
+ * knows about a profile; what backend each one dials stays on the host. */
+function openProfileSheet(label, add) {
+  var panel = el('sheet-panel');
+  panel.textContent = '';
+  panel.append(h('div', 'sheet-title', 'new chat in ' + label + ' — on which backend?'));
+  var pick = function (profile) {
+    return function () { closeSheet(); spawnChat(label, profile, add); };
+  };
+  var host = h('button', 'row');
+  host.append(h('div', 'title', 'Claude (host default)'));
+  host.append(h('div', 'meta', 'the operator’s own Claude sub'));
+  host.onclick = pick('');
+  panel.append(host);
+  view.profiles.forEach(function (name) {
+    var b = h('button', 'row');
+    b.append(h('div', 'title', name));
+    b.append(h('div', 'meta', 'model profile'));
+    b.onclick = pick(name);
+    panel.append(b);
+  });
+  var cancel = h('button', 'cancel', 'cancel');
+  cancel.onclick = closeSheet;
+  panel.append(cancel);
+  var sheet = el('sheet');
+  /* Tapping the dimmed backdrop dismisses it — the sheet spends money when
+   * it is answered, so backing out must be the easiest thing on screen. */
+  sheet.onclick = function (ev) { if (ev.target === sheet) closeSheet(); };
+  sheet.hidden = false;
+}
+
+function closeSheet() { el('sheet').hidden = true; }
 
 /* ---------------- screen 3: one chat ---------------- */
 
@@ -386,6 +450,7 @@ function renderKeys(p) {
 
 function render() {
   closeStream();
+  closeSheet();
   var parts = (location.hash || '#/').slice(1).split('/');
   if (parts[1] === 'w' && parts[2]) return screenWorkspace(decodeURIComponent(parts[2]));
   if (parts[1] === 'c' && parts[2]) return screenChat(decodeURIComponent(parts[2]));
@@ -393,7 +458,9 @@ function render() {
 }
 
 function refresh() {
-  return loadChats().then(render, function (e) { render(); showError(e); });
+  /* Profiles ride along with the chat list and never block it: the picker
+   * is garnish, the chats are the app. */
+  return loadProfiles().then(loadChats).then(render, function (e) { render(); showError(e); });
 }
 
 window.addEventListener('hashchange', render);

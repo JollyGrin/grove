@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/chatweb"
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/tmux"
 )
 
@@ -173,8 +175,37 @@ func (chatBackend) Picker(target string) chatweb.Picker {
 	return chatweb.DetectPicker(capture)
 }
 
-func (chatBackend) NewChat(label string) (string, error) {
-	return spawnAndName(label, chatSpawnReq{Label: label})
+// NewChat is `+ New chat` on the phone. profile is a model-profile name
+// ("" = the operator's own Claude), and it goes into the SAME chatSpawnReq
+// the desk's `gv orchestrator new --profile` fills — so the phone gets the
+// profiled spawn path unchanged, including its refusals: an unknown name
+// dies in chatSpawnPlan's ResolveProfile before a dir, a session or an
+// event exists (grove-225).
+func (chatBackend) NewChat(label, profile string) (string, error) {
+	return spawnAndName(label, chatSpawnReq{Label: label, Profile: profile})
+}
+
+// Profiles lists the model profiles this machine has configured, on the
+// cockpit `)` hotkey's own semantics (ResolveOrchestratorProfile): sorted
+// names, and nothing at all when none are configured — the phone then
+// shows no picker and `+ New chat` behaves exactly as it did before.
+//
+// A machine with NO config file has no profiles, which is an empty picker
+// and not a fault: `gv chat serve` is runnable from anywhere, and a 500 on
+// a garnish route would be a broken button on a working server.
+func (chatBackend) Profiles() ([]string, error) {
+	cfg, err := loadCfg()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	names, action := cfg.ResolveOrchestratorProfile()
+	if action != config.ProfilePick {
+		return nil, nil
+	}
+	return names, nil
 }
 
 // Resume revives an archived chat (grove-217). The target names a row; the

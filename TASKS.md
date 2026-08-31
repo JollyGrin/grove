@@ -137,6 +137,35 @@
       audit → park → `park --chats`, and asserts the colliding `chat-app`
       cockpit survives the reap.
 
+- [x] Profile picker for phone-spawned chats (grove-225, 2026-08-31): the
+      phone could only spawn on the host's default lane — `+ new chat`
+      POSTed an empty body and `chatSpawnReq.Profile` stayed "" — while the
+      desk has had profiled spawns since grove-36/41/105. One additive
+      route on the closed table, `GET /api/profiles`, lists the host's
+      configured profiles on `ResolveOrchestratorProfile`'s own semantics
+      (sorted, **names only**: a profile's `base_url` and auth env var stay
+      on the host, since the page leaves the house), and
+      `POST /api/workspaces/<l>/new` takes an **optional** `{"profile"}` —
+      an absent body, `{}` and `{"profile":""}` are all the byte-compatible
+      grove-218 spawn, so an older client keeps working. The name travels
+      into the same `chatSpawnReq` the CLI fills, which means the refusals
+      come for free and unchanged: an unknown profile is `cfg.ResolveProfile`'s
+      own words with a 409, spawning nothing, and `e2e/chat.sh` proves that
+      text is byte-identical to `gv orchestrator new --profile <bad>`
+      rather than asserting it by eye. Never a quiet fallback to the
+      default lane — an operator would find out which backend billed them
+      a day later. `DisallowUnknownFields` on the body for the same reason:
+      a typo'd key is a 400, not a silent spawn on the wrong backend. The
+      UI is a bottom sheet (the reachable third of a phone screen) with
+      "Claude (host default)" first, and it exists **only** when the list
+      is non-empty — zero profiles renders no sheet and `+ new chat`
+      behaves exactly as before, which is also where a failed
+      `/api/profiles` fetch degrades to: the lane list is garnish, the
+      spawn button is not. Table tests for the route parse and the body
+      decode (present/absent/empty/unknown-field), e2e for the wiring —
+      a profiled phone spawn lands in the profile's own cwd inside its
+      backend wrapper.
+
 - [x] `gv chat serve` — the phone UI (grove-218, 2026-08-31): train 4/4
       of `gv chat` (design §6–8), and grove's **first HTTP listener** (it
       used net/http as a client only). One `net/http` server plus one
