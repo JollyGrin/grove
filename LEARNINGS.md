@@ -406,6 +406,27 @@
 
 ## Go / CLI
 
+- **2026-09-01 · A workspace brain can be perfectly in sync with the seed
+  and still be wrong** (grove-234). The field incident looked like brain
+  drift and was not: the workspace's stamp (`6794db4eb15a`) matched the
+  embedded seed byte for byte — the doc was current, the SEED was stale.
+  `orchestrator/CLAUDE.md` is hand-maintained and nothing ties it to the
+  verbs it documents, so `--host` (grove-176, nine verbs by grove-191) and
+  `--profile` (grove-36) shipped without ever reaching it; grove-189 DID
+  update the seed, which is the proof this is a remembered step, not an
+  enforced one. Two failures fell out of one dispatch: the chat concluded
+  "`gv grab` has no host flag" (it does — `internal/remote/remote.go`
+  intercepts `--host` BEFORE the verb's flagset, so it is absent from
+  every `-h` output, and a doc that isn't written is the only place to
+  learn it) and dispatched by raw `ssh`; and it grabbed on a per-token
+  `openrouter-*` lane while the flat-rate `zai-plan-*` twin was
+  configured, because the lane distinction lived only in config comments
+  and a repo-tracked skill marked "do NOT load for ordinary dispatch" —
+  neither of which exists in another workspace. Rule: a flag that changes
+  where work runs or who pays for it is not shipped until the seed says
+  so; grove-190's stamp answers "is this brain behind the seed?", never
+  "is the seed behind the binary?" (tripwire: #235).
+
 - **2026-08-31 · A zero `time.Time` crosses JSON as year 0001 — which is
   TRUTHY in JavaScript, so `a || b` is not a fallback** (grove-228). A
   Go time field with no value marshals to `"0001-01-01T00:00:00Z"`, a

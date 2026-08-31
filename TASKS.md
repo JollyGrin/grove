@@ -9,6 +9,29 @@
 
 ## Now (2026-07-12)
 
+- [x] Seed brain learned `--host` and billing lanes (grove-234,
+      2026-09-01): the embedded orchestrator seed had **zero** occurrences
+      of `--host` and said nothing about model-profile lanes, though
+      grove-176 shipped `gv grab --host`, grove-191 extended it to nine
+      verbs (+ `orchestrator new`), and grove-36 shipped `--profile`. A
+      freshly-`gv init`'d workspace whose brain stamp matched the seed
+      EXACTLY still dispatched by raw `ssh` (§9 presented `gv handoff` as
+      the only route to another host, and handoff correctly refuses a task
+      with no PR body) and grabbed on the pay-per-token
+      `openrouter-glm-flash` lane while the flat-rate `zai-plan-glm-flash`
+      lane was configured with its key present. Content-only fix to
+      `orchestrator/CLAUDE.md`: the tools block gains `gv grab --host`
+      (with the note that `--host` is intercepted before each verb's
+      flagset, so it never appears in `-h` output) and `gv grab
+      --profile`; duty 3 gains a **Remote dispatch** paragraph (grab
+      `--host` starts fresh work; handoff MOVES running work; the remote
+      resolves `--repo` against its OWN config) and a **Lanes cost
+      different money** paragraph (`zai-plan-*` flat-rate vs
+      `openrouter-*` per-token, same model under two prefixes, name the
+      lane when proposing a grab); duty 9 is rescoped to moving running
+      work. The stamp moves by design. Tripwire is #235; propagation to
+      already-seeded workspaces is #236.
+
 - [x] model-lanes skill: executable snippets now actually execute
       (grove-202, 2026-08-29): the skill tells the orchestrator to run its
       snippets verbatim, and four defects made that produce wrong routing

@@ -19,6 +19,14 @@ gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
 gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
 gv grab DEV-X --manual    # set up for the operator to drive by hand
+gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
+                           #   (hosts: in config). grab/ls/adopt/handoff/answer/
+                           #   nudge/diff/pause/untrack (and `orchestrator new`)
+                           #   all take --host; it is NOT in any verb's own `-h`
+                           #   output (intercepted before the flagset) — trust
+                           #   this list, not --help
+gv grab DEV-X --profile P # run this worker on a model profile lane (see
+                           #   Dispatch below — lanes differ in who pays)
 gv answer DEV-X "..."     # relay an answer to a waiting worker
 gv nudge DEV-X "..."      # follow-up prompt to any worker
 gv audit --json           # cross-check every task vs reality (pure read):
@@ -127,6 +135,24 @@ lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
    hard one on Opus), pass `--model <id>` — it pins that worker only and
    needs no config edit or revert. Never hand-edit a repo's `claude:` line
    to flip models.
+
+   **Remote dispatch.** To start fresh work on another host, pass `--host
+   <name>` to the grab — `gv grab DEV-X --repo Y --host <host>`. Do NOT reach
+   for `gv handoff` to do this: handoff MOVES an already-running task and
+   verifies the PR body carries a real handoff, so it refuses a task with no
+   commits, by design. Host names come from `hosts:` in config — never invent
+   one. The remote host resolves `--repo` against its OWN config, so name the
+   repo as that host knows it.
+
+   **Lanes cost different money.** `--profile` picks a billing lane, not just a
+   model. `zai-plan-*` lanes are flat-rate subscription (no marginal cost);
+   `openrouter-*` lanes bill per token. Two lanes can run the identical model
+   under different prefixes — `zai-plan-glm-flash` and `openrouter-glm-flash`
+   are both GLM 5.3 Flash. Never route to an `openrouter-*` lane while a
+   `zai-plan-*` lane can do the job; the per-token lane is for overflow when the
+   flat plan is capped. When you propose a grab with `--profile`, say which lane
+   it is and why in the same line.
+
    **Dispatch-and-dismiss (fire-and-forget).** ONLY when the operator's message
    this turn explicitly tells you to close/dismiss/exit this chat when done
    (e.g. "investigate DEV-42, add detail if needed, grab it, then close this
@@ -225,9 +251,11 @@ lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
    also the whole reason step 1 comes first: the handoff in the PR body is
    the state that survives either outcome.
 
-9. **Remote overflow** — when this machine is the bottleneck (too many
-   live workers, a laptop about to close, a long task nobody needs to
-   watch), a task can MOVE to another grove host instead of being parked:
+9. **Remote overflow** — gv handoff MOVES a task that is already running
+   (to start fresh work remotely, use `gv grab --host` — see duty 3). When this
+   machine is the bottleneck (too many live workers, a laptop about to close, a
+   long task nobody needs to watch), a running task can MOVE to another grove
+   host instead of being parked:
 
        gv handoff DEV-X --to <host>     # send it there
        gv handoff DEV-X --from <host>   # bring it back here
