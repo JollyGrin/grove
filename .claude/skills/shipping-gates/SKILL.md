@@ -74,6 +74,16 @@ widths — grove-79's panic lived only at heights the tests never visited.
   binary already stamped `dev` escapes once with
   `gv update --yes --force`, then plain `--yes` forever after.
 
+## Verb surface → the orchestrator seed
+
+A new verb, flag, or lane that an orchestrator would ever be expected to use
+is not shipped until `orchestrator/CLAUDE.md` teaches it. The seed is the only
+doc every workspace's brain is born from, and a workspace brain can be
+perfectly in sync with the seed and still be wrong — sync is not currency.
+`orchestrator/seed_test.go` enforces the `--host` verb set mechanically;
+everything else is on you. Grep the seed for the flag you just added before
+you open the PR.
+
 ## Merging and cleanup
 
 - Verify merges via `gh pr view --json state,mergedAt`, **never git

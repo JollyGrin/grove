@@ -66,6 +66,17 @@
       --force` — instead of the one thing (`go install`) that re-stamps
       the binary `dev` and guarantees the next refusal too. Doc comment
       rewritten to state the rule rather than the old inverted premise.
+
+- [x] Tripwire: `remote.Supported` tied to the orchestrator seed
+      (grove-235, 2026-09-01): `orchestrator/seed_test.go` fails the moment
+      `internal/remote.Supported`'s verb set drifts from a golden list of
+      verbs the seed is known to cover, naming the offending verb and what
+      to edit. Two more tests guard the #234 content (`--host` taught >= 4
+      times + the two key phrases; `zai-plan`/`openrouter-` each >= 2
+      times) against silent deletion. `.claude/skills/shipping-gates/
+      SKILL.md` gained a "Verb surface → the orchestrator seed" section:
+      a new verb/flag/lane isn't shipped until the seed teaches it: sync
+      with the seed is not the same as being correct.
 - [x] model-lanes skill: executable snippets now actually execute
       (grove-202, 2026-08-29): the skill tells the orchestrator to run its
       snippets verbatim, and four defects made that produce wrong routing
