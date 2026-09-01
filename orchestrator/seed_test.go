@@ -53,6 +53,12 @@ func TestSeedTeachesHostFlag(t *testing.T) {
 			"running` warning that steers workers away from misusing gv handoff for remote " +
 			"dispatch — restore it in orchestrator/CLAUDE.md's duty 3 Dispatch section")
 	}
+	if !strings.Contains(ClaudeMd, "BEFORE the ticket") {
+		t.Error("orchestrator/CLAUDE.md is missing the relay-verb `BEFORE the ticket` " +
+			"position rule (answer/nudge take --host only before the ticket; after it, " +
+			"everything is payload) — restore it in orchestrator/CLAUDE.md's tools block " +
+			"--host entry (grove-242)")
+	}
 }
 
 // TestSeedTeachesLaneBilling guards the #234 lane-billing paragraph

@@ -87,6 +87,32 @@ func ExtractHostPrefix(args []string) (host string, rest []string) {
 	return host, rest
 }
 
+// PostTicketHostHintText is appended to a relay verb's local "no active
+// task" error when the payload still carries a --host token (grove-242):
+// the signature of `gv nudge grove-236 --host vps "…"`, where the flag
+// landed after the ticket, ExtractHostPrefix never saw it, and the verb
+// ran locally. It names the rule AND the escape — flag-after-ticket is
+// what `gv grab` (full-argv scan) taught, so the hint has to unteach
+// that, not just report the miss.
+const PostTicketHostHintText = `(--host found after the ticket — for answer/nudge it must come BEFORE the ticket: gv nudge --host <h> <task> "..."; anything after the ticket is treated as message text)`
+
+// PostTicketHostHint reports PostTicketHostHintText when args — the relay
+// args AFTER the ticket, i.e. the would-be message text — still carry a
+// token ExtractHost would have recognized (`--host`, `-host`,
+// `--host=…`), and "" otherwise (grove-242). Pure string inspection: the
+// parse itself must not change, because relay free text may legitimately
+// contain `--host` — this only detects the one shape that reads as
+// breakage, a flag swallowed by a local ticket miss.
+func PostTicketHostHint(args []string) string {
+	for _, a := range args {
+		if a == "--host" || a == "-host" ||
+			strings.HasPrefix(a, "--host=") || strings.HasPrefix(a, "-host=") {
+			return PostTicketHostHintText
+		}
+	}
+	return ""
+}
+
 // NewOpID mints a client op id for an idempotent relayed mutation
 // (grove-186): 16 bytes of crypto/rand as lowercase hex (32 chars).
 // go.mod deliberately has no uuid dependency. The id rides the ssh hop as

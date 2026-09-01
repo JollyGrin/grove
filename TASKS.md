@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] Relay verbs teach the `--host`-after-the-ticket trap in their local
+      error (grove-242, 2026-09-01): `gv nudge grove-N --host H "..."` ran
+      LOCALLY and failed with a bare `no active task grove-N — see gv ls`
+      — the flag was silently swallowed into message text and nothing
+      hinted why. The rule is deliberate (answer/nudge parse `--host` in
+      leading-flag position only, so free text may contain `--host`;
+      `grab` scans the whole argv) and the parse is NOT changed: when the
+      local miss leaves a literal `--host` token in the payload,
+      `remote.PostTicketHostHint` appends the position rule to the error
+      (it must come BEFORE the ticket; everything after it is payload),
+      the seed's tools block gains the same rule, and the #235 seed
+      tripwire asserts the phrase stays.
+
 - [x] release.yml releases on `orchestrator/**` (grove-241, 2026-09-01):
       the auto-release trigger only listed `cmd/**`, `internal/**`,
       `go.mod`, `go.sum` — but `orchestrator/CLAUDE.md` is embedded in the

@@ -406,6 +406,24 @@
 
 ## Go / CLI
 
+- **2026-09-01 · A parse-rule split between verbs is indistinguishable
+  from breakage until it is taught** (grove-242). `gv nudge grove-236
+  --host groveremote "rebase please..."` ran LOCALLY and failed
+  `no active task grove-236 — see gv ls`: the flag was never parsed and
+  nothing hinted why. The rule is deliberate, not a bug — relay verbs
+  parse `--host` prefix-only by design (payload may legitimately contain
+  `--host`, so `ExtractHostPrefix` stops at the first non-flag arg, the
+  ticket) while `grab` scans the whole argv (`ExtractHost`, any position
+  works). But the orchestrator had learned flag-order from the seed's own
+  tools block — `gv grab grove-N --host H`, flag-after-ticket — and
+  generalized it to a verb where the flag is silently swallowed into
+  message text. Fix is teaching, not parsing: the local "no active task"
+  error appends the position rule when the payload still carries a
+  literal `--host` (pure argv inspection at the call site; the parse is
+  untouched), and the seed's `--host` entry now says for answer/nudge the
+  flag must come BEFORE the ticket. A verb-surface split like this must
+  be taught in the seed or it reads as breakage.
+
 - **2026-09-01 · The release path filter is part of the "shipped"
   definition** (grove-241). `release.yml` triggers on `cmd/**`,
   `internal/**`, `go.mod`, `go.sum` — and not on `orchestrator/**`, even
