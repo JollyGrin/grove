@@ -406,6 +406,22 @@
 
 ## Go / CLI
 
+- **2026-09-01 · The release path filter is part of the "shipped"
+  definition** (grove-241). `release.yml` triggers on `cmd/**`,
+  `internal/**`, `go.mod`, `go.sum` — and not on `orchestrator/**`, even
+  though `orchestrator/CLAUDE.md` is embedded in the binary
+  (`//go:embed`), so a seed-only merge changes what every `gv init`
+  ships and what `gv brains` compares against yet cuts no release: the
+  fixed seed exists on main and reaches no machine until an unrelated Go
+  change happens to land. Field-proven 2026-09-01 on the #234 train —
+  PR #238 (seed content only) merged 12:10:51Z with no Release run, and
+  had it merged alone, `gv brains` everywhere would have reported every
+  workspace current against a seed the binary never got. An embedded
+  asset's directory missing from `on.push.paths` means
+  merged-but-never-shipped, invisible until something else releases; the
+  guard is a test (`orchestrator/release_test.go`) that reads the
+  workflow file and fails without the line.
+
 - **2026-09-01 · A workspace brain can be perfectly in sync with the seed
   and still be wrong** (grove-234). The field incident looked like brain
   drift and was not: the workspace's stamp (`6794db4eb15a`) matched the
