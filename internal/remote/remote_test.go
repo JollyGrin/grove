@@ -51,6 +51,37 @@ func TestExtractHostPrefix(t *testing.T) {
 	}
 }
 
+// TestPostTicketHostHint (grove-242): the hint fires only when the args
+// AFTER the ticket carry a token ExtractHost would have recognized — the
+// signature of a relay flag swallowed into payload by the prefix rule —
+// and stays out of every other miss, including text that merely mentions
+// --host without the flag shape.
+func TestPostTicketHostHint(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want bool
+	}{
+		{"the field-evidence shape", []string{"--host", "vps", "rebase please"}, true},
+		{"= form", []string{"--host=vps"}, true},
+		{"single-dash form", []string{"-host", "vps"}, true},
+		{"trailing bare --host", []string{"try", "--host"}, true},
+		{"plain payload", []string{"rebase please"}, false},
+		{"--hostname is not the flag", []string{"try", "--hostname"}, false},
+		{"--host-like word is not the flag", []string{"see", "--hostel", "docs"}, false},
+		{"no payload at all", nil, false},
+	}
+	for _, c := range cases {
+		got := PostTicketHostHint(c.in)
+		if c.want && got != PostTicketHostHintText {
+			t.Errorf("%s: PostTicketHostHint(%v) = %q, want the hint text", c.name, c.in, got)
+		}
+		if !c.want && got != "" {
+			t.Errorf("%s: PostTicketHostHint(%v) = %q, want \"\"", c.name, c.in, got)
+		}
+	}
+}
+
 func TestArgv(t *testing.T) {
 	h := &config.Host{SSH: "dean@grove-host", GV: "/home/dean/go/bin/gv"}
 	cases := []struct {

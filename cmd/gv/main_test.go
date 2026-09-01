@@ -147,6 +147,46 @@ func TestCmdRelayOpIDDedups(t *testing.T) {
 	}
 }
 
+// TestCmdRelayPostTicketHostHint (grove-242) pins the wiring: a relay
+// verb whose --host landed after the ticket runs LOCALLY and dies on the
+// ticket miss — that error must carry the position rule when the payload
+// still has a --host token, and stay byte-identical to the old miss when
+// it does not. (The helper itself is unit-tested in internal/remote.)
+func TestCmdRelayPostTicketHostHint(t *testing.T) {
+	dir := t.TempDir()
+	oldDir := ambient.stateDir
+	oldWS := ambient.ws
+	ambient.stateDir = dir
+	ambient.ws = nil // findTask takes the legacy global path, like a bare checkout
+	t.Cleanup(func() { ambient.stateDir = oldDir; ambient.ws = oldWS })
+
+	// A live local task so the miss is a genuine miss, not an empty log —
+	// the field evidence had other tasks tracked; the relayed one lives on
+	// the remote host only.
+	if err := state.Append(dir, state.Event{Type: state.EvTaskCreated, Ticket: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := cmdRelay([]string{"gv-242-missing", "--host", "vps", "rebase please"}, false)
+	if err == nil {
+		t.Fatal("relay of an untracked ticket returned nil, want the no-active-task error")
+	}
+	if !strings.Contains(err.Error(), "no active task gv-242-missing") {
+		t.Errorf("error %q missing the ticket miss itself", err)
+	}
+	if !strings.Contains(err.Error(), "BEFORE the ticket") {
+		t.Errorf("error %q missing the post-ticket --host hint", err)
+	}
+
+	err = cmdRelay([]string{"gv-242-missing", "rebase please"}, false)
+	if err == nil {
+		t.Fatal("relay of an untracked ticket returned nil, want the no-active-task error")
+	}
+	if strings.Contains(err.Error(), "BEFORE the ticket") {
+		t.Errorf("error %q grew the hint without a --host in the payload", err)
+	}
+}
+
 // captureStdout swaps os.Stdout for a pipe around f and returns what f
 // printed (cmdRelay's receipts go straight to stdout).
 func captureStdout(t *testing.T, f func()) string {

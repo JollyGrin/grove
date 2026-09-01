@@ -2675,6 +2675,17 @@ func cmdRelay(args []string, isAnswer bool) error {
 	}
 	t, err := findTask(args[0])
 	if err != nil {
+		// grove-242: a --host typed after the ticket never reached the
+		// dispatcher (ExtractHostPrefix stops at the first non-flag arg —
+		// the ticket), so the verb ran locally and the ticket miss reads
+		// as breakage. Inspect the payload for the swallowed flag and
+		// teach the position rule on the way out; the parse itself must
+		// not change, free text may legitimately contain --host.
+		if strings.Contains(err.Error(), "no active task") {
+			if hint := remote.PostTicketHostHint(args[1:]); hint != "" {
+				return fmt.Errorf("%w %s", err, hint)
+			}
+		}
 		return err
 	}
 	if opID != "" {

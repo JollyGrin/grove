@@ -24,7 +24,9 @@ gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   nudge/diff/pause/untrack (and `orchestrator new`)
                            #   all take --host; it is NOT in any verb's own `-h`
                            #   output (intercepted before the flagset) — trust
-                           #   this list, not --help
+                           #   this list, not --help. for answer/nudge the flag
+                           #   must come BEFORE the ticket (everything after the
+                           #   ticket is payload)
 gv grab DEV-X --profile P # run this worker on a model profile lane (see
                            #   Dispatch below — lanes differ in who pays)
 gv answer DEV-X "..."     # relay an answer to a waiting worker
