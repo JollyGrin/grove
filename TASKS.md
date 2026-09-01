@@ -9,6 +9,35 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv update` sweeps every workspace's orchestrator brain (grove-236,
+      2026-09-01): `gv update` swaps in a binary carrying a NEW embedded
+      seed and then says nothing, so every workspace on the box silently
+      keeps running an older brain — grove-190 built the refresh path but
+      it is per-workspace, opt-in and manual, and nothing walks the
+      registry. Measured on the Mac: of four brains, three UNSTAMPED
+      (hand-managed, so the refresh will not even write a `CLAUDE.md.new`
+      without a flag the operator has never typed) and one current. New
+      **`gv brains [--json]`**: a pure read that walks
+      `~/.config/grove/registry.yaml`, plans each root against the seed
+      THIS binary embeds, prints only the workspaces that need attention
+      (`cd <root> && gv init --only orchestrator-md[ --force-…]`) and
+      collapses the rest to `✓ N workspaces current` — it has to stay
+      readable at 11+ workspaces or it gets scrolled past, which is the
+      failure. A registered root that has vanished is a `missing-root`
+      ROW, never an error: one stale entry must not cost the other ten
+      their sweep. `gv update` runs it **only after a real replace** (new
+      `update.Options.Applied`), so a routine `gv update --yes` on a
+      current box stays silent, and never fails the update. It shells out
+      to the REPLACED binary rather than sweeping in-process — this
+      process still holds the OLD seed, so an in-process sweep would
+      cheerfully report every workspace current against the seed just
+      superseded. Cross-machine falls out for free: `gv update --yes` over
+      ssh reads that host's own registry. Report-only throughout —
+      grove-190's invariant is untouched, grove never overwrites a brain.
+      Planning is pure (`bootstrap.PlanSweep` over `BrainProbe`s, table
+      tested); `e2e/brains.sh` byte-compares both brains before and after
+      and fails on any `CLAUDE.md.new`.
+
 - [x] Seed brain learned `--host` and billing lanes (grove-234,
       2026-09-01): the embedded orchestrator seed had **zero** occurrences
       of `--host` and said nothing about model-profile lanes, though

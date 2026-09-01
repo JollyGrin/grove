@@ -189,6 +189,24 @@ Updating the host later: `gv update` is a GitHub-releases self-updater
 and errors on a private source install — use
 `ssh <host> 'cd ~/git/grove && git pull --ff-only && go install ./cmd/gv'`.
 
+**After `gv update --yes` on a host, read the brain sweep it prints and
+refresh what it names** (grove-236). A new binary carries a new
+orchestrator seed, so every workspace on that host is suddenly running an
+older brain; the sweep runs only when the update actually replaced the
+binary and lists each workspace that is behind with the exact command —
+run from that workspace's root, over the same ssh hop:
+
+```bash
+ssh <host> 'gv update --yes'                 # the sweep prints at the end
+ssh <host> 'gv brains'                       # or read it any time, pure read
+ssh <host> 'cd <root> && gv init --only orchestrator-md'
+```
+
+The sweep reads the host's OWN `~/.config/grove/registry.yaml`, so
+running it over ssh reports that host's workspaces — there is no
+cross-host push, and nothing is ever overwritten: the refresh drops
+`CLAUDE.md.new` beside the brain for you to diff.
+
 ## Mac side
 
 Add the host to the Mac's config.yaml (#176):

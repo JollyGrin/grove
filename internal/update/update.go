@@ -183,6 +183,11 @@ type Options struct {
 	Target  string                            // "" → resolve the running binary
 	Out     io.Writer                         // "" → os.Stdout
 	Client  *http.Client                      // nil → sane per-call timeouts
+	// Applied, when non-nil, is set to true exactly when the binary was
+	// actually replaced — not on an up-to-date no-op and not on an
+	// aborted confirm. grove-236 hangs the post-update brain sweep off
+	// it so a routine `gv update --yes` on a current box stays quiet.
+	Applied *bool
 }
 
 // Run is the whole gv update flow: fetch latest → decide → confirm →
@@ -239,6 +244,9 @@ func Run(o Options) error {
 		return fmt.Errorf("replaced %s but `version` failed: %v\n%s", target, err, out)
 	}
 	fmt.Fprintf(o.Out, "updated %s\n%s", target, out)
+	if o.Applied != nil {
+		*o.Applied = true
+	}
 	return nil
 }
 
