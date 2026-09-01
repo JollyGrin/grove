@@ -31,7 +31,12 @@
       lane when proposing a grab); duty 9 is rescoped to moving running
       work. The stamp moves by design. Tripwire is #235; propagation to
       already-seeded workspaces is #236.
-
+- [x] `gv update`'s dev-build refusal stops telling the operator to
+      `go install ./cmd/gv` (grove-233, 2026-09-01): `ErrDevBuild` now
+      names the escape hatch that actually works — `gv update --yes
+      --force` — instead of the one thing (`go install`) that re-stamps
+      the binary `dev` and guarantees the next refusal too. Doc comment
+      rewritten to state the rule rather than the old inverted premise.
 - [x] model-lanes skill: executable snippets now actually execute
       (grove-202, 2026-08-29): the skill tells the orchestrator to run its
       snippets verbatim, and four defects made that produce wrong routing

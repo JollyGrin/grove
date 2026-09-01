@@ -27,9 +27,11 @@ const (
 	DefaultRepo = "JollyGrin/grove"
 )
 
-// ErrDevBuild refuses to overwrite a source build: `go install` owns
-// that binary, not the release pipeline. --force overrides.
-var ErrDevBuild = errors.New("built from source — use `go install ./cmd/gv` (or --force to replace with the latest release)")
+// ErrDevBuild refuses to silently overwrite a source build — but the way
+// out is `--force`, not `go install`: a source build is what MAKES this
+// refusal fire, so re-installing from source only guarantees it fires
+// again (grove-233). --force overrides.
+var ErrDevBuild = errors.New("built from source — `gv update --yes --force` replaces it with the latest release (a plain `go install` re-stamps it dev and this refusal returns)")
 
 // Release is the subset of the GitHub release JSON gv update reads.
 type Release struct {
