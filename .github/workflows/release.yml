@@ -12,6 +12,7 @@ on:
     paths:
       - 'cmd/**'
       - 'internal/**'
+      - 'orchestrator/**'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/release.yml'

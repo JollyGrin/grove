@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] release.yml releases on `orchestrator/**` (grove-241, 2026-09-01):
+      the auto-release trigger only listed `cmd/**`, `internal/**`,
+      `go.mod`, `go.sum` — but `orchestrator/CLAUDE.md` is embedded in the
+      binary (`orchestrator/embed.go`, `//go:embed`), so a seed-only merge
+      changed what every `gv init` ships and what `gv brains` compares
+      against yet cut no release. Demonstrated on the #234 train: PR #238
+      (seed content) merged 2026-09-01 12:10:51Z with no Release run; the
+      train only shipped because #237/#239 touched `internal/` minutes
+      later. One path line fixes it; `orchestrator/release_test.go`
+      tripwires the line so it cannot be dropped again.
+
 - [x] `gv update` sweeps every workspace's orchestrator brain (grove-236,
       2026-09-01): `gv update` swaps in a binary carrying a NEW embedded
       seed and then says nothing, so every workspace on the box silently
