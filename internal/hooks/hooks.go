@@ -71,6 +71,9 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 	if task == nil {
 		return nil // no fleet tracks this cwd (manual session, orchestrator, ovs worktree) — stay silent
 	}
+	if event != "session-start" && foreignSession(task, p.SessionID) {
+		return nil // another session at the worker's cwd — not the worker; stay silent (grove-250)
+	}
 
 	switch event {
 	case "session-start":
@@ -96,6 +99,7 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 			Data: map[string]string{
 				"status": status, "sentinel": sentinel,
 				"question": question, "message": message,
+				"session_id": p.SessionID,
 			},
 		}); err != nil {
 			return err
@@ -121,7 +125,7 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		glyphWorker(task, state.Glyph(state.AgentWaiting, ""))
 		_ = state.Append(stateDir, state.Event{
 			Type: state.EvNotification, Ticket: task.Ticket,
-			Data: map[string]string{"message": p.Message},
+			Data: map[string]string{"message": p.Message, "session_id": p.SessionID},
 		})
 		notify(task.Ticket+" needs input", p.Message)
 		pushNtfy(task.Ticket+" needs input", p.Message, "high", "bell")
@@ -131,9 +135,32 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		glyphWorker(task, state.Glyph(state.AgentDead, ""))
 		return state.Append(stateDir, state.Event{
 			Type: state.EvSessionEnded, Ticket: task.Ticket,
+			Data: map[string]string{"session_id": p.SessionID},
 		})
 	}
 	return fmt.Errorf("unknown hook event %q", event)
+}
+
+// foreignSession reports whether a payload at a tracked worktree's cwd
+// came from a session OTHER than the task's recorded worker (grove-250).
+//
+// Hooks fire from every Claude session in the profile and Claude Code's
+// hook cwd follows the Bash tool's persistent shell cwd, so one
+// `cd <worktree> && …` in an orchestrator makes its next Stop look like
+// the worker's — verified live 2026-09-02: a worker 30 minutes into a
+// busy turn was stamped `idle` with the orchestrator's chat reply as its
+// last_message, and a stall monitor fired on it. The same mechanism lets
+// a late SessionEnd from a REPLACED process stamp `dead` over the live
+// successor (#148). The cwd match stays the ownership key; the recorded
+// session id is the second lock on the door.
+//
+// Fallback: a task with no recorded id (pre-capture rows, or a worker
+// whose SessionStart was lost) keeps cwd-only attribution — an unknown
+// id must never make a task unreachable. A payload with no id is treated
+// the same way. `session-start` is exempt by the caller: it is how a
+// worker registers (adopt's fresh pickup session carries a NEW id).
+func foreignSession(task *state.Task, sessionID string) bool {
+	return task.SessionID != "" && sessionID != "" && task.SessionID != sessionID
 }
 
 // glyphWorker pushes the worker's live status glyph into its tmux window

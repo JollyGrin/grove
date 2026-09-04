@@ -26,6 +26,25 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-04 · hook attribution is cwd + session id; a Bash `cd` moves
+  the hook cwd** (grove-250; incident on unbrewed 2026-09-02). Hooks live
+  in the profile's global `settings.json`, so EVERY session fires them and
+  the receiver decides ownership — and it decided by cwd alone. Claude
+  Code's hook `cwd` is the Bash tool's persistent shell cwd, not the
+  directory the session launched in, so an orchestrator that ran one
+  `cd <worktree> && …` had its next Stop attributed to that worker:
+  `gv watch` emitted `idle` while the worker was 30 minutes into a busy
+  turn, `gv ls` showed the orchestrator's own chat reply as the worker's
+  `last_message`, and a stall monitor fired a false idle. The payload
+  already carried `session_id` and the task already recorded its worker's
+  (`claude_session_id`, folded from `session_started`); nothing compared
+  them. Now `stop`/`notification`/`session-end` at a tracked cwd are
+  dropped when the ids differ (silent, zero writes); `session-start` is
+  exempt so an adopt's fresh pickup session can still register; a task
+  with no recorded id keeps cwd-only attribution so an unknown id never
+  makes a task unreachable. The brain rule "never `cd` into a tracked
+  worktree from the orchestrator" stays as belt; this is the braces.
+
 - **2026-08-31 · `claude --session-id <uuid>` exists — mint identity, never
   infer it; and a claude holds NO fd on its transcript** (grove-222, fixing
   the grove-215 resolver). Two facts, both verified live. (1) The CLI takes
