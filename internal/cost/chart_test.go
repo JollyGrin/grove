@@ -18,8 +18,8 @@ func TestPoints(t *testing.T) {
 	if len(pts) != 1 {
 		t.Fatalf("points = %d, want 1 (%+v)", len(pts), pts)
 	}
-	if pts[0].USD != 15 { // sonnet output $15/MTok
-		t.Errorf("USD = %v, want 15", pts[0].USD)
+	if pts[0].USD != 10 { // sonnet-5 output $10/MTok
+		t.Errorf("USD = %v, want 10", pts[0].USD)
 	}
 	want := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	if !pts[0].Time.Equal(want) {

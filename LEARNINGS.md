@@ -425,6 +425,29 @@
 
 ## Go / CLI
 
+- **2026-09-04 · A pricing table that silently prices a whole generation
+  at $0 stays invisible for five weeks unless the $0 path is loud**
+  (grove-249). `defaultRates` had no `claude-opus-5` key — `rateFor`'s
+  prefix match only strips a trailing `-<suffix>` and `claude-opus-4` is
+  not a `-`-boundary prefix of `claude-opus-5`, so every Opus 5 worker
+  (213 unbrewed rows, 19 waterhouse, 2 grove) resolved `cost_known:
+  false` and `est_usd: 0`. unbrewed's ledger read July $2,457 → August
+  $13 on unchanged ticket volume (154 tasks in August) — that drop was
+  the pricing gap, not savings, and nobody caught it because `fmtUSD`'s
+  `~$` prefix on unknown-cost rows reads as "approximately", not "this is
+  actually zero and wrong." Separately, `claude-fable-5-1` had no key
+  either but *did* resolve — by accident, riding `claude-fable-5`'s
+  prefix match — and silently used the wrong cache-read rate (10% of
+  input instead of Fable 5.1's actual 2.5%). Fix: add the missing/wrong
+  keys, and make unknowns loud instead of quiet — a `currentGeneration`
+  tripwire test asserts each current model id has an EXACT table entry
+  (not just a resolving `rateFor`), and `gv cost` / `gv cost --analyze`
+  now print an `⚠ unpriced: <model> — N tickets, M turns` footer instead
+  of leaving $0 rows to blend into the totals. Lesson: any code path that
+  can legitimately return "zero, and I don't actually know" must render
+  differently from "zero, confirmed" — a soft prefix marker is not
+  enough to get a human to look.
+
 - **2026-09-01 · A parse-rule split between verbs is indistinguishable
   from breakage until it is taught** (grove-242). `gv nudge grove-236
   --host groveremote "rebase please..."` ran LOCALLY and failed

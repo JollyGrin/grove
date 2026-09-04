@@ -2433,6 +2433,7 @@ func cmdCost(args []string) error {
 
 	cache := cost.NewCache()
 	var rows []costRow
+	var allTots []cost.Totals
 	var doneUSD float64
 	var doneCount, doneTurns int
 	for _, t := range tasks {
@@ -2440,6 +2441,7 @@ func cmdCost(args []string) error {
 		if err != nil || tot.Turns == 0 {
 			continue
 		}
+		allTots = append(allTots, tot)
 		if t.Done {
 			doneCount++
 			doneUSD += tot.USD
@@ -2471,6 +2473,7 @@ func cmdCost(args []string) error {
 	}
 	fmt.Printf("\ndone tasks: %d · est $%.2f total · %d turns  (estimates, not billing)\n",
 		doneCount, doneUSD, doneTurns)
+	printUnpricedFooter(unpricedModels(allTots))
 	return nil
 }
 
@@ -2524,6 +2527,87 @@ type analyzeReport struct {
 	USDPerMergedPR float64            `json:"est_usd_per_merged_pr"`
 	AbandonedUSD   float64            `json:"est_usd_on_abandoned"` // closed-PR tickets: pure waste
 	ByRepoUSD      map[string]float64 `json:"by_repo_est_usd"`
+	// UnpricedModels (grove-249, additive) names every model with
+	// cost_known:false across rows, with ticket/turn counts — the pricing
+	// table gap is loud in the JSON, not just the $0 it silently produced
+	// for five weeks. Always present, empty when every row is priced.
+	UnpricedModels []unpricedModel `json:"unpriced_models"`
+}
+
+// unpricedModel is one row of the unpriced-models footer/JSON field: a
+// model with no pricing table entry, and how much fleet activity rode it
+// unpriced — the loud-unknowns signal for grove-249.
+type unpricedModel struct {
+	Model   string `json:"model"`
+	Tickets int    `json:"tickets"`
+	Turns   int    `json:"turns"`
+}
+
+// unpricedModels aggregates cost_known:false model subtotals across every
+// ticket's Totals into per-model ticket/turn counts, sorted by model name
+// for stable output. Always returns a non-nil (possibly empty) slice so
+// the JSON field is `[]`, never `null`, when every row is priced.
+func unpricedModels(rows []cost.Totals) []unpricedModel {
+	type acc struct{ tickets, turns int }
+	byModel := map[string]*acc{}
+	var order []string
+	for _, tot := range rows {
+		for _, m := range tot.Models {
+			if m.CostKnown {
+				continue
+			}
+			a, ok := byModel[m.Model]
+			if !ok {
+				a = &acc{}
+				byModel[m.Model] = a
+				order = append(order, m.Model)
+			}
+			a.tickets++
+			a.turns += m.Turns
+		}
+	}
+	sort.Strings(order)
+	out := make([]unpricedModel, 0, len(order))
+	for _, model := range order {
+		a := byModel[model]
+		out = append(out, unpricedModel{Model: model, Tickets: a.tickets, Turns: a.turns})
+	}
+	return out
+}
+
+// printUnpricedFooter prints one "⚠ unpriced:" line per model with no
+// pricing table entry — the loud-unknowns footer for `gv cost` and
+// `gv cost --analyze` human output (grove-249). Prints nothing when every
+// row is priced.
+func printUnpricedFooter(models []unpricedModel) {
+	for _, m := range models {
+		s := ""
+		if m.Tickets != 1 {
+			s = "s"
+		}
+		fmt.Printf("⚠ unpriced: %s — %d ticket%s, %s turns (add cost.pricing.%s in config.yaml)\n",
+			m.Model, m.Tickets, s, commaInt(m.Turns), m.Model)
+	}
+}
+
+// commaInt renders an integer with thousands separators: 9812 -> "9,812".
+func commaInt(n int) string {
+	s := fmt.Sprintf("%d", n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var out []byte
+	for i, c := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, c)
+	}
+	if neg {
+		return "-" + string(out)
+	}
+	return string(out)
 }
 
 // costAnalyze assembles the outcome-priced ledger: per ticket → cost,
@@ -2617,6 +2701,12 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	}
 	sort.Slice(rep.Rows, func(i, j int) bool { return rep.Rows[i].Cost.USD > rep.Rows[j].Cost.USD })
 
+	rowTots := make([]cost.Totals, len(rep.Rows))
+	for i, r := range rep.Rows {
+		rowTots[i] = r.Cost
+	}
+	rep.UnpricedModels = unpricedModels(rowTots)
+
 	if asJSON {
 		return emitJSON("report", rep)
 	}
@@ -2634,6 +2724,7 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 		fmt.Printf("  %-11s est $%.2f\n", repo, usd)
 	}
 	fmt.Println("(estimates from transcript token counts — a relative-effort signal, not billing)")
+	printUnpricedFooter(rep.UnpricedModels)
 	return nil
 }
 

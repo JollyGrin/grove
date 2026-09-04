@@ -119,6 +119,16 @@ Since grove-191 (workspace transparency) one more additive row field:
   `host` and `workspace` — the host says which machine, the workspace
   which grove on it owns the task.
 
+Since grove-249 one more additive field, on `gv cost --analyze --json`'s
+`report` object only:
+
+- `unpriced_models` — array of `{model, tickets, turns}`, one row per
+  model id with no pricing table entry across `report.rows`, empty (`[]`,
+  never `null`) when every row is priced. The human `gv cost` and
+  `gv cost --analyze` output ends with one `⚠ unpriced: <model> — N
+  tickets, M turns (add cost.pricing.<model> in config.yaml)` line per
+  such model, and nothing when there are none.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv watch` (grove-205) is the supported subscription: grove does the

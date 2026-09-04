@@ -33,14 +33,24 @@ func derive(input, output float64) Rates {
 }
 
 // defaultRates: current Anthropic pricing (claude-api reference, cached
-// 2026-06-24). Explicit per minor version — Opus 4.0/4.1 were $15/$75 while
-// 4.5+ is $5/$25, so every priced version is its own key. rateFor's prefix
-// match only ever strips a trailing "-<suffix>" (a dated snapshot/variant),
-// and longest-wins keeps a dated 4.8 on the 4.8 key, so it never collapses
-// two distinct minor versions. Overridable via config `cost.pricing`.
+// 2026-06-24; claude-opus-5/claude-sonnet-5/fable-5.1/mythos-5.1 refreshed
+// from https://platform.claude.com/docs/en/about-claude/models/overview,
+// fetched 2026-09-04). Explicit per minor version — Opus 4.0/4.1 were
+// $15/$75 while 4.5+ is $5/$25, so every priced version is its own key.
+// rateFor's prefix match only ever strips a trailing "-<suffix>" (a dated
+// snapshot/variant), and longest-wins keeps a dated 4.8 on the 4.8 key, so
+// it never collapses two distinct minor versions. Fable 5.1 / Mythos 5.1
+// get their own explicit keys rather than riding fable-5's prefix match:
+// their cache-read rate is 2.5% of input, not the 10% every other model
+// uses, so collapsing them onto claude-fable-5 (grove-249) silently
+// mispriced cache reads even though input/output looked identical.
+// Overridable via config `cost.pricing`.
 var defaultRates = map[string]Rates{
 	"claude-fable-5":    derive(10, 50),
 	"claude-mythos-5":   derive(10, 50),
+	"claude-fable-5-1":  {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite5m: 12.5, CacheWrite1h: 20},
+	"claude-mythos-5-1": {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite5m: 12.5, CacheWrite1h: 20},
+	"claude-opus-5":     derive(5, 25),
 	"claude-opus-4-8":   derive(5, 25),
 	"claude-opus-4-7":   derive(5, 25),
 	"claude-opus-4-6":   derive(5, 25),
@@ -48,7 +58,7 @@ var defaultRates = map[string]Rates{
 	"claude-opus-4-1":   derive(15, 75),
 	"claude-opus-4-0":   derive(15, 75),
 	"claude-opus-4":     derive(15, 75),
-	"claude-sonnet-5":   derive(3, 15),
+	"claude-sonnet-5":   derive(2, 10),
 	"claude-sonnet-4-6": derive(3, 15),
 	"claude-sonnet-4-5": derive(3, 15),
 	"claude-sonnet-4-0": derive(3, 15),
@@ -106,6 +116,7 @@ type Totals struct {
 type ModelUsage struct {
 	Model     string  `json:"model"`
 	Tokens    int     `json:"tokens"`     // input + output + all cache tokens
+	Turns     int     `json:"turns"`      // usage entries billed to this model
 	USD       float64 `json:"est_usd"`    // 0 when CostKnown is false
 	CostKnown bool    `json:"cost_known"` // false when this model has no pricing
 }
@@ -225,6 +236,7 @@ func Total(entries []transcript.UsageEntry) Totals {
 	// already in each entry's Model, so don't aggregate it away.
 	type acc struct {
 		tokens    int
+		turns     int
 		usd       float64
 		costKnown bool
 	}
@@ -248,6 +260,7 @@ func Total(entries []transcript.UsageEntry) Totals {
 		tot.CacheRead += e.CacheRead
 		m := get(e.Model)
 		m.tokens += e.Input + e.Output + e.CacheCreate5m + e.CacheCreate1h + e.CacheRead
+		m.turns++
 		if e.CostUSD != nil {
 			tot.USD += *e.CostUSD
 			m.usd += *e.CostUSD
@@ -270,7 +283,7 @@ func Total(entries []transcript.UsageEntry) Totals {
 	for _, model := range order {
 		a := byModel[model]
 		tot.Models = append(tot.Models, ModelUsage{
-			Model: model, Tokens: a.tokens, USD: a.usd, CostKnown: a.costKnown,
+			Model: model, Tokens: a.tokens, Turns: a.turns, USD: a.usd, CostKnown: a.costKnown,
 		})
 	}
 	// Biggest share first so mix strings read "dominant model first". Order
