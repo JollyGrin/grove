@@ -16,6 +16,12 @@
 
 var el = function (id) { return document.getElementById(id); };
 var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null };
+/* Everything the live-list loop needs: the interval handle (null means the
+ * loop is deliberately stopped), a one-flight guard so a poll and a
+ * refocus cannot stack fetches, and the signature of what is currently
+ * painted. */
+var poll = { timer: null, inflight: false, sig: null };
+var POLL_MS = 5000;
 
 /* ---------------- transport ---------------- */
 
@@ -471,9 +477,85 @@ function render() {
   closeStream();
   closeSheet();
   var parts = (location.hash || '#/').slice(1).split('/');
-  if (parts[1] === 'w' && parts[2]) return screenWorkspace(decodeURIComponent(parts[2]));
-  if (parts[1] === 'c' && parts[2]) return screenChat(decodeURIComponent(parts[2]));
-  return screenProjects();
+  if (parts[1] === 'w' && parts[2]) screenWorkspace(decodeURIComponent(parts[2]));
+  else if (parts[1] === 'c' && parts[2]) screenChat(decodeURIComponent(parts[2]));
+  else screenProjects();
+  /* Whatever just landed on screen IS the painted state, however it got
+   * there (first load, ⟳, a tap, a poll). Recording it here is what keeps
+   * repaintList's change check honest from every entry point. */
+  poll.sig = listSig();
+}
+
+/* ---------------- live lists (grove-258) ---------------- */
+
+/* The open chat is live because SSE pushes it. The LISTS used to be frozen
+ * at page load: `busy` dots, ages and the card meta all aged in place until
+ * someone tapped ⟳, so opening the phone after any idle period showed a
+ * snapshot of whenever it was last opened. The loop below is the fix, and
+ * its shape is all about what it REFUSES to do — no fetch while a chat
+ * stream is the live view, none while the tab is hidden, and no repaint
+ * that the reader would notice when nothing actually changed. */
+
+function isListScreen() {
+  var parts = (location.hash || '#/').slice(1).split('/');
+  return !(parts[1] === 'c' && parts[2]);
+}
+
+/* listSig folds the RENDERED strings, not the raw rows — including each
+ * row's `ago()` label. So a row crossing a minute boundary counts as a
+ * change and the ages tick on the same 5s beat, with no second timer, while
+ * a poll that returns an identical list is a no-op down to the DOM. */
+function listSig() {
+  if (!isListScreen()) return null;
+  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0];
+  view.chats.forEach(function (c) {
+    parts.push(c.workspace, c.kind, c.session || '', c.session_id || '',
+      chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, ago(activeAt(c)));
+  });
+  return parts.join('\u0000');
+}
+
+/* The list screens rebuild `main` wholesale, so an unguarded re-render every
+ * 5s would blink and throw the reader back to the top of a long list. Guard
+ * on the signature, and restore the scroll offset for the repaints that do
+ * happen — that is what makes a poll of unchanged data visually inert. */
+function repaintList() {
+  if (listSig() === poll.sig) return;
+  var main = el('main');
+  var top = main.scrollTop;
+  render();
+  main.scrollTop = top;
+}
+
+/* refreshList is the ONLY thing that fetches on a timer, and it declines in
+ * every case where a fetch would be waste or damage: off a list screen (SSE
+ * owns that view), hidden tab (nobody is looking, and it is the operator's
+ * battery), a fetch already in flight, or the profile sheet open — render()
+ * closes the sheet, so a poll underneath an open sheet would dismiss the
+ * question the operator is mid-way through answering. */
+function refreshList() {
+  if (!isListScreen() || document.hidden || poll.inflight) return;
+  if (!el('sheet').hidden) return;
+  poll.inflight = true;
+  /* Re-phase the timer so a hashchange or a refocus and the next tick do
+   * not land back to back. */
+  if (poll.timer) { clearInterval(poll.timer); poll.timer = setInterval(refreshList, POLL_MS); }
+  var done = function () {
+    poll.inflight = false;
+    /* Failure keeps the last-loaded list on screen — api() has already set
+     * the offline class, and a blank list is a worse lie than a stale one.
+     * Repainting anyway lets the ages keep ticking while disconnected. */
+    repaintList();
+  };
+  return loadChats().then(done, done);
+}
+
+/* The timer exists only while it is allowed to fetch, so a backgrounded tab
+ * or an open chat costs literally nothing rather than a guarded wake-up. */
+function syncPolling() {
+  var want = isListScreen() && !document.hidden;
+  if (want && !poll.timer) poll.timer = setInterval(refreshList, POLL_MS);
+  else if (!want && poll.timer) { clearInterval(poll.timer); poll.timer = null; }
 }
 
 function refresh() {
@@ -482,7 +564,19 @@ function refresh() {
   return loadProfiles().then(loadChats).then(render, function (e) { render(); showError(e); });
 }
 
-window.addEventListener('hashchange', render);
+window.addEventListener('hashchange', function () {
+  render();
+  syncPolling();
+  /* Coming back from a chat must not show the list as stale as when it was
+   * left — the cached rows paint instantly, then this catches them up. */
+  refreshList();
+});
+/* Unlocking the phone or switching back to the tab is the other moment the
+ * list is guaranteed stale, and the one the operator notices most. */
+document.addEventListener('visibilitychange', function () {
+  syncPolling();
+  refreshList();
+});
 window.addEventListener('online', refresh);
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
 el('refresh').onclick = refresh;
@@ -490,6 +584,7 @@ el('refresh').onclick = refresh;
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
 render();
 refresh();
+syncPolling();
 
 /* The service worker caches the shell only (never /api), so a phone that
  * has lost the tailnet opens to "not connected" instead of a blank page.
