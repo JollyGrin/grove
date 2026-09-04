@@ -40,11 +40,18 @@ import (
 // inside workspaces, so pre-existing payloads are unchanged.
 type Row struct {
 	*state.Task
-	Host      string       `json:"host,omitempty"`
-	Workspace string       `json:"workspace,omitempty"`
-	Live      string       `json:"live"`
-	PR        *github.PR   `json:"pr,omitempty"`
-	Cost      *cost.Totals `json:"cost,omitempty"`
+	Host      string     `json:"host,omitempty"`
+	Workspace string     `json:"workspace,omitempty"`
+	Live      string     `json:"live"`
+	PR        *github.PR `json:"pr,omitempty"`
+	// PRKnown is only present when a PR lookup was actually attempted for
+	// this row: false means the lookup errored or timed out (github.FetchAll
+	// dropped it into its unknown map, grove-251) — nil/absent means no
+	// lookup was attempted at all (--no-pr, or no repo config for this
+	// task). A caller must never read a nil PR as "no PR" without checking
+	// this first.
+	PRKnown *bool        `json:"pr_known,omitempty"`
+	Cost    *cost.Totals `json:"cost,omitempty"`
 }
 
 // Live values for tombstone rows — additive vocabulary next to the tmux
