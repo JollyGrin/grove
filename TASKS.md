@@ -26,6 +26,22 @@
       cwd-only attribution. Additive contract field: the three event types
       gain `data.session_id`. Five unit cases + a dummy.sh intruder leg.
 
+- [x] `claude-opus-5` priced, `claude-sonnet-5` re-priced, fable-5.1/
+      mythos-5.1 given exact keys (grove-249, 2026-09-04): every current
+      Opus 5 worker read `cost_known: false` and `est_usd: 0` —
+      `defaultRates` had no `claude-opus-5` key at all, `claude-sonnet-5`
+      was priced $3/$15 against a live $2/$10, and `claude-fable-5-1`
+      only resolved by accidentally riding `claude-fable-5`'s prefix
+      match, so its 2.5%-of-input cache-read rate silently used the
+      wrong (10%) formula. unbrewed's ledger read July $2,457 → August
+      $13 on unchanged volume — that was the pricing gap, not savings.
+      Fixed the table (prices + fetch-date comment), added a
+      `currentGeneration` tripwire test that fails if any current model
+      id loses its exact key, and made unpriced models loud: `gv cost` /
+      `gv cost --analyze` print an `⚠ unpriced: <model> — N tickets, M
+      turns` footer, and `--analyze --json` gains additive
+      `unpriced_models`.
+
 - [x] Relay verbs teach the `--host`-after-the-ticket trap in their local
       error (grove-242, 2026-09-01): `gv nudge grove-N --host H "..."` ran
       LOCALLY and failed with a bare `no active task grove-N — see gv ls`

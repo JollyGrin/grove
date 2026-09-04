@@ -198,6 +198,34 @@ func TestShortModel(t *testing.T) {
 	}
 }
 
+// TestCurrentGenerationHasExactRates is the tripwire: every model id a
+// worker on the current Claude generation actually emits must resolve via
+// an EXACT defaultRates key, never fall through to rateFor's prefix rule
+// (grove-249: claude-opus-5 had no key at all and rode straight to
+// cost_known:false / $0; claude-fable-5-1 rode fable-5's prefix by
+// accident and silently used the wrong cache-read rate). A new generation
+// added without its own exact key must fail this test, not ship as $0.
+func TestCurrentGenerationHasExactRates(t *testing.T) {
+	currentGeneration := []string{
+		"claude-fable-5-1",
+		"claude-fable-5",
+		"claude-opus-5",
+		"claude-opus-4-8",
+		"claude-sonnet-5",
+		"claude-haiku-4-5",
+	}
+	for _, id := range currentGeneration {
+		if _, ok := defaultRates[id]; !ok {
+			t.Errorf("defaultRates[%q] missing — must be an exact key, not rely on rateFor's prefix match", id)
+		}
+	}
+	// Fable 5.1's cache-read rate is 2.5% of input, not the 10% every other
+	// model uses — collapsing it onto claude-fable-5 silently mispriced this.
+	if r := defaultRates["claude-fable-5-1"]; r.CacheRead != 0.25 {
+		t.Errorf("claude-fable-5-1 CacheRead = %v, want 0.25 (2.5%% of $10 input)", r.CacheRead)
+	}
+}
+
 func TestRateForPrefixMatch(t *testing.T) {
 	// Configure an OpenRouter key the way config `cost.pricing` would, so the
 	// dated-slug case (transcript records z-ai/glm-5.2-20260616, config keys
