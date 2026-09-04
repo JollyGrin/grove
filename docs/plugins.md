@@ -183,7 +183,15 @@ optional `data.op_id` (grove-186, additive): relayed `answer`/`nudge`
 hops (`--host`) stamp a client op id so a retried hop is a no-op on the
 remote — same id seen again ⇒ nothing pasted, no second event. Local
 relays and the cockpit keep appending `answered` with no `data`, exactly
-as before.
+as before. `agent_status`, `notification` and `session_ended` carry an
+optional `data.session_id` (grove-250, additive): the Claude session id
+of the process that fired the hook — always the task's recorded worker
+now that the receiver drops these three events when the id at the
+worktree's cwd is NOT the recorded one (an orchestrator whose shell
+`cd`'d into a worker's worktree used to overwrite that worker's status).
+`session_started` keeps registering whatever id arrives, so an adopt's
+fresh pickup session still takes over. Records written before grove-250
+have no `session_id`; treat a missing one as unknown, never as foreign.
 Workspace-scoped (empty `ticket`): `workspace_parked`,
 `orchestrator_closed`, `orchestrator_spawned` (grove-198, additive: data
 `{workspace, session, profile?, op_id?, resume?}` — a detached

@@ -526,3 +526,242 @@ func TestCapRunesShortMessageUntouched(t *testing.T) {
 		t.Errorf("under-cap message must pass through untouched, got %q", got)
 	}
 }
+
+// --- session-id gate (grove-250) ---
+
+// payloadFor builds a hook payload for the given Claude hook event name
+// with an explicit session id.
+func payloadFor(hookEvent, sessionID, cwd, msg string) string {
+	b, _ := json.Marshal(map[string]string{
+		"session_id": sessionID, "cwd": cwd, "hook_event_name": hookEvent,
+		"last_assistant_message": msg,
+	})
+	return string(b)
+}
+
+// countLines reports the number of event records in a state dir; a
+// missing events.jsonl counts as zero.
+func countLines(t *testing.T, stateDir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(stateDir, "events.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	return len(strings.Split(strings.TrimSpace(string(raw)), "\n"))
+}
+
+func lastEventIn(t *testing.T, stateDir string) state.Event {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(stateDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var ev state.Event
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+// refresh folds events.jsonl into the derived tasks.json the receiver
+// scans — what every gv command and cockpit tick does in a live state dir.
+func refresh(t *testing.T, stateDir string) map[string]*state.Task {
+	t.Helper()
+	tasks, err := state.Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tasks
+}
+
+// A stop from a session that is NOT the task's recorded worker — an
+// orchestrator whose Bash tool cd'd into the worktree — must not touch the
+// task: no event, no status change, and the derived view keeps the
+// worker's last word.
+func TestReceiveStopDropsForeignSession(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-worker", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := refresh(t, dir)["DEV-1"].SessionID; got != "s-worker" {
+		t.Fatalf("recorded session id = %q, want s-worker", got)
+	}
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-worker", cwd, "STATUS: QUESTION — tabs or spaces?"))); err != nil {
+		t.Fatal(err)
+	}
+	refresh(t, dir)
+
+	evData, evMtime := snapshot(t, filepath.Join(dir, "events.jsonl"))
+	before := countLines(t, dir)
+	err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-intruder", cwd, "here is my chat reply, no sentinel")))
+	if err != nil {
+		t.Fatalf("foreign stop must be a silent no-op, got %v", err)
+	}
+	if got := countLines(t, dir); got != before {
+		t.Errorf("foreign stop appended: %d → %d events", before, got)
+	}
+	assertUnchanged(t, filepath.Join(dir, "events.jsonl"), evData, evMtime)
+	task := refresh(t, dir)["DEV-1"]
+	if task.Agent != state.AgentWaiting || task.Sentinel != "question" || task.Question != "tabs or spaces?" {
+		t.Errorf("worker state hijacked: agent=%s sentinel=%s question=%q", task.Agent, task.Sentinel, task.Question)
+	}
+	if task.SessionID != "s-worker" {
+		t.Errorf("session id changed to %q", task.SessionID)
+	}
+}
+
+// A stop from the recorded worker lands exactly as before, and the record
+// now carries the speaking session's id (additive contract field).
+func TestReceiveStopSameSessionAppendsWithID(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-worker", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	refresh(t, dir)
+	before := countLines(t, dir)
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-worker", cwd, "STATUS: DONE — shipped"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("same-session stop: %d → %d events, want +1", before, got)
+	}
+	ev := lastEventIn(t, dir)
+	if ev.Type != state.EvAgentStatus || ev.Ticket != "DEV-1" {
+		t.Fatalf("last event = %s/%s, want agent_status/DEV-1", ev.Type, ev.Ticket)
+	}
+	if ev.Data["session_id"] != "s-worker" {
+		t.Errorf("agent_status data.session_id = %q, want s-worker", ev.Data["session_id"])
+	}
+	if ev.Data["status"] != state.AgentIdle || ev.Data["sentinel"] != "done" {
+		t.Errorf("classification changed: %v", ev.Data)
+	}
+	task := refresh(t, dir)["DEV-1"]
+	if task.Sentinel != "done" || task.LastMessage != "STATUS: DONE — shipped" {
+		t.Errorf("fold: sentinel=%s last_message=%q", task.Sentinel, task.LastMessage)
+	}
+}
+
+// A task with NO recorded session id (pre-capture rows, a lost
+// SessionStart) keeps cwd-only attribution — an unknown id must never make
+// a task unreachable.
+func TestReceiveStopNoRecordedIDFallsBackToCwd(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if got := refresh(t, dir)["DEV-1"].SessionID; got != "" {
+		t.Fatalf("fixture leaked a session id %q", got)
+	}
+	before := countLines(t, dir)
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-anyone", cwd, "STATUS: BLOCKED — no creds"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("stop with no recorded id: %d → %d events, want +1 (cwd fallback)", before, got)
+	}
+	ev := lastEventIn(t, dir)
+	if ev.Type != state.EvAgentStatus || ev.Data["session_id"] != "s-anyone" {
+		t.Errorf("last event = %s data=%v", ev.Type, ev.Data)
+	}
+	if task := refresh(t, dir)["DEV-1"]; task.Agent != state.AgentBlocked {
+		t.Errorf("agent = %s, want blocked", task.Agent)
+	}
+}
+
+// session-start is exempt from the gate: a NEW id at the same cwd is how
+// `gv adopt`'s fresh pickup session registers, and the fold re-points the
+// task's SessionID at it.
+func TestReceiveSessionStartNewIDRegisters(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-old", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := refresh(t, dir)["DEV-1"].SessionID; got != "s-old" {
+		t.Fatalf("recorded id = %q, want s-old", got)
+	}
+	before := countLines(t, dir)
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-new", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("new-id session-start: %d → %d events, want +1", before, got)
+	}
+	if ev := lastEventIn(t, dir); ev.Type != state.EvSessionStarted || ev.Data["session_id"] != "s-new" {
+		t.Errorf("last event = %s data=%v", ev.Type, ev.Data)
+	}
+	if got := refresh(t, dir)["DEV-1"].SessionID; got != "s-new" {
+		t.Errorf("fold left SessionID = %q, want s-new", got)
+	}
+	// The new session now owns the task: its stops land, the old id's don't.
+	before = countLines(t, dir)
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-old", cwd, "late word"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before {
+		t.Errorf("old session's stop appended after re-registration")
+	}
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-new", cwd, "STATUS: DONE — ok"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Errorf("new session's stop did not land")
+	}
+}
+
+// The #148 mechanism: a late SessionEnd from a REPLACED process must not
+// stamp `dead` over the live successor; the current session's SessionEnd
+// still does.
+func TestReceiveSessionEndGatedOnCurrentSession(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	for _, id := range []string{"s-old", "s-new"} {
+		if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", id, cwd, ""))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task := refresh(t, dir)["DEV-1"]; task.SessionID != "s-new" || task.Agent != state.AgentWorking {
+		t.Fatalf("fixture: session=%q agent=%s", task.SessionID, task.Agent)
+	}
+
+	before := countLines(t, dir)
+	if err := Receive(single(dir), "session-end", strings.NewReader(payloadFor("SessionEnd", "s-old", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before {
+		t.Errorf("late session-end from the replaced process appended: %d → %d", before, got)
+	}
+	if task := refresh(t, dir)["DEV-1"]; task.Agent != state.AgentWorking {
+		t.Errorf("late session-end stamped agent=%s over the live worker", task.Agent)
+	}
+
+	// Notification is gated the same way.
+	if err := Receive(single(dir), "notification", strings.NewReader(payloadFor("Notification", "s-old", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before {
+		t.Errorf("foreign notification appended: %d → %d", before, got)
+	}
+
+	if err := Receive(single(dir), "session-end", strings.NewReader(payloadFor("SessionEnd", "s-new", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("current session-end: %d → %d events, want +1", before, got)
+	}
+	if ev := lastEventIn(t, dir); ev.Type != state.EvSessionEnded || ev.Data["session_id"] != "s-new" {
+		t.Errorf("last event = %s data=%v", ev.Type, ev.Data)
+	}
+	if task := refresh(t, dir)["DEV-1"]; task.Agent != state.AgentDead {
+		t.Errorf("agent = %s after the current session's end, want dead", task.Agent)
+	}
+}

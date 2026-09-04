@@ -149,6 +149,15 @@ say "seed a session id via the SessionStart hook so pause→adopt can resume"
 printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"SessionStart"}' "$WTDIR" | "$GV" hook session-start
 grep -q 's-pause-1' "$GROVE_STATE_DIR/events.jsonl" || fail "session-start hook not captured"
 
+say "hook session gate: a foreign session at the worker's cwd is a silent no-op (grove-250)"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-sid.json" # fold → tasks.json carries the recorded id
+grep -q '"claude_session_id": *"s-pause-1"' "$SCRATCH/ls-sid.json" || fail "ls --json missing the recorded session id"
+EV_BEFORE_INTRUDER=$(wc -l < "$GROVE_STATE_DIR/events.jsonl")
+printf '{"session_id":"s-intruder","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"orchestrator chat reply, no sentinel"}' \
+  "$WTDIR" | "$GV" hook stop
+[ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -eq "$EV_BEFORE_INTRUDER" ] || fail "a foreign session's stop hijacked the worker (appended an event)"
+grep -q 's-intruder' "$GROVE_STATE_DIR/events.jsonl" && fail "intruder session id leaked into events.jsonl" || true
+
 say "gv pause guards a mid-turn worker (agent working) behind --force"
 ("$GV" pause task-001 2>&1 || true) > "$SCRATCH/pause-guard.out"
 grep -q 'mid-turn' "$SCRATCH/pause-guard.out" || fail "pause should warn about the in-flight turn"
@@ -205,8 +214,11 @@ export PATH="$STUBBIN:$PATH"
 
 say "make task-001 idle: agent done + quiet past a tiny idle_after"
 printf 'audit:\n  idle_after: 1ms\n' >> "$WCFG"
+EV_BEFORE_OWN_STOP=$(wc -l < "$GROVE_STATE_DIR/events.jsonl")
 printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — wrapped up"}' \
   "$WTDIR" | "$GV" hook stop
+[ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -eq $((EV_BEFORE_OWN_STOP + 1)) ] || fail "the worker's own stop did not land after the session gate (grove-250)"
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" | grep -q '"session_id":"s-pause-1"' || fail "agent_status missing additive data.session_id (grove-250)"
 "$GV" audit --json > "$SCRATCH/audit-idle.json"
 grep -q '"class": *"idle"' "$SCRATCH/audit-idle.json" || fail "done+quiet worker should classify idle"
 

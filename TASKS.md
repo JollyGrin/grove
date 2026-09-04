@@ -9,6 +9,23 @@
 
 ## Now (2026-07-12)
 
+- [x] Hooks gate stop/notification/session-end on the recorded session
+      id (grove-250, 2026-09-04): the receiver attributed every hook by
+      cwd alone, and Claude Code's hook `cwd` follows the Bash tool's
+      persistent shell cwd — so one `cd <worktree> && …` in an
+      orchestrator made its next Stop look like the worker's. Verified
+      live on unbrewed 2026-09-02: a worker 30 minutes into a busy turn
+      was stamped `idle` with the orchestrator's chat reply as its
+      `last_message`, and a stall monitor fired on it; the same mechanism
+      is #148's late SessionEnd stamping `dead` over a live successor.
+      `hooks.Receive` now drops `stop`/`notification`/`session-end` when
+      the task has a recorded `claude_session_id` and the payload's
+      differs (zero writes, exit 0 — the receiver's silence contract);
+      `session-start` stays exempt (it is how a worker registers, adopt's
+      fresh pickup session included); a task with no recorded id keeps
+      cwd-only attribution. Additive contract field: the three event types
+      gain `data.session_id`. Five unit cases + a dummy.sh intruder leg.
+
 - [x] Relay verbs teach the `--host`-after-the-ticket trap in their local
       error (grove-242, 2026-09-01): `gv nudge grove-N --host H "..."` ran
       LOCALLY and failed with a bare `no active task grove-N — see gv ls`
