@@ -129,6 +129,28 @@ Since grove-249 one more additive field, on `gv cost --analyze --json`'s
   tickets, M turns (add cost.pricing.<model> in config.yaml)` line per
   such model, and nothing when there are none.
 
+Since grove-251 (supervisor train 1/4) the `pr` object gains five additive
+fields, and rows gain one more additive field:
+
+- `pr.draft` — the PR's `isDraft`.
+- `pr.mergeable` — gh's `mergeable`: `MERGEABLE` | `CONFLICTING` | `UNKNOWN`.
+- `pr.merge_state` — gh's `mergeStateStatus`, passed through verbatim:
+  `BEHIND` | `BLOCKED` | `CLEAN` | `DIRTY` | `DRAFT` | `HAS_HOOKS` |
+  `UNKNOWN` | `UNSTABLE`.
+- `pr.failing` — sorted names of the checks whose conclusion is `FAILURE`,
+  `ERROR`, `TIMED_OUT`, `CANCELLED` or `ACTION_REQUIRED` (a CheckRun's
+  `name`, or a StatusContext's `context`). Omitted when nothing is failing.
+  Note the widened CI derivation this rides on: `pr.ci` now counts
+  `TIMED_OUT`/`CANCELLED`/`ACTION_REQUIRED` as a failure too, so a PR whose
+  only failing check was cancelled reads `ci: "fail"`, not `"pass"`.
+- `pr.checks` — total `statusCheckRollup` entries.
+- `pr_known` — present on a row only when a PR lookup was actually
+  attempted for it (`--no-pr` and rows with no matching repo config never
+  carry it); `false` means the lookup errored or timed out, so `pr: null`
+  there means "lookup failed", not "no PR" — the human table renders `?`
+  in the PR column for that case instead of the usual blank. Plugins that
+  treat an absent `pr` as "no open PR" should check `pr_known` first.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv watch` (grove-205) is the supported subscription: grove does the

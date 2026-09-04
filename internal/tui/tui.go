@@ -75,7 +75,14 @@ type flashMsg string
 type remoteMsg struct {
 	results []fleet.Result
 }
-type prsMsg map[string]*github.PR
+
+// prsMsg carries a PR poll's result. unknown holds the tickets whose lookup
+// errored or timed out (github.FetchAll, grove-251) — kept separate from
+// prs so the view can render "?" instead of silently reading "no PR".
+type prsMsg struct {
+	prs     map[string]*github.PR
+	unknown map[string]bool
+}
 type paneTailMsg string
 type actionDoneMsg struct {
 	err    error
@@ -127,7 +134,12 @@ type Model struct {
 	sceneBuf []*state.Task
 	live     map[string]string
 	prs      map[string]*github.PR
-	events   []state.Event
+	// prUnknown holds the tickets whose last PR poll errored or timed out
+	// (github.FetchAll, grove-251) — a ticket here renders "?" in the PR
+	// column instead of the "no PR" dash, since m.prs holding no entry for
+	// it is otherwise ambiguous between the two.
+	prUnknown map[string]bool
+	events    []state.Event
 
 	mem     resource.Mem // last memory reading (gauge)
 	workers int          // live worker count at that reading
@@ -231,7 +243,7 @@ func New(cfg *config.Config, stateDir, label string) Model {
 	if cfg != nil {
 		fx = parseFx(cfg.Cockpit.Effects)
 	}
-	return Model{cfg: cfg, stateDir: stateDir, label: label, folder: state.NewFolder(stateDir, feedTail), live: map[string]string{}, prs: map[string]*github.PR{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
+	return Model{cfg: cfg, stateDir: stateDir, label: label, folder: state.NewFolder(stateDir, feedTail), live: map[string]string{}, prs: map[string]*github.PR{}, prUnknown: map[string]bool{}, input: in, costCache: cost.NewCache(), fx: fx, celebrations: map[string]int{}}
 }
 
 // Run returns the attach target plus the A5 quit farewell — one styled line
@@ -606,7 +618,12 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 				lookups[t.Ticket] = [2]string{r.Path, t.Branch}
 			}
 		}
-		return prsMsg(github.FetchAll(lookups))
+		prs, unknownErrs := github.FetchAll(lookups)
+		unknown := make(map[string]bool, len(unknownErrs))
+		for k := range unknownErrs {
+			unknown[k] = true
+		}
+		return prsMsg{prs: prs, unknown: unknown}
 	}
 }
 
@@ -801,7 +818,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// I/O. Gated to fxFull; the celebrations map is capped so a burst of
 		// merges can't grow it without bound.
 		if m.fx >= fxFull {
-			for ticket, pr := range msg {
+			for ticket, pr := range msg.prs {
 				if pr == nil || pr.State != "MERGED" {
 					continue
 				}
@@ -815,7 +832,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.flash = "⬢ " + ticket + " merged — the canopy grows"
 			}
 		}
-		m.prs = msg
+		m.prs = msg.prs
+		m.prUnknown = msg.unknown
 		return m, nil
 
 	case paneTailMsg:

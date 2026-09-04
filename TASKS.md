@@ -9,6 +9,20 @@
 
 ## Now (2026-07-12)
 
+- [x] Supervisor train 1/4: `github.PR` gains `draft`, `mergeable`,
+      `merge_state`, `failing` (sorted check names) and `checks`
+      (grove-251, 2026-09-04) — the transition engine (part 2) needs these
+      facts to decide `pr_ready`/`pr_ci_failed`/`pr_conflicting`, and none
+      of them were fetched before. `PRForBranch` pulls `isDraft,mergeable,
+      mergeStateStatus` and the check `name`/`context` fields in the same
+      `gh pr list` call; `TIMED_OUT`/`CANCELLED`/`ACTION_REQUIRED` now
+      count as CI failures too (closes #124 item 1: a cancelled-only-check
+      PR used to read `ci: pass`). `FetchAll` now returns
+      `(prs, unknown map[string]error)` so a failed/timed-out lookup can
+      never be read as "no PR" — `gv ls --json` rows carry the additive
+      `pr_known` bool, and the human table + cockpit render `?` instead of
+      a blank PR column when it's false.
+
 - [x] Hooks gate stop/notification/session-end on the recorded session
       id (grove-250, 2026-09-04): the receiver attributed every hook by
       cwd alone, and Claude Code's hook `cwd` follows the Bash tool's

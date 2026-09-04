@@ -2066,6 +2066,12 @@ func cmdLs(args []string) error {
 	}
 	var handedOff []*state.Task
 	prs := map[string]*github.PR{}
+	// grove-251: a ticket lands in prAttempted whenever a lookup was
+	// actually issued for it, and in prUnknown when that lookup errored or
+	// timed out — so "no PR" (not attempted, or attempted and empty) stays
+	// distinguishable from "lookup failed" on the row's pr_known field.
+	prAttempted := map[string]bool{}
+	prUnknown := map[string]bool{}
 	if !*noPR {
 		for _, f := range fleets {
 			if f.cfg == nil {
@@ -2075,10 +2081,15 @@ func cmdLs(args []string) error {
 			for _, t := range state.Active(f.tasks) {
 				if r, ok := f.cfg.Repos[t.Repo]; ok {
 					lookups[t.Ticket] = [2]string{r.Path, t.Branch}
+					prAttempted[t.Ticket] = true
 				}
 			}
-			for k, v := range github.FetchAll(lookups) {
+			got, unknown := github.FetchAll(lookups)
+			for k, v := range got {
 				prs[k] = v
+			}
+			for k := range unknown {
+				prUnknown[k] = true
 			}
 		}
 	}
@@ -2096,6 +2107,10 @@ func cmdLs(args []string) error {
 				liveStr = live.Status.String()
 			}
 			row := lsRow{Task: t, Live: liveStr, PR: prs[t.Ticket], Workspace: f.label}
+			if prAttempted[t.Ticket] {
+				known := !prUnknown[t.Ticket]
+				row.PRKnown = &known
+			}
 			if !*noCost {
 				if tot, err := costCache.ForTask(t.Worktree); err == nil {
 					row.Cost = &tot
@@ -2204,6 +2219,8 @@ func cmdLs(args []string) error {
 			if r.PR.PreviewURL != "" {
 				preview = "⬡ up"
 			}
+		} else if r.PRKnown != nil && !*r.PRKnown {
+			pr = "?" // lookup failed/timed out — never render as "no PR" (grove-251)
 		}
 		status := r.Label()
 		if r.Paused {

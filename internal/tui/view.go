@@ -206,6 +206,8 @@ func (m Model) viewAgents() string {
 			if p.PreviewURL != "" {
 				preview = "⬡ up"
 			}
+		} else if m.prUnknown[t.Ticket] {
+			pr = "?" // lookup failed/timed out — never render as "no PR" (grove-251)
 		}
 		cursor := " "
 		if i == m.sel {

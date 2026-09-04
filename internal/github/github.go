@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,6 +27,15 @@ type PR struct {
 	MergedAt   string `json:"mergedAt,omitempty"`
 	CI         string `json:"ci"`      // pass | fail | pending | none
 	PreviewURL string `json:"preview"` // best-effort Vercel link
+
+	// grove-251: PR facts the supervisor's transition engine needs to
+	// decide pr_ready / pr_ci_failed / pr_conflicting without a second
+	// `gh` round-trip.
+	Draft      bool     `json:"draft"`
+	Mergeable  string   `json:"mergeable"`         // gh's MERGEABLE | CONFLICTING | UNKNOWN
+	MergeState string   `json:"merge_state"`       // gh's mergeStateStatus, passed through verbatim
+	Failing    []string `json:"failing,omitempty"` // names of failing checks, sorted
+	Checks     int      `json:"checks"`            // total rollup entries
 }
 
 func gh(dir string, args ...string) ([]byte, error) {
@@ -48,19 +58,24 @@ func gh(dir string, args ...string) ([]byte, error) {
 // are vercel.com build pages (field-tested on PR #936, twice).
 func PRForBranch(repoDir, branch string) (*PR, error) {
 	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,mergedAt,statusCheckRollup,comments")
+		"--json", "number,url,state,mergedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,comments")
 	if err != nil {
 		return nil, err
 	}
 	var prs []struct {
-		Number   int    `json:"number"`
-		URL      string `json:"url"`
-		State    string `json:"state"`
-		MergedAt string `json:"mergedAt"`
-		Comments []struct {
+		Number     int    `json:"number"`
+		URL        string `json:"url"`
+		State      string `json:"state"`
+		MergedAt   string `json:"mergedAt"`
+		IsDraft    bool   `json:"isDraft"`
+		Mergeable  string `json:"mergeable"`
+		MergeState string `json:"mergeStateStatus"`
+		Comments   []struct {
 			Body string `json:"body"`
 		} `json:"comments"`
 		StatusCheckRollup []struct {
+			Name       string `json:"name"`    // CheckRun
+			Context    string `json:"context"` // StatusContext
 			Status     string `json:"status"`
 			Conclusion string `json:"conclusion"`
 			State      string `json:"state"` // StatusContext variant (Vercel uses these)
@@ -74,16 +89,36 @@ func PRForBranch(repoDir, branch string) (*PR, error) {
 		return nil, nil
 	}
 	p := prs[0]
-	pr := &PR{Number: p.Number, URL: p.URL, State: p.State, MergedAt: p.MergedAt, CI: "none"}
+	pr := &PR{
+		Number:     p.Number,
+		URL:        p.URL,
+		State:      p.State,
+		MergedAt:   p.MergedAt,
+		CI:         "none",
+		Draft:      p.IsDraft,
+		Mergeable:  p.Mergeable,
+		MergeState: p.MergeState,
+		Checks:     len(p.StatusCheckRollup),
+	}
 
 	var pass, fail, pending int
+	var failing []string
 	for _, c := range p.StatusCheckRollup {
 		// CheckRun: status/conclusion. StatusContext: state.
 		switch {
 		case c.Conclusion == "SUCCESS" || c.State == "SUCCESS":
 			pass++
-		case c.Conclusion == "FAILURE" || c.State == "FAILURE" || c.State == "ERROR":
+		case c.Conclusion == "FAILURE" || c.Conclusion == "ERROR" || c.Conclusion == "TIMED_OUT" ||
+			c.Conclusion == "CANCELLED" || c.Conclusion == "ACTION_REQUIRED" ||
+			c.State == "FAILURE" || c.State == "ERROR":
 			fail++
+			name := c.Name
+			if name == "" {
+				name = c.Context
+			}
+			if name != "" {
+				failing = append(failing, name)
+			}
 		case c.Status == "IN_PROGRESS" || c.Status == "QUEUED" || c.State == "PENDING":
 			pending++
 		}
@@ -91,6 +126,8 @@ func PRForBranch(repoDir, branch string) (*PR, error) {
 			pr.PreviewURL = c.TargetURL
 		}
 	}
+	sort.Strings(failing)
+	pr.Failing = failing
 	if pr.PreviewURL == "" {
 		for _, c := range p.Comments {
 			if m := vercelURLRe.FindString(c.Body); m != "" {
@@ -138,32 +175,50 @@ func Merged(repoDir, branch string) (bool, *PR, error) {
 	return pr.State == "MERGED", pr, nil
 }
 
-// FetchAll fans PR lookups out concurrently (ls refresh path).
-func FetchAll(lookups map[string][2]string) map[string]*PR {
+// FetchAll fans PR lookups out concurrently (ls refresh path). unknown
+// carries a key whenever its lookup errored or never returned before the
+// timeout — the transition engine (part 2) must never emit a transition
+// from a failed lookup, so "lookup failed" has to stay distinguishable
+// from "no PR" (a key in neither map). A key present in prs is never also
+// in unknown.
+func FetchAll(lookups map[string][2]string) (prs map[string]*PR, unknown map[string]error) {
 	type res struct {
 		key string
 		pr  *PR
+		err error
 	}
 	ch := make(chan res, len(lookups))
 	for key, rb := range lookups {
 		go func(key, repoDir, branch string) {
-			pr, _ := PRForBranch(repoDir, branch)
-			ch <- res{key, pr}
+			pr, err := PRForBranch(repoDir, branch)
+			ch <- res{key, pr, err}
 		}(key, rb[0], rb[1])
 	}
-	out := map[string]*PR{}
+	prs = map[string]*PR{}
+	unknown = map[string]error{}
 	timeout := time.After(6 * time.Second)
+	pending := map[string]bool{}
+	for key := range lookups {
+		pending[key] = true
+	}
 	for range lookups {
 		select {
 		case r := <-ch:
-			if r.pr != nil {
-				out[r.key] = r.pr
+			delete(pending, r.key)
+			switch {
+			case r.err != nil:
+				unknown[r.key] = r.err
+			case r.pr != nil:
+				prs[r.key] = r.pr
 			}
 		case <-timeout:
-			return out
+			for key := range pending {
+				unknown[key] = fmt.Errorf("timed out")
+			}
+			return prs, unknown
 		}
 	}
-	return out
+	return prs, unknown
 }
 
 // OpenPRBody returns number, url, and body of the open PR whose head is
