@@ -34,6 +34,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
@@ -225,7 +226,10 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 //
 // `?since=N` resumes where a client left off, which is what makes a phone
 // waking from sleep cheap: it reconnects with the last seq it rendered
-// instead of replaying the whole conversation.
+// instead of replaying the whole conversation. The browser does that on its
+// own: every `entry` event is stamped `id: <seq>`, so EventSource's automatic
+// reconnect carries `Last-Event-ID` and resumes without the page touching the
+// URL. A first connection sends neither, and still replays from seq 1.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -233,6 +237,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target str
 		return
 	}
 	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
+	// A reconnect's Last-Event-ID is a floor, not a replacement: whichever
+	// of the two is further along is the one the client has already seen.
+	if n, err := strconv.Atoi(strings.TrimSpace(r.Header.Get("Last-Event-ID"))); err == nil && n > since {
+		since = n
+	}
 	follow := r.URL.Query().Get("follow") != "0"
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -280,7 +289,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target str
 				flusher.Flush()
 				return
 			}
-			sse(w, "entry", line)
+			sseEntry(w, line)
 			flusher.Flush()
 		case <-ticker.C:
 			if p := s.backend.Picker(target); first || !p.same(last) {
@@ -316,6 +325,22 @@ func (p Picker) same(o Picker) bool {
 // one.
 func sse(w io.Writer, event string, data []byte) {
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, bytes.TrimRight(data, "\r\n"))
+}
+
+// sseEntry writes an `entry` event stamped with its seq as the SSE id, so a
+// browser reconnect resumes past it via Last-Event-ID. Only entries carry a
+// stable seq — picker and the keep-alive stay id-less, because an id on
+// either would make the browser ask to resume from a number that names no
+// entry. A line without a usable seq is forwarded unstamped rather than
+// dropped: the data is still the contract, the id is only an optimisation.
+func sseEntry(w io.Writer, line []byte) {
+	var head struct {
+		Seq int `json:"seq"`
+	}
+	if err := json.Unmarshal(line, &head); err == nil && head.Seq > 0 {
+		fmt.Fprintf(w, "id: %d\n", head.Seq)
+	}
+	sse(w, "entry", line)
 }
 
 // lineWriter turns chat.Tail's JSONL into whole lines on a channel. It

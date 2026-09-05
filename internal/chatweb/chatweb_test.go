@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,16 @@ func (f *fakeBackend) Tail(ctx context.Context, target string, since int, follow
 		return f.tailErr
 	}
 	for _, l := range f.lines {
+		// The real chat.Tail reads the file from byte zero and uses since
+		// only as an emit filter; the fake does the same, so a resume test
+		// sees what a phone would.
+		var head struct {
+			Seq int `json:"seq"`
+		}
+		_ = json.Unmarshal([]byte(l), &head)
+		if head.Seq != 0 && head.Seq <= since {
+			continue
+		}
 		if _, err := io.WriteString(w, l+"\n"); err != nil {
 			return err
 		}
@@ -113,6 +124,19 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+	return w
+}
+
+// getWith is get with request headers — how a browser's automatic
+// EventSource reconnect differs from its first connection.
+func getWith(t *testing.T, h http.Handler, path string, hdr map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("GET", path, nil)
+	for k, v := range hdr {
+		r.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
 	return w
 }
 
@@ -529,5 +553,127 @@ func TestEventsEmitsPickerAndKeepAlive(t *testing.T) {
 	if !strings.Contains(got.String(), ":\n\n") {
 		t.Errorf("no SSE keep-alive comment:\n%s", got.String())
 	}
+	// Only entries carry a stable seq. An id on a picker or a keep-alive
+	// would hand the browser a Last-Event-ID that names no entry, so the
+	// next reconnect would resume from the wrong place.
+	if strings.Contains(got.String(), "id:") {
+		t.Errorf("a picker or keep-alive was stamped with an SSE id:\n%s", got.String())
+	}
 	cancel()
+}
+
+// --- SSE resume (grove-259) ---
+
+// transcript is a three-entry chat, seq 1..3.
+func transcript() []string {
+	return []string{
+		`{"seq":1,"role":"user","kind":"text","text":"triage the backlog","tool":"","ts":null}`,
+		`{"seq":2,"role":"assistant","kind":"text","text":"On it.","tool":"","ts":null}`,
+		`{"seq":3,"role":"assistant","kind":"text","text":"Done.","tool":"","ts":null}`,
+	}
+}
+
+// An EventSource reconnect — the phone waking, the tailnet blipping — must
+// not re-download the whole conversation. The browser handles that itself
+// once the server stamps each entry with its seq: it replays the id back as
+// Last-Event-ID, and the server resumes past it.
+func TestEntryEventsCarryTheirSeqAsTheSSEID(t *testing.T) {
+	b := &fakeBackend{lines: transcript()}
+	body := get(t, chatweb.NewServer(b), "/api/chats/c/events?follow=0").Body.String()
+	for i, line := range transcript() {
+		want := fmt.Sprintf("id: %d\nevent: entry\ndata: %s\n\n", i+1, line)
+		if !strings.Contains(body, want) {
+			t.Fatalf("entry %d is not stamped with its seq:\n%s", i+1, body)
+		}
+	}
+}
+
+func TestReconnectWithLastEventIDResumesPastIt(t *testing.T) {
+	srv := chatweb.NewServer(&fakeBackend{lines: transcript()})
+
+	// First connection: the whole transcript, and the last id the browser
+	// would have kept.
+	first := get(t, srv, "/api/chats/c/events?follow=0").Body.String()
+	last := lastEventID(t, first)
+	if last != 3 {
+		t.Fatalf("last id = %d, want 3 (from:\n%s)", last, first)
+	}
+
+	// The reconnect the browser makes on its own: same URL, one header.
+	again := getWith(t, srv, "/api/chats/c/events?follow=0",
+		map[string]string{"Last-Event-ID": fmt.Sprint(last)}).Body.String()
+	for _, seq := range []int{1, 2, 3} {
+		if strings.Contains(again, fmt.Sprintf("id: %d\n", seq)) {
+			t.Fatalf("seq %d was re-streamed on reconnect — the whole transcript is replaying again:\n%s", seq, again)
+		}
+	}
+	if strings.Contains(again, "event: entry") {
+		t.Fatalf("a caught-up reconnect must stream no entries:\n%s", again)
+	}
+
+	// And a reconnect from the middle streams the tail only.
+	mid := getWith(t, srv, "/api/chats/c/events?follow=0",
+		map[string]string{"Last-Event-ID": "1"}).Body.String()
+	if strings.Contains(mid, `"text":"triage the backlog"`) {
+		t.Fatalf("an entry the client already rendered was re-sent:\n%s", mid)
+	}
+	if !strings.Contains(mid, `"text":"On it."`) || !strings.Contains(mid, `"text":"Done."`) {
+		t.Fatalf("the entries after the resume point are missing:\n%s", mid)
+	}
+}
+
+// The floor is the further-along of the two, so an explicit `?since=` the
+// client chose is never walked backwards by a stale header (and vice versa).
+func TestLastEventIDAndSinceTakeTheHigherFloor(t *testing.T) {
+	cases := []struct {
+		query, header string
+		want          int
+	}{
+		{"?since=2&follow=0", "1", 2},
+		{"?since=1&follow=0", "2", 2},
+		{"?follow=0", "2", 2},
+		{"?since=2&follow=0", "", 2},
+		{"?follow=0", "not-a-number", 0},
+	}
+	for _, c := range cases {
+		b := &fakeBackend{}
+		getWith(t, chatweb.NewServer(b), "/api/chats/c/events"+c.query,
+			map[string]string{"Last-Event-ID": c.header})
+		if b.tailSince != c.want {
+			t.Errorf("query %q + Last-Event-ID %q resumed at %d, want %d", c.query, c.header, b.tailSince, c.want)
+		}
+	}
+}
+
+// A first connection is unchanged: no header, no since, the whole chat from
+// seq 1. The resume is an optimisation on top of that, not a replacement.
+func TestFirstConnectionStillReplaysFromSeqOne(t *testing.T) {
+	b := &fakeBackend{lines: transcript()}
+	body := get(t, chatweb.NewServer(b), "/api/chats/c/events?follow=0").Body.String()
+	if b.tailSince != 0 {
+		t.Errorf("a first connection resumed at %d — it must replay from the start", b.tailSince)
+	}
+	if n := strings.Count(body, "event: entry"); n != 3 {
+		t.Fatalf("first connection streamed %d entries, want 3:\n%s", n, body)
+	}
+	if !strings.Contains(body, `"text":"triage the backlog"`) {
+		t.Errorf("seq 1 is missing from a first connection:\n%s", body)
+	}
+}
+
+// lastEventID reads the id the browser would remember from a stream: the
+// last `id:` line it saw.
+func lastEventID(t *testing.T, body string) int {
+	t.Helper()
+	last := 0
+	for _, l := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(l, "id: "); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				t.Fatalf("id line %q is not numeric — the browser would send it back verbatim", l)
+			}
+			last = n
+		}
+	}
+	return last
 }
