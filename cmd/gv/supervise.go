@@ -20,7 +20,6 @@ import (
 
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
-	"github.com/JollyGrin/grove/internal/notify"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/supervise"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -83,7 +82,7 @@ func cmdSupervise(args []string) error {
 		}
 		for _, ev := range evs {
 			emitSupervise(ev, *asJSON)
-			pushSupervise(ev)
+			supervise.Push(ev)
 		}
 		if *once {
 			return nil
@@ -108,45 +107,4 @@ func emitSupervise(ev state.Event, asJSON bool) {
 		}
 	}
 	fmt.Fprintln(os.Stdout, line)
-}
-
-// pushSupervise fans one emitted event out to ntfy/desktop per
-// docs/plugins.md's table. Body is the same trailing detail `gv watch`
-// prints, capped the same way (watch.Detail) — the two surfaces read the
-// same tail, never two independently-truncated strings.
-func pushSupervise(ev state.Event) {
-	priority, tags, desktop := pushClassFor(ev.Type)
-	if priority == "" && !desktop {
-		return
-	}
-	title := ev.Ticket
-	if label := watch.Label(ev); label != "" {
-		title += " " + label
-	}
-	body := watch.Detail(ev)
-	if desktop {
-		notify.Desktop(title, body)
-	}
-	if priority != "" {
-		notify.Push(title, body, priority, tags)
-	}
-}
-
-// pushClassFor is the grove-253 notification table: every one of the
-// eleven delivery/liveness types maps to exactly one row here — the
-// default case covers pr_opened/pr_updated/pr_closed/worker_recovered,
-// which push nothing.
-func pushClassFor(evType string) (priority, tags string, desktop bool) {
-	switch evType {
-	case state.EvWorkerWaiting, state.EvWorkerVanished, state.EvWorkerErrored:
-		return "high", "warning", true
-	case state.EvPRCIFailed, state.EvPRConflicting:
-		return "high", "x", true
-	case state.EvPRReady:
-		return "default", "white_check_mark", true
-	case state.EvPRMerged:
-		return "default", "tada", true
-	default: // pr_opened, pr_updated, pr_closed, worker_recovered
-		return "", "", false
-	}
 }

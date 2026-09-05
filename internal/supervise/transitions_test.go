@@ -268,3 +268,53 @@ func TestLivenessTransitions_OutOfScopeTasksEmitNothing(t *testing.T) {
 		})
 	}
 }
+
+// grove-254: a driver whose fold lags its own appends (the cockpit — an
+// ad-hoc refresh in flight during an append delivers a task folded BEFORE
+// the event landed) must not re-emit the transition it just made. The
+// Memory shadows what it emitted; the stale fold loses until it carries
+// the same stamp, then it is authoritative again.
+func TestTransitions_StaleFoldDoesNotReEmit(t *testing.T) {
+	mem := NewMemory()
+	stale := newTask("gr-7") // Delivery nil: the fold before the append
+	pr := &github.PR{Number: 7, URL: "https://x/7", State: "OPEN", CI: "pending"}
+
+	evs := Transitions(Observation{Task: stale, PR: pr, PRKnown: true, Now: t0()}, mem)
+	if len(evs) != 1 || evs[0].Type != state.EvPROpened {
+		t.Fatalf("first observation: got %+v", evs)
+	}
+	// The same stale fold, re-observed with the same PR: nothing.
+	if evs := Transitions(Observation{Task: stale, PR: pr, PRKnown: true, Now: t0().Add(time.Second)}, mem); len(evs) != 0 {
+		t.Fatalf("stale fold re-emitted: %+v", evs)
+	}
+	// A PR that moved on while the fold is still stale diffs against the
+	// SHADOW (opened), so it is pr_updated-class, not a second pr_opened.
+	green := &github.PR{Number: 7, URL: "https://x/7", State: "OPEN", CI: "pass"}
+	evs = Transitions(Observation{Task: stale, PR: green, PRKnown: true, Now: t0().Add(2 * time.Second)}, mem)
+	if len(evs) != 1 || evs[0].Type != state.EvPRReady {
+		t.Fatalf("stale fold + moved PR: got %+v, want one pr_ready", evs)
+	}
+	// The fold catches up (same stamp as the shadow): authoritative again,
+	// and a newer fold that says something else wins outright.
+	caught := newTask("gr-7")
+	caught.Delivery = &state.Delivery{State: state.DeliveryReady, At: t0().Add(2 * time.Second)}
+	if evs := Transitions(Observation{Task: caught, PR: green, PRKnown: true, Now: t0().Add(3 * time.Second)}, mem); len(evs) != 0 {
+		t.Fatalf("caught-up fold re-emitted: %+v", evs)
+	}
+	newer := newTask("gr-7")
+	newer.Delivery = &state.Delivery{State: state.DeliveryMerged, At: t0().Add(10 * time.Second)}
+	if evs := Transitions(Observation{Task: newer, PR: green, PRKnown: true, Now: t0().Add(11 * time.Second)}, mem); len(evs) != 1 || evs[0].Type != state.EvPRReady {
+		t.Fatalf("newer fold must win over the shadow: got %+v, want pr_ready (merged->ready)", evs)
+	}
+
+	// Liveness twin: an error marker against a stale (Liveness nil) fold
+	// emits worker_errored exactly once.
+	live := detect.LiveInfo{Exists: true, HasClaude: true, PaneContent: "API Error: boom"}
+	evs = Transitions(Observation{Task: stale, PRKnown: false, Live: live, Now: t0()}, mem)
+	if len(evs) != 1 || evs[0].Type != state.EvWorkerErrored {
+		t.Fatalf("errored: got %+v", evs)
+	}
+	if evs := Transitions(Observation{Task: stale, PRKnown: false, Live: live, Now: t0().Add(time.Second)}, mem); len(evs) != 0 {
+		t.Fatalf("stale fold re-emitted worker_errored: %+v", evs)
+	}
+}

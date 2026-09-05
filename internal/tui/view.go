@@ -81,11 +81,16 @@ func (m Model) viewHeader() string {
 			strip = sForest.Render(s) + " · "
 		}
 	}
-	right := m.memGauge() + strip + counts
+	// grove-254: a headless gv supervise holding the lock is named here,
+	// so the operator knows this cockpit is watching, not emitting. The
+	// note is pre-rendered at lock time ("" when the cockpit is the
+	// supervisor) — no per-frame work for it.
+	right := m.memGauge() + strip + m.supNote + counts
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 && strip != "" {
-		// A narrow pane sheds the flourish before the data: an overflowing
-		// header would hard-wrap the alt-screen, so the strip goes first.
+	if gap < 1 && (strip != "" || m.supNote != "") {
+		// A narrow pane sheds the flourishes before the data: an
+		// overflowing header would hard-wrap the alt-screen, so the strip
+		// and the supervise note go first.
 		right = m.memGauge() + counts
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	}

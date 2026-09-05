@@ -89,11 +89,11 @@ const usage = `gv — grove
       [--once] [--json]                        cockpit open — the stream for a workspace whose cockpit
                                               isn't up (a VPS running overflow workers). Recommended
                                               interval floor 5s (cost discipline, not enforced). One
-                                              writer at a time: a second supervise (or part 4's cockpit
-                                              driver) exits 1 naming the pid already emitting. --once
-                                              fires one pass then exits 0 — no worker_waiting/
-                                              worker_vanished (that hysteresis needs a continuously
-                                              running loop).
+                                              writer at a time: an open cockpit IS the supervisor; a
+                                              supervise started under one exits 1 naming the pid
+                                              already emitting. --once fires one pass then exits 0 —
+                                              no worker_waiting/worker_vanished (that hysteresis
+                                              needs a continuously running loop).
   gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
   gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)

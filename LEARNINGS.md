@@ -486,6 +486,28 @@
   poll-derived dimension should fold-and-diff the same way, not append
   raw snapshots.
 
+- **2026-09-05 · An idempotent engine driven by a reader whose fold can
+  lag its own appends still double-emits — unless it remembers what it
+  emitted** (grove-254). `Transitions` diffs against the folded
+  `Task.Delivery`/`Task.Liveness`, which is airtight for `gv supervise`
+  (peek → append → peek, strictly serial). The cockpit is not serial: an
+  ad-hoc `refreshCmd` (an answer, a review, a done) can be in flight —
+  its fold read BEFORE the prsMsg handler appended `pr_opened` — and
+  deliver a task that still says `none` a tick later, so the engine would
+  derive and append the same `pr_opened` again. Rather than special-case
+  the cockpit, `supervise.Memory` now shadows the state of the last event
+  it emitted per ticket, stamped with the event time, and diffs against
+  the shadow only while it is strictly newer than the fold's own `At`; the
+  moment the fold carries the same stamp it is authoritative again (and a
+  fold that is newer than the shadow wins outright, so a headless holder's
+  appends are never masked). Two consequences worth keeping: the memory
+  is still never persisted (a restart's first observation is against the
+  real fold, which is correct), and `e2e/cockpit.sh` asserts "exactly
+  once" by counting types in `events.jsonl` after an `r` re-poll, not by
+  reading the screen. Generalizes: any bubbletea driver that appends from
+  one message handler and folds from another must dedupe on its own
+  emissions, because message arrival order is not read order.
+
 - **2026-09-05 · A pure transition engine still needs exactly one
   single-emitter lock, not "trust the caller"** (grove-253). Part 2
   (`internal/supervise.Transitions`) is idempotent by construction — two

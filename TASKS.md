@@ -9,6 +9,33 @@
 
 ## Now (2026-07-12)
 
+- [x] Supervisor train 4/4: the cockpit drives the engine on its existing
+      beat (grove-254, 2026-09-05). While the cockpit is open it IS the
+      supervisor: `refreshMsg` now carries each task's `detect.LiveInfo`
+      (a third return from `liveStates`, consumed in Update and dropped)
+      and `prsMsg` its PR poll, and both are fed to
+      `internal/supervise.Transitions` — liveness on the 1s refresh,
+      delivery on the 30s/`r` PR poll with `PRKnown` from `prsCmd`'s
+      unknown map so a gh outage emits nothing — with the results
+      `state.Append`ed for the folder to pick up next tick. Computed in
+      Update on message arrival, never in View; no new goroutine, poll,
+      timer, or cache (the only additions are the engine's `Memory` and the
+      flock; `TestViewAllocsFlatUnderSupervision` pins the frame). Lock
+      arbitration both ways: `Run` takes `<state>/supervise.lock` before
+      the program starts and releases on `q` (and before the `X` park's
+      kill, re-taking it if the kill never happened); a headless holder
+      makes the cockpit render `⟳ supervised by pid N` in the header and
+      emit nothing, and a `gv supervise` under an open cockpit gets the
+      existing refusal. Pushes go through the table moved to
+      `supervise.Push`/`PushClass` (shared with `gv supervise`); the
+      footer flash gets `✓ grove-98 ready — 4 checks green`,
+      `pr_ci_failed`, `pr_conflicting`, `worker_*`. The engine's `Memory`
+      gained a shadow of what it last emitted so a stale in-flight
+      refresh can never make the cockpit re-emit (LEARNINGS).
+      `e2e/cockpit.sh` drives the live TUI with the fake `gh`: none →
+      open → ready → merged lands each event exactly once, `gv supervise`
+      alongside is refused naming the cockpit's pid, `q` frees the lock;
+      both tmux-conf modes.
 - [x] Unattended train 1/4: `gv orchestrator new --brief T` /
       `--brief-file F` — a standing brief as the chat's FIRST user message
       (grove-271, 2026-09-05). The goal the train serves: dispatch from
