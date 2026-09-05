@@ -928,6 +928,27 @@ grep -q 'text-align: left; white-space: nowrap;' "$SCRATCH/idx.html" \
 grep -q 'overflow-x: hidden' "$SCRATCH/idx.html" \
   || fail "the page body must never scroll sideways (grove-260)"
 curl -fsS "http://127.0.0.1:$PORT/app.js" > "$SCRATCH/app.js" || fail "app.js is not served"
+# grove-261: a turn's tool/thinking rows collapse into ONE "N steps" group,
+# a running turn says so above the composer, and a Bash row's headline is
+# the command rather than the raw input JSON. All three are page-side, so
+# the served app.js and stylesheet are the only place to assert them.
+grep -q "' steps'" "$SCRATCH/app.js" \
+  || fail "a turn's steps must collapse into one N-steps group (grove-261)"
+grep -q 'steps-body' "$SCRATCH/idx.html" \
+  || fail "the steps group needs its own style rule (grove-261)"
+grep -q 'function toolSummary' "$SCRATCH/app.js" \
+  || fail "a tool row's headline must be humanized, not the raw input JSON (grove-261)"
+grep -q "Bash: \['command'\]" "$SCRATCH/app.js" \
+  || fail "a Bash row must summarize as its command (grove-261)"
+grep -q 'function toolDetail' "$SCRATCH/app.js" \
+  || fail "the expanded tool row must still show the full input (grove-261)"
+grep -q 'id="working"' "$SCRATCH/idx.html" \
+  || fail "a running turn must show a working indicator (grove-261)"
+grep -q 'setWorking' "$SCRATCH/app.js" \
+  || fail "nothing drives the working indicator (grove-261)"
+# It is an indicator, never a gate: the composer must not be disabled by it.
+grep -q 'setWorking(true);' "$SCRATCH/app.js" \
+  || fail "sending must light the indicator before the first entry lands (grove-261)"
 curl -fsS "http://127.0.0.1:$PORT/marked.min.js" > "$SCRATCH/marked.js" || fail "marked.min.js is not served"
 grep -q 'marked v12.0.2' "$SCRATCH/marked.js" || fail "the vendored marked must stay pinned at v12.0.2"
 curl -fsS "http://127.0.0.1:$PORT/sw.js" > /dev/null || fail "the service worker is not served"

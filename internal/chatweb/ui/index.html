@@ -110,6 +110,21 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 /* Zebra rows: once a table scrolls sideways, banding is what keeps the eye on
    the same row while the columns move under it. */
 .msg.assistant tbody tr:nth-child(even) { background: var(--surface); }
+/* ---- a turn's steps, as one row (grove-261) ----
+   Everything a turn did between the question and the answer — tool calls,
+   their results, thinking — lives inside ONE collapsed group, so the prose
+   answer is the next thing under the question instead of the twentieth.
+   The group is a <details> around the per-step <details> rows, which keeps
+   every entry one tap away rather than hidden. */
+details.steps { margin-bottom: 8px; }
+details.steps > summary {
+  list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim);
+  background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+details.steps > summary::-webkit-details-marker { display: none; }
+details.steps[open] > summary { color: var(--green); border-radius: 8px 8px 0 0; border-bottom-color: transparent; }
+details.steps > .steps-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px 8px 0; }
 details.tool { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
 details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.tool > summary::-webkit-details-marker { display: none; }
@@ -130,6 +145,15 @@ body.picker #keys { display: flex; }
 #text:focus { outline: none; border-color: var(--border-bright); }
 #send { border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 9px 16px; }
 #send:disabled, #text:disabled { opacity: .45; }
+/* The "working…" strip (grove-261): a running turn is otherwise silent
+   between `send` and the first entry. It sits above the composer and never
+   disables it — the operator can queue the next message mid-turn, exactly
+   as at the desk. */
+#working { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); padding: 2px 2px 6px; }
+#working[hidden] { display: none; }
+#working .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 1.3s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #working .pulse { animation: none; opacity: .8; } }
 #why { font-size: 12px; color: var(--dimmer); padding: 4px 2px; overflow-wrap: anywhere; }
 #resume { width: 100%; border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 11px; margin-top: 6px; }
 .busy { opacity: .5; pointer-events: none; }
@@ -165,6 +189,7 @@ body.picker #keys { display: flex; }
   <main id="main"></main>
   <footer id="footer" hidden>
     <div id="keys"></div>
+    <div id="working" hidden><span class="pulse"></span>working…</div>
     <div id="why"></div>
     <div class="compose">
       <textarea id="text" rows="1" placeholder="message this chat…" enterkeyhint="send"></textarea>
