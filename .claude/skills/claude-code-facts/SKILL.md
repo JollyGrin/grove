@@ -1,13 +1,13 @@
 ---
 name: claude-code-facts
-description: Use when working on anything that integrates with the Claude Code CLI — hook capture/classification, session resume and gv adopt, transcripts and cost estimation, model profiles / CLAUDE_CONFIG_DIR, or kickoff/relay behavior. Verified facts about how Claude Code actually behaves, so you don't re-derive them.
+description: Use when working on anything that integrates with the Claude Code CLI — hook capture/classification, session resume and gv adopt, transcripts and cost estimation, model profiles / CLAUDE_CONFIG_DIR, or kickoff/relay behavior. Verified facts, so you don't re-derive them.
 ---
 
 # Claude Code integration facts
 
 Everything below was verified live (dates + incident details in
-[LEARNINGS.md](../../../LEARNINGS.md) §"Claude Code behavior"). Trust
-these over intuition; re-verify only if a Claude Code major version
+LEARNINGS.md + `docs/archive/LEARNINGS-*.md` §"Claude Code behavior").
+Trust these over intuition; re-verify only if a Claude Code major version
 changes the behavior.
 
 ## Hooks (the source of truth for worker state)
