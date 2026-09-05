@@ -17,7 +17,10 @@ say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRATCH="$(mktemp -d /tmp/grove-brains.XXXXXX)"
+# macOS's /tmp is a symlink to /private/tmp — gv brains prints the registry
+# root realpath'd, so an un-realpath'd scratch root never matches (grove-228
+# had the same bug in chat.sh). Resolve with pwd -P up front.
+SCRATCH="$(cd "$(mktemp -d /tmp/grove-brains.XXXXXX)" && pwd -P)"
 
 # Build with the real environment BEFORE HOME is redirected — otherwise Go
 # re-downloads its module cache into the scratch HOME (dummy.sh, same note).

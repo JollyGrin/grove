@@ -9,6 +9,20 @@
 
 ## Now (2026-07-12)
 
+- [x] `e2e/cockpit.sh` + `e2e/brains.sh` green on macOS (grove-230,
+      2026-09-05): `cockpit.sh`'s `R merge missing the @pc row` was a real
+      `ssh` shelled out to — tmux spawns a pane's shell as a LOGIN shell by
+      default, and macOS's `/etc/zprofile` → `path_helper` rebuilds `PATH`
+      from `/etc/paths`, pushing the script's faked `ssh` behind the real
+      one before the cockpit's typed `gv dash` ever runs. Fix is
+      script-only: the isolated server now boots (both default and hostile
+      conf modes) with `default-command "$SHELL"` so panes run non-login,
+      plus a new early assertion that a throwaway pane resolves `ssh` to
+      the scratch bin. `brains.sh` had the grove-228 chat.sh bug in
+      miniature — asserted against the raw `mktemp` path instead of
+      `pwd -P`'d — one-line fix. No `internal/`/`cmd/` changes; both
+      suites plus `e2e/all.sh` verified green on the Mac.
+
 - [x] Supervisor train 1/4: `github.PR` gains `draft`, `mergeable`,
       `merge_state`, `failing` (sorted check names) and `checks`
       (grove-251, 2026-09-04) — the transition engine (part 2) needs these
