@@ -9,6 +9,38 @@
 
 ## Now (2026-07-12)
 
+- [x] Supervisor train 3/4: `gv supervise` — the headless loop (grove-253,
+      2026-09-05). Part 2 built the pure transition engine; nothing ran it
+      yet. Each pass: `state.Peek` (read-only fold) → `state.Active` → one
+      `tmux.SnapshotSession` per distinct session + one
+      `detect.DetectLiveFrom` per task (the grove-149 shape, never the
+      stateless per-task exec) → one `github.FetchAll` round-trip → one
+      `internal/supervise.Transitions` per task → `state.Append` for
+      whatever fired, printed exactly like `gv watch` (or the raw record
+      with `--json`). A non-blocking `flock` on `<state>/supervise.lock`
+      (new `supervise.Lock`) makes it single-emitter: a second `gv
+      supervise` — or part 4's future cockpit driver — exits 1 naming the
+      pid already holding it, so a cockpit and a headless loop can safely
+      coexist without double-emitting (the cockpit does not emit yet).
+      `--once` runs one pass and exits 0: hysteresis lives in-process, so a
+      single pass can still emit delivery/`worker_errored` events but never
+      `worker_waiting`/`worker_vanished` (those need a running loop to
+      accumulate the debounce window) — documented in `--help`. `pushNtfy`/
+      `notify`/`ntfySettings` moved out of `internal/hooks` into a new
+      `internal/notify` (exported `Push`/`Desktop`, pure move — hooks'
+      behavior and every `TestNtfy*` test are unchanged) so `gv supervise`
+      can push the same way per docs/plugins.md's table (high·warning for
+      worker_waiting/vanished/errored, high·x for ci_failed/conflicting,
+      default·white_check_mark for pr_ready, default·tada for pr_merged,
+      nothing for pr_opened/updated/closed/worker_recovered) — body is
+      `watch.Detail` (newly exported), the same trailing tail `gv watch`
+      prints. `e2e/supervise.sh` (added to `e2e/all.sh`) proves the full
+      11-step contract against a fake `gh` (answer rewritten between
+      steps) and a controllable claude-shaped stub pane. Orchestrator seed
+      taught `gv supervise` + the "never write a monitor script" rule with
+      all 11 types, one line each; `orchestrator/seed_test.go` gained a
+      tripwire.
+
 - [x] Supervisor train 2/4: the transition engine — delivery + liveness
       state machines, 11 event types, fold, `watch --until <type>`
       (grove-252, 2026-09-05). DESIGN.md principle 4 says the supervisor

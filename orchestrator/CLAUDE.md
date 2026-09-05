@@ -16,6 +16,12 @@ gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
      --until done          #   it lands. --until exits 0 exactly when that
                            #   sentinel arrives. Read the Monitoring section
                            #   below before writing ANY completion detector.
+gv supervise              # HEADLESS loop that emits the transitions gv watch
+     [--interval 30s]      #   streams — the cockpit runs one for you when it's
+                           #   open (part 4); on a host with no desk cockpit
+                           #   (a VPS running overflow workers), run this
+                           #   yourself. One writer at a time — a second one
+                           #   (or the cockpit's own) refuses, naming the pid.
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
 gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
 gv grab DEV-X --manual    # set up for the operator to drive by hand
@@ -116,8 +122,23 @@ two of them inside one minute, both workers still `agent: working`):
    produces a line. A detector that only watches for the happy event
    reports "still working" forever.
 
-If a pane fallback is truly unavoidable, it must exclude the placeholder
-lines (`STATUS: … — <…>`) **and** require that the agent has stopped.
+**Never write a monitor script.** The stream now carries delivery (PR
+state) and liveness (what a Stop hook cannot see) too — `gv watch --until
+pr_ready` or `--until worker_waiting` is the whole surface, for any of
+these eleven types (`gv supervise` is what emits them; see the tools
+block):
+
+- `pr_opened` — a PR now exists for the branch (or a closed one reopened)
+- `pr_updated` — the PR re-entered `opened` (a fresh push, checks back to pending)
+- `pr_ci_failed` — a check went red (`failing` names it)
+- `pr_conflicting` — the PR can no longer merge cleanly
+- `pr_ready` — checks green, not a draft — review-ready
+- `pr_merged` — merged
+- `pr_closed` — closed without merging
+- `worker_waiting` — an AskUserQuestion menu or other input prompt, sustained ≥10s
+- `worker_vanished` — the pane went dark (no claude, no shell activity) past boot grace
+- `worker_errored` — a usage-limit/429, sleep-cut, or API-error marker in the pane
+- `worker_recovered` — liveness returned to `ok` from any of the above
 
 ## Duties
 

@@ -61,6 +61,20 @@ func TestSeedTeachesHostFlag(t *testing.T) {
 	}
 }
 
+// TestSeedTeachesSupervise guards the grove-253 `gv supervise` teaching
+// against silent deletion: an orchestrator on a headless host (no desk
+// cockpit) must know this verb exists instead of reinventing a monitor
+// script.
+func TestSeedTeachesSupervise(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv supervise") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv supervise` — restore it in the tools block")
+	}
+	if !strings.Contains(ClaudeMd, "pr_ready") {
+		t.Error("orchestrator/CLAUDE.md is missing `pr_ready` — restore the Monitoring section's " +
+			"delivery/liveness event-type list")
+	}
+}
+
 // TestSeedTeachesLaneBilling guards the #234 lane-billing paragraph
 // (zai-plan vs openrouter-) against silent deletion.
 func TestSeedTeachesLaneBilling(t *testing.T) {

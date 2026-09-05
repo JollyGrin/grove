@@ -182,10 +182,35 @@ a restart never double-fire). The events:
 | `worker_errored` | `reason, line` (`reason` one of `usage_limit`/`sleep`/`api_error`; `line` the matched pane line, ≤200 runes) | a usage-limit/429, a sleep-cut, or another `API Error:` line appears in the pane — immediate, no debounce |
 | `worker_recovered` | `from` (the prior liveness state) | liveness returns to `ok` from anything else |
 
-No poller runs yet (grove-253 adds it) — these types exist in the
-vocabulary and fold today, but nothing in a fleet emits them until then.
+`gv supervise` (grove-253) is the poller that emits them — see the next
+section.
 
 ## React: `gv watch`, or tail `events.jsonl`
+
+`gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the
+delivery/liveness stream above: a headless loop (one per workspace, guarded
+by a `<state>/supervise.lock` single-emitter flock — a second `gv
+supervise`, or the cockpit once it drives this itself, exits 1 naming the
+pid already emitting) that reads one `tmux.SnapshotSession` per session,
+one `github.FetchAll` round-trip, and one `internal/detect.DetectLiveFrom`
+per task, feeds them through `internal/supervise.Transitions`, and appends
+whatever fired. `--once` runs a single pass then exits 0 — hysteresis
+(the 10s waiting-debounce, 60s vanished-debounce + 120s boot grace) lives
+in-process, so a single pass can still emit delivery and `worker_errored`
+transitions, but never `worker_waiting`/`worker_vanished` (those need a
+continuously running loop to accumulate the debounce window). Every
+emitted event is printed the same way `gv watch` would show it (or the raw
+record with `--json`), and pushed to ntfy/desktop per the table below — so
+running `gv supervise` on a headless host (no desk cockpit open) is the
+whole "produce" half; `gv watch` below is the "consume" half.
+
+| event | ntfy priority · tag | desktop |
+|---|---|---|
+| `worker_waiting` / `worker_vanished` / `worker_errored` | high · `warning` | yes |
+| `pr_ci_failed` / `pr_conflicting` | high · `x` | yes |
+| `pr_ready` | default · `white_check_mark` | yes |
+| `pr_merged` | default · `tada` | yes |
+| `pr_opened` / `pr_updated` / `pr_closed` / `worker_recovered` | none | no |
 
 `gv watch` (grove-205) is the supported subscription: grove does the
 tailing, the offset bookkeeping and the torn-line handling, and hands you
@@ -324,8 +349,10 @@ tmux-discipline skill).
 
 Outbound notifications ride the existing channel: `notify.ntfy` in the
 workspace config names an ntfy topic URL that fires on
-QUESTION/BLOCKED/DONE/needs-input. A plugin that wants its own pushes can
-subscribe to the same topic, or run its own — grove claims nothing here.
+QUESTION/BLOCKED/DONE/needs-input, and (grove-253) `gv supervise` pushes
+the eleven delivery/liveness types on the same topic per the table in the
+React section above. A plugin that wants its own pushes can subscribe to
+the same topic, or run its own — grove claims nothing here.
 
 ## Workspace enumeration: one plugin, all groves
 

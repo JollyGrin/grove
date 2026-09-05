@@ -486,6 +486,42 @@
   poll-derived dimension should fold-and-diff the same way, not append
   raw snapshots.
 
+- **2026-09-05 · A pure transition engine still needs exactly one
+  single-emitter lock, not "trust the caller"** (grove-253). Part 2
+  (`internal/supervise.Transitions`) is idempotent by construction — two
+  readers observing the same state emit nothing twice — but a headless `gv
+  supervise` loop and part 4's future cockpit driver are two *processes*
+  that could both run `state.Append` in the same tick, which is fine for
+  `events.jsonl` (flock-serialized) but means every consumer sees each
+  transition's human row printed twice. Rather than special-case "am I the
+  cockpit" logic, `gv supervise` takes a plain non-blocking
+  `flock(LOCK_EX|LOCK_NB)` on `<state>/supervise.lock` at startup and
+  writes its own pid into it; a second caller's `Flock` fails immediately
+  (no polling, no timeout) and it reads the pid back out to name the
+  holder in its error. The lock needs no cleanup path for a crashed
+  holder — `flock` is released by the kernel the instant the holding
+  process's last fd closes, crash or clean exit alike — so "stale lock
+  from a dead pid" was never a case to handle. Generalizes: any feature
+  that must run as at-most-one-instance-per-directory (this ticket, and
+  probably part 4) is this same four-line pattern, not a pidfile-plus-
+  liveness-check.
+
+- **2026-09-05 · A stub tmux pane for a liveness e2e must be a redrawing
+  loop, not an `echo`** (grove-253). Every prior scripted-tmux suite
+  (`watch.sh`, `dummy.sh`, …) sets a repo's `claude:` to plain `echo` —
+  it prints the kickoff prompt once and the pane goes back to a bare
+  shell, which is fine when the suite never reads pane CONTENT. `gv
+  supervise`'s liveness dimension (`detect.DetectLiveFrom`) reads exactly
+  that content, so `e2e/supervise.sh` needed a persistent process that
+  redraws a claude-shaped screen (idle prompt / an "Enter to select" menu
+  / a `429`+`API Error:` line) on command from a control file the script
+  rewrites mid-run — an infinite loop doing `printf '\033[H\033[2J'` +
+  the current mode's lines + `sleep 0.3`, driven by a plain file the test
+  writes between assertions. `pickPane`'s highest-index fallback resolves
+  it as "the claude pane" without the script needing to look like a real
+  `claude` process (`pane_current_command` reports `bash` either way,
+  same as every other worker pane in this suite family).
+
 - **2026-09-04 · A pricing table that silently prices a whole generation
   at $0 stays invisible for five weeks unless the $0 path is loud**
   (grove-249). `defaultRates` had no `claude-opus-5` key — `rateFor`'s
