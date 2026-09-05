@@ -192,6 +192,31 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-05 · macOS login-shell panes run `path_helper` and silently
+  reorder PATH out from under a faked binary** (grove-230): `e2e/cockpit.sh`
+  faked `ssh` on `$PATH` and typed `gv dash` into a tmux pane via
+  `SendKeys`, but tmux spawns a pane's shell as a LOGIN shell whenever
+  `default-command` is empty — on macOS that runs `/etc/zprofile`, which
+  runs `/usr/libexec/path_helper` and rebuilds `PATH` from `/etc/paths`,
+  pushing the scratch bin (and its fake ssh) behind the real one. The
+  cockpit then shelled out to the REAL `ssh`, hit host-key verification,
+  and the `R` merge never saw the `@pc` row — read as a fixture/timing bug
+  for a week before the pane's own shell turned out to be the cause.
+  Linux has no `path_helper`, so this class is invisible on groveremote.
+  Fix is script-only: `tmux -f <conf> start-server` with
+  `set -g default-command "$SHELL"` (a non-empty default-command runs the
+  shell directly, skipping the login-shell flag and `/etc/zprofile`
+  entirely) before anything sends keys into a pane. Any e2e that fakes a
+  binary for a pane-launched process needs this — a session grep for
+  `command -v <faked-binary>` in a throwaway pane is the tripwire to add
+  alongside it.
+- **2026-09-05 · `mktemp -d /tmp/...` is not the scratch root on macOS —
+  `pwd -P` it** (grove-230, same class as grove-228's chat.sh bug):
+  `e2e/brains.sh` asserted against the raw `mktemp` path, but `gv brains`
+  prints the registry root realpath'd, and macOS's `/tmp` is a symlink to
+  `/private/tmp`. Every e2e scratch root must be resolved with
+  `SCRATCH="$(cd "$(mktemp -d ...)" && pwd -P)"` up front, not compared
+  against post-hoc.
 - **2026-08-31 · `session_created` has one-second resolution, so two chats
   spawned back-to-back TIE** (grove-215): the lazy join between a live chat
   pane and its Claude session id resolves "newest unclaimed transcript

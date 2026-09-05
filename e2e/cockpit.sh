@@ -52,26 +52,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Hostile tmux config mode (grove-168): GROVE_E2E_TMUX_CONF=hostile boots the
-# isolated server with the common dotfiles pair base-index 1 +
-# pane-base-index 1, which turned every literal ".0"/".1" pane target into a
-# fresh-install failure. The scratch HOME means suites never load a real
-# tmux.conf, so without this mode that whole class is structurally invisible
-# here. -f only applies at server boot, so start the server now (exit-empty
-# off keeps it alive with no sessions) and every later gv tmux call joins it
-# with the hostile options already global.
-if [ "${GROVE_E2E_TMUX_CONF:-}" = "hostile" ]; then
-  say "hostile tmux conf (base-index 1, pane-base-index 1)"
-  cat > "$SCRATCH/hostile.conf" <<'EOF'
-set -g base-index 1
-set -g pane-base-index 1
-set -g renumber-windows on
-set -g allow-rename on
-set -g exit-empty off
-EOF
-  tmux -f "$SCRATCH/hostile.conf" start-server
-fi
-
 say "seed config + fleet events"
 cat > "$HOME/.config/grove/config.yaml" <<EOF
 provider: {kind: markdown}
@@ -134,6 +114,50 @@ esac
 EOF
 chmod +x "$SCRATCH/bin/ssh"
 export PATH="$SCRATCH/bin:$PATH"
+
+# Start the isolated server explicitly, with PATH already scratch'd, so the
+# global environment every later session/pane inherits carries the fake ssh.
+# default-command non-empty means new panes run the shell DIRECTLY instead
+# of as a login shell — on macOS a login shell runs /etc/zprofile, which
+# runs /usr/libexec/path_helper and rebuilds PATH from /etc/paths, silently
+# pushing the scratch bin (and its fake ssh) behind the real one (grove-230:
+# this is why `R` merged no @pc row — the cockpit's pane shelled out to the
+# REAL ssh and hit host-key verification, not the fixture). Linux has no
+# path_helper, which is why this class was invisible on groveremote.
+# exit-empty off keeps the server alive with no sessions until gv creates one.
+PANE_SHELL="${SHELL:-/bin/sh}"
+if [ "${GROVE_E2E_TMUX_CONF:-}" = "hostile" ]; then
+  say "start isolated tmux server (non-login panes; hostile conf: base-index 1, pane-base-index 1)"
+  cat > "$SCRATCH/tmux.conf" <<EOF
+set -g default-command "$PANE_SHELL"
+set -g exit-empty off
+set -g base-index 1
+set -g pane-base-index 1
+set -g renumber-windows on
+set -g allow-rename on
+EOF
+else
+  say "start isolated tmux server (non-login panes)"
+  cat > "$SCRATCH/tmux.conf" <<EOF
+set -g default-command "$PANE_SHELL"
+set -g exit-empty off
+EOF
+fi
+tmux -f "$SCRATCH/tmux.conf" start-server
+
+say "sanity: a cockpit-style pane resolves the fake ssh, not the real one"
+tmux new-session -d -s ssh-check -x 80 -y 24
+CHECKPANE="$(tmux list-panes -t '=ssh-check:' -F '#{pane_id}')"
+tmux send-keys -t "$CHECKPANE" 'command -v ssh' Enter
+CHECKCAP=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  CHECKCAP="$(tmux capture-pane -p -S -50 -t "$CHECKPANE")"
+  echo "$CHECKCAP" | grep -q "$SCRATCH/bin/ssh" && break
+  sleep 0.2
+done
+echo "$CHECKCAP" | grep -q "$SCRATCH/bin/ssh" || fail "pane shell resolved ssh to the wrong binary (path_helper?):
+$CHECKCAP"
+tmux kill-session -t '=ssh-check'
 
 say "gv (bare) builds the cockpit (attach fails headless — expected)"
 "$GV" >/dev/null 2>&1 || true
