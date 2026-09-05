@@ -56,7 +56,11 @@ header .sub { font-size: 11px; color: var(--dimmer); }
 header .grow { flex: 1; min-width: 0; }
 #offline { display: none; flex: none; background: #3a2418; color: var(--amber); font-size: 12px; padding: 6px 12px; text-align: center; }
 body.offline #offline { display: block; }
-main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px; padding-bottom: calc(12px + var(--pad)); }
+/* overflow-x: hidden is the promise that the PAGE never scrolls sideways
+   (grove-260): wide content — a table, a <pre>, a long unbroken token —
+   scrolls inside its own box, never by dragging the whole conversation
+   out from under the reader's thumb. */
+main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 12px; padding-bottom: calc(12px + var(--pad)); }
 
 /* ---- lists (screens 1 + 2) ---- */
 .row {
@@ -85,6 +89,27 @@ main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12
 .msg.assistant pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
 .msg.assistant pre code { background: none; border: none; padding: 0; }
 .msg.assistant li { margin-left: 1.2em; }
+
+/* A markdown table keeps its natural column widths and scrolls horizontally
+   inside the message (grove-260). Orchestrator answers are full of status and
+   cost tables; letting one be squeezed into the message width turns a
+   "Ticket"/"grove-215" column into an unreadable one-character-wide ribbon on
+   a 430px phone. display:block + width:max-content is what makes the table a
+   scroll container of its own; nowrap cells are what keep the header on one
+   line inside it. */
+.msg.assistant table {
+  display: block; width: max-content; max-width: 100%;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-collapse: collapse; font-size: .92em;
+}
+.msg.assistant :is(th, td) {
+  border: 1px solid var(--border); padding: 4px 9px;
+  text-align: left; white-space: nowrap;
+}
+.msg.assistant th { background: var(--surface); color: var(--green-bright); font-weight: 600; border-bottom-color: var(--border-bright); }
+/* Zebra rows: once a table scrolls sideways, banding is what keeps the eye on
+   the same row while the columns move under it. */
+.msg.assistant tbody tr:nth-child(even) { background: var(--surface); }
 details.tool { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
 details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.tool > summary::-webkit-details-marker { display: none; }
