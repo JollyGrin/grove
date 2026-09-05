@@ -9,6 +9,38 @@
 
 ## Now (2026-07-12)
 
+- [x] Supervisor train 2/4: the transition engine — delivery + liveness
+      state machines, 11 event types, fold, `watch --until <type>`
+      (grove-252, 2026-09-05). DESIGN.md principle 4 says the supervisor
+      loop is "fixed and enumerable, so it is code"; grove only ever built
+      the hook half. unbrewed alone carries **30** hand-rolled
+      `monitor-*.sh` scripts polling `gv ls --json` + `gh pr view` + `tmux
+      capture-pane` because nothing streamed PR state or the liveness a
+      Stop-hook sentinel can't see — field incidents behind them: p2p#691
+      sat on an AskUserQuestion menu 2h15m unseen, three silent worker
+      deaths in 24h, a 429 plan cap with the fix uncommitted, a
+      sleep-cut turn. New `internal/supervise` (pure, no poller, no
+      goroutine — part 3 runs it): `Transitions(Observation, *Memory)
+      []state.Event` derives delivery (`none → opened → ci_failed
+      /conflicting/ready → merged/closed`, from the #251 PR facts) and
+      liveness (`ok → waiting/vanished/errored`, from a tmux pane read)
+      as **transitions, not observations** — an event fires only when the
+      derived state differs from the task's folded state, so two pollers
+      or a restart re-emit nothing. Hysteresis (10s waiting debounce, 60s
+      vanished debounce + 120s boot grace) lives in the caller-owned,
+      never-persisted `Memory`. `internal/state` gains `Task.Delivery`/
+      `Task.Liveness` (additive, nil-means-none/ok) folded from the 11 new
+      event types, plus an internal (`json:"-"`) `LiveSince` the liveness
+      engine's boot grace keys off. `internal/detect` adds the
+      AskUserQuestion menu markers (`enter to select`/`ready to submit`)
+      the pre-existing waiting patterns missed — the exact shape behind
+      the p2p#691 stall — via a new `WaitingMarker` helper (seed-manifest
+      divergence). `gv watch`'s type vocabulary and default set gain all
+      11 types with human-row rendering, and `--until` now accepts an
+      event type as well as a sentinel (`--until pr_merged`, `--until
+      worker_waiting`). Nothing in the fleet changes behavior yet — no
+      poller runs until grove-253.
+
 - [x] `e2e/cockpit.sh` + `e2e/brains.sh` green on macOS (grove-230,
       2026-09-05): `cockpit.sh`'s `R merge missing the @pc row` was a real
       `ssh` shelled out to — tmux spawns a pane's shell as a LOGIN shell by

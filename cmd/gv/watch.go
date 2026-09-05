@@ -36,7 +36,7 @@ func cmdWatch(args []string) error {
 	asJSON := fs.Bool("json", false, "emit the raw event record, one per line")
 	replay := fs.Bool("replay", false, "include the log's history, not just new events")
 	since := fs.String("since", "", "only events at or after this RFC3339 timestamp")
-	until := fs.String("until", "", "exit 0 when this sentinel lands (question|blocked|done|none)")
+	until := fs.String("until", "", "exit 0 when this sentinel (question|blocked|done|none) or event type (e.g. pr_merged, worker_waiting) lands")
 	var tickets, types, sentinels repeatable
 	fs.Var(&tickets, "ticket", "only this ticket (repeatable, or comma-separated)")
 	fs.Var(&types, "type", "event types to stream (default: the terminal/actionable set; `all` for every type)")

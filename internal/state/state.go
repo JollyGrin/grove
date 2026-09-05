@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +37,51 @@ const (
 	// event time is `at`. Folds like an untrack (leaves Active) but keeps
 	// the host on the task so `gv ls --json` can show handed_off_to.
 	EvTaskHandedOff = "task_handed_off"
+)
+
+// Delivery event types (grove-252): the supervisor's transition engine
+// (internal/supervise) emits one of these when a task's PR crosses into a
+// new Delivery state (docs/plugins.md has the data-field table per type).
+const (
+	EvPROpened      = "pr_opened"
+	EvPRUpdated     = "pr_updated"
+	EvPRCIFailed    = "pr_ci_failed"
+	EvPRConflicting = "pr_conflicting"
+	EvPRReady       = "pr_ready"
+	EvPRMerged      = "pr_merged"
+	EvPRClosed      = "pr_closed"
+)
+
+// Liveness event types (grove-252): emitted when internal/supervise detects
+// a state the Stop-hook sentinels cannot see — a menu, a silent death, a
+// 429/sleep-cut turn.
+const (
+	EvWorkerWaiting   = "worker_waiting"
+	EvWorkerVanished  = "worker_vanished"
+	EvWorkerErrored   = "worker_errored"
+	EvWorkerRecovered = "worker_recovered"
+)
+
+// Delivery states (the `delivery` dimension; folded from the PR event
+// types above). None is the zero value — a task with no Delivery pointer
+// reads as none.
+const (
+	DeliveryNone        = "none"
+	DeliveryOpened      = "opened"
+	DeliveryCIFailed    = "ci_failed"
+	DeliveryConflicting = "conflicting"
+	DeliveryReady       = "ready"
+	DeliveryMerged      = "merged"
+	DeliveryClosed      = "closed"
+)
+
+// Liveness states (the `liveness` dimension). OK is the zero value — a
+// task with no Liveness pointer reads as ok.
+const (
+	LivenessOK       = "ok"
+	LivenessWaiting  = "waiting"
+	LivenessVanished = "vanished"
+	LivenessErrored  = "errored"
 )
 
 // Human states (the `human` dimension): "" (untouched) · reviewing ·
@@ -64,6 +111,31 @@ type Event struct {
 	// by Append. Records written before the field existed read as v1 —
 	// use Version(), never V directly.
 	V int `json:"v,omitempty"`
+}
+
+// Delivery is the folded PR-facing state (grove-252): the supervisor's
+// transition engine derives it from `github.PR` and appends one of the
+// EvPR* events on every state change; this struct is the fold of that
+// event, not a live re-derivation — a task with no PR yet carries no
+// Delivery pointer at all (nil, not a zero-value State).
+type Delivery struct {
+	State      string    `json:"state"` // none|opened|ci_failed|conflicting|ready|merged|closed
+	PR         int       `json:"pr,omitempty"`
+	URL        string    `json:"url,omitempty"`
+	CI         string    `json:"ci,omitempty"`
+	Failing    []string  `json:"failing,omitempty"`
+	MergeState string    `json:"merge_state,omitempty"`
+	At         time.Time `json:"at"`
+}
+
+// Liveness is the folded worker-liveness state (grove-252): a supplement
+// to `agent`, covering states the Stop hook cannot see on its own (a menu,
+// a silent death, a usage-cap/sleep-cut turn). Nil means ok (the zero
+// value LivenessOK), matching Delivery's nil-means-none convention.
+type Liveness struct {
+	State  string    `json:"state"` // ok|waiting|vanished|errored
+	Reason string    `json:"reason,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 type Task struct {
@@ -107,8 +179,21 @@ type Task struct {
 	// zero struct, and absent must mean "no sentinel". Additive & optional
 	// — events predating the field fold to nil.
 	SentinelAt *time.Time `json:"sentinel_at,omitempty"`
-	Created    time.Time  `json:"created"`
-	Updated    time.Time  `json:"updated"`
+	// Delivery and Liveness (grove-252) are the supervisor transition
+	// engine's folded state — nil means "no PR yet" / "ok", exactly like
+	// SentinelAt's nil-means-absent. Additive & optional: events predating
+	// the fields simply leave them nil.
+	Delivery *Delivery `json:"delivery,omitempty"`
+	Liveness *Liveness `json:"liveness,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	// LiveSince is when the task's CURRENT live session began — stamped by
+	// session_started/task_created/task_adopted (grove-252). Internal
+	// bookkeeping only (json:"-", no plugin-contract surface): it is the
+	// reference point for the liveness engine's adopt/boot grace, so a
+	// pane that legitimately still shows a shell while claude boots does
+	// not read as a vanished worker.
+	LiveSince time.Time `json:"-"`
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -232,12 +317,15 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Done = false
 		t.Paused = false
 		t.HandedOffTo = ""
+		t.Delivery, t.Liveness = nil, nil
+		t.LiveSince = ev.Time
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
 			t.Agent = AgentWorking
 		}
 		t.Paused = false // any live session un-pauses (mirrors ParkedTickets)
+		t.LiveSince = ev.Time
 	case EvAgentStatus:
 		t.Agent = d["status"]
 		t.Sentinel = d["sentinel"]
@@ -277,6 +365,8 @@ func fold(tasks map[string]*Task, ev Event) {
 		if b := d["branch"]; b != "" {
 			t.Branch = b
 		}
+		// The host now carries delivery/liveness for this task.
+		t.Delivery, t.Liveness = nil, nil
 	case EvTaskPaused:
 		// Deliberate park (grove-90). Agent normalizes to idle so a paused
 		// worker never ghosts the working counts — the window kill that
@@ -315,7 +405,67 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.HandedOffTo = ""
 		t.Agent = AgentSetup
 		t.Sentinel, t.Question, t.SentinelAt = "", "", nil
+		t.Delivery, t.Liveness = nil, nil
+		t.LiveSince = ev.Time
+	case EvPROpened, EvPRUpdated, EvPRCIFailed, EvPRConflicting, EvPRReady, EvPRMerged, EvPRClosed:
+		foldDelivery(t, ev)
+	case EvWorkerWaiting:
+		t.Liveness = &Liveness{State: LivenessWaiting, Reason: d["marker"], At: ev.Time}
+	case EvWorkerVanished:
+		t.Liveness = &Liveness{State: LivenessVanished, At: ev.Time}
+	case EvWorkerErrored:
+		t.Liveness = &Liveness{State: LivenessErrored, Reason: d["reason"], At: ev.Time}
+	case EvWorkerRecovered:
+		t.Liveness = &Liveness{State: LivenessOK, At: ev.Time}
 	}
+}
+
+// foldDelivery folds one of the seven EvPR* events into Task.Delivery. The
+// PR number is always carried; URL/CI/Failing/MergeState are read from the
+// event's own data when the type carries them (docs/plugins.md's per-type
+// table) and otherwise preserved from the prior Delivery, since a PR's URL
+// does not change between events that don't repeat it.
+func foldDelivery(t *Task, ev Event) {
+	d := ev.Data
+	prevURL := ""
+	if t.Delivery != nil {
+		prevURL = t.Delivery.URL
+	}
+	pr, _ := strconv.Atoi(d["pr"])
+	next := &Delivery{PR: pr, URL: prevURL, At: ev.Time}
+	switch ev.Type {
+	case EvPROpened:
+		next.State = DeliveryOpened
+		next.URL = d["url"]
+	case EvPRUpdated:
+		next.State = DeliveryOpened
+	case EvPRCIFailed:
+		next.State = DeliveryCIFailed
+		next.CI = "fail"
+		next.Failing = splitCSV(d["failing"])
+	case EvPRConflicting:
+		next.State = DeliveryConflicting
+		next.MergeState = d["merge_state"]
+	case EvPRReady:
+		next.State = DeliveryReady
+		next.CI = "pass"
+		next.URL = d["url"]
+		next.MergeState = d["merge_state"]
+	case EvPRMerged:
+		next.State = DeliveryMerged
+	case EvPRClosed:
+		next.State = DeliveryClosed
+	}
+	t.Delivery = next
+}
+
+// splitCSV parses the comma-joined `failing` data field back into a slice;
+// "" folds to nil, matching Delivery.Failing's omitempty.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
 }
 
 // sentinelStamp is when the current sentinel was set — nil while there is

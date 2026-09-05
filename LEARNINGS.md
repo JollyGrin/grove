@@ -450,6 +450,42 @@
 
 ## Go / CLI
 
+- **2026-09-05 · An unstreamed dimension gets re-derived once per
+  orchestrator, badly** (grove-252). `gv watch` (grove-205) streamed hook
+  events, but nothing streamed delivery (PR opened/CI failing/conflicting/
+  ready/merged) or the liveness a Stop hook cannot see (an AskUserQuestion
+  menu, a bare shell after a silent death, a 429 plan cap, a sleep-cut
+  turn — each leaves `agent: working` with no sentinel). The gap didn't
+  stay empty: `~/git/unbrewed/.grove/` grew **30** hand-rolled
+  `monitor-*.sh` scripts, each polling `gv ls --json` + `gh pr view` +
+  `tmux capture-pane` on its own 90–300s loop with its own hysteresis,
+  each written after `gv watch` already existed — because the thing they
+  needed to watch had no supported subscription. The sentinel histogram
+  on unbrewed makes the shape of the miss visible: 754 `done`, 24
+  `question`, 16 `blocked` — the states that actually need a human
+  (a stuck menu, a dead worker, a capped plan) essentially never produce
+  a hook sentinel at all. Fixed by building the missing half as a pure
+  engine (`internal/supervise.Transitions`) rather than another poller:
+  DESIGN.md principle 4 says the supervisor loop is "fixed and
+  enumerable, so it is code", and a dimension nobody streams is exactly
+  where ad-hoc bash accretes.
+
+- **2026-09-05 · A transition engine must diff against folded state, not
+  emit on every observation** (grove-252). The naive shape — "poll PR/pane,
+  append what you see" — double-fires the instant two pollers exist (a
+  cockpit driver and an operator's own `gv supervise` loop) or a poller
+  restarts mid-fleet. `Transitions(Observation, *Memory)` instead compares
+  the freshly derived delivery/liveness state against `Task.Delivery`/
+  `Task.Liveness` (the fold of prior events) and emits only on an actual
+  change — re-observing the same state, from any number of concurrent
+  readers, emits nothing. The hysteresis timers (10s waiting-debounce, 60s
+  vanished-debounce + 120s boot grace) live in a caller-owned `Memory`
+  that is explicitly never persisted: a restart just re-arms the timers,
+  delaying the next transition by one debounce window rather than ever
+  fabricating or losing one. Generalizes past this ticket: any future
+  poll-derived dimension should fold-and-diff the same way, not append
+  raw snapshots.
+
 - **2026-09-04 · A pricing table that silently prices a whole generation
   at $0 stays invisible for five weeks unless the $0 path is loud**
   (grove-249). `defaultRates` had no `claude-opus-5` key — `rateFor`'s

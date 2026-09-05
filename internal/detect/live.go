@@ -169,6 +169,50 @@ func bottomN(lines []string, n int) []string {
 	return lines[len(lines)-n:]
 }
 
+// WaitingMarker names which pane-content pattern is putting the pane into
+// StatusWaiting, or "" when none matched. Split out of classifyPaneOutput
+// so supervise's worker_waiting event (grove-252) has a name to report in
+// `data.marker` without changing classifyPaneOutput's own signature — the
+// byte-comparable-with-ovs probe core this package otherwise stays. The
+// two AskUserQuestion menu markers ("enter to select", "ready to submit")
+// are a deliberate divergence from that core (docs/seed-manifest.md): they
+// are the shapes that produced the 2026-08-24 2h15m stall on p2p#691, which
+// the pre-existing markers below never matched.
+func WaitingMarker(output string) string {
+	lines := strings.Split(output, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	b10 := bottomN(lines, 10)
+	b5 := bottomN(lines, 5)
+	bot10 := strings.ToLower(strings.Join(b10, "\n"))
+	bot5 := strings.ToLower(strings.Join(b5, "\n"))
+
+	switch {
+	// "esc to cancel": active input/dialog UI element (bottom 5)
+	case strings.Contains(bot5, "esc to cancel"):
+		return "esc_to_cancel"
+	// "No, and tell Claude...": ephemeral selection text, only visible when active (bottom 10)
+	case strings.Contains(bot10, "no, and tell claude what to do differently"):
+		return "no_and_tell_claude"
+	// "do you want" / "would you like": question text (bottom 5 to avoid stale matches)
+	case strings.Contains(bot5, "do you want"):
+		return "do_you_want"
+	case strings.Contains(bot5, "would you like"):
+		return "would_you_like"
+	// AskUserQuestion menu chrome (grove-252, bottom 10, case-insensitive)
+	case strings.Contains(bot10, "enter to select"):
+		return "enter_to_select"
+	case strings.Contains(bot10, "ready to submit"):
+		return "ready_to_submit"
+	default:
+		return ""
+	}
+}
+
 // classifyPaneOutput determines the agent status from captured pane content.
 //
 // Status indicators in Claude Code appear at the bottom of the terminal pane.
@@ -214,14 +258,10 @@ func classifyPaneOutput(output string) (AgentStatus, bool) {
 		return StatusUnknown, false
 	}
 
-	// 3. Waiting — needs user attention (bottom of pane only)
-	//    "esc to cancel": active input/dialog UI element (bottom 5)
-	//    "No, and tell Claude...": ephemeral selection text, only visible when active (bottom 10)
-	//    "do you want" / "would you like": question text (bottom 5 to avoid stale matches)
-	if strings.Contains(bot5, "esc to cancel") ||
-		strings.Contains(bot10, "no, and tell claude what to do differently") ||
-		strings.Contains(bot5, "do you want") ||
-		strings.Contains(bot5, "would you like") {
+	// 3. Waiting — needs user attention. See WaitingMarker for the full
+	//    pattern list (esc-to-cancel / question text / the AskUserQuestion
+	//    menu markers grove-252 added).
+	if WaitingMarker(output) != "" {
 		return StatusWaiting, true
 	}
 
