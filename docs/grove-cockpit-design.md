@@ -205,6 +205,26 @@ few weeks, then delete if unused; **later, optionally** unify the logs.
 
 ---
 
+## 5b. The cockpit as supervisor (grove-254, 2026-09-05)
+
+While the cockpit is open it is the workspace's supervisor. It adds no
+poll: the 1s refresh already reads every task's pane (`detect.LiveInfo`)
+and the 30s/`r` PR poll already fetches every PR, so both are fed to the
+shared engine (`internal/supervise.Transitions`) in `Update` and the
+resulting `pr_*`/`worker_*` events are appended for the folder to pick up
+on the next tick, exactly as a hook append would be. It takes the same
+`<state>/supervise.lock` a headless `gv supervise` takes: whoever holds it
+emits, the other stays silent — a cockpit that finds the lock taken shows
+`⟳ supervised by pid N` in the header, and a `gv supervise` started under
+an open cockpit is refused naming the cockpit's pid. Quit (and park)
+release the lock, so the VPS-style headless loop can take over the moment
+the desk cockpit closes. The operator-facing transitions land in the
+footer flash (`✓ grove-98 ready — 4 checks green`) and push through the
+same table `gv supervise` uses; the only in-memory additions are the
+engine's hysteresis memory and the flock — the frame does no new work.
+
+---
+
 ## 6. Explicitly NOT touched
 
 The chat panes' contents · the state model / hooks / relay / ntfy push · the

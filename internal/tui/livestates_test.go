@@ -54,7 +54,7 @@ func TestLiveStatesOneSnapshotPerSessionOneDetectPerTask(t *testing.T) {
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 		{Ticket: "grove-99", TmuxSession: "grove-test", TmuxWindow: "repo · grove-99"},
 	}
-	live, focused := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	live, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
 
 	// The batched contract: 3 tasks + the active-window read = ONE snapshot.
 	if fetches != 1 {
@@ -91,7 +91,7 @@ func TestLiveStatesFocusedGlyphTolerant(t *testing.T) {
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 		{Ticket: "grove-1", TmuxSession: "grove-test", TmuxWindow: "repo · grove-1"},
 	}
-	_, focused := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	_, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
 	if focused != "grove-1" {
 		t.Errorf("focused = %q, want grove-1 (glyphed active window, sibling must not match)", focused)
 	}
@@ -115,7 +115,7 @@ func TestLiveStatesDeadSessionMemoized(t *testing.T) {
 		{Ticket: "grove-1", TmuxSession: "grove-test", TmuxWindow: "repo · grove-1"},
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 	}
-	live, focused := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	live, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
 	if fetches != 1 {
 		t.Errorf("dead session fetched %d times, want 1 (nil memoized)", fetches)
 	}

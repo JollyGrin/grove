@@ -26,6 +26,7 @@ import (
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/supervise"
 	"github.com/JollyGrin/grove/internal/tmux"
 )
 
@@ -46,11 +47,15 @@ type refreshMsg struct {
 	// into the board while the R remote merge is on.
 	handedOff []*state.Task
 	live      map[string]string
-	events    []state.Event
-	mem       resource.Mem
-	workers   int
-	ok        bool   // state.Load succeeded — a zero msg (load error) stays false
-	focused   string // grove-63: ticket at the tmux-focused window, "" if none
+	// infos is the per-ticket pane read behind live (grove-254): the
+	// supervisor engine needs Exists/HasClaude/PaneContent, not just the
+	// status word. Consumed in Update and dropped — never held on the model.
+	infos   map[string]detect.LiveInfo
+	events  []state.Event
+	mem     resource.Mem
+	workers int
+	ok      bool   // state.Load succeeded — a zero msg (load error) stays false
+	focused string // grove-63: ticket at the tmux-focused window, "" if none
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -84,6 +89,11 @@ type prsMsg struct {
 	unknown map[string]bool
 }
 type paneTailMsg string
+
+// parkFailedMsg is a park whose kill never happened (grove-254): the
+// cockpit lives on, so it must take its supervise lock back.
+type parkFailedMsg struct{ err error }
+
 type actionDoneMsg struct {
 	err    error
 	ticket string // for the J2 done ritual (grove-22)
@@ -222,6 +232,19 @@ type Model struct {
 	// flash fires exactly once per cockpit launch (grove-56).
 	greeted bool
 
+	// Supervisor driver (grove-254). While the cockpit holds
+	// <state>/supervise.lock it IS the supervisor: every refreshMsg/prsMsg
+	// already on the beat is fed to supervise.Transitions and the results
+	// appended — no new goroutine, poll, timer, or cache. sup is the
+	// engine's hysteresis memory (nil = not the holder, emit nothing);
+	// supUnlock releases the flock on quit/park; supNote is the
+	// pre-rendered "⟳ supervised by pid N" header note when a headless
+	// `gv supervise` holds the lock instead ("" otherwise) — rendered
+	// as-is, so the frame allocates nothing for it.
+	sup       *supervise.Memory
+	supUnlock func()
+	supNote   string
+
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
 	// and so can't happen inside the tea loop. Inside tmux, attach is a
@@ -249,12 +272,15 @@ func New(cfg *config.Config, stateDir, label string) Model {
 // Run returns the attach target plus the A5 quit farewell — one styled line
 // cmd/gv prints after the alt-screen closes (empty at fx off, grove-56).
 func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error) {
-	p := tea.NewProgram(New(cfg, stateDir, label), tea.WithAltScreen())
+	m := New(cfg, stateDir, label)
+	m.acquireSupervise()
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
 	if err != nil {
 		return nil, "", err
 	}
-	m := out.(Model)
+	m = out.(Model)
+	m.releaseSupervise() // q — the lock is free for a headless gv supervise
 	farewell := farewellLine(m.fx, countWorking(m.localTasks), nowHour())
 	if farewell != "" {
 		farewell = sChrome.Render(farewell)
@@ -330,13 +356,15 @@ func snapshotSessions(fetch func(string) (*tmux.SessionSnapshot, error)) func(st
 // process spawns/sec, which pegged the CPU on hosts where spawning is
 // expensive (EDR scanning each exec, WSL1). snapFor and detectFrom are
 // injected so tests can count exactly what a refresh reads.
-func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo) (map[string]string, string) {
+func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo) (map[string]string, string, map[string]detect.LiveInfo) {
 	live := map[string]string{}
+	infos := make(map[string]detect.LiveInfo, len(active))
 	activeWindow := snapFor(session).ActiveWindow()
 	focused := ""
 	for _, t := range active {
 		snap := snapFor(t.TmuxSession)
 		info := detectFrom(snap, t.TmuxWindow)
+		infos[t.Ticket] = info
 		if !info.Exists {
 			live[t.Ticket] = "gone"
 		} else {
@@ -349,7 +377,7 @@ func liveStates(active []*state.Task, session string, snapFor func(string) *tmux
 			focused = t.Ticket
 		}
 	}
-	return live, focused
+	return live, focused, infos
 }
 
 // feedTail is the activity-feed tail bound — the folder keeps this many
@@ -376,7 +404,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 		// grove-149: two session-wide reads answer every window/pane question
 		// for the whole board; only capture-pane stays per task (inside
 		// DetectLiveFrom).
-		live, focused := liveStates(active, session,
+		live, focused, infos := liveStates(active, session,
 			snapshotSessions(tmux.SnapshotSession), detect.DetectLiveFrom)
 
 		// Piggyback the resource gauge on the existing 1s tick — no new poll
@@ -390,7 +418,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, handedOff: handedOff, live: live, events: events, mem: mem, workers: workers, ok: true, focused: focused}
+		return refreshMsg{tasks: active, handedOff: handedOff, live: live, infos: infos, events: events, mem: mem, workers: workers, ok: true, focused: focused}
 	}
 }
 
@@ -677,6 +705,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
 		// runs both on the beat and on ad-hoc refreshes (answers, reviews,
 		// dones); it must never re-arm a timer or touch m.tick.
+		var cmds []tea.Cmd
 		// Gauge refreshes every time, independent of msg.ok below. A failed
 		// read is a zero Mem (OK()==false) and simply hides the gauge.
 		m.mem = msg.mem
@@ -721,6 +750,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.assemble()
 			m.events = msg.events
 			m.focused = msg.focused
+			// grove-254: the supervisor's liveness beat rides this refresh
+			// (delivery too, against the last PR poll). Computed here, in
+			// Update, never in View; the fold picks the appends up on the
+			// next tick like any hook append.
+			if push := m.superviseObserve(msg.tasks, msg.infos, m.prs, m.prUnknown, time.Now()); push != nil {
+				cmds = append(cmds, push)
+			}
 			if m.detail != nil {
 				// Repoint detail at fresh data — over the LOCAL list only,
 				// never the merged board: a remote row shares its window
@@ -747,7 +783,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		var cmds []tea.Cmd
 		// No pane tail for a remote-bound detail (grove-185): scraping the
 		// task's window coordinates here could hit a LOCAL pane that merely
 		// shares the name (grove-116 class) — the worker has no local pane.
@@ -813,6 +848,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Data only — the poll loop lives on prTickMsg now (grove-118). This
 		// handler runs both on the beat and on ad-hoc refreshes ('r', detail
 		// entry); it must never re-arm a timer.
+		// grove-254: the supervisor's delivery beat rides this poll — the
+		// fresh PR set against the last refresh's fold, PRKnown from the
+		// unknown map so a gh outage emits nothing. No pane read here (a
+		// zero LiveInfo is out of liveness scope by construction).
+		push := m.superviseObserve(m.localTasks, nil, msg.prs, msg.unknown, time.Now())
 		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
 		// short shimmer + footer flash. Detected by diffing old vs new — no new
 		// I/O. Gated to fxFull; the celebrations map is capped so a burst of
@@ -834,7 +874,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.prs = msg.prs
 		m.prUnknown = msg.unknown
-		return m, nil
+		return m, push
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
@@ -842,6 +882,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flashMsg:
 		m.flash = string(msg)
+		return m, nil
+
+	case parkFailedMsg:
+		// The session survived, so the cockpit is still the operator's
+		// supervisor: take the lock back (grove-254).
+		m.flash = msg.err.Error()
+		m.acquireSupervise()
 		return m, nil
 
 	case relayDoneMsg:
@@ -1226,12 +1273,17 @@ func (m Model) handleCloseKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "y" {
 		stateDir, label := m.stateDir, m.label
 		m.flash = "parking " + m.sessionName() + "…"
+		// grove-254: hand the supervise lock back BEFORE the kill so a
+		// headless gv supervise can take over the instant the cockpit is
+		// gone (the flock would die with the process anyway; this is the
+		// clean path). A failed park re-acquires it below.
+		m.releaseSupervise()
 		return m, func() tea.Msg {
 			// CloseWorkspace logs the parked event then kills the session,
 			// which takes down this process — so on success nothing below
 			// runs. A returned error means the kill never happened; surface it.
 			if err := CloseWorkspace(stateDir, label); err != nil {
-				return flashMsg(err.Error())
+				return parkFailedMsg{err: err}
 			}
 			return nil
 		}

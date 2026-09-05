@@ -17,8 +17,8 @@ gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
                            #   sentinel arrives. Read the Monitoring section
                            #   below before writing ANY completion detector.
 gv supervise              # HEADLESS loop that emits the transitions gv watch
-     [--interval 30s]      #   streams — the cockpit runs one for you when it's
-                           #   open (part 4); on a host with no desk cockpit
+     [--interval 30s]      #   streams — an OPEN cockpit already is one (it holds
+                           #   the lock); on a host with no desk cockpit
                            #   (a VPS running overflow workers), run this
                            #   yourself. One writer at a time — a second one
                            #   (or the cockpit's own) refuses, naming the pid.

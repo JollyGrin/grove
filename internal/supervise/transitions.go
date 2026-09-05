@@ -46,15 +46,33 @@ type Observation struct {
 // for the waiting/vanished debounce windows. In-process only, NEVER
 // persisted — a restart simply re-arms the timers, delaying the next
 // transition by the hysteresis window rather than ever losing one.
+//
+// It also shadows what this emitter last appended per ticket (grove-254):
+// a driver whose fold can lag its own appends — the cockpit, where an
+// ad-hoc refresh in flight during an append delivers a task folded BEFORE
+// the event landed — would otherwise re-derive the same transition from
+// the stale fold and emit it twice. The shadow wins over the fold only
+// while it is strictly newer than the fold's own stamp; the moment the
+// fold catches up (same event, same time) it is authoritative again.
 type Memory struct {
 	waitingSince   map[string]time.Time
 	notClaudeSince map[string]time.Time
+	lastDelivery   map[string]stamped
+	lastLiveness   map[string]stamped
+}
+
+// stamped is one emitted state and the time of the event that set it.
+type stamped struct {
+	state string
+	at    time.Time
 }
 
 // NewMemory returns an empty, ready-to-use Memory. A caller may also pass a
 // zero-value &Memory{} — Transitions lazily initializes it.
 func NewMemory() *Memory {
-	return &Memory{waitingSince: map[string]time.Time{}, notClaudeSince: map[string]time.Time{}}
+	m := &Memory{}
+	m.init()
+	return m
 }
 
 func (m *Memory) init() {
@@ -63,6 +81,12 @@ func (m *Memory) init() {
 	}
 	if m.notClaudeSince == nil {
 		m.notClaudeSince = map[string]time.Time{}
+	}
+	if m.lastDelivery == nil {
+		m.lastDelivery = map[string]stamped{}
+	}
+	if m.lastLiveness == nil {
+		m.lastLiveness = map[string]stamped{}
 	}
 }
 
@@ -74,6 +98,78 @@ func (m *Memory) forget(ticket string) {
 	delete(m.notClaudeSince, ticket)
 }
 
+// prevDelivery is the delivery state to diff against: the fold's, unless
+// this Memory emitted a newer one the fold has not caught up with yet.
+func (m *Memory) prevDelivery(t *state.Task) string {
+	prev, at := state.DeliveryNone, time.Time{}
+	if t.Delivery != nil {
+		prev, at = t.Delivery.State, t.Delivery.At
+	}
+	if s, ok := m.lastDelivery[t.Ticket]; ok && at.Before(s.at) {
+		return s.state
+	}
+	return prev
+}
+
+// prevLiveness is the liveness twin of prevDelivery.
+func (m *Memory) prevLiveness(t *state.Task) string {
+	prev, at := state.LivenessOK, time.Time{}
+	if t.Liveness != nil {
+		prev, at = t.Liveness.State, t.Liveness.At
+	}
+	if s, ok := m.lastLiveness[t.Ticket]; ok && at.Before(s.at) {
+		return s.state
+	}
+	return prev
+}
+
+// remember records an emitted event's resulting state so the next
+// observation diffs against it until the fold carries the same stamp.
+func (m *Memory) remember(ev state.Event) {
+	if st, ok := deliveryStateOf(ev.Type); ok {
+		m.lastDelivery[ev.Ticket] = stamped{state: st, at: ev.Time}
+	}
+	if st, ok := livenessStateOf(ev.Type); ok {
+		m.lastLiveness[ev.Ticket] = stamped{state: st, at: ev.Time}
+	}
+}
+
+// deliveryStateOf maps a delivery event type to the Delivery state it
+// folds to (the same table as state.foldDelivery).
+func deliveryStateOf(evType string) (string, bool) {
+	switch evType {
+	case state.EvPROpened, state.EvPRUpdated:
+		return state.DeliveryOpened, true
+	case state.EvPRCIFailed:
+		return state.DeliveryCIFailed, true
+	case state.EvPRConflicting:
+		return state.DeliveryConflicting, true
+	case state.EvPRReady:
+		return state.DeliveryReady, true
+	case state.EvPRMerged:
+		return state.DeliveryMerged, true
+	case state.EvPRClosed:
+		return state.DeliveryClosed, true
+	}
+	return "", false
+}
+
+// livenessStateOf maps a liveness event type to the Liveness state it
+// folds to (the same table as state.foldLiveness).
+func livenessStateOf(evType string) (string, bool) {
+	switch evType {
+	case state.EvWorkerWaiting:
+		return state.LivenessWaiting, true
+	case state.EvWorkerVanished:
+		return state.LivenessVanished, true
+	case state.EvWorkerErrored:
+		return state.LivenessErrored, true
+	case state.EvWorkerRecovered:
+		return state.LivenessOK, true
+	}
+	return "", false
+}
+
 // Transitions derives the events.jsonl records for one Observation.
 func Transitions(obs Observation, mem *Memory) []state.Event {
 	if obs.Task == nil || mem == nil {
@@ -81,8 +177,11 @@ func Transitions(obs Observation, mem *Memory) []state.Event {
 	}
 	mem.init()
 	var evs []state.Event
-	evs = append(evs, deliveryTransitions(obs)...)
+	evs = append(evs, deliveryTransitions(obs, mem)...)
 	evs = append(evs, livenessTransitions(obs, mem)...)
+	for _, ev := range evs {
+		mem.remember(ev)
+	}
 	return evs
 }
 
@@ -92,15 +191,12 @@ func mkEvent(evType, ticket string, at time.Time, data map[string]string) state.
 
 // --- Delivery ---------------------------------------------------------
 
-func deliveryTransitions(obs Observation) []state.Event {
+func deliveryTransitions(obs Observation, mem *Memory) []state.Event {
 	if !obs.PRKnown {
 		return nil
 	}
 	t := obs.Task
-	prev := state.DeliveryNone
-	if t.Delivery != nil {
-		prev = t.Delivery.State
-	}
+	prev := mem.prevDelivery(t)
 	next, evType, data := deriveDelivery(obs.PR, prev)
 	if next == prev {
 		return nil
@@ -195,10 +291,7 @@ func livenessTransitions(obs Observation, mem *Memory) []state.Event {
 		return nil
 	}
 
-	prev := state.LivenessOK
-	if t.Liveness != nil {
-		prev = t.Liveness.State
-	}
+	prev := mem.prevLiveness(t)
 
 	// errored — immediate, no hysteresis: a marker in the pane capture
 	// means the turn is already dead, waiting out a debounce only delays

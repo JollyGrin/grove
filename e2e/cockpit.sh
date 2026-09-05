@@ -113,6 +113,22 @@ case " \$cmd " in
 esac
 EOF
 chmod +x "$SCRATCH/bin/ssh"
+
+say "fake gh on PATH (grove-254: the cockpit supervises its PR poll)"
+# supervise.sh's fake-gh pattern: the pr-list answer is a file this script
+# rewrites between steps. Branch-aware, because the seeded fleet has TWO
+# tasks in the same repo and only task-001 is the subject — task-002 (the
+# tombstone) must keep reading "no PR".
+GH_ANSWER="$SCRATCH/gh-answer.json"
+echo '[]' > "$GH_ANSWER"
+cat > "$SCRATCH/bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"pr list"*"--head task-001-demo"*) cat "$GH_ANSWER" ;;
+  *) echo '[]' ;;
+esac
+EOF
+chmod +x "$SCRATCH/bin/gh"
 export PATH="$SCRATCH/bin:$PATH"
 
 # Start the isolated server explicitly, with PATH already scratch'd, so the
@@ -299,6 +315,79 @@ tmux send-keys -t "$PANE0" a
 wait_grep 'was handed off to pc' || fail "a on a tombstone must flash read-only, not relay:
 $CAP"
 
+# --- grove-254: the cockpit drives the supervise engine on its beat ---
+# Same fake gh as e2e/supervise.sh, driven through the LIVE cockpit: `r`
+# is the ad-hoc PR poll (prsMsg), so each flip lands within one keypress
+# instead of the 30s prTick. Assertions read events.jsonl, the contract.
+
+# wait_events <type> <count> — poll until exactly <count> events of the
+# type are in the log; leaves the last count in EV_COUNT.
+wait_events() {
+  local typ="$1" want="$2" i
+  for i in $(seq 1 50); do
+    EV_COUNT="$(grep -c "\"type\":\"$typ\"" "$GROVE_STATE_DIR/events.jsonl" || true)"
+    [ "$EV_COUNT" -eq "$want" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+say "grove-254: the open cockpit holds supervise.lock — a gv supervise alongside is refused"
+LOCK="$GROVE_STATE_DIR/supervise.lock"
+[ -f "$LOCK" ] || fail "cockpit did not take $LOCK"
+HOLDER="$(cat "$LOCK")"
+kill -0 "$HOLDER" 2>/dev/null || fail "lock holder pid '$HOLDER' is not a live process"
+set +e
+"$GV" supervise --once > "$SCRATCH/supervise-refused.out" 2>&1
+RC=$?
+set -e
+[ "$RC" -ne 0 ] || fail "gv supervise must refuse while the cockpit holds the lock: $(cat "$SCRATCH/supervise-refused.out")"
+grep -q "already supervised (pid $HOLDER)" "$SCRATCH/supervise-refused.out" \
+  || fail "refusal did not name the cockpit's pid $HOLDER: $(cat "$SCRATCH/supervise-refused.out")"
+
+say "gh: none → open; r polls → pr_opened exactly once"
+cat > "$GH_ANSWER" <<'JSON'
+[{"number":41,"url":"https://example.test/pr/41","state":"OPEN","mergedAt":"","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","statusCheckRollup":[{"name":"build","status":"IN_PROGRESS"}],"comments":[]}]
+JSON
+tmux send-keys -t "$PANE0" r
+wait_events pr_opened 1 || fail "pr_opened count = $EV_COUNT after the open flip, want 1:
+$(tail -3 "$GROVE_STATE_DIR/events.jsonl")"
+
+say "…r again on the same answer: still exactly one"
+tmux send-keys -t "$PANE0" r
+sleep 1.5
+wait_events pr_opened 1 || fail "pr_opened re-fired on an unchanged poll: count = $EV_COUNT"
+grep '"type":"pr_' "$GROVE_STATE_DIR/events.jsonl" > "$SCRATCH/pr-events.out" || true
+grep -q '"ticket":"task-002"' "$SCRATCH/pr-events.out" && fail "the tombstone task-002 got a delivery event" || true
+
+say "gh: green + CLEAN → pr_ready, and the footer flash says so"
+cat > "$GH_ANSWER" <<'JSON'
+[{"number":41,"url":"https://example.test/pr/41","state":"OPEN","mergedAt":"","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"name":"build","conclusion":"SUCCESS"}],"comments":[]}]
+JSON
+tmux send-keys -t "$PANE0" r
+wait_events pr_ready 1 || fail "pr_ready did not land: count = $EV_COUNT"
+wait_grep 'task-001 ready' || fail "the pr_ready flash never rendered:
+$CAP"
+
+say "gh: MERGED → pr_merged exactly once; pr_opened still once"
+cat > "$GH_ANSWER" <<'JSON'
+[{"number":41,"url":"https://example.test/pr/41","state":"MERGED","mergedAt":"2026-09-05T00:00:00Z","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"name":"build","conclusion":"SUCCESS"}],"comments":[]}]
+JSON
+tmux send-keys -t "$PANE0" r
+wait_events pr_merged 1 || fail "pr_merged did not land exactly once: count = $EV_COUNT"
+wait_events pr_opened 1 || fail "pr_opened count drifted to $EV_COUNT"
+
+say "q quits the cockpit → the lock is free → gv supervise --once runs"
+tmux send-keys -t "$PANE0" q
+SUP_OK=0
+for _ in $(seq 1 25); do
+  if "$GV" supervise --once > "$SCRATCH/supervise-after.out" 2>&1; then SUP_OK=1; break; fi
+  sleep 0.2
+done
+[ "$SUP_OK" -eq 1 ] || fail "gv supervise --once still refused after the cockpit quit: $(cat "$SCRATCH/supervise-after.out")"
+# The headless pass sees the same fold the cockpit left: nothing to re-emit.
+wait_events pr_merged 1 || fail "gv supervise re-emitted after the cockpit's appends: pr_merged count = $EV_COUNT"
+
 # --- grove-199: the `@`-armed remote spawn ---
 # A WORKSPACE cockpit, because a remote chat spawns into the HOST's twin of
 # the workspace the operator is standing in — the label is what travels, so
@@ -402,4 +491,4 @@ wait_grep 'remote spawn cancelled' || fail "esc did not cancel the arming:
 $CAP"
 [ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "a cancelled arming still reached the host"
 
-say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host"
+say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host, the cockpit supervises"
