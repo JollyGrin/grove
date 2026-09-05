@@ -28,8 +28,8 @@ tracked by exactly one host at a time. Ownership moves with
   Everything below runs as that user; the hooks and `hosts.gv` path in the
   Mac's config.yaml assume its home directory.
 - **Linger:** `sudo loginctl enable-linger dean` so user systemd units keep
-  running without a login session — nothing needs it today, but the
-  planned sidecars (Telegram, watchers) ship as user units.
+  running without a login session. Two sidecars need it — `gv chat serve`
+  and `gv supervise`, see §Sidecars below.
 
 ## Tailscale
 
@@ -207,6 +207,183 @@ running it over ssh reports that host's workspaces — there is no
 cross-host push, and nothing is ever overwritten: the refresh drops
 `CLAUDE.md.new` beside the brain for you to diff.
 
+## Sidecars: user systemd units
+
+Two grove processes are long-running and want to survive a closed lid, a
+dropped ssh session and a reboot: the phone UI (`gv chat serve`) and the
+headless supervisor (`gv supervise`). Both belong in **user** systemd units,
+not in a tmux window — a tmux window dies with the tmux server, and nothing
+restarts it.
+
+Prerequisites, once:
+
+```bash
+sudo loginctl enable-linger dean       # user units run with no login session
+mkdir -p ~/.config/systemd/user
+```
+
+Two things about the `systemd --user` environment that bite here:
+
+- **It does not read `~/.profile`.** The default `$PATH` is
+  `/usr/local/bin:/usr/bin:/bin` (+ `~/.local/bin`) — no `~/go/bin`, no
+  `/usr/local/go/bin`. Hence the absolute `%h/go/bin/gv` in every
+  `ExecStart`. What gv shells out to (`gh`, `git`, `tmux`) is all in
+  `/usr/bin`, so nothing else needs a `PATH=` override.
+- **`%h` is the unit-file specifier for the user's home** — don't hardcode
+  `/home/dean`.
+
+### `gv-chat.service` — the phone UI
+
+`~/.config/systemd/user/gv-chat.service`:
+
+```ini
+[Unit]
+Description=grove chat UI (gv chat serve)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/go/bin/gv chat serve --port 3000
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gv-chat.service
+tailscale serve --bg 3000        # the entire auth story — see README §Chats from a phone
+```
+
+`gv chat serve` is registry-driven: one process serves every registered
+workspace, so `WorkingDirectory=%h` is deliberate — there is no ambient
+workspace to pick up, and exactly one of these units per host.
+
+### `gv-supervise.service` — the headless supervisor
+
+`gv supervise` (grove-253) is the transition stream — `pr_ready`,
+`pr_ci_failed`, `pr_conflicting`, `pr_merged`, `worker_waiting`,
+`worker_vanished`, `worker_errored` and the rest — appended to
+`events.jsonl` and pushed to the phone. As a unit it runs with **zero
+orchestrator chats and zero cockpits alive**, which is the whole point on a
+VPS: workers keep going after you close the laptop, and the phone still
+hears every transition.
+
+`~/.config/systemd/user/gv-supervise.service`:
+
+```ini
+[Unit]
+Description=grove supervisor (gv supervise) — grove-repo workspace
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/go/bin/gv supervise --interval 30s
+WorkingDirectory=%h/git/grove
+EnvironmentFile=-%h/.config/grove/.env
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gv-supervise.service
+systemctl --user status gv-supervise          # active (running)
+journalctl --user -u gv-supervise -n 20 -f    # transition rows, same format as gv watch
+                                              # (silent on a quiet fleet — see below)
+```
+
+- **`WorkingDirectory` is the config.** `gv supervise` is ambient-workspace
+  scoped and has no `--workspace`/`--host` flag: the cwd decides which
+  `.grove/config.yaml` and which `.grove/state` it reads. Point it at the
+  registered workspace root (`%h/git/grove` for the `grove-repo` twin) —
+  **one unit per supervised workspace**, each with its own file name and its
+  own `WorkingDirectory`. A unit left at `%h` supervises the *global* layer
+  instead, which is not what you want on a host that carries twins.
+- **ntfy is configured in `~/.config/grove/config.yaml`, not in the unit.**
+  The push path reads the `notify:` block from the **global** config
+  directly (`config.NotifySettings`, and `config.Dir()` is unconditionally
+  `~/.config/grove` — it is not workspace-aware), whatever workspace
+  supervise is standing in. A `notify:` block in a workspace's
+  `.grove/config.yaml` is silently ignored by pushes: no error, just
+  silence. Set the topic once, globally:
+
+  ```yaml
+  notify:
+    ntfy: https://ntfy.sh/<long-random-topic>
+    ntfy_body: full        # or title-only, to keep pane text off the ntfy server
+  ```
+
+  `EnvironmentFile=-%h/.config/grove/.env` is there for the model-profile
+  secrets (`OPENROUTER_API_KEY` and friends), not for ntfy. The leading `-`
+  makes the file optional, so the unit still starts clean on a host that
+  has none.
+- **Config errors beat the lock.** `gv supervise` loads the resolved config
+  before it takes the lock, so a `Restart=on-failure` crash-loop right after
+  `enable --now` is almost always a config problem, not a supervision one —
+  `journalctl --user -u gv-supervise -n 5` prints the exact
+  `gv: read config: …` line.
+- **`--interval 30s` is the cost-discipline setting.** Each pass is ≤2 tmux
+  execs per session, one capture per task and one `gh` round-trip per
+  tracked branch. 5s is the recommended floor (not enforced); 30s is right
+  for an unattended host.
+- **Single emitter — expect the second one to be refused.** The unit holds
+  a non-blocking `flock` on `<state>/supervise.lock`, so two processes can
+  never double-write `events.jsonl`. Anything else that tries exits 1
+  naming the holder:
+
+  ```
+  $ gv supervise --once
+  gv: already supervised (pid 1540110)
+  ```
+
+  That is the lock working, **not a bug**. The cockpit arbitrates the very
+  same lock (grove-254): while it is open the cockpit *is* the supervisor,
+  driving the engine on the tick it already runs — but only if it wins the
+  lock. Open one over ssh while the unit is running and it finds the lock
+  taken, renders
+
+  ```
+  ⟳ supervised by pid N ·
+  ```
+
+  in its header, and **never appends** — the unit stays the single emitter
+  and the cockpit just renders the stream it writes. Whoever holds the lock
+  emits; the other stays silent. To hand the emitter role back to a desk
+  cockpit — or to run a one-shot pass by hand — stop the unit first:
+
+  ```bash
+  systemctl --user stop gv-supervise.service
+  cd ~/git/grove && gv supervise --once --json
+  systemctl --user start gv-supervise.service
+  ```
+- **A quiet fleet logs nothing.** `gv supervise` prints only when a
+  transition fires, so on a host with no open PRs and no waiting worker
+  `journalctl --user -u gv-supervise` shows systemd's own `Started …` line
+  and then silence — that is healthy, not a hung loop. `systemctl --user
+  status` saying `active (running)` is the liveness signal; the one-shot
+  above is how you make it say something on demand.
+
+### After every `gv update`
+
+The unit's `ExecStart` path is fixed, so a new binary lands under the
+running process without it noticing — the old code keeps running until you
+restart it:
+
+```bash
+ssh grove-host 'gv update --yes'                        # read the brain sweep it prints
+ssh grove-host 'systemctl --user restart gv-chat.service gv-supervise.service'
+```
+
+Same rule for both units. (The brain sweep from `gv update --yes` is a
+separate follow-up — see the workspace-twins section above.)
+
 ## Mac side
 
 Add the host to the Mac's config.yaml (#176):
@@ -255,9 +432,12 @@ unquoted form dies with `zsh: grove-<label> not found` before `ssh` ever runs
 
 Tailscale app + Termius or Blink → `ssh grove-host` → `tmux attach -t
 '=grove-<label>'` (or `gv ls`). The `grove-mobile` cockpit (issue #5, parked)
-is the intended narrow-screen view once phone access is real; a Telegram
-sidecar (read-only fleet digest + `gv answer` relay, as a user systemd unit —
-hence `enable-linger`) is the next idea after that.
+is the intended narrow-screen view once phone access is real.
+
+For a phone that reads and steers without a terminal, and hears every
+transition with nothing attached, run the two sidecars above:
+`gv-chat.service` (the chat UI over `tailscale serve`) and
+`gv-supervise.service` (ntfy pushes for `pr_*` / `worker_*`).
 
 ## Appendix — if the host is a Windows PC (WSL2)
 
