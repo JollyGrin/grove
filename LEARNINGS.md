@@ -1,28 +1,35 @@
 # Grove — learnings
 
-> Working docs: [DESIGN.md](DESIGN.md) is the what/why ·
 > [TASKS.md](TASKS.md) is the status board · **LEARNINGS.md** is the
-> surprises — anything discovered the hard way or verified against source,
-> so we never re-derive (or re-break) it.
+> surprises — anything discovered the hard way or verified against
+> source, so we never re-derive (or re-break) it. Every entry is
+> verified fact, not opinion.
 >
-> Entry format: date · context · the fact · what it changed. Newest first
-> within each section. If a learning invalidates a DESIGN.md decision,
-> update the doc and note it here.
+> Entry format: `- **YYYY-MM-DD · the fact** — context, what it changed.`
+> Newest first within each section. If a learning invalidates a
+> DESIGN.md decision, update the doc and note it here. When an entry
+> generalizes into a rule, update the matching `.claude/skills/` skill
+> too — the skills are the distillation, this file is the dated log.
 >
-> **Distilled 2026-07-12** into `.claude/skills/` (tmux-discipline ·
-> shipping-gates · claude-code-facts) so workers load the rules
-> automatically. This file stays the dated log of record; when adding an
-> entry that generalizes into a rule, update the matching skill too.
+> **Append target — never open this file to add an entry.** When surprised:
 >
-> **Seeded 2026-07-03** from overstory-tui's LEARNINGS.md (@ `8c2f4f0`) —
-> the *generic* entries only; each was verified live in ovs. Grid-specific
-> entries (Linear pipeline rules, monorepo deploy semantics, worktree:setup
-> codegen gap) stay with ovs and will move into the Grid pack's L5 layer.
+>     scripts/log-append.py learnings --section "Go / CLI" <<'EOF'
+>     - **YYYY-MM-DD · the fact** — context, what it changed.
+>     EOF
 >
-> **Why-context lives in [docs/journal.md](docs/journal.md)** — the dated
-> narrative of why an era of work happened (arcs, not facts). Not loaded
-> into worker context; read it when an entry here or a TASKS.md row needs
-> its backstory.
+> (sections: `Claude Code behavior (verified in ovs)` · `tmux / git /
+> detector internals (verified against source)` · `Go / CLI` · `Remote /
+> attach architecture (verified against t3code source)` · `Field notes
+> (ovs, kept for judgment)`). That puts the entry at the top of its section
+> and, if the head is over its cap, moves the OLDEST entries into
+> `docs/archive/LEARNINGS-YYYY-MM.md` (their own month; same sections).
+> Nothing is ever deleted; 2026-06 holds the entries seeded from
+> overstory-tui. Looking for one? `grep -r <term> LEARNINGS.md
+> docs/archive/` — don't read the archive in. `internal/guidance` fails
+> `go test ./...` when this head is over its cap. Why-context (the
+> narrative behind an era) lives in [docs/journal.md](docs/journal.md),
+> never loaded into a session.
+> <!-- head-cap: 16384 -->
 
 ## Claude Code behavior (verified in ovs)
 

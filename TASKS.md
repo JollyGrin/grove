@@ -1,14 +1,45 @@
 # Grove — status board
 
-> Working docs: [DESIGN.md](DESIGN.md) is the what/why · **TASKS.md** is
-> the status board · [LEARNINGS.md](LEARNINGS.md) is the surprises.
+> **TASKS.md** is the status board · [LEARNINGS.md](LEARNINGS.md) is the
+> surprises · [docs/roadmap.md](docs/roadmap.md) is the open phases.
 > Fresh pickup? Read [HANDOFF.md](HANDOFF.md) first.
 >
-> Phases mirror DESIGN.md §13 (redrawn 2026-07-03 per design review).
-> Each phase gets a `docs/plans/` plan (plan-reviewer gated) before code.
+> Grove dogfoods itself: the backlog is GitHub issues on this repo
+> (`grove-N` = issue #N), worked by grove workers — issue → `gv grab
+> grove-N --repo grove` → PR → merge → `gv done`.
+>
+> **Append target — never open this file to add a row.** When you ship:
+>
+>     scripts/log-append.py tasks <<'EOF'
+>     - [x] <what shipped> (grove-N, YYYY-MM-DD): <one paragraph>
+>     EOF
+>
+> That puts your row at the top of §Now (newest first) and, if the head
+> is over its cap, moves the OLDEST shipped rows into
+> `docs/archive/TASKS-YYYY-MM.md` (their own month; same format, newest
+> first). Nothing is ever deleted. Looking for an old row? `grep -r <term>
+> TASKS.md docs/archive/` — don't read the archive in.
+> `internal/guidance` fails `go test ./...` when this head is over its cap.
+> <!-- head-cap: 16384 -->
 
-## Now (2026-07-12)
+## Now
 
+- [x] Guidance-surface diet (grove-275, 2026-09-05): measured what lands in
+      every session and trimmed it without dropping a rule. Always-resident
+      bytes (root CLAUDE.md + orchestrator seed) 24,474 → 17,340 (−29%):
+      history narration, duplicated rules, and `-h`-restated flag prose
+      removed; every load-bearing phrase still guarded by
+      `orchestrator/seed_test.go`. TASKS.md/LEARNINGS.md became small
+      heads (current month) with monthly archives under `docs/archive/`
+      and the open phases in `docs/roadmap.md`; HANDOFF.md rewritten lean
+      (original archived). `model-lanes` split into procedure (17.5k) +
+      two on-demand `reference/` files; shipping-gates lost its copy of
+      the CLAUDE.md hard rules. Kickoff templates untouched (nothing
+      provably redundant). Enforcement: each head declares `<!-- head-cap:
+      N -->`; `internal/guidance.TestRepoHeadsUnderCap` fails the gate when
+      a head is over it, and `scripts/log-append.py` is the append path —
+      a session adds a row/entry without reading the file, and the script
+      archives the oldest rows past the cap. PR left open for review.
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch
