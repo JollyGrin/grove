@@ -78,6 +78,40 @@
       open → ready → merged lands each event exactly once, `gv supervise`
       alongside is refused naming the cockpit's pid, `q` frees the lock;
       both tmux-conf modes.
+
+- [x] Unattended train 2/4: the **supervision mandate** — a standing,
+      scoped pre-authorization in the orchestrator brain (grove-273,
+      2026-09-05). Every steer was propose-then-yes, so an orchestrator
+      woken by a worker's question at 03:00 drafted a proposal and stalled
+      until morning; the only pre-authorization precedent
+      (dispatch-and-dismiss) is scoped to one turn. New `## Supervision
+      mandate` section in `orchestrator/CLAUDE.md`, 84 lines, between
+      Monitoring and Duties: a mandate exists only when the operator's
+      message (usually the #271 `--brief`) carries BOTH halves — scope and
+      an end condition — so a plain "watch grove-41" stays duty 4. It
+      watches with one `gv watch --json` over the scope **as a Monitor**,
+      never `run_in_background` (that tool notifies on exit; the stream
+      has none — see LEARNINGS), never a pane grep. In scope, act-then-
+      report: `gv answer` when the answer is derivable from the ticket,
+      the PR, or the mandate text, `gv nudge` on `pr_ci_failed`
+      (`data.failing` names the check) and `pr_conflicting`, and duty 8's
+      checkpoint nudge → `gv pause`. Out, always: `done`, `untrack`,
+      `adopt` (it can resurrect the rotted context), `sweep`, `handoff`,
+      merges, issue closes, ticket comments, un-named grabs, and any
+      unsure answer — each becomes an ntfy push and the mandate KEEPS
+      RUNNING. `internal/notify` is Go, so the seed teaches the equivalent
+      `curl`, reading the topic from `notify.ntfy` in config.yaml — NOT
+      `.env`, which holds API keys only (the ticket had this wrong;
+      hardcoding or misreading it means a silently-never-sent push, since
+      `notify.Push` is silent on every failure). Guardrails gained the
+      one-sentence carve-out so the two sections cannot contradict, and
+      Monitoring's `run_in_background`/Monitor mapping was corrected in
+      place. Tripwire `TestSeedTeachesSupervisionMandate` asserts INSIDE
+      the section (a whole-file substring search would stay green after
+      deleting it) and splits in-scope from out- at the `**Out of scope`
+      boundary, plus a ≤95-line budget — the seed is resident in every
+      orchestrator turn. Falsified both ways before shipping.
+
 - [x] Unattended train 1/4: `gv orchestrator new --brief T` /
       `--brief-file F` — a standing brief as the chat's FIRST user message
       (grove-271, 2026-09-05). The goal the train serves: dispatch from

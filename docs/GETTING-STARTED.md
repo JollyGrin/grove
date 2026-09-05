@@ -185,6 +185,31 @@ happens, so `gv watch` run from anywhere sharing that state dir sees them
 too — only one `gv supervise` (or the cockpit) may emit at a time, so a
 second one exits immediately naming the pid already running.
 
+### Supervising with the laptop closed
+
+A remote orchestrator can watch workers while your Mac is asleep — it runs
+in its own tmux session on the host, so nothing dies with the lid. Two
+lines from the Mac: dispatch the work there, then spawn the chat there
+with a **standing brief** as its first message.
+
+```
+gv grab DEV-41 --repo myapp --host grove-host
+gv orchestrator new --host grove-host --workspace myws --brief-file ~/mandate.md
+```
+
+`--brief-file` is read locally (a path is local knowledge — only the text
+travels) and lands as the chat's first user message, before you can type
+into the pane. If that brief is a **supervision mandate** — it names the
+tickets in scope and the condition to stop at — the orchestrator brain
+treats it as a standing pre-authorization to `gv answer`, `gv nudge`, and
+checkpoint-and-`pause` those tasks on its own, and to push you over ntfy
+for anything else (`done`, `untrack`, `adopt`, a design question it cannot
+derive). It never ends a task unattended. The mandate section of
+`orchestrator/CLAUDE.md` carries a brief you can copy; the host also wants
+a `gv supervise` running, since it has no desk cockpit to emit transitions
+— as a systemd unit, so it survives the reboot too (remote-host-setup.md
+§Sidecars).
+
 ### Dashboard keys (left pane)
 
 Press **`?`** for the full help overlay. The main keys:
