@@ -15,7 +15,10 @@
 'use strict';
 
 var el = function (id) { return document.getElementById(id); };
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null };
+/* `group` is the turn's open "N steps" row, or null when the last thing
+ * rendered was prose (grove-261); `working` is the indicator's state. Both
+ * are pure view state — nothing on the wire knows they exist. */
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -286,6 +289,10 @@ function screenChat(a) {
   setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + c.kind : 'chat', back);
   var main = el('main');
   main.textContent = '';
+  /* A fresh transcript starts with no open group and nothing running —
+   * the stream that is about to replay decides both. */
+  view.group = null;
+  setWorking(false);
   if (!c) {
     main.append(h('div', 'empty', 'this chat is not in the current list — pull ⟳ to refresh'));
     el('footer').hidden = true;
@@ -348,33 +355,179 @@ function closeStream() {
 }
 
 /* appendEntry renders one `gv chat tail` line — the same JSON a piped CLI
- * would print. Assistant prose goes through marked; a tool call collapses
- * to one line the reader can open. Thinking is collapsed by default: on a
- * phone it is the difference between a readable conversation and a wall. */
+ * would print. Assistant prose goes through marked; everything a turn did
+ * to produce it — every tool_use, tool_result and thinking block between
+ * one prose answer and the next — collapses into ONE "N steps" row
+ * (grove-261). Before that, a twelve-tool turn was twelve grey rows with
+ * thinking rows interleaved, so on a phone the reply sat twenty rows below
+ * the question. Nothing is hidden by the grouping: the group opens to the
+ * same per-entry <details> rows it always rendered.
+ *
+ * This is presentation only. The stream contract is untouched — every
+ * entry still arrives once, in seq order, and lands in the DOM. */
 function appendEntry(e) {
   var main = el('main');
   var stick = main.scrollHeight - main.scrollTop - main.clientHeight < 120;
-  var node;
-  if (e.kind === 'tool_use' || e.kind === 'tool_result') {
-    node = h('details', 'tool');
-    var mark = e.kind === 'tool_use' ? '▸ ' : '◂ ';
-    node.append(h('summary', '', mark + (e.tool || 'tool') + ' — ' + oneLine(e.text)));
-    node.append(h('pre', '', e.text || ''));
-  } else if (e.kind === 'thinking') {
-    node = h('details', 'tool think');
-    node.append(h('summary', '', '… thinking'));
-    node.append(h('pre', '', e.text || ''));
-  } else if (e.role === 'assistant') {
-    node = h('div', 'msg assistant');
-    /* Safe because of the server's Content-Security-Policy, not because
-     * marked sanitizes (it does not, since v8). See index.html's note. */
-    node.innerHTML = window.marked ? window.marked.parse(e.text || '') : '';
-    if (!window.marked) node.textContent = e.text || '';
+  if (isStep(e)) {
+    growGroup(main, e);
   } else {
-    node = h('div', 'msg user', e.text || '');
+    /* Prose — the operator's or the agent's — closes the group; the next
+     * step opens a new one. That is the whole grouping rule, and it needs
+     * nothing from the server: a turn's boundary is already visible in the
+     * shape of the stream. */
+    view.group = null;
+    var node;
+    if (e.role === 'assistant') {
+      node = h('div', 'msg assistant');
+      /* Safe because of the server's Content-Security-Policy, not because
+       * marked sanitizes (it does not, since v8). See index.html's note. */
+      node.innerHTML = window.marked ? window.marked.parse(e.text || '') : '';
+      if (!window.marked) node.textContent = e.text || '';
+    } else {
+      node = h('div', 'msg user', e.text || '');
+    }
+    main.append(node);
   }
-  main.append(node);
+  /* "working…" is read off the shape of the stream, not off any state the
+   * server keeps: anything that is not the agent's prose means the turn is
+   * still going, and the prose is what ends it. Garnish, so it is wrong in
+   * the cases a heuristic is wrong (a turn that died mid-tool, a chat left
+   * on the operator's last message) — which is exactly why it never
+   * touches the composer. Replay lands on the same answer as live append,
+   * since each entry sets it and the last one wins. */
+  setWorking(!(e.role === 'assistant' && e.kind === 'text'));
   if (stick) main.scrollTop = main.scrollHeight;
+}
+
+/* A step is the machinery of a turn rather than a thing said. tool_result
+ * blocks arrive under the USER role (that is how the wire carries them), so
+ * this reads kind and never role. */
+function isStep(e) {
+  return e.kind === 'tool_use' || e.kind === 'tool_result' || e.kind === 'thinking';
+}
+
+/* growGroup appends a step to the turn's group, opening one if the last
+ * thing rendered was prose. Live append and replay go through here
+ * identically — the group is just "the open one", so entries streaming in
+ * grow the row already on screen instead of starting a new one. */
+function growGroup(main, e) {
+  if (!view.group) {
+    var box = h('details', 'steps');
+    var sum = h('summary', '', '');
+    var body = h('div', 'steps-body');
+    box.append(sum, body);
+    main.append(box);
+    view.group = { sum: sum, body: body, n: 0, tool: '' };
+  }
+  var g = view.group;
+  g.n++;
+  if (e.tool) g.tool = e.tool;
+  else if (!g.tool) g.tool = 'thinking';
+  g.sum.textContent = '▸ ' + g.n + (g.n === 1 ? ' step' : ' steps') + ' · ' + g.tool;
+  g.body.append(stepRow(e));
+}
+
+/* One step's own row — collapsed to a headline, expandable to everything.
+ * Unchanged in kind from grove-218; what changed is that a tool_use's
+ * headline is now the CALL rather than its input JSON. */
+function stepRow(e) {
+  if (e.kind === 'thinking') {
+    var t = h('details', 'tool think');
+    t.append(h('summary', '', '… thinking'));
+    t.append(h('pre', '', e.text || ''));
+    return t;
+  }
+  var node = h('details', 'tool');
+  var use = e.kind === 'tool_use';
+  var head = use ? toolSummary(e.tool, e.text) : oneLine(e.text);
+  node.append(h('summary', '', (use ? '▸ ' : '◂ ') + (e.tool || 'tool') + ' — ' + head));
+  node.append(h('pre', '', use ? toolDetail(e.text) : (e.text || '')));
+  return node;
+}
+
+/* SALIENT is the one field that IS the call, per tool: for a Bash row the
+ * command, not `{"command":"…","description":"…"}`. GENERIC catches the
+ * tools not listed — including whatever MCP server the operator wired up
+ * this week — by looking for the field names that carry a call's subject.
+ * Anything that yields nothing readable falls back to the compact JSON,
+ * which is where every row started. */
+var SALIENT = {
+  Bash: ['command'],
+  BashOutput: ['bash_id'],
+  Read: ['file_path'],
+  Write: ['file_path'],
+  Edit: ['file_path'],
+  NotebookEdit: ['notebook_path'],
+  Glob: ['pattern'],
+  Grep: ['pattern'],
+  WebFetch: ['url'],
+  WebSearch: ['query'],
+  Task: ['description'],
+  Agent: ['description'],
+  Skill: ['skill'],
+  SlashCommand: ['command'],
+  TodoWrite: ['todos']
+};
+var GENERIC = ['command', 'file_path', 'notebook_path', 'path', 'pattern',
+  'query', 'url', 'description', 'title', 'name', 'skill', 'prompt', 'text'];
+
+function toolSummary(tool, text) {
+  var input = parseInput(text);
+  if (!input) return oneLine(text);
+  var keys = (SALIENT[tool] || []).concat(GENERIC);
+  var list = null, listKey = '';
+  for (var i = 0; i < keys.length; i++) {
+    var v = input[keys[i]];
+    if (typeof v === 'string' && v.trim()) return oneLine(v);
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (!list && Array.isArray(v) && v.length) { list = v; listKey = keys[i]; }
+  }
+  /* A call whose subject is a LIST (TodoWrite's todos) says how many rather
+   * than spilling the array into a one-line summary. */
+  if (list) return list.length + ' ' + listKey;
+  /* Nothing named — an MCP tool the operator wired up this week, say. Its
+   * FIRST string field, named, still beats a braces-and-quotes blob: the
+   * transcript preserves the order the model wrote them in, and the first
+   * one is nearly always the subject. */
+  var own = Object.keys(input);
+  for (var j = 0; j < own.length; j++) {
+    var w = input[own[j]];
+    if (typeof w === 'string' && w.trim()) return oneLine(own[j] + ': ' + w);
+  }
+  return oneLine(text);
+}
+
+/* The expanded row keeps the whole input — a headline is a shortcut, never
+ * a substitute. Field-per-line rather than the raw compact JSON, because
+ * the field that matters is usually a shell command and reading one back
+ * through \n escapes and quote soup is the thing this row exists to fix.
+ * Anything that is not a plain object prints exactly as it arrived. */
+function toolDetail(text) {
+  var input = parseInput(text);
+  if (!input) return text || '';
+  var keys = Object.keys(input);
+  if (!keys.length) return text || '';
+  return keys.map(function (k) {
+    var v = input[k];
+    var s = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+    return s.indexOf('\n') >= 0 ? k + ':\n' + s : k + ': ' + s;
+  }).join('\n');
+}
+
+function parseInput(text) {
+  if (!text) return null;
+  var o;
+  try { o = JSON.parse(text); } catch (_) { return null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  return o;
+}
+
+/* The indicator lives in the composer's own strip and is never a gate: the
+ * operator can queue the next message while a turn is still running, which
+ * is how the desk works too. */
+function setWorking(on) {
+  view.working = !!on;
+  el('working').hidden = !on;
 }
 
 function oneLine(s) {
@@ -429,7 +582,14 @@ function composer(c) {
      * slow on purpose (bracketed paste, settle, a separate Enter, then a
      * scrape proving it SUBMITTED), so the button says so. */
     api('/api/chats/' + encodeURIComponent(addr(c)) + '/send', { text: body })
-      .then(function () { text.value = ''; autosize(); })
+      .then(function () {
+        text.value = '';
+        autosize();
+        /* Delivered, so the turn is running — say so now rather than
+         * waiting for the agent's first thinking block to land. The
+         * stream takes the indicator over from here. */
+        setWorking(true);
+      })
       .catch(showError)
       .then(function () {
         text.disabled = send.disabled = false;
