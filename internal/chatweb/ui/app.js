@@ -310,10 +310,12 @@ function screenChat(a) {
 }
 
 /* openStream replays the transcript and then follows it. Replay and live
- * append come down ONE stream, so there is no seam to get wrong: `since`
- * makes an EventSource reconnect (a phone waking up, a tailnet blip)
- * resume where it left off, and the seq check makes a duplicate replay
- * harmless either way. */
+ * append come down ONE stream, so there is no seam to get wrong. The
+ * reconnect a phone waking up or a tailnet blip forces is the browser's
+ * own: every entry arrives stamped `id: <seq>`, so EventSource replays that
+ * back as Last-Event-ID and the server resumes past it (grove-259) — no URL
+ * to rewrite here. The seq check below makes a duplicate replay harmless
+ * either way. */
 function openStream(a) {
   closeStream();
   var es = new EventSource('/api/chats/' + encodeURIComponent(a) + '/events');
@@ -577,7 +579,12 @@ document.addEventListener('visibilitychange', function () {
   syncPolling();
   refreshList();
 });
-window.addEventListener('online', refresh);
+/* Regaining the network refreshes the LISTS. A chat screen is deliberately
+ * left alone: re-rendering it wipes the transcript and re-opens the stream
+ * from seq 0, which is the full replay the SSE resume exists to avoid
+ * (grove-259). Its EventSource reconnects on its own, carrying
+ * Last-Event-ID, and onopen clears the offline class when it lands. */
+window.addEventListener('online', function () { if (isListScreen()) refresh(); });
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
 el('refresh').onclick = refresh;
 

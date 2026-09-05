@@ -1009,6 +1009,22 @@ curl -sN --max-time 3 "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/eve
 grep -q '"seq":1' "$SCRATCH/sse2.txt" && fail "--since must suppress entries the client already has" || true
 grep -q '"seq":3' "$SCRATCH/sse2.txt" || { cat "$SCRATCH/sse2.txt"; fail "--since 2 must resume at seq 3"; }
 
+say "grove-259: entries are stamped id: <seq>, and Last-Event-ID resumes past them"
+# The stamp is what makes the phone's own reconnect cheap: EventSource
+# replays the last id it saw as Last-Event-ID, so a wake from sleep resumes
+# instead of re-downloading the whole transcript.
+grep -q '^id: 1$' "$SCRATCH/sse.txt" || { cat "$SCRATCH/sse.txt"; fail "entry events must carry their seq as the SSE id"; }
+LAST_ID="$(grep '^id: ' "$SCRATCH/sse.txt" | tail -1 | cut -d' ' -f2)"
+[ -n "$LAST_ID" ] || fail "the stream handed the browser no id to reconnect with"
+curl -sN --max-time 3 -H "Last-Event-ID: 1" \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/events?follow=0" > "$SCRATCH/sse3.txt" 2>/dev/null || true
+grep -q '"seq":1' "$SCRATCH/sse3.txt" && { cat "$SCRATCH/sse3.txt"; fail "a reconnect re-sent an entry the browser already had"; } || true
+grep -q '"seq":2' "$SCRATCH/sse3.txt" || { cat "$SCRATCH/sse3.txt"; fail "a reconnect must stream the entries after Last-Event-ID"; }
+# Caught up: nothing to re-send at all.
+curl -sN --max-time 3 -H "Last-Event-ID: $LAST_ID" \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/events?follow=0" > "$SCRATCH/sse4.txt" 2>/dev/null || true
+grep -q '^event: entry$' "$SCRATCH/sse4.txt" && { cat "$SCRATCH/sse4.txt"; fail "a caught-up reconnect replayed the transcript anyway"; } || true
+
 say "grove-225: zero model_profiles is an empty list, not a 404 or a 500"
 # Nothing has written a global config yet, and the serve process runs from
 # $SCRATCH (no .grove marker) — so this is the no-config host, which must
