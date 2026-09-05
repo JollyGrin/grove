@@ -863,6 +863,103 @@ rc=0
 [ "$rc" -ne 0 ] || fail "a labelless --resume must exit non-zero"
 grep -q 'needs a workspace' "$SCRATCH/nolabel2.out" || { cat "$SCRATCH/nolabel2.out"; fail "wrong no-workspace error"; }
 
+# ---------------------------------------------------------------------------
+# grove-271: `--brief` / `--brief-file` — the chat's FIRST user message.
+#
+# The brief is handed to claude the way a worker's kickoff prompt is: a
+# file on disk, read by the shell as a positional argv at launch. So the
+# proof is argv, not the pane: a stand-in claude records what it was
+# actually given, and the brief file is compared byte-for-byte with the
+# text that was asked for — locally AND after an ssh hop that single-quotes
+# a three-line brief containing an apostrophe.
+# ---------------------------------------------------------------------------
+
+say "grove-271: workspace with an argv-recording claude"
+cat > "$SCRATCH/bin/argvclaude" <<EOF
+#!/usr/bin/env bash
+# Record the LAST argument (the prompt) where the test can find it, keyed
+# by the session id grove minted for this launch — then idle, so the pane
+# and its stamp outlive the assertion.
+id=unknown; last=; prev=
+for a in "\$@"; do
+  [ "\$prev" = "--session-id" ] && id="\$a"
+  prev="\$a"; last="\$a"
+done
+mkdir -p "$SCRATCH/argv"
+printf '%s' "\$last" > "$SCRATCH/argv/\$id.last"
+sleep 120
+EOF
+chmod +x "$SCRATCH/bin/argvclaude"
+BRIEFWS="$SCRATCH/briefws"
+mkrepo "$BRIEFWS"
+( cd "$BRIEFWS" && "$GV" init --yes --label briefws > /dev/null )
+cat >> "$BRIEFWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/argvclaude
+EOF
+
+say "grove-271: --brief seeds the first message of a detached --workspace chat"
+BRIEF_TEXT='watch grove-1'
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace briefws --brief "$BRIEF_TEXT" ) \
+  > "$SCRATCH/brief1.out" 2>&1 || { cat "$SCRATCH/brief1.out"; fail "the briefed spawn failed"; }
+cat "$SCRATCH/brief1.out"
+BID="$(pane_stamp grove-chat-briefws-1)"
+[ -n "$BID" ] || fail "the briefed chat was never stamped with a session id"
+for _ in $(seq 1 40); do [ -s "$SCRATCH/argv/$BID.last" ] && break; sleep 0.1; done
+[ "$(cat "$SCRATCH/argv/$BID.last" 2>/dev/null)" = "$BRIEF_TEXT" ] \
+  || { ls -la "$SCRATCH/argv" 2>/dev/null; fail "claude's argv must END with the brief text, got '$(cat "$SCRATCH/argv/$BID.last" 2>/dev/null)'"; }
+BRIEF_MD="$BRIEFWS/.grove/orchestrator/briefs/$BID.md"
+[ -f "$BRIEF_MD" ] || fail "no brief file at $BRIEF_MD (it is named by the session id)"
+printf '%s' "$BRIEF_TEXT" | cmp -s - "$BRIEF_MD" || { cat "$BRIEF_MD"; fail "the brief file is not the bytes that were asked for"; }
+grep -q "\"brief\":\"$BRIEF_MD\"" "$BRIEFWS/.grove/state/events.jsonl" || fail "the spawn event must record where the brief landed"
+
+say "grove-271: --brief-file survives the ssh hop byte-for-byte"
+# Three lines and an apostrophe: remote.Quote single-quotes the whole
+# brief, so the ' is the character that would break the relayed line.
+cat > "$SCRATCH/standing.md" <<'BEOF'
+watch grove-1 and grove-2
+nudge whichever one's been idle 20m
+don't merge anything — ping me instead
+BEOF
+( cd "$WS" && "$GV" orchestrator new --host pc --workspace briefws --brief-file "$SCRATCH/standing.md" ) \
+  > "$SCRATCH/brief2.out" 2> "$SCRATCH/brief2.err"
+cat "$SCRATCH/brief2.out"
+# Only the TEXT travels — never the local path — and it goes LAST, so a
+# retry's argv stays byte-equal to the hop it repeats.
+grep -Eq "\[fake ssh\] $GV orchestrator new --op-id [0-9a-f]{32} --as pc --workspace briefws --brief 'watch grove-1 and grove-2$" "$SCRATCH/brief2.err" \
+  || { cat "$SCRATCH/brief2.err"; fail "relayed argv wrong — want the brief text quoted and last"; }
+grep -q -- "--brief-file" "$SCRATCH/brief2.err" && fail "the local --brief-file path must never travel" || true
+BID2="$(pane_stamp grove-chat-briefws-2)"
+[ -n "$BID2" ] || fail "the relayed briefed chat was never stamped"
+BRIEF_MD2="$BRIEFWS/.grove/orchestrator/briefs/$BID2.md"
+cmp -s "$SCRATCH/standing.md" "$BRIEF_MD2" \
+  || { diff "$SCRATCH/standing.md" "$BRIEF_MD2" || true; fail "the receiving side's brief is not byte-equal to the file it came from"; }
+for _ in $(seq 1 40); do [ -s "$SCRATCH/argv/$BID2.last" ] && break; sleep 0.1; done
+# The argv is the file minus its trailing newline — `$(cat …)` strips those,
+# exactly as it does for a worker's kickoff prompt. Every line, every
+# apostrophe and the em dash are otherwise carried through unchanged.
+[ "$(cat "$SCRATCH/argv/$BID2.last" 2>/dev/null)" = "$(cat "$SCRATCH/standing.md")" ] \
+  || { cat "$SCRATCH/argv/$BID2.last" 2>/dev/null; fail "the agent's own argv must be the three-line brief, verbatim"; }
+
+say "grove-271: the impossible brief combinations are refused, and spawn nothing"
+BEFORE_BRIEF_N="$(chat_sessions briefws)"
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace chatws --brief 'watch it' --resume aaaa1111 ) \
+  > "$SCRATCH/briefbad1.out" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || fail "--brief with --resume must exit 1, got $rc"
+grep -q 'mutually exclusive' "$SCRATCH/briefbad1.out" || { cat "$SCRATCH/briefbad1.out"; fail "wrong --brief/--resume refusal"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace briefws --brief 'watch it' --brief-file "$SCRATCH/standing.md" ) \
+  > "$SCRATCH/briefbad2.out" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || fail "--brief with --brief-file must exit 1, got $rc"
+grep -q 'mutually exclusive' "$SCRATCH/briefbad2.out" || { cat "$SCRATCH/briefbad2.out"; fail "wrong --brief/--brief-file refusal"; }
+rc=0
+( cd "$WS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace briefws --brief '' ) \
+  > "$SCRATCH/briefbad3.out" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || fail "an empty --brief must exit 1 (never a silent no-op), got $rc"
+grep -q 'empty' "$SCRATCH/briefbad3.out" || { cat "$SCRATCH/briefbad3.out"; fail "wrong empty-brief refusal"; }
+[ "$(chat_sessions briefws)" -eq "$BEFORE_BRIEF_N" ] || fail "a refused brief spawned a chat anyway"
+
 say "the local half never spawns here"
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^grove-chat-' && fail "chat sessions leaked onto the local server" || true
 

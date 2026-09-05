@@ -9,6 +9,33 @@
 
 ## Now (2026-07-12)
 
+- [x] Unattended train 1/4: `gv orchestrator new --brief T` /
+      `--brief-file F` — a standing brief as the chat's FIRST user message
+      (grove-271, 2026-09-05). The goal the train serves: dispatch from
+      the Mac, close the lid, and a remote orchestrator keeps watching N
+      workers under a mandate — which needs a way to say what the mandate
+      IS at spawn time, before anyone can type into the pane. The brief
+      is handed over the way a worker's kickoff prompt is (`claude …
+      "$(cat <path>)"`, main.go:1583): written to
+      `<orchDir>/briefs/<session-id>.md` — named by the id, so it is
+      still findable from the conversation long after it scrolls off —
+      and appended to the BARE launch, ahead of `wrapOrchestratorLaunch`,
+      because the profile wrap ends in `exec <cmd> )` and anything after
+      that is the shell's argument, not claude's (the `--resume` rule,
+      re-applied). All three spawn shapes carry it: the cockpit pane, the
+      `--workspace` detached chat, and the `--host` hop, where only the
+      TEXT travels (`--brief-file` is read on the calling side — a path
+      is local knowledge) and `--brief` goes LAST in chatHopArgs /
+      chatManualRetry, so a retry's argv stays byte-equal to the hop it
+      repeats and the op-id receipt stays trustworthy. `remote.Quote`
+      single-quotes it, so a three-line brief holding an apostrophe
+      survives the ssh hop byte-for-byte (`e2e/chat.sh` asserts exactly
+      that, against a claude stand-in that records its own argv). Refused
+      rather than guessed: `--brief` + `--resume` (a revival already has
+      a conversation — the brief would land as an unrelated turn),
+      `--brief` + `--brief-file`, and an empty brief from either door.
+      The phone UI's POST new is unchanged.
+
 - [x] Supervisor train 3/4: `gv supervise` — the headless loop (grove-253,
       2026-09-05). Part 2 built the pure transition engine; nothing ran it
       yet. Each pass: `state.Peek` (read-only fold) → `state.Active` → one
