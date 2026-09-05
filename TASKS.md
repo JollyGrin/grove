@@ -9,6 +9,48 @@
 
 ## Now (2026-07-12)
 
+- [x] Unattended 3/4: `gv supervise` as a user systemd unit on the remote
+      host — docs + unit file (grove-272, 2026-09-05). Docs only, no Go.
+      `docs/remote-host-setup.md` gains a **§Sidecars: user systemd units**
+      between the workspace-twins and Mac-side sections, documenting both
+      long-running host processes as `~/.config/systemd/user/` units:
+      `gv-chat.service` (the phone UI, registry-driven, `WorkingDirectory=%h`,
+      one per host) and `gv-supervise.service`
+      (`ExecStart=%h/go/bin/gv supervise --interval 30s`,
+      `WorkingDirectory=%h/git/grove`, `Restart=on-failure`/`RestartSec=10`,
+      `EnvironmentFile=-%h/.config/grove/.env`). Four things the section
+      pins down: the cwd IS the config — supervise is ambient-workspace
+      scoped with no `--workspace`, so **one unit per supervised
+      workspace**; ntfy is NOT env — `notify.Push` reads the `notify:` block
+      from the **global** `~/.config/grove/config.yaml` via
+      `config.NotifySettings` whatever workspace it stands in, so a
+      workspace-only block is silently ignored (falsified at runtime, not
+      just read: `config.Dir()` stays `~/.config/grove` from inside a
+      workspace, and a workspace-only topic gets zero POSTs against a local
+      sink while a global one fires) and the `.env` (leading `-`, optional)
+      is only the model-profile secrets; the grove-253
+      single-emitter `flock` means anything else that tries exits 1 with
+      `gv: already supervised (pid N)` — verified live — which is the lock
+      working, not a bug — and since grove-254 the cockpit arbitrates the
+      same lock, so a cockpit opened over ssh under the unit renders
+      `⟳ supervised by pid N ·` in its header and never appends
+      (`systemctl --user stop` hands the emitter role back); and
+      `systemd --user` never reads `~/.profile`, hence the absolute
+      `%h/go/bin/gv` (its `gh`/`git`/`tmux` callees are all in `/usr/bin`).
+      The after-every-update note restarts BOTH units in one line, since the
+      `ExecStart` path is fixed and the running process holds the old code.
+      Two more traps the live dry-run turned up and the section now names:
+      a quiet fleet logs NOTHING (supervise prints only on a transition, so
+      `journalctl` showing just systemd's `Started …` is healthy — the
+      on-demand check is stop-unit → `gv supervise --once --json` →
+      start-unit), and `loadCfg` runs BEFORE the lock, so a crash-loop right
+      after `enable --now` is a config error, not a supervision one. Both
+      unit files pass `systemd-analyze verify` clean. `enable-linger` bullet
+      and the §Phone paragraph rewritten to point at it;
+      `docs/GETTING-STARTED.md`'s remote aside gains the one-sentence
+      pointer. Live install on groveremote + the ntfy round-trip are
+      operator-side (no key to that host from the worker).
+
 - [x] Supervisor train 4/4: the cockpit drives the engine on its existing
       beat (grove-254, 2026-09-05). While the cockpit is open it IS the
       supervisor: `refreshMsg` now carries each task's `detect.LiveInfo`
