@@ -315,7 +315,8 @@ ENC="$(printf '%s' "$WTDIR2" | tr '/.' '--')"
 PROJ="$HOME/.claude/projects/$ENC"
 mkdir -p "$PROJ"
 # Two models so the per-task model breakdown (grove-14) has a mix to show.
-# The tiny haiku entry keeps the total under $0.035 (still rounds to $0.03).
+# At current sonnet-5 pricing ($2/$10, grove-249) this totals ≈$0.0233;
+# the tiny haiku entry keeps it under $0.025 (still rounds to $0.02).
 {
   printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
   printf '%s\n' '{"timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
@@ -349,7 +350,7 @@ rm -rf "$HOME/.claude/projects"
 "$GV" cost --ledger > "$SCRATCH/ledger.out"
 grep -q 'task-001' "$SCRATCH/ledger.out" || fail "history lost after transcript deletion"
 grep -q 'Replace me' "$SCRATCH/ledger.out" || fail "history lost the title after transcript deletion"
-grep -q '0.03' "$SCRATCH/ledger.out" || fail "history lost the cost estimate (2k out tokens ≈ \$0.03)"
+grep -q '0.02' "$SCRATCH/ledger.out" || fail "history lost the cost estimate (2k out tokens ≈ \$0.02)"
 
 say "worktree process of a DONE task: audit reports it, sweep offers the kill (grove-156)"
 # Same discipline as the orphan-lookalike above: stubbed ps so the row is
