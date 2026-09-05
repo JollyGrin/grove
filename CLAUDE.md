@@ -2,102 +2,83 @@
 
 Repo-agnostic orchestrator for autonomous Claude Code sessions: one task →
 git worktree + tmux window + kickoff prompt → PR, with pluggable task
-backends (local markdown default; Linear/GitHub as adapters), model routing,
-a first-run wizard, and a layered learnings system. Grove is the OSS-ready
-successor to `overstory-tui` (`ovs`, at `~/git/thegrid/overstory-tui`),
-which stays frozen as the daily-driver reference implementation until
-grove passes the parity gate.
+backends (local markdown default; Linear/GitHub adapters), model routing,
+a first-run wizard, and a layered learnings system. OSS-ready successor to
+`overstory-tui` (`ovs`, `~/git/thegrid/overstory-tui`, frozen).
 
-Read [HANDOFF.md](HANDOFF.md) first if you are picking this repo up fresh.
-[DESIGN.md](DESIGN.md) is the founding what/why spec; deep designs live in
-`docs/` (connections/wizard, learnings, cockpit); [TASKS.md](TASKS.md) is
-the status board; [LEARNINGS.md](LEARNINGS.md) holds verified surprises —
-update both when you ship or get surprised. Plans go in `docs/plans/`.
-The recurring traps are distilled into `.claude/skills/`
-(tmux-discipline, shipping-gates, claude-code-facts) — load the matching
-skill before touching tmux, the test gate/e2e, or hook/session/transcript
-code. When a new learning generalizes into a rule, update the skill too;
-LEARNINGS.md stays the dated log. External surfaces (gv-<surface> repos)
-build against the plugin contract — [docs/plugins.md](docs/plugins.md) +
-the copyable plugin-authoring skill; changing any `--json` field or
-events.jsonl record is a contract change (additive-only, `e2e/plugin.sh`
-is the tripwire).
+## Docs — what to read, what to append
 
-## Running the binary (P0.0 done — safe, with two cautions)
+- Fresh pickup: [HANDOFF.md](HANDOFF.md). Rules that were learned from
+  incidents live in `.claude/skills/` — load the matching skill before
+  touching tmux (tmux-discipline), the test gate/e2e/merge (shipping-
+  gates), or hook/session/transcript code (claude-code-facts). When a new
+  learning generalizes into a rule, update the skill too.
+- **When you ship:** one row at the top of [TASKS.md](TASKS.md) §Now.
+  **When surprised:** one dated entry in [LEARNINGS.md](LEARNINGS.md).
+  Both files are small heads (current month); older rows/entries are in
+  `docs/archive/` — grep there, don't read it in.
+- Read only as the task needs: [DESIGN.md](DESIGN.md) (founding what/why),
+  `docs/*-design.md` (deep designs), [docs/roadmap.md](docs/roadmap.md)
+  (open phases), [docs/seed-manifest.md](docs/seed-manifest.md) (when
+  touching a package copied from ovs). Plans go in `docs/plans/`.
+- External surfaces (gv-<surface> repos) build against the plugin
+  contract, [docs/plugins.md](docs/plugins.md) + the plugin-authoring
+  skill. Any `--json` field or events.jsonl record is a contract:
+  additive-only; `e2e/plugin.sh` is the tripwire.
 
-**Resolved 2026-07-04 (Phase 0):** the P0.0 namespace rename is done —
-config `~/.config/grove/`, state `~/.local/state/grove/` (env override
-`GROVE_STATE_DIR`; since 2026-07-05 a repo/parent with a `.grove/` marker
-is a WORKSPACE — its own `.grove/{config.yaml,state,orchestrator}`,
-cockpit `grove-<label>`, ambient walk-up; the global paths are the
-legacy/defaults layer), `gv hook` commands, `grove`/`grove-mobile` cockpit
-sessions. The binary is safe to run and no longer touches overstory
-state (`e2e/dummy.sh` asserts it). One live-coexistence caution remains:
-`gv hooks install` writes the **shared** `~/.cc-work/settings.json`
-(tested to preserve ovs entries — but treat it with respect).
+## Layout
 
-Since grove-29 (P2) a workspace's cockpit **and** its workers share one
-`grove-<label>` session (window 0 = cockpit, 1+ = workers); the old
-`pr-<repo>` worker sessions and their vestigial `dashboard` shell are
-retired, so the ovs `pr-<repo>` coexistence constraint is gone — the
-operator now runs grove exclusively.
+Config `~/.config/grove/`, state `~/.local/state/grove/` (env override
+`GROVE_STATE_DIR`) are the global/defaults layer. A repo or parent dir
+with a `.grove/` marker is a WORKSPACE with its own
+`.grove/{config.yaml,state,orchestrator}`, found by ambient walk-up. A
+workspace's cockpit and its workers share one tmux session
+`grove-<label>` (window 0 = cockpit, 1+ = workers). `gv hooks install`
+writes the **shared** `~/.cc-work/settings.json` — it preserves other
+tools' entries, but treat it with respect.
 
 ## Build / test
 
-- `go build ./... && go vet ./... && go test ./...` must be green;
-  `gofmt -l .` empty.
-- **`gv update --yes` is the ONLY way to refresh the operator's
-  `~/go/bin/gv`. Never `go install ./cmd/gv` for that.** A push to main
-  auto-cuts a GitHub release within ~a minute (main pushed 15:20:39Z →
-  v0.1.30 published 15:21:41Z, 2026-08-31), so after a merge you wait,
-  then update. `go install` stamps the binary `dev`, which is exactly
-  what `gv update` refuses (`ErrDevBuild`, internal/update/update.go) —
-  so each `go install` guarantees the next one refuses too. To escape a
-  binary already stamped `dev`: `gv update --yes --force` once. Hooks
-  reference the absolute path, so no re-install of hooks either way.
-- For operator testing of an UNMERGED branch, neither applies — the
-  default is a throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`,
-  hand over that path — the installed gv and live sessions stay
-  untouched.
-- `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
-  scratch everything (the dummy-data pattern) — run it before merging
-  anything that touches the task lifecycle. `e2e/all.sh` runs all ten
-  suites; no CI covers them, so run it before merging anything that
-  touches the TUI as well (grove-79: three TUI PRs merged while
-  cockpit.sh + workspace.sh were red).
+- `go build ./... && go vet ./... && go test ./...` green; `gofmt -l .`
+  empty. Never pipe the gate (a pipe reports the pipe's exit status).
+- **Never `go install ./cmd/gv`.** The operator's `~/go/bin/gv` is
+  refreshed only by `gv update --yes` (a push to main auto-cuts a release
+  within about a minute); `go install` stamps the binary `dev`, which
+  `gv update` then refuses. To test an UNMERGED branch, hand over a
+  throwaway build: `go build -o /tmp/gv-<ticket> ./cmd/gv`.
+- `e2e/dummy.sh` runs the grab/ls/hook/untrack/done loop against scratch
+  everything; run it before merging anything that touches the task
+  lifecycle. `e2e/all.sh` runs every suite (no CI covers them) — run it
+  before merging anything that touches the TUI, tmux, or the lifecycle.
 
-## Hard rules (inherited from ovs, provider-neutral)
+## Hard rules (provider-neutral)
 
 - **The binary never mutates a task backend's terminal state.** Grove
-  reads; agents transition; humans finish. Zero terminal-state mutations in
-  Go, for every provider.
+  reads; agents transition; humans finish — for every provider.
 - **The binary never deletes worktrees/branches it didn't create** (audit
   reports orphans; removal is the human's call).
 - **`events.jsonl` is append-only** (O_APPEND + flock); `tasks.json` is a
-  derived view — never treat it as writable state.
-- Merge checks go through `gh` (`pr view --json state,mergedAt`), never git
-  ancestry — squash-merges break ancestry.
-- **Propose, then dispose** — orchestrator/autonomy never takes
+  derived view — never writable state.
+- Merge checks go through `gh` (`pr view --json state,mergedAt`), never
+  git ancestry — squash-merges break ancestry.
+- **Propose, then dispose** — orchestrator/autonomy never takes an
   irreversible or outward-facing action without human confirmation.
-- **`ovs` is frozen.** Never edit `~/git/thegrid/overstory-tui` from work
-  in this repo; learnings that would fix ovs get noted for deliberate
-  backport, not applied.
+- **`ovs` is frozen.** Never edit `~/git/thegrid/overstory-tui`; note
+  backports instead of applying them.
 
 ## Conventions
 
 - Decision logic lives in tested internal packages; `cmd/gv/main.go` is
   thin glue. TDD for anything with branching logic.
-- **Packages copied from ovs stay byte-comparable with upstream** (only the
-  import path differs) until a plan task deliberately generalizes them.
-  Record every deliberate divergence in
-  [docs/seed-manifest.md](docs/seed-manifest.md).
-- Design/plan flow: brainstorm → `docs/plans/YYYY-MM-DD-<slug>-design.md`
-  (design-reviewer) → `docs/plans/YYYY-MM-DD-<slug>.md` (plan-reviewer) →
-  execute. Non-trivial work on a short-lived branch in a worktree
-  (`~/git/.worktrees/grove/<slug>`), commit per plan task,
-  `git merge --ff-only` to main, push.
-- Repo shape: private `github.com/JollyGrin/grove`, direct-to-main history
-  for docs; branches for code.
-- E2E without touching anything live: dummy-data pattern — scratch `HOME`
-  (config) + state-dir env override + repo `claude:` set to `echo`; see
-  docs/seed-manifest.md §Dummy-data E2E.
+- Packages copied from ovs stay byte-comparable with upstream (only the
+  import path differs) until a plan task deliberately generalizes them;
+  record every divergence in docs/seed-manifest.md.
+- Non-trivial work: brainstorm → `docs/plans/YYYY-MM-DD-<slug>-design.md`
+  (design-reviewer) → `docs/plans/YYYY-MM-DD-<slug>.md` (plan-reviewer)
+  → execute on a short-lived branch in a worktree
+  (`~/git/.worktrees/grove/<slug>`), commit per plan task, then a PR
+  (or `git merge --ff-only`) to main. Docs go direct to main; code goes
+  through a branch.
+- E2E without touching anything live: the dummy-data pattern — scratch
+  `HOME` + `GROVE_STATE_DIR` + repo `claude:` set to `echo`
+  (docs/seed-manifest.md §Dummy-data E2E).
