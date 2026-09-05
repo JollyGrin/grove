@@ -35,14 +35,17 @@ a derived snapshot — never contractual, NEVER written.
 streams the workspace's transitions, one event per flushed stdout line —
 grove does the tailing, the offset bookkeeping and the torn-line handling.
 Default is FROM NOW (`--replay` / `--since` for history), so a baseline can
-never be sampled after the fact, and `--until <sentinel>` exits 0 exactly
-when that transition lands. The default type set covers every terminal
-state — including an idle stop with no STATUS line and `session_ended` — so
-a crashed worker is never silent. **Never derive completion from a tmux
-pane**: the kickoff prompt ends with all three `STATUS:` sentinel lines
-verbatim, so a pane grep fires on every task from second zero (grove-205).
-A poll-only consumer edge-detects on the `sentinel_at` row field (when the
-current sentinel landed) instead of keeping its own baseline.
+never be sampled after the fact, and `--until <sentinel or event type>`
+exits 0 exactly when that transition lands — a sentinel as before, or
+(grove-252) a bare event type: `--until pr_merged`, `--until
+worker_waiting`. The default type set covers every terminal state —
+including an idle stop with no STATUS line and `session_ended`, plus all
+eleven delivery/liveness types below — so a crashed worker is never
+silent. **Never derive completion from a tmux pane**: the kickoff prompt
+ends with all three `STATUS:` sentinel lines verbatim, so a pane grep
+fires on every task from second zero (grove-205). A poll-only consumer
+edge-detects on the `sentinel_at` row field (when the current sentinel
+landed) instead of keeping its own baseline.
 
 Or tail it yourself: `<workspace-root>/.grove/state/events.jsonl` — an
 append-only JSONL log, one record per line:
@@ -51,10 +54,16 @@ v1. Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (a task moved to another grove host — its `gv ls --json`
-row then carries `handed_off_to`; live rows carry `host`);
-workspace-scoped (empty ticket): `workspace_parked`, `orchestrator_closed`.
-Skip unknown types and lines that fail to parse (the last line may be
-torn mid-write).
+row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
+`pr_opened`, `pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`,
+`pr_merged`, `pr_closed`, `worker_waiting`, `worker_vanished`,
+`worker_errored`, `worker_recovered` — the transition engine's delivery
+(PR-facing) and liveness (worker-facing, beyond what the Stop hook sees)
+dimensions, folded into row fields `delivery`/`liveness`
+(`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
+full per-type data table. Workspace-scoped (empty ticket):
+`workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
+that fail to parse (the last line may be torn mid-write).
 
 **Steer.** Mutations shell out to `gv` — it resolves the tmux pane, does
 safe paste injection, and appends the event for you:

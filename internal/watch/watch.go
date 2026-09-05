@@ -48,6 +48,20 @@ var DefaultTypes = []string{
 	state.EvTaskDone,
 	state.EvTaskUntracked,
 	state.EvTaskPaused,
+	// grove-252: every delivery/liveness type is actionable or terminal —
+	// the whole point of the supervisor train is that these transitions
+	// stop needing a bash script watching `gh pr view` / tmux capture-pane.
+	state.EvPROpened,
+	state.EvPRUpdated,
+	state.EvPRCIFailed,
+	state.EvPRConflicting,
+	state.EvPRReady,
+	state.EvPRMerged,
+	state.EvPRClosed,
+	state.EvWorkerWaiting,
+	state.EvWorkerVanished,
+	state.EvWorkerErrored,
+	state.EvWorkerRecovered,
 }
 
 // KnownTypes is the full event vocabulary `--type` accepts (docs/plugins.md).
@@ -71,6 +85,17 @@ var KnownTypes = []string{
 	state.EvOrchestratorClosed,
 	state.EvOrchestratorSpawned,
 	state.EvWorkspaceParked,
+	state.EvPROpened,
+	state.EvPRUpdated,
+	state.EvPRCIFailed,
+	state.EvPRConflicting,
+	state.EvPRReady,
+	state.EvPRMerged,
+	state.EvPRClosed,
+	state.EvWorkerWaiting,
+	state.EvWorkerVanished,
+	state.EvWorkerErrored,
+	state.EvWorkerRecovered,
 }
 
 // KnownSentinels is the classifier's vocabulary (internal/hooks.classify):
@@ -256,9 +281,15 @@ func Run(ctx context.Context, opts Options, out io.Writer) (fired bool, err erro
 			if err := emit(out, ev, raw, opts.JSON); err != nil {
 				return false, err
 			}
-			if opts.Until != "" && ev.Type == state.EvAgentStatus &&
-				ev.Data["sentinel"] == opts.Until {
-				return true, nil
+			if opts.Until != "" {
+				// The original form: an agent_status sentinel landing.
+				sentinelFired := ev.Type == state.EvAgentStatus && ev.Data["sentinel"] == opts.Until
+				// grove-252: --until also accepts a bare event type, e.g.
+				// `--until pr_merged` or `--until worker_waiting`.
+				typeFired := ev.Type == opts.Until
+				if sentinelFired || typeFired {
+					return true, nil
+				}
 			}
 		}
 		select {
@@ -326,6 +357,9 @@ func detail(ev state.Event) string {
 	if s == "" && ev.Type == state.EvTaskHandedOff {
 		s = "→ " + d["host"]
 	}
+	if s == "" {
+		s = deliveryLivenessDetail(ev.Type, d)
+	}
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
@@ -334,6 +368,29 @@ func detail(ev state.Event) string {
 		s = string(r[:detailCap]) + "…"
 	}
 	return s
+}
+
+// deliveryLivenessDetail renders the trailing detail for the grove-252
+// delivery/liveness types not covered by question/message/handoff above —
+// e.g. `#98 · CLEAN` for pr_ready, `usage_limit · Usage limit reached…` for
+// worker_errored.
+func deliveryLivenessDetail(evType string, d map[string]string) string {
+	switch evType {
+	case state.EvPROpened, state.EvPRUpdated, state.EvPRMerged, state.EvPRClosed:
+		return "#" + d["pr"]
+	case state.EvPRCIFailed:
+		return "#" + d["pr"] + " · " + d["failing"]
+	case state.EvPRConflicting, state.EvPRReady:
+		return "#" + d["pr"] + " · " + d["merge_state"]
+	case state.EvWorkerWaiting:
+		return d["marker"]
+	case state.EvWorkerErrored:
+		return d["reason"] + " · " + d["line"]
+	case state.EvWorkerRecovered:
+		return "recovered from " + d["from"]
+	default:
+		return ""
+	}
 }
 
 // Validate checks the filter vocabularies up front. An unknown value is an
@@ -352,8 +409,11 @@ func Validate(types, sentinels []string, until string) error {
 			return fmt.Errorf("unknown sentinel %q (known: %s)", s, strings.Join(KnownSentinels, ", "))
 		}
 	}
-	if until != "" && !knownSentinels[until] {
-		return fmt.Errorf("unknown --until sentinel %q (known: %s)", until, strings.Join(KnownSentinels, ", "))
+	// --until widens to an event type (grove-252: `--until pr_merged`,
+	// `--until worker_waiting`) on top of the original sentinel form.
+	if until != "" && !knownSentinels[until] && !known[until] {
+		return fmt.Errorf("unknown --until value %q (want a sentinel: %s; or an event type: %s)",
+			until, strings.Join(KnownSentinels, ", "), strings.Join(KnownTypes, ", "))
 	}
 	return nil
 }

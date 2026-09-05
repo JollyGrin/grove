@@ -268,6 +268,44 @@ func TestRunUntilIgnoresHistoryFiresOnceOnTheNewTransition(t *testing.T) {
 // A worker whose pane is full of the kickoff prompt's three STATUS lines
 // but which has emitted no sentinel produces NO output. This is the exact
 // false positive that filed grove-205.
+// grove-252: --until widens to accept a bare event type, not just a
+// sentinel — `--until pr_merged` fires on that transition landing.
+func TestRunUntilEventTypeFires(t *testing.T) {
+	dir := t.TempDir()
+	writeLog(t, dir) // empty log: from-now baseline
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	done := make(chan bool, 1)
+	go func() {
+		fired, err := Run(ctx, Options{
+			StateDir: dir, Tickets: []string{"t-1"}, Until: state.EvPRMerged,
+			Interval: time.Millisecond,
+		}, &out)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- fired
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	appendLog(t, dir, ev(time.Now(), state.EvPROpened, "t-1", map[string]string{"pr": "9", "url": "https://x/9"}))
+	appendLog(t, dir, ev(time.Now(), state.EvPRMerged, "t-1", map[string]string{"pr": "9"}))
+
+	select {
+	case fired := <-done:
+		if !fired {
+			t.Fatal("Run returned without firing --until pr_merged")
+		}
+	case <-ctx.Done():
+		t.Fatal("Run never fired on pr_merged")
+	}
+	if !strings.Contains(out.String(), state.EvPRMerged) {
+		t.Fatalf("output missing pr_merged row: %q", out.String())
+	}
+}
+
 func TestRunIgnoresKickoffPromptText(t *testing.T) {
 	dir := t.TempDir()
 	// Everything a live-but-working worker actually appends. The pane holds
@@ -390,6 +428,35 @@ func TestRowLabels(t *testing.T) {
 	}
 }
 
+// grove-252: human rows for the 11 delivery/liveness types.
+func TestRowLabelsDeliveryLiveness(t *testing.T) {
+	at := time.Date(2026, 8, 29, 14, 5, 0, 0, time.Local)
+	cases := []struct {
+		ev       state.Event
+		wantRow  string // substrings the row must contain, beyond the type label
+		wantType string
+	}{
+		{ev(at, state.EvPROpened, "t-1", map[string]string{"pr": "98", "url": "https://x/98", "draft": "false"}), "#98", state.EvPROpened},
+		{ev(at, state.EvPRCIFailed, "t-1", map[string]string{"pr": "98", "failing": "build,lint"}), "build,lint", state.EvPRCIFailed},
+		{ev(at, state.EvPRConflicting, "t-1", map[string]string{"pr": "98", "merge_state": "DIRTY"}), "DIRTY", state.EvPRConflicting},
+		{ev(at, state.EvPRReady, "t-1", map[string]string{"pr": "98", "url": "https://x/98", "merge_state": "CLEAN"}), "#98", state.EvPRReady},
+		{ev(at, state.EvPRMerged, "t-1", map[string]string{"pr": "98"}), "#98", state.EvPRMerged},
+		{ev(at, state.EvWorkerWaiting, "t-1", map[string]string{"marker": "enter_to_select"}), "enter_to_select", state.EvWorkerWaiting},
+		{ev(at, state.EvWorkerVanished, "t-1", nil), "", state.EvWorkerVanished},
+		{ev(at, state.EvWorkerErrored, "t-1", map[string]string{"reason": "usage_limit", "line": "Usage limit reached"}), "usage_limit", state.EvWorkerErrored},
+		{ev(at, state.EvWorkerRecovered, "t-1", map[string]string{"from": "errored"}), "errored", state.EvWorkerRecovered},
+	}
+	for _, c := range cases {
+		if got := Label(c.ev); got != c.wantType {
+			t.Errorf("Label(%s) = %q, want %q", c.ev.Type, got, c.wantType)
+		}
+		row := Row(c.ev)
+		if !strings.Contains(row, c.wantType) || (c.wantRow != "" && !strings.Contains(row, c.wantRow)) {
+			t.Errorf("Row(%s) = %q, want to contain %q", c.ev.Type, row, c.wantRow)
+		}
+	}
+}
+
 func TestRowDetailIsRuneSafe(t *testing.T) {
 	long := strings.Repeat("é", detailCap+40)
 	row := Row(ev(time.Now(), state.EvAgentStatus, "t-1", map[string]string{"sentinel": "done", "message": long}))
@@ -422,6 +489,16 @@ func TestValidateRejectsTypos(t *testing.T) {
 	}
 	if err := Validate(nil, nil, "DONE"); err == nil {
 		t.Error("a mistyped --until must be an error")
+	}
+	// grove-252: --until also accepts an event type, not only a sentinel.
+	if err := Validate(nil, nil, state.EvPRMerged); err != nil {
+		t.Errorf("--until pr_merged rejected: %v", err)
+	}
+	if err := Validate(nil, nil, "worker_waiting"); err != nil {
+		t.Errorf("--until worker_waiting rejected: %v", err)
+	}
+	if err := Validate(nil, nil, "bogus_type"); err == nil {
+		t.Error("a mistyped --until event type must be an error")
 	}
 }
 

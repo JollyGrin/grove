@@ -75,7 +75,8 @@ const usage = `gv — grove
   gv watch [--json] [--ticket X]...           follow this workspace's transition stream, one event
       [--type t,…] [--sentinel s,…]           per line, flushed as it lands (pure read). Default is
       [--since <RFC3339> | --replay]          FROM NOW — never a baseline sampled after the fact.
-      [--until <sentinel>]                    --until exits 0 exactly when that sentinel lands.
+      [--until <sentinel or event type>]       --until exits 0 exactly when that sentinel or event type lands
+                                              (grove-252: e.g. --until pr_merged, --until worker_waiting).
                                               Never derive completion from a pane: the kickoff prompt
                                               contains all three STATUS lines verbatim.
       … --host <name>                         run the verb over ssh on a configured remote host (hosts: in

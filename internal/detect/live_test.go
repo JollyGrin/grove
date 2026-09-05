@@ -35,6 +35,45 @@ func TestClassifyPaneOutput_Waiting(t *testing.T) {
 	}
 }
 
+// grove-252: the AskUserQuestion menu markers — the shapes that produced
+// the 2026-08-24 2h15m stall on p2p#691 (the menu left `agent: working`
+// with no hook sentinel, since none of the pre-existing waiting patterns
+// matched it). Case-insensitive, bottom-10.
+func TestClassifyPaneOutput_MenuMarkers(t *testing.T) {
+	tests := []string{
+		"Pick an option\n1. Yes\n2. No\nEnter to select",
+		"ENTER TO SELECT",
+		"Type your answer\nReady to submit",
+		"ready to submit",
+	}
+	for _, output := range tests {
+		status, hasClaude := classifyPaneOutput(output)
+		if status != StatusWaiting || !hasClaude {
+			t.Errorf("output=%q: got status=%v hasClaude=%v, want waiting/true", output, status, hasClaude)
+		}
+	}
+}
+
+func TestWaitingMarker(t *testing.T) {
+	tests := []struct {
+		output string
+		want   string
+	}{
+		{"Press esc to cancel", "esc_to_cancel"},
+		{"No, and tell Claude what to do differently", "no_and_tell_claude"},
+		{"Do you want to proceed?", "do_you_want"},
+		{"Would you like to continue?", "would_you_like"},
+		{"Enter to select", "enter_to_select"},
+		{"Ready to submit", "ready_to_submit"},
+		{"nothing interesting here", ""},
+	}
+	for _, tt := range tests {
+		if got := WaitingMarker(tt.output); got != tt.want {
+			t.Errorf("WaitingMarker(%q) = %q, want %q", tt.output, got, tt.want)
+		}
+	}
+}
+
 func TestClassifyPaneOutput_Busy(t *testing.T) {
 	tests := []string{
 		"Working on it...\nesc to interrupt",

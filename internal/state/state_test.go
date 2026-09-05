@@ -501,3 +501,140 @@ func TestSentinelAtIsOmittedWhenAbsent(t *testing.T) {
 		t.Fatalf("sentinel_at missing for a task with one: %s", raw)
 	}
 }
+
+// grove-252: Delivery/Liveness are the transition engine's folded state —
+// additive & optional, reset on created/adopted, cleared on handoff.
+func TestFoldDelivery(t *testing.T) {
+	tasks := map[string]*Task{}
+	fold(tasks, Event{Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{"title": "t"}})
+	task := tasks["gr-1"]
+	if task.Delivery != nil {
+		t.Fatal("a fresh task has no Delivery")
+	}
+
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	fold(tasks, Event{Time: at, Type: EvPROpened, Ticket: "gr-1",
+		Data: map[string]string{"pr": "42", "url": "https://x/42", "draft": "false"}})
+	if task.Delivery == nil || task.Delivery.State != DeliveryOpened || task.Delivery.PR != 42 ||
+		task.Delivery.URL != "https://x/42" || !task.Delivery.At.Equal(at) {
+		t.Fatalf("pr_opened fold = %+v", task.Delivery)
+	}
+
+	// pr_updated carries no url — the prior one must survive.
+	fold(tasks, Event{Time: at.Add(time.Minute), Type: EvPRUpdated, Ticket: "gr-1", Data: map[string]string{"pr": "42"}})
+	if task.Delivery.State != DeliveryOpened || task.Delivery.URL != "https://x/42" {
+		t.Fatalf("pr_updated must keep the prior url: %+v", task.Delivery)
+	}
+
+	fold(tasks, Event{Type: EvPRCIFailed, Ticket: "gr-1", Data: map[string]string{"pr": "42", "failing": "build,lint"}})
+	if task.Delivery.State != DeliveryCIFailed || task.Delivery.CI != "fail" ||
+		len(task.Delivery.Failing) != 2 || task.Delivery.Failing[0] != "build" {
+		t.Fatalf("pr_ci_failed fold = %+v", task.Delivery)
+	}
+
+	fold(tasks, Event{Type: EvPRConflicting, Ticket: "gr-1", Data: map[string]string{"pr": "42", "merge_state": "DIRTY"}})
+	if task.Delivery.State != DeliveryConflicting || task.Delivery.MergeState != "DIRTY" {
+		t.Fatalf("pr_conflicting fold = %+v", task.Delivery)
+	}
+
+	fold(tasks, Event{Type: EvPRReady, Ticket: "gr-1",
+		Data: map[string]string{"pr": "42", "url": "https://x/42", "merge_state": "BEHIND", "behind": "true"}})
+	if task.Delivery.State != DeliveryReady || task.Delivery.CI != "pass" || task.Delivery.MergeState != "BEHIND" {
+		t.Fatalf("pr_ready fold = %+v", task.Delivery)
+	}
+
+	fold(tasks, Event{Type: EvPRMerged, Ticket: "gr-1", Data: map[string]string{"pr": "42"}})
+	if task.Delivery.State != DeliveryMerged || task.Delivery.PR != 42 {
+		t.Fatalf("pr_merged fold = %+v", task.Delivery)
+	}
+
+	// task_created/task_adopted reset Delivery to nil.
+	fold(tasks, Event{Type: EvTaskAdopted, Ticket: "gr-1", Data: map[string]string{}})
+	if task.Delivery != nil {
+		t.Errorf("task_adopted must reset Delivery: %+v", task.Delivery)
+	}
+
+	fold(tasks, Event{Type: EvPRClosed, Ticket: "gr-1", Data: map[string]string{"pr": "42"}})
+	if task.Delivery.State != DeliveryClosed {
+		t.Fatalf("pr_closed fold = %+v", task.Delivery)
+	}
+	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-1", Data: map[string]string{"host": "pc"}})
+	if task.Delivery != nil {
+		t.Errorf("task_handed_off must clear Delivery (the host carries it now): %+v", task.Delivery)
+	}
+}
+
+func TestFoldLiveness(t *testing.T) {
+	tasks := map[string]*Task{}
+	fold(tasks, Event{Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{"title": "t"}})
+	task := tasks["gr-1"]
+	if task.Liveness != nil {
+		t.Fatal("a fresh task has no Liveness")
+	}
+
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	fold(tasks, Event{Time: at, Type: EvWorkerWaiting, Ticket: "gr-1", Data: map[string]string{"marker": "enter_to_select"}})
+	if task.Liveness == nil || task.Liveness.State != LivenessWaiting || task.Liveness.Reason != "enter_to_select" || !task.Liveness.At.Equal(at) {
+		t.Fatalf("worker_waiting fold = %+v", task.Liveness)
+	}
+
+	fold(tasks, Event{Type: EvWorkerVanished, Ticket: "gr-1"})
+	if task.Liveness.State != LivenessVanished {
+		t.Fatalf("worker_vanished fold = %+v", task.Liveness)
+	}
+
+	fold(tasks, Event{Type: EvWorkerErrored, Ticket: "gr-1", Data: map[string]string{"reason": "usage_limit", "line": "429"}})
+	if task.Liveness.State != LivenessErrored || task.Liveness.Reason != "usage_limit" {
+		t.Fatalf("worker_errored fold = %+v", task.Liveness)
+	}
+
+	fold(tasks, Event{Type: EvWorkerRecovered, Ticket: "gr-1", Data: map[string]string{"from": "errored"}})
+	if task.Liveness.State != LivenessOK {
+		t.Fatalf("worker_recovered fold = %+v", task.Liveness)
+	}
+
+	// task_created/task_adopted reset Liveness to nil.
+	fold(tasks, Event{Type: EvTaskAdopted, Ticket: "gr-1", Data: map[string]string{}})
+	if task.Liveness != nil {
+		t.Errorf("task_adopted must reset Liveness: %+v", task.Liveness)
+	}
+
+	fold(tasks, Event{Type: EvWorkerWaiting, Ticket: "gr-1", Data: map[string]string{"marker": "do_you_want"}})
+	fold(tasks, Event{Type: EvTaskHandedOff, Ticket: "gr-1", Data: map[string]string{"host": "pc"}})
+	if task.Liveness != nil {
+		t.Errorf("task_handed_off must clear Liveness (the host carries it now): %+v", task.Liveness)
+	}
+}
+
+// grove-252: LiveSince is the boot-grace reference the liveness engine
+// keys off — session_started/task_created/task_adopted all restamp it,
+// json:"-" so it never becomes part of the plugin contract.
+func TestFoldLiveSince(t *testing.T) {
+	tasks := map[string]*Task{}
+	created := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	fold(tasks, Event{Time: created, Type: EvTaskCreated, Ticket: "gr-1", Data: map[string]string{"title": "t"}})
+	task := tasks["gr-1"]
+	if !task.LiveSince.Equal(created) {
+		t.Fatalf("task_created LiveSince = %v, want %v", task.LiveSince, created)
+	}
+
+	started := created.Add(time.Minute)
+	fold(tasks, Event{Time: started, Type: EvSessionStarted, Ticket: "gr-1", Data: map[string]string{"session_id": "s-1"}})
+	if !task.LiveSince.Equal(started) {
+		t.Fatalf("session_started LiveSince = %v, want %v", task.LiveSince, started)
+	}
+
+	adopted := started.Add(time.Hour)
+	fold(tasks, Event{Time: adopted, Type: EvTaskAdopted, Ticket: "gr-1", Data: map[string]string{}})
+	if !task.LiveSince.Equal(adopted) {
+		t.Fatalf("task_adopted LiveSince = %v, want %v", task.LiveSince, adopted)
+	}
+
+	raw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "LiveSince") || strings.Contains(string(raw), "live_since") {
+		t.Fatalf("LiveSince must never be serialized (json:\"-\"): %s", raw)
+	}
+}

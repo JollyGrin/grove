@@ -151,6 +151,40 @@ fields, and rows gain one more additive field:
   in the PR column for that case instead of the usual blank. Plugins that
   treat an absent `pr` as "no open PR" should check `pr_known` first.
 
+Since grove-252 (supervisor train 2/4) two more additive row fields, and
+eleven new `events.jsonl` types:
+
+- `delivery` — `{state, pr?, url?, ci?, failing?, merge_state?, at}`, the
+  transition engine's folded PR-facing state. `state` is
+  `none|opened|ci_failed|conflicting|ready|merged|closed`. Absent (not
+  present in the payload) means `none` — a task with no PR yet — exactly
+  like `sentinel_at`'s absent-means-no-sentinel convention.
+- `liveness` — `{state, reason?, at}`, folded worker liveness beyond what
+  the Stop hook can see. `state` is `ok|waiting|vanished|errored`. Absent
+  means `ok`.
+
+`internal/supervise` derives both from `github.PR` (the #251 fields) and a
+tmux pane read, and emits one event per **state change** (never per
+observation — re-observing the same state emits nothing, so two pollers or
+a restart never double-fire). The events:
+
+| type | data | fires when |
+|---|---|---|
+| `pr_opened` | `pr, url, draft` | a PR appears, or a closed PR reopens |
+| `pr_updated` | `pr` | re-entering `opened` from any other non-none state (a fresh push put checks back to pending) |
+| `pr_ci_failed` | `pr, failing` (comma-joined check names) | CI goes red |
+| `pr_conflicting` | `pr, merge_state` | the PR is open and `mergeable: CONFLICTING` or `mergeStateStatus: DIRTY` |
+| `pr_ready` | `pr, url, merge_state, behind?` (`"true"` when `merge_state: BEHIND`) | open, not draft, CI green, not conflicting — `BLOCKED`/`BEHIND` still count as ready |
+| `pr_merged` | `pr` | the PR merges |
+| `pr_closed` | `pr` | the PR closes unmerged |
+| `worker_waiting` | `marker` | the pane has shown a question/menu/permission-prompt marker continuously for ≥10s (debounces the busy/idle flap) |
+| `worker_vanished` | *(none)* | the window exists, claude is gone from the pane, continuously for ≥60s, **and** ≥120s since the task's last session start/adopt (a boot grace — the pane legitimately shows a shell while claude boots) |
+| `worker_errored` | `reason, line` (`reason` one of `usage_limit`/`sleep`/`api_error`; `line` the matched pane line, ≤200 runes) | a usage-limit/429, a sleep-cut, or another `API Error:` line appears in the pane — immediate, no debounce |
+| `worker_recovered` | `from` (the prior liveness state) | liveness returns to `ok` from anything else |
+
+No poller runs yet (grove-253 adds it) — these types exist in the
+vocabulary and fold today, but nothing in a fleet emits them until then.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv watch` (grove-205) is the supported subscription: grove does the
@@ -160,7 +194,7 @@ one event per stdout line.
 ```
 gv watch [--json] [--ticket X]... [--type agent_status,notification,…]
          [--sentinel done,question,blocked] [--since <RFC3339> | --replay]
-         [--until done]
+         [--until done|pr_merged|worker_waiting|…]
 ```
 
 - **Pure read**, workspace-scoped: it follows the ambient workspace's log,
@@ -171,16 +205,19 @@ gv watch [--json] [--ticket X]... [--type agent_status,notification,…]
   started. `--since <RFC3339>` resumes from a cutoff, `--replay` includes
   the whole history. This is what makes a "before" snapshot impossible to
   sample late; do not rebuild one yourself.
-- **`--until <sentinel>` exits 0 exactly when that transition lands**
-  (`question|blocked|done|none`). One notification, no polling
-  arithmetic. A non-zero exit means the wait ended some other way — exit 0
-  always means the transition happened.
+- **`--until <sentinel or event type>` exits 0 exactly when that transition
+  lands** — a sentinel (`question|blocked|done|none`) as before, or
+  (grove-252) a bare event type: `--until pr_merged`, `--until
+  worker_waiting`. One notification, no polling arithmetic. A non-zero
+  exit means the wait ended some other way — exit 0 always means the
+  transition happened.
 - **Default type set** — the terminal/actionable states, so a crashed or
   wedged worker is never silent: `agent_status` (every sentinel,
   *including* an idle stop with no STATUS line), `notification`,
-  `session_ended`, `task_done`, `task_untracked`, `task_paused`. `--type`
-  takes an explicit list (or `all`); an unknown type or sentinel is an
-  error, never an empty stream.
+  `session_ended`, `task_done`, `task_untracked`, `task_paused`, and
+  (grove-252) all eleven delivery/liveness types — every one is
+  actionable or terminal. `--type` takes an explicit list (or `all`); an
+  unknown type or sentinel is an error, never an empty stream.
 - **Line-flushed** — os.Stdout is unbuffered, so each event is on the pipe
   as it lands (`gv watch | cat` shows it immediately). This is the
   contract a per-line notification consumer needs.
@@ -210,7 +247,11 @@ Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
 a forwarding pointer to the remote grove host; a later `task_untracked`
-for the same ticket drops the pointer for good). `answered` may carry an
+for the same ticket drops the pointer for good), and (grove-252) the
+eleven delivery/liveness types in the table above: `pr_opened`,
+`pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`, `pr_merged`,
+`pr_closed`, `worker_waiting`, `worker_vanished`, `worker_errored`,
+`worker_recovered`. `answered` may carry an
 optional `data.op_id` (grove-186, additive): relayed `answer`/`nudge`
 hops (`--host`) stamp a client op id so a retried hop is a no-op on the
 remote — same id seen again ⇒ nothing pasted, no second event. Local
