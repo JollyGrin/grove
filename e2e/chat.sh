@@ -917,6 +917,16 @@ grep -q 'funnel' "$SERVE_LOG" || fail "the loopback banner must say funnel is ne
 curl -fsS -D "$SCRATCH/idx.h" "http://127.0.0.1:$PORT/" > "$SCRATCH/idx.html" || fail "GET / failed"
 grep -q '<title>gv chat</title>' "$SCRATCH/idx.html" || { head -5 "$SCRATCH/idx.html"; fail "GET / did not serve the embedded shell"; }
 grep -qi "content-security-policy: default-src 'none'" "$SCRATCH/idx.h" || { cat "$SCRATCH/idx.h"; fail "the shell must carry the CSP that sanitizes rendered agent markdown"; }
+# grove-260: a wide markdown table must scroll inside the message, not be
+# crushed to the message width — on a 430px phone that turns a "Ticket"
+# column into a one-character-wide ribbon. The rule lives in CSS only, so
+# the served stylesheet is the only place to assert it.
+grep -q 'width: max-content' "$SCRATCH/idx.html" \
+  || fail "assistant tables must keep their natural column width (grove-260)"
+grep -q 'text-align: left; white-space: nowrap;' "$SCRATCH/idx.html" \
+  || fail "table cells must not wrap — that is the crush this fixed (grove-260)"
+grep -q 'overflow-x: hidden' "$SCRATCH/idx.html" \
+  || fail "the page body must never scroll sideways (grove-260)"
 curl -fsS "http://127.0.0.1:$PORT/app.js" > "$SCRATCH/app.js" || fail "app.js is not served"
 curl -fsS "http://127.0.0.1:$PORT/marked.min.js" > "$SCRATCH/marked.js" || fail "marked.min.js is not served"
 grep -q 'marked v12.0.2' "$SCRATCH/marked.js" || fail "the vendored marked must stay pinned at v12.0.2"
