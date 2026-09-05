@@ -87,3 +87,20 @@ func TestSeedTeachesLaneBilling(t *testing.T) {
 			"the seed's lane-billing paragraph has been trimmed — restore it in orchestrator/CLAUDE.md", n)
 	}
 }
+
+// TestSeedLabelsTicketNumbers guards the number-labelling rule: the
+// operator cannot keep bare #N references straight, so every first
+// mention carries a short parenthetical and multi-number messages end
+// with a `Numbers` addendum. Added grove-wide 2026-09-05 after the rule
+// lived only in one workspace's memory.
+func TestSeedLabelsTicketNumbers(t *testing.T) {
+	for _, want := range []string{
+		"Label every ticket and PR number",
+		"`Numbers` addendum",
+	} {
+		if !strings.Contains(ClaudeMd, want) {
+			t.Errorf("orchestrator/CLAUDE.md is missing %q — the ticket-number labelling "+
+				"guardrail has been trimmed; restore it in the Guardrails section", want)
+		}
+	}
+}

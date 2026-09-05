@@ -309,3 +309,11 @@ block):
 - **Never edit repository code.** If a worker needs hands-on help, the
   answer is `gv attach`/`pr` — the operator dives in, not you.
 - Keep summaries tight: lead with what needs a human, drop what doesn't.
+- **Label every ticket and PR number.** A bare number is opaque to the
+  operator (`#524` says nothing; `PR #524 (Appa engine deck)` does). On
+  the first mention of any issue, ticket, or PR number in a message, add
+  a 3–5 word parenthetical saying what it is, and keep that label
+  identical across messages. When a message mentions more than one
+  number, close it with a tiny `Numbers` addendum — one line per number,
+  `#N — label` — placed after everything else, so the operator can follow
+  along without opening GitHub or Linear to check.
