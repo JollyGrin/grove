@@ -83,7 +83,7 @@ func TestChatSpawnPlan(t *testing.T) {
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("default plan: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestChatSpawnPlan(t *testing.T) {
 		t.Errorf("cmd must --add-dir the twin's root, got %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", []string{"grove-chat-unbrewed-1"})
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", []string{"grove-chat-unbrewed-1"})
 	if err != nil {
 		t.Fatalf("profiled plan: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestChatSpawnPlan(t *testing.T) {
 
 	// A profile the HOST doesn't have is a hard error — decided before any
 	// dir or session exists.
-	if _, err := chatSpawnPlan(cfg, ws, "nope", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
+	if _, err := chatSpawnPlan(cfg, ws, "nope", "", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
 		t.Fatalf("unknown profile = %v, want an unknown-model-profile error", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 	}
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "aaaa1111", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "aaaa1111", "", nil)
 	if err != nil {
 		t.Fatalf("resume plan: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 		t.Errorf("a revival resumes one NAMED conversation, never --continue: %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "bbbb2222", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "bbbb2222", "", nil)
 	if err != nil {
 		t.Fatalf("profiled resume plan: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 
 	// The id reaches a shell command line, so a malformed one never gets
 	// past the plan — belt to internal/chat's braces.
-	if _, err := chatSpawnPlan(cfg, ws, "", "a; rm -rf /", nil); err == nil {
+	if _, err := chatSpawnPlan(cfg, ws, "", "a; rm -rf /", "", nil); err == nil {
 		t.Error("a shell-hostile --resume id must be refused before anything is created")
 	}
 }
@@ -516,5 +516,181 @@ func TestParkChatLines(t *testing.T) {
 	}
 	if strings.Contains(killed, "survive") {
 		t.Errorf("--chats leaves nothing behind — no survivor line:\n%s", killed)
+	}
+}
+
+// TestChatHopArgsBrief (grove-271): the standing brief travels as the LAST
+// argument, after every other name, so a hop and its by-hand retry stay
+// byte-equal — the op-id receipt is only trustworthy while argv equality
+// holds. --brief-file never travels: the path is the caller's, and its
+// text is what the host is given.
+func TestChatHopArgsBrief(t *testing.T) {
+	req := chatSpawnReq{Label: "unbrewed", OpID: "deadbeef", Host: "groveremote"}
+	base := []string{"new", "--op-id", "deadbeef", "--as", "groveremote", "--workspace", "unbrewed"}
+	if got := chatHopArgs(req); !reflect.DeepEqual(got, base) {
+		t.Fatalf("no brief changed the argv: %v", got)
+	}
+
+	briefed := req
+	briefed.Brief = "watch grove-1\nit's yours until the PR is up\n"
+	want := append(append([]string{}, base...), "--brief", briefed.Brief)
+	if got := chatHopArgs(briefed); !reflect.DeepEqual(got, want) {
+		t.Fatalf("chatHopArgs(brief) = %v, want %v", got, want)
+	}
+
+	// With a profile too, the brief still goes last.
+	both := briefed
+	both.Profile = "openrouter-glm"
+	want = append(append([]string{}, base...), "--profile", "openrouter-glm", "--brief", briefed.Brief)
+	if got := chatHopArgs(both); !reflect.DeepEqual(got, want) {
+		t.Fatalf("chatHopArgs(profile+brief) = %v, want the brief last", got)
+	}
+
+	// The manual retry is paste-able: a multi-line brief holding an
+	// apostrophe survives remote.Quote's single-quoting intact.
+	manual := chatManualRetry(briefed)
+	const wantManual = `gv orchestrator new --host groveremote --op-id deadbeef --workspace unbrewed --brief 'watch grove-1
+it'\''s yours until the PR is up
+'`
+	if manual != wantManual {
+		t.Fatalf("chatManualRetry(brief) = %q, want %q", manual, wantManual)
+	}
+}
+
+// TestChatBriefText: the two front doors resolve to one text, and every
+// way of asking for an empty brief is refused rather than silently
+// spawning a chat with nothing to do.
+func TestChatBriefText(t *testing.T) {
+	if got, err := chatBriefText("", false, ""); err != nil || got != "" {
+		t.Errorf("no flags = %q, %v; want no brief", got, err)
+	}
+	if got, err := chatBriefText("watch grove-1", true, ""); err != nil || got != "watch grove-1" {
+		t.Errorf("--brief = %q, %v", got, err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "brief.md")
+	body := "watch grove-1\nnudge it if it's idle 20m\nthen ping me\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := chatBriefText("", false, path)
+	if err != nil || got != body {
+		t.Errorf("--brief-file = %q, %v; want the file's bytes verbatim", got, err)
+	}
+
+	if _, err := chatBriefText("watch grove-1", true, path); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("--brief + --brief-file = %v, want a mutual-exclusion refusal", err)
+	}
+	if _, err := chatBriefText("", true, ""); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("--brief '' = %v, want a refusal (never a silent no-op)", err)
+	}
+	if _, err := chatBriefText("   \n", true, ""); err == nil {
+		t.Errorf("whitespace-only --brief must be refused too")
+	}
+	blank := filepath.Join(dir, "blank.md")
+	if err := os.WriteFile(blank, []byte("\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chatBriefText("", false, blank); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("an empty --brief-file = %v, want a refusal", err)
+	}
+	if _, err := chatBriefText("", false, filepath.Join(dir, "nope.md")); err == nil {
+		t.Errorf("a missing --brief-file must be a hard error")
+	}
+}
+
+// TestChatBriefConflict: a revival already has a conversation, so a brief
+// would be an unrelated turn dropped into the middle of one.
+func TestChatBriefConflict(t *testing.T) {
+	if err := chatBriefConflict("", ""); err != nil {
+		t.Errorf("neither flag = no conflict, got %v", err)
+	}
+	if err := chatBriefConflict("watch grove-1", ""); err != nil {
+		t.Errorf("--brief alone = no conflict, got %v", err)
+	}
+	if err := chatBriefConflict("", "aaaa1111"); err != nil {
+		t.Errorf("--resume alone = no conflict, got %v", err)
+	}
+	err := chatBriefConflict("watch grove-1", "aaaa1111")
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("both flags = %v, want a mutual-exclusion refusal", err)
+	}
+}
+
+// TestChatSpawnPlanBrief (grove-271): the brief is handed over as a
+// positional prompt read by the shell at launch — the worker kickoff's
+// exact shape — and for a PROFILED chat it must land INSIDE the backend
+// wrapper, because WrapProfile ends in `exec <cmd> )`.
+func TestChatSpawnPlanBrief(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"openrouter-glm": {
+			BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+			Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+		},
+	}
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
+	brief := "watch grove-1 and grove-2\n"
+
+	plan, err := chatSpawnPlan(cfg, ws, "", "", brief, nil)
+	if err != nil {
+		t.Fatalf("briefed plan: %v", err)
+	}
+	wantPath := filepath.Join(orchDir, "briefs", plan.SessionID+".md")
+	if plan.BriefPath != wantPath || plan.Brief != brief {
+		t.Fatalf("plan brief = %q at %q, want %q at %q", plan.Brief, plan.BriefPath, brief, wantPath)
+	}
+	// chatSpawnPlan creates nothing: the caller writes the file.
+	if _, err := os.Stat(plan.BriefPath); err == nil {
+		t.Errorf("chatSpawnPlan must not create %s", plan.BriefPath)
+	}
+	if !strings.HasSuffix(plan.Cmd, ` "$(cat "`+wantPath+`")"`) {
+		t.Fatalf("cmd = %q, want it to end in the kickoff-shaped prompt argv", plan.Cmd)
+	}
+	if !strings.Contains(plan.Cmd, "--session-id "+plan.SessionID+" \"$(cat") {
+		t.Errorf("the brief must follow --session-id on the bare launch: %q", plan.Cmd)
+	}
+
+	// Profiled: the prompt argv sits inside the wrap, ahead of its closing
+	// paren — outside it, the shell would swallow the prompt.
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", brief, nil)
+	if err != nil {
+		t.Fatalf("profiled briefed plan: %v", err)
+	}
+	if strings.HasSuffix(plan.Cmd, `)"`) || !strings.HasSuffix(plan.Cmd, ")") {
+		t.Fatalf("profiled cmd must still end in the profile wrap's paren: %q", plan.Cmd)
+	}
+	// The brief still lives under the BRAIN dir, not the per-profile cwd.
+	if !strings.Contains(plan.Cmd, `"$(cat "`+filepath.Join(orchDir, "briefs", plan.SessionID+".md")+`")"`) {
+		t.Fatalf("profiled cmd lost the brief: %q", plan.Cmd)
+	}
+
+	// No brief, no argv, no path.
+	plan, err = chatSpawnPlan(cfg, ws, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("unbriefed plan: %v", err)
+	}
+	if plan.BriefPath != "" || strings.Contains(plan.Cmd, "$(cat") {
+		t.Fatalf("an unbriefed spawn must be untouched: %+v", plan)
+	}
+}
+
+// TestWriteChatBrief: the file is created with its dir, byte-for-byte.
+func TestWriteChatBrief(t *testing.T) {
+	orchDir := t.TempDir()
+	body := "line one\nit's got an apostrophe\n\tand a tab\n"
+	path := chatBriefPath(orchDir, "aaaa1111-2222-3333-4444-555555555555")
+	if err := writeChatBrief(path, body); err != nil {
+		t.Fatalf("writeChatBrief: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("brief round-trip = %q, want %q", got, body)
 	}
 }

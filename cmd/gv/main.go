@@ -118,6 +118,9 @@ const usage = `gv — grove
                                               own grove-chat-<label>-<n> (it opens idle, awaiting input)
   gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
                                               this workspace — prints the ssh line that attaches to it
+  gv orchestrator new --brief T | --brief-file F
+                                              seed the new chat's FIRST message with T (or the text of the
+                                              local file F) — a standing brief; composes with --workspace/--host
   gv orchestrator close [--ticket X]          dismiss this chat's own pane (fire-and-forget dispatch)
   gv chat ls [--workspace L] [--json]         orchestrator chats in every registered workspace: live
                                               detached chats, the cockpit's own (read-only) panes, and
@@ -1029,6 +1032,20 @@ func wrapOrchestratorLaunch(launch string, p *config.ModelProfile) string {
 	return config.WrapProfile(launch, p, config.SecretsPath())
 }
 
+// flagWasSet answers "did the operator type this flag?" — the one thing a
+// flag's value cannot say. An explicitly-empty --brief must be refused
+// while an absent one is the ordinary no-brief spawn, and those two are
+// the same empty string.
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
 // cmdOrchestratorNew spawns a fresh orchestrator chat pane into the
 // cockpit's right column (cockpit design §4) — the O keybind's CLI twin.
 // Builds the cockpit first if it isn't running. --profile (grove-36) opens
@@ -1038,11 +1055,20 @@ func cmdOrchestratorNew(args []string) error {
 	profileFlag := fs.String("profile", "", "open this orchestrator on a model profile (e.g. openrouter-glm) instead of Claude")
 	wsFlag := fs.String("workspace", "", "spawn detached in this REGISTERED workspace's own grove-chat-<label>-<n> session (the receiving half of --host)")
 	resumeFlag := fs.String("resume", "", "revive the archived chat with this Claude session id (`gv chat ls` lists them) instead of starting fresh")
+	briefFlag := fs.String("brief", "", "seed the chat's FIRST message with this text (the standing brief)")
+	briefFileFlag := fs.String("brief-file", "", "read the standing brief from this file (its text is what travels)")
 	opFlag := fs.String("op-id", "", "idempotency receipt for a relayed spawn — the same id twice spawns once")
 	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
 	_ = fs.Parse(args)
 
 	if err := chatResumeConflict(*profileFlag, *resumeFlag); err != nil {
+		return err
+	}
+	brief, err := chatBriefText(*briefFlag, flagWasSet(fs, "brief"), *briefFileFlag)
+	if err != nil {
+		return err
+	}
+	if err := chatBriefConflict(brief, *resumeFlag); err != nil {
 		return err
 	}
 	// grove-217: a revival is ALWAYS the detached shape (design §5) — it
@@ -1060,7 +1086,7 @@ func cmdOrchestratorNew(args []string) error {
 	if label != "" {
 		return spawnWorkspaceChat(chatSpawnReq{
 			Label: label, Profile: *profileFlag, Resume: *resumeFlag,
-			OpID: *opFlag, Host: *asFlag,
+			Brief: brief, OpID: *opFlag, Host: *asFlag,
 		})
 	}
 
@@ -1068,7 +1094,7 @@ func cmdOrchestratorNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	msg, err := spawnOrchestratorProfile(cfg, *profileFlag)
+	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, brief)
 	if err != nil {
 		return err
 	}
@@ -1083,6 +1109,13 @@ func cmdOrchestratorNew(args []string) error {
 // Ambient-scoped (cockpit design §4.6 happy path): the pane joins the
 // invoking workspace's cockpit and its gv calls hit that fleet.
 func spawnOrchestrator(cfg *config.Config) (string, error) {
+	return spawnOrchestratorBrief(cfg, "")
+}
+
+// spawnOrchestratorBrief is spawnOrchestrator with grove-271's standing
+// brief. The TUI's O keybind has no place to type one, so the injected
+// hook keeps its two-argument shape and only the CLI reaches this.
+func spawnOrchestratorBrief(cfg *config.Config, brief string) (string, error) {
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
 	dir := orchestratorDirFor(ws, cfg)
@@ -1093,7 +1126,14 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		if err := buildCockpit(ws, cfg); err != nil {
 			return "", err
 		}
-		return "cockpit built — gv attaches", nil
+		// The cockpit's own first pane launches `--continue` and adopts
+		// whatever conversation it resumes, so a standing brief has no
+		// place in it. An unbriefed spawn is done here — it built the
+		// pane that was asked for — and a briefed one falls through to a
+		// pane of its own, exactly as the profiled twin does.
+		if brief == "" {
+			return "cockpit built — gv attaches", nil
+		}
 	}
 	root := ""
 	if ws != nil {
@@ -1108,7 +1148,7 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 		})
 	}
 
-	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), nil)
+	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), dir, brief, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1136,12 +1176,24 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 // resumes, so there is nothing to mint. That pane is the one live case
 // chat.Resolve still answers — and, as the only unstamped pane in its
 // project dir, it is the case Resolve can answer without guessing.
-func mintedOrchestratorLaunch(launch string, p *config.ModelProfile) (string, string, error) {
+//
+// grove-271: a standing brief is written here too, for the same reason —
+// the file is named by the id, so it cannot be laid down until the id
+// exists. Both additions go on the BARE launch, ahead of the wrap.
+func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProfile) (string, string, error) {
 	id, err := chat.NewSessionID()
 	if err != nil {
 		return "", "", err
 	}
-	return wrapOrchestratorLaunch(launch+" --session-id "+id, p), id, nil
+	launch += " --session-id " + id
+	if brief != "" {
+		path := chatBriefPath(orchDir, id)
+		if err := writeChatBrief(path, brief); err != nil {
+			return "", "", err
+		}
+		launch += chatBriefArg(path)
+	}
+	return wrapOrchestratorLaunch(launch, p), id, nil
 }
 
 // stampOrchestratorPane records a spawned chat's identity on its pane.
@@ -1163,12 +1215,18 @@ func stampOrchestratorPane(pane, id string) {
 // pane's fresh launch runs wrapped in the profile's backend
 // (orchestratorLaunchProfile), never the operator's own Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
+	return spawnOrchestratorProfileBrief(cfg, profileName, "")
+}
+
+// spawnOrchestratorProfileBrief is that twin carrying grove-271's standing
+// brief — the CLI's entry point; the TUI hook above stays brief-less.
+func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief string) (string, error) {
 	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
 		return "", err
 	}
 	if p == nil {
-		return spawnOrchestrator(cfg)
+		return spawnOrchestratorBrief(cfg, brief)
 	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
@@ -1206,7 +1264,9 @@ func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, e
 	if err := os.MkdirAll(paneDir, 0o755); err != nil {
 		return "", err
 	}
-	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), p)
+	// The brief lives under the BRAIN dir, not the per-profile cwd: one
+	// briefs/ per workspace, keyed by session id, whichever backend ran it.
+	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), baseDir, brief, p)
 	if err != nil {
 		return "", err
 	}

@@ -23,7 +23,7 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 
-	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), p)
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 func TestOrchestratorLaunchProfileNilIsUnchanged(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
-	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), nil)
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

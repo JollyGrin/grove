@@ -55,6 +55,7 @@ type chatSpawnReq struct {
 	Label   string // the REGISTERED workspace label, resolved on the far side
 	Profile string // model profile name, "" = the host's own Claude
 	Resume  string // grove-217: revive this Claude session id instead of starting fresh
+	Brief   string // grove-271: the chat's FIRST user message (the standing brief), text only
 	OpID    string // idempotency receipt for a relayed spawn
 	Host    string // the alias the caller knows the SPAWNING machine by
 }
@@ -71,6 +72,13 @@ func chatHopArgs(r chatSpawnReq) []string {
 	if r.Resume != "" {
 		args = append(args, "--resume", r.Resume)
 	}
+	// grove-271: the brief goes LAST, and only as text — --brief-file is
+	// read on the CALLING side, because the path is the caller's and means
+	// nothing on the host. remote.Quote single-quotes it, so newlines and
+	// apostrophes survive the hop intact.
+	if r.Brief != "" {
+		args = append(args, "--brief", r.Brief)
+	}
 	return args
 }
 
@@ -84,6 +92,9 @@ func chatManualRetry(r chatSpawnReq) string {
 	}
 	if r.Resume != "" {
 		cmd += " --resume " + remote.Quote(r.Resume)
+	}
+	if r.Brief != "" {
+		cmd += " --brief " + remote.Quote(r.Brief)
 	}
 	return cmd
 }
@@ -103,6 +114,73 @@ func chatResumeConflict(profile, resume string) error {
 	return fmt.Errorf("--resume and --profile are mutually exclusive: a resumed conversation already carries its backend (the cwd it ran in decides it) — drop --profile")
 }
 
+// chatBriefText resolves the --brief / --brief-file pair into the one
+// thing that travels: the text. The file is read on the CALLING side —
+// a path is local knowledge, meaningless on a host across an ssh hop —
+// so --brief-file and --brief are the same feature with two front doors,
+// and passing both is a hard error rather than a precedence rule.
+//
+// briefSet distinguishes an explicitly-empty --brief (refused, because
+// a silent no-op would look like a delivered brief) from the flag being
+// absent (no brief, the old behavior).
+func chatBriefText(brief string, briefSet bool, file string) (string, error) {
+	if briefSet && file != "" {
+		return "", fmt.Errorf("--brief and --brief-file are mutually exclusive: pass the text or the path, not both")
+	}
+	if file != "" {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("--brief-file: %w", err)
+		}
+		if strings.TrimSpace(string(b)) == "" {
+			return "", fmt.Errorf("--brief-file %s is empty — a brief that says nothing is not a brief", file)
+		}
+		return string(b), nil
+	}
+	if briefSet && strings.TrimSpace(brief) == "" {
+		return "", fmt.Errorf("--brief is empty — give the standing brief some text, or drop the flag")
+	}
+	return brief, nil
+}
+
+// chatBriefConflict refuses `--brief` together with `--resume`. A revived
+// chat ALREADY has a conversation: the brief would not be its first
+// message, it would be an unrelated turn dropped into the middle of one —
+// and a standing brief read out of context is worse than none. Send it as
+// a message (`gv chat send`) instead.
+func chatBriefConflict(brief, resume string) error {
+	if brief == "" || resume == "" {
+		return nil
+	}
+	return fmt.Errorf("--brief and --resume are mutually exclusive: a revived chat already has a conversation, so the brief would land as an unrelated turn — spawn it fresh, or `gv chat send` the text")
+}
+
+// chatBriefPath is where a chat's standing brief lives: named by the
+// session id, under the brain dir, so the file that seeded a conversation
+// is still findable from the conversation's id long after it scrolled off.
+func chatBriefPath(orchDir, sessionID string) string {
+	return filepath.Join(orchDir, "briefs", sessionID+".md")
+}
+
+// chatBriefArg is the argv fragment that hands the brief to claude — the
+// worker kickoff's exact shape (main.go's `claude "$(cat <path>)"`): one
+// positional prompt, read by the shell at launch, so no amount of
+// newlines, quotes or backticks in the text can be mangled on the way in.
+// It must be appended to the BARE launch, before wrapOrchestratorLaunch:
+// the profile wrap ends in `exec <cmd> )`, and anything after that is the
+// shell's argument, not claude's.
+func chatBriefArg(path string) string {
+	return fmt.Sprintf(` "$(cat %q)"`, path)
+}
+
+// writeChatBrief lays the brief down where chatBriefArg says it is.
+func writeChatBrief(path, brief string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(brief), 0o644)
+}
+
 // runRemoteOrchestratorNew is the local half. Returns the remote's exit
 // code (the caller exits with it), so a missing twin or an unknown profile
 // on the host stays a hard, non-zero failure here.
@@ -111,11 +189,20 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	profile := fs.String("profile", "", "open the remote chat on one of the HOST's model profiles")
 	label := fs.String("workspace", "", "target this workspace label on the host (default: the ambient workspace's)")
 	resume := fs.String("resume", "", "revive one of the HOST's archived chats by Claude session id")
+	brief := fs.String("brief", "", "seed the remote chat's FIRST message with this text (the standing brief)")
+	briefFile := fs.String("brief-file", "", "read the standing brief from this LOCAL file (only its text travels)")
 	opID := fs.String("op-id", "", "reuse a client op id (makes a by-hand retry a no-op)")
 	if err := fs.Parse(args); err != nil {
 		return 0, err
 	}
 	if err := chatResumeConflict(*profile, *resume); err != nil {
+		return 0, err
+	}
+	briefText, err := chatBriefText(*brief, flagWasSet(fs, "brief"), *briefFile)
+	if err != nil {
+		return 0, err
+	}
+	if err := chatBriefConflict(briefText, *resume); err != nil {
 		return 0, err
 	}
 	if *label == "" {
@@ -132,7 +219,7 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	if *resume != "" && !chat.ValidSessionID(*resume) {
 		return 0, fmt.Errorf("--resume %q is not a Claude session id — run `gv chat ls --workspace %s` on %s to list them", *resume, *label, host)
 	}
-	req := chatSpawnReq{Label: *label, Profile: *profile, Resume: *resume, OpID: *opID, Host: host}
+	req := chatSpawnReq{Label: *label, Profile: *profile, Resume: *resume, Brief: briefText, OpID: *opID, Host: host}
 	cfg, err := loadCfg()
 	if err != nil {
 		return 0, err
@@ -170,6 +257,8 @@ type chatPlan struct {
 	SessionID string // grove-222: the id this chat WILL run on — minted here for a
 	// fresh chat, the revived id for a --resume — so the pane can be stamped
 	// at creation instead of guessed at later.
+	Brief     string // grove-271: the standing brief's text ("" = none)
+	BriefPath string // where Brief must be written before the launch runs ("" = none)
 }
 
 // chatSpawnPlan resolves the profile against the TWIN's config (its claude
@@ -185,7 +274,7 @@ type chatPlan struct {
 // profile wrapper goes on LAST, because WrapProfile ends in `exec <cmd> )`:
 // a flag appended after the wrap lands outside the subshell and is handed
 // to the shell instead of to claude.
-func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume string, sessions []string) (chatPlan, error) {
+func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume, brief string, sessions []string) (chatPlan, error) {
 	name, p, err := cfg.ResolveProfile(profile, nil)
 	if err != nil {
 		return chatPlan{}, err
@@ -210,6 +299,16 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume 
 	} else {
 		launch += " --resume " + resume
 	}
+	// grove-271: the standing brief is the chat's first user message,
+	// handed over as a positional prompt exactly like a worker's kickoff.
+	// The path is named by the id, so it can only be computed once the id
+	// exists — and the caller writes it, because this function creates
+	// nothing.
+	briefPath := ""
+	if brief != "" {
+		briefPath = chatBriefPath(orchDir, id)
+		launch += chatBriefArg(briefPath)
+	}
 	plan := chatPlan{
 		Session:   tmux.NextChatSession(ws.Label, sessions),
 		OrchDir:   orchDir,
@@ -218,6 +317,8 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume 
 		Profile:   name,
 		Resume:    resume,
 		SessionID: id,
+		Brief:     brief,
+		BriefPath: briefPath,
 	}
 	if p != nil {
 		plan.Dir = filepath.Join(orchDir, name)
@@ -238,6 +339,9 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume 
 func spawnWorkspaceChat(r chatSpawnReq) error {
 	label := r.Label
 	if err := chatResumeConflict(r.Profile, r.Resume); err != nil {
+		return err
+	}
+	if err := chatBriefConflict(r.Brief, r.Resume); err != nil {
 		return err
 	}
 	if err := workspace.ValidateLabel(label); err != nil {
@@ -300,7 +404,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		}
 		profile, revived = name, s.FirstPrompt
 	}
-	plan, err := chatSpawnPlan(cfg, ws, profile, r.Resume, tmux.SessionNames())
+	plan, err := chatSpawnPlan(cfg, ws, profile, r.Resume, r.Brief, tmux.SessionNames())
 	if err != nil {
 		return err
 	}
@@ -309,6 +413,14 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	if err := os.MkdirAll(plan.Dir, 0o755); err != nil {
 		return err
+	}
+	// The brief lands before the launch that reads it — a `$(cat)` against
+	// a missing file would boot claude on an empty prompt in a detached
+	// pane nobody is watching.
+	if plan.BriefPath != "" {
+		if err := writeChatBrief(plan.BriefPath, plan.Brief); err != nil {
+			return err
+		}
 	}
 	// Breadcrumb before the spawn — a chat is a claude process like any
 	// other and can trip the same memory cliff as a grab (grove-3).
@@ -340,6 +452,9 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	if plan.Resume != "" {
 		data["resume"] = plan.Resume
+	}
+	if plan.BriefPath != "" {
+		data["brief"] = plan.BriefPath
 	}
 	// The receipt lands after the session exists: a spawn that died mid-way
 	// leaves no id, so a retry tries again instead of claiming success.
