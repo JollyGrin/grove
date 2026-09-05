@@ -34,7 +34,7 @@ run_suite() { # <script> <mode: default|hostile>
   fi
 }
 
-for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh relay.sh handoff.sh chat.sh watch.sh brains.sh; do
+for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh relay.sh handoff.sh chat.sh watch.sh brains.sh supervise.sh; do
   run_suite "$s" default
 done
 # Second pass under a hostile tmux conf (base-index 1 / pane-base-index 1,

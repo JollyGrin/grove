@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/notify"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -365,9 +366,9 @@ func seedTask(t *testing.T) (string, string) {
 
 func withNtfy(t *testing.T, n config.Notify) {
 	t.Helper()
-	old := ntfySettings
-	ntfySettings = func() config.Notify { return n }
-	t.Cleanup(func() { ntfySettings = old })
+	old := notify.Settings
+	notify.Settings = func() config.Notify { return n }
+	t.Cleanup(func() { notify.Settings = old })
 }
 
 func stopPayload(cwd, msg string) string {

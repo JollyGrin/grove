@@ -329,7 +329,7 @@ func Row(ev state.Event) string {
 		ticket = "-" // workspace-scoped record (workspace_parked, …)
 	}
 	return strings.TrimRight(fmt.Sprintf("%s  %-16s  %-13s  %s",
-		ev.Time.Format("15:04"), ticket, Label(ev), detail(ev)), " ")
+		ev.Time.Format("15:04"), ticket, Label(ev), Detail(ev)), " ")
 }
 
 // Label is the transition's one-word name: the sentinel for a classified
@@ -348,7 +348,11 @@ func Label(ev state.Event) string {
 	return state.EvAgentStatus
 }
 
-func detail(ev state.Event) string {
+// Detail is the human row's trailing detail — the question/message head,
+// or (grove-253) the delivery/liveness tail (`#98 · CLEAN`, `usage_limit ·
+// <line>`) — capped at detailCap runes. `gv supervise` reuses it verbatim
+// as the push body, so the two surfaces never drift apart.
+func Detail(ev state.Event) string {
 	d := ev.Data
 	s := d["question"]
 	if s == "" {

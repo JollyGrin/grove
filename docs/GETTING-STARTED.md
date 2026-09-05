@@ -171,6 +171,17 @@ pane. The pane closes and the layout re-tiles. Closing a chat loses nothing —
 the fleet's state lives in `.grove/`, not in chat history, so a fresh
 orchestrator re-derives everything from `gv ls`.
 
+### Monitoring without a cockpit open
+
+Not every host has a desk cockpit open all day — a VPS running overflow
+workers, say. `gv supervise [--interval 30s]` is the same PR/liveness
+transition stream the cockpit itself will drive once open (a later
+release); it polls tmux and `gh` once per interval and prints (plus
+pushes over ntfy, if configured) every `pr_*`/`worker_*` transition as it
+happens, so `gv watch` run from anywhere sharing that state dir sees them
+too — only one `gv supervise` (or the cockpit) may emit at a time, so a
+second one exits immediately naming the pid already running.
+
 ### Dashboard keys (left pane)
 
 Press **`?`** for the full help overlay. The main keys:
@@ -304,6 +315,7 @@ gv attach DEV-123              # jump into a worker's tmux window
 gv answer DEV-123 "text"       # reply to a waiting worker
 gv diff DEV-123                # review the branch diff without attaching
 gv done DEV-123                # verify merged → clean up
+gv supervise                   # headless PR/liveness stream — for a host with no cockpit open
 gv help                        # full command list
 ```
 

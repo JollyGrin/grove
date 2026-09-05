@@ -85,6 +85,15 @@ const usage = `gv — grove
                                               ticket (relay free text may legitimately mention it);
                                               relayed answer/nudge hop with a client --op-id so an ssh
                                               retry can never double-steer (exit 255 auto-retries once)
+  gv supervise [--interval 30s]                headless loop: the gv watch transitions above, without a
+      [--once] [--json]                        cockpit open — the stream for a workspace whose cockpit
+                                              isn't up (a VPS running overflow workers). Recommended
+                                              interval floor 5s (cost discipline, not enforced). One
+                                              writer at a time: a second supervise (or part 4's cockpit
+                                              driver) exits 1 naming the pid already emitting. --once
+                                              fires one pass then exits 0 — no worker_waiting/
+                                              worker_vanished (that hysteresis needs a continuously
+                                              running loop).
   gv handoff <ticket> --to <host> [--rm] [--yes] [--no-checkpoint] [--timeout 10m]   move a running task to a remote host
   gv handoff <ticket> --from <host>            the mirror: release it there, cold-adopt it here
   gv audit [--json]                           cross-check tasks vs reality (pure read)
@@ -408,6 +417,8 @@ func main() {
 		err = cmdLs(args)
 	case "watch":
 		err = cmdWatch(args)
+	case "supervise":
+		err = cmdSupervise(args)
 	case "audit":
 		err = cmdAudit(args)
 	case "cost":

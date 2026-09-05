@@ -7,16 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/notify"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 )
@@ -106,18 +104,18 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		}
 		switch sentinel {
 		case "question":
-			notify(task.Ticket+" has a question", question)
-			pushNtfy(task.Ticket+" has a question", question, "high", "grey_question")
+			notify.Desktop(task.Ticket+" has a question", question)
+			notify.Push(task.Ticket+" has a question", question, "high", "grey_question")
 		case "blocked":
-			notify(task.Ticket+" is blocked", question)
-			pushNtfy(task.Ticket+" is blocked", question, "high", "no_entry")
+			notify.Desktop(task.Ticket+" is blocked", question)
+			notify.Push(task.Ticket+" is blocked", question, "high", "no_entry")
 		case "done":
-			notify(task.Ticket+" reports done", firstLine(message))
-			pushNtfy(task.Ticket+" reports done", firstLine(message), "default", "white_check_mark")
+			notify.Desktop(task.Ticket+" reports done", firstLine(message))
+			notify.Push(task.Ticket+" reports done", firstLine(message), "default", "white_check_mark")
 		default:
 			// Plain idle stops are the common case — desktop-only, so an
 			// ntfy outage can never tax every turn-end.
-			notify(task.Ticket+" went idle", "no STATUS line — check on it")
+			notify.Desktop(task.Ticket+" went idle", "no STATUS line — check on it")
 		}
 		return nil
 
@@ -127,8 +125,8 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 			Type: state.EvNotification, Ticket: task.Ticket,
 			Data: map[string]string{"message": p.Message, "session_id": p.SessionID},
 		})
-		notify(task.Ticket+" needs input", p.Message)
-		pushNtfy(task.Ticket+" needs input", p.Message, "high", "bell")
+		notify.Desktop(task.Ticket+" needs input", p.Message)
+		notify.Push(task.Ticket+" needs input", p.Message, "high", "bell")
 		return nil
 
 	case "session-end":
@@ -210,57 +208,6 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
-}
-
-// notify pings via terminal-notifier, best-effort. Fired from the hook
-// itself so it works with the TUI closed.
-func notify(title, body string) {
-	if _, err := exec.LookPath("terminal-notifier"); err != nil {
-		return
-	}
-	if len(body) > 120 {
-		body = body[:120] + "…"
-	}
-	_ = exec.Command("terminal-notifier",
-		"-title", "gv: "+title, "-message", body,
-		"-group", "grove", "-sender", "com.apple.Terminal").Start()
-}
-
-// --- ntfy push ---
-
-// ntfySettings resolves the push target; only consulted for push-worthy
-// classes, and overridable in tests so they can never reach a real topic.
-var ntfySettings = config.NotifySettings
-
-// ntfyClient bounds how long a push may delay a hook: an ntfy outage costs
-// at most 1.5s, and only on notification-worthy turn-ends.
-var ntfyClient = &http.Client{Timeout: 1500 * time.Millisecond}
-
-// pushNtfy sends a phone push, best-effort. Synchronous by necessity — a
-// goroutine can't outlive the hook process — and silent on every failure.
-func pushNtfy(title, body, priority, tags string) {
-	n := ntfySettings()
-	if n.Ntfy == "" {
-		return
-	}
-	if n.NtfyBody == "title-only" {
-		body = ""
-	}
-	if len(body) > 200 {
-		body = body[:200] + "…"
-	}
-	req, err := http.NewRequest(http.MethodPost, n.Ntfy, strings.NewReader(body))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Title", "gv: "+title)
-	req.Header.Set("Priority", priority)
-	req.Header.Set("Tags", tags)
-	resp, err := ntfyClient.Do(req)
-	if err != nil {
-		return
-	}
-	_ = resp.Body.Close()
 }
 
 // --- installer ---
