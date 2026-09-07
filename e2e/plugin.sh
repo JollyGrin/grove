@@ -75,6 +75,14 @@ assert data['schema_version'] == 1, data
 print(data['tasks'][0]['ticket'])
 ")"
 
+# 2b. READ: gv cost --context --all --json (grove-289) — contract envelope.
+( cd "$ROOT" && "$GV" cost --context --all --json > "$OUT/cost-context.json" )
+python3 -c "
+import json
+data = json.load(open('$OUT/cost-context.json'))
+assert data['schema_version'] == 1, data
+"
+
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.
 tail -n 50 "$ROOT/.grove/state/events.jsonl" > "$OUT/events.tail"
 python3 -c "
@@ -115,5 +123,31 @@ tmux list-panes -t "$WIN" -F '#{pane_id}' > "$SCRATCH/panes.txt"
 while read -r p; do tmux capture-pane -p -S - -t "$p" >> "$SCRATCH/pane.txt"; done < "$SCRATCH/panes.txt"
 tr -d '\n' < "$SCRATCH/pane.txt" > "$SCRATCH/pane.flat"
 grep -q 'plugin-smoke-ping' "$SCRATCH/pane.flat" || fail "nudge text not delivered to the pane"
+
+say "hook: SessionStart source=compact records exactly one compaction event, no session_started (grove-289)"
+WTPATH="$(python3 -c "
+import json
+data = json.load(open('$SCRATCH/ls.json'))
+print(data['tasks'][0]['worktree'])
+")"
+EV_BEFORE_COMPACT=$(wc -l < "$EVENTS")
+SS_BEFORE_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
+python3 -c "
+import json
+print(json.dumps({'session_id': 's-compact-1', 'cwd': '$WTPATH', 'hook_event_name': 'SessionStart', 'source': 'compact'}))
+" | "$GV" hook session-start
+[ "$(wc -l < "$EVENTS")" -eq "$((EV_BEFORE_COMPACT + 1))" ] || fail "compact session-start did not append exactly one event"
+tail -n 1 "$EVENTS" > "$SCRATCH/last-compact-event.json"
+grep -q '"type":"compaction"' "$SCRATCH/last-compact-event.json" || fail "compact session-start did not append a compaction event"
+SS_AFTER_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
+[ "$SS_AFTER_COMPACT" -eq "$SS_BEFORE_COMPACT" ] || fail "compact session-start incorrectly appended session_started"
+
+say "gv ls --json: the task's compactions field is now 1"
+( cd "$DUMMY" && "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-compacted.json" )
+grep -q '"compactions": 1' "$SCRATCH/ls-compacted.json" || fail "gv ls --json missing compactions: 1 after the compact restart"
+
+say "gv watch --replay --type compaction --json prints the compaction event"
+( cd "$DUMMY" && "$GV" watch --replay --type compaction --until compaction --json > "$SCRATCH/watch-compaction.json" )
+grep -q '"type":"compaction"' "$SCRATCH/watch-compaction.json" || fail "gv watch did not print the compaction event"
 
 say "PASS — external plugin drove read/react/steer through the contract alone"

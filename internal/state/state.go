@@ -37,6 +37,11 @@ const (
 	// event time is `at`. Folds like an untrack (leaves Active) but keeps
 	// the host on the task so `gv ls --json` can show handed_off_to.
 	EvTaskHandedOff = "task_handed_off"
+	// EvCompaction (grove-289) is appended by the SessionStart hook when
+	// Claude Code restarts a worker's session after an auto/manual context
+	// compaction (source: "compact") — a restart, not a new session: no
+	// glyph change, no session_started.
+	EvCompaction = "compaction"
 )
 
 // Delivery event types (grove-252): the supervisor's transition engine
@@ -170,6 +175,11 @@ type Task struct {
 	// also untracks), cleared by a local task_created/task_adopted (the
 	// task came back). Additive & optional.
 	HandedOffTo string `json:"handed_off_to,omitempty"`
+	// Compactions (grove-289) counts EvCompaction events folded for this
+	// task — how many times this ticket's session has restarted after a
+	// context compaction. Additive & optional: events predating the field
+	// fold to 0.
+	Compactions int `json:"compactions,omitempty"`
 	// SentinelAt (grove-205) is when the agent_status event that set the
 	// CURRENT sentinel landed. Updated moves for any event, so it cannot
 	// tell "done just now" from "done an hour ago"; a poll-based consumer
@@ -319,6 +329,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.HandedOffTo = ""
 		t.Delivery, t.Liveness = nil, nil
 		t.LiveSince = ev.Time
+		t.Compactions = 0
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
@@ -326,6 +337,8 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 		t.Paused = false // any live session un-pauses (mirrors ParkedTickets)
 		t.LiveSince = ev.Time
+	case EvCompaction:
+		t.Compactions++
 	case EvAgentStatus:
 		t.Agent = d["status"]
 		t.Sentinel = d["sentinel"]

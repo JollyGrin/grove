@@ -718,6 +718,52 @@ func TestReceiveSessionStartNewIDRegisters(t *testing.T) {
 	}
 }
 
+// A SessionStart with source "compact" is a restart, not a new session
+// (grove-289): it records a compaction event and leaves the glyph/session
+// bookkeeping alone — exactly one compaction event, zero session_started.
+func TestReceiveSessionStartCompact(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-worker", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	before := countLines(t, dir)
+
+	compactPayload, _ := json.Marshal(map[string]string{
+		"session_id": "s-worker-2", "cwd": cwd, "hook_event_name": "SessionStart", "source": "compact",
+	})
+	if err := Receive(single(dir), "session-start", bytes.NewReader(compactPayload)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("compact session-start: %d → %d events, want +1", before, got)
+	}
+	if ev := lastEventIn(t, dir); ev.Type != state.EvCompaction {
+		t.Fatalf("last event type = %q, want %q", ev.Type, state.EvCompaction)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.Contains(line, `"type":"session_started"`) {
+			n++
+		}
+	}
+	if n != 1 { // only the first, non-compact session-start above
+		t.Errorf("session_started count = %d, want 1 (the compact restart must not add another)", n)
+	}
+
+	task := refresh(t, dir)["DEV-1"]
+	if task.Compactions != 1 {
+		t.Errorf("task.Compactions = %d, want 1", task.Compactions)
+	}
+}
+
 // The #148 mechanism: a late SessionEnd from a REPLACED process must not
 // stamp `dead` over the live successor; the current session's SessionEnd
 // still does.

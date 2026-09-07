@@ -41,7 +41,9 @@ import (
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/sub"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/tui"
 	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/wizard"
@@ -2481,6 +2483,10 @@ type costRow struct {
 	Repo   string      `json:"repo"`
 	Done   bool        `json:"done"`
 	Cost   cost.Totals `json:"cost"`
+	// Sessions (grove-289) is set only on the synthetic "orchestrator" row
+	// — the transcript file count backing it, since that row has no
+	// worktree/task of its own to describe it.
+	Sessions int `json:"sessions,omitempty"`
 }
 
 // cmdCost reports per-ticket token/cost estimates (active table + done
@@ -2492,7 +2498,10 @@ func cmdCost(args []string) error {
 	analyze := fs.Bool("analyze", false, "outcome-priced ledger with analysis flags")
 	record := fs.String("record", "", "turn the persistent spend ledger on|off (also toggleable from the cockpit costs page)")
 	showLedger := fs.Bool("ledger", false, "print the recorded spend history (latest snapshot per ticket)")
-	parseAnywhere(fs, args)
+	ctxMode := fs.Bool("context", false, "per-call context decomposition: growth by source, compactions, delegation")
+	top := fs.Int("top", 10, "--context: how many amplification rows to show per ticket")
+	allTickets := fs.Bool("all", false, "--context: every tracked task, not just the ones named on the command line")
+	rest := parseAnywhere(fs, args)
 
 	if *record != "" {
 		if *record != "on" && *record != "off" {
@@ -2506,6 +2515,9 @@ func cmdCost(args []string) error {
 	}
 	if *showLedger {
 		return costLedger(*asJSON)
+	}
+	if *ctxMode {
+		return costContext(rest, *asJSON, *top, *allTickets)
 	}
 
 	cfg, err := loadCfg()
@@ -2544,6 +2556,11 @@ func cmdCost(args []string) error {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Cost.USD > rows[j].Cost.USD })
 
+	orchRow, hasOrch := orchestratorCostRow()
+	if hasOrch {
+		rows = append(rows, orchRow)
+	}
+
 	if *asJSON {
 		return emitJSON("rows", rows)
 	}
@@ -2554,16 +2571,205 @@ func cmdCost(args []string) error {
 		fmt.Printf("%-11s %-11s %-8s %-6s %-8s %-8s %-7s %s\n",
 			"TICKET", "REPO", "EST $", "TURNS", "IN", "OUT", "CACHE%", "MODELS")
 		for _, r := range rows {
-			fmt.Printf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s %s\n",
+			line := fmt.Sprintf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s %s",
 				r.Ticket, r.Repo, fmtUSD(&r.Cost), r.Cost.Turns,
 				fmtTok(r.Cost.Input), fmtTok(r.Cost.Output),
 				fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()), r.Cost.Mix())
+			if r.Ticket == orchestratorTicket {
+				line = dim(line)
+			}
+			fmt.Println(line)
 		}
 	}
 	fmt.Printf("\ndone tasks: %d · est $%.2f total · %d turns  (estimates, not billing)\n",
 		doneCount, doneUSD, doneTurns)
 	printUnpricedFooter(unpricedModels(allTots))
 	return nil
+}
+
+// orchestratorTicket is the synthetic ticket id `gv cost` and `gv cost
+// --analyze` use for the ambient workspace's orchestrator chats
+// (grove-289) — spend today's per-ticket rows never show, since no task
+// owns it.
+const orchestratorTicket = "orchestrator"
+
+// orchestratorCostRow builds that row. Empty/false when there is no
+// ambient workspace (the legacy no-workspace path) — orchestrator spend
+// accounting is workspace-scoped by design (DESIGN.md, non-goals).
+func orchestratorCostRow() (costRow, bool) {
+	tot, sessions, label, ok := orchestratorTotals()
+	if !ok {
+		return costRow{}, false
+	}
+	return costRow{Ticket: orchestratorTicket, Repo: label, Done: false, Cost: tot, Sessions: sessions}, true
+}
+
+// orchestratorTotals aggregates every transcript under the ambient
+// workspace's orchestratorProjectDirs (its brain dir + one per model
+// profile, chat_ls.go:398) — everywhere its orchestrator chats have run.
+func orchestratorTotals() (tot cost.Totals, sessions int, label string, ok bool) {
+	if ambient.ws == nil {
+		return cost.Totals{}, 0, "", false
+	}
+	label = ambient.ws.Label
+	if cfg, err := config.LoadAt(ambient.ws.Root); err == nil && cfg.Workspace.Label != "" {
+		label = cfg.Workspace.Label
+	}
+	if label == "" {
+		label = "global"
+	}
+	configDir := workspaceClaudeConfigDir(*ambient.ws)
+	var entries []transcript.UsageEntry
+	for _, dir := range orchestratorProjectDirs(*ambient.ws) {
+		fileEntries, files := readProjectDirUsage(transcript.ProjectDirIn(configDir, dir))
+		entries = append(entries, fileEntries...)
+		sessions += files
+	}
+	return cost.Total(cost.Dedup(entries)), sessions, label, true
+}
+
+// readProjectDirUsage parses every *.jsonl in a Claude project dir (not
+// keyed to any one worktree, so cost.Cache's per-task discovery does not
+// apply) and reports how many files it found.
+func readProjectDirUsage(projDir string) ([]transcript.UsageEntry, int) {
+	entries, err := os.ReadDir(projDir)
+	if err != nil {
+		return nil, 0
+	}
+	var all []transcript.UsageEntry
+	files := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		files++
+		f, err := os.Open(filepath.Join(projDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		all = append(all, transcript.ParseUsage(f)...)
+		f.Close()
+	}
+	return all, files
+}
+
+// contextRow is one `gv cost --context --json` row.
+type contextRow struct {
+	Ticket string             `json:"ticket"`
+	Report cost.ContextReport `json:"report"`
+}
+
+// costContext implements `gv cost --context` (grove-289): per-call context
+// decomposition — what filled a ticket's context, whether it compacted,
+// whether it delegated — so a context cap, the deny gate, or `gv sub` can
+// be judged by numbers a week later. Pure read.
+func costContext(tickets []string, asJSON bool, top int, all bool) error {
+	tasks, err := state.Peek(stateDir())
+	if err != nil {
+		return err
+	}
+
+	var selected []*state.Task
+	if all {
+		for _, t := range tasks {
+			selected = append(selected, t)
+		}
+		sort.Slice(selected, func(i, j int) bool { return selected[i].Ticket < selected[j].Ticket })
+	} else {
+		if len(tickets) == 0 {
+			return fmt.Errorf("usage: gv cost --context <ticket>... (or --all for every tracked task)")
+		}
+		for _, tk := range tickets {
+			t, ok := tasks[tk]
+			if !ok {
+				return fmt.Errorf("unknown ticket %q — not tracked (`gv ls` lists tracked tickets)", tk)
+			}
+			selected = append(selected, t)
+		}
+	}
+
+	allSubs, err := sub.Read(stateDir())
+	if err != nil {
+		return err
+	}
+
+	var rows []contextRow
+	for _, t := range selected {
+		lines, err := contextLinesForTask(t.Worktree)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, contextRow{
+			Ticket: t.Ticket,
+			Report: cost.Context(lines, sub.ForTicket(allSubs, t.Ticket), top),
+		})
+	}
+
+	if asJSON {
+		return emitJSON("rows", rows)
+	}
+	if len(rows) == 0 {
+		fmt.Println("no matching tasks with transcripts")
+		return nil
+	}
+	for _, r := range rows {
+		printContextReport(r.Ticket, r.Report)
+	}
+	return nil
+}
+
+// contextLinesForTask reads and decodes every session + subagent
+// transcript for a worktree, concatenated in file order (transcript.
+// SessionFiles' order — cost.Context relies on it for CallsAfter
+// accounting).
+func contextLinesForTask(worktreePath string) ([]transcript.Line, error) {
+	files, err := transcript.SessionFiles(worktreePath)
+	if err != nil {
+		return nil, err
+	}
+	var all []transcript.Line
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			continue // unreadable file degrades that file, not the ticket
+		}
+		all = append(all, transcript.ParseLines(f)...)
+		f.Close()
+	}
+	return all, nil
+}
+
+// printContextReport renders one ticket's `gv cost --context` human table:
+// a header line, growth-by-bucket sorted desc, then the top-N amplified
+// blocks.
+func printContextReport(ticket string, r cost.ContextReport) {
+	fmt.Printf("%s  calls %d  avg %s  p90 %s  max %s  floor %.0f%%  compactions %d  sub %d\n",
+		ticket, r.APICalls, fmtTok(r.AvgCtx), fmtTok(r.P90Ctx), fmtTok(r.MaxCtx),
+		100*r.FloorShare, len(r.Compactions), r.Delegation.Calls)
+
+	type growthRow struct {
+		bucket cost.GrowthBucket
+		share  float64
+	}
+	growth := make([]growthRow, 0, len(r.Growth))
+	for b, s := range r.Growth {
+		growth = append(growth, growthRow{b, s})
+	}
+	sort.Slice(growth, func(i, j int) bool {
+		if growth[i].share != growth[j].share {
+			return growth[i].share > growth[j].share
+		}
+		return growth[i].bucket < growth[j].bucket
+	})
+	for _, g := range growth {
+		fmt.Printf("  %-22s %.0f%%\n", g.bucket, 100*g.share)
+	}
+
+	for _, a := range r.Top {
+		fmt.Printf("  %-14s %s chars ×%d  ≈%s tok  %s\n",
+			a.Bucket, fmtTok(a.Chars), a.CallsAfter, fmtTok(a.EstTokens), a.Head)
+	}
+	fmt.Println()
 }
 
 // costLedger prints the recorded history — reads the ledger alone, so it
@@ -2607,6 +2813,19 @@ type analyzeRow struct {
 	Steers  int         `json:"steers"`
 	Flags   []string    `json:"flags,omitempty"`
 	Cost    cost.Totals `json:"cost"`
+	// The five fields below (grove-289, additive) come from the same
+	// transcript walk as `gv cost --context`, cached in the same
+	// cost.Cache generation (LinesForTask) so --analyze pays for parsing
+	// each transcript once, not twice.
+	APICalls      int     `json:"api_calls"`
+	AvgCtx        int     `json:"avg_ctx"`
+	MaxCtx        int     `json:"max_ctx"`
+	Compactions   int     `json:"compactions"`
+	SubCalls      int     `json:"sub_calls"`
+	EstUSDPerCall float64 `json:"est_usd_per_call,omitempty"`
+	// Sessions is set only on the synthetic "orchestrator" row (costRow's
+	// twin field) — the transcript file count backing it.
+	Sessions int `json:"sessions,omitempty"`
 }
 
 type analyzeReport struct {
@@ -2709,6 +2928,10 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	if err != nil {
 		return err
 	}
+	allSubs, err := sub.Read(stateDir())
+	if err != nil {
+		return err
+	}
 
 	// PR outcomes concurrently — every ticket ever tracked (done included).
 	type prRes struct {
@@ -2757,6 +2980,17 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 			Ticket: t.Ticket, Repo: t.Repo, Done: t.Done,
 			Outcome: outcomes[t.Ticket], Steers: steers[t.Ticket], Cost: tot,
 		}
+		if lines, err := cache.LinesForTask(t.Worktree); err == nil {
+			ctxRep := cost.Context(lines, sub.ForTicket(allSubs, t.Ticket), 5)
+			row.APICalls = ctxRep.APICalls
+			row.AvgCtx = ctxRep.AvgCtx
+			row.MaxCtx = ctxRep.MaxCtx
+			row.Compactions = len(ctxRep.Compactions)
+			row.SubCalls = ctxRep.Delegation.Calls
+			if ctxRep.APICalls > 0 {
+				row.EstUSDPerCall = tot.USD / float64(ctxRep.APICalls)
+			}
+		}
 		rep.Rows = append(rep.Rows, row)
 		rep.TotalUSD += tot.USD
 		rep.ByRepoUSD[t.Repo] += tot.USD
@@ -2787,6 +3021,12 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 		if cost.CostOutlier(r.Cost.USD, medianMerged) {
 			r.Flags = append(r.Flags, "cost: ≥2× median of merged tickets")
 		}
+		if cost.ContextHeavy(r.AvgCtx) {
+			r.Flags = append(r.Flags, "context: avg ≥ 200k")
+		}
+		if cost.NeverCompacted(r.APICalls, r.Compactions) {
+			r.Flags = append(r.Flags, "context: ≥150 calls, never compacted")
+		}
 	}
 	sort.Slice(rep.Rows, func(i, j int) bool { return rep.Rows[i].Cost.USD > rep.Rows[j].Cost.USD })
 
@@ -2796,6 +3036,13 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	}
 	rep.UnpricedModels = unpricedModels(rowTots)
 
+	if tot, sessions, label, ok := orchestratorTotals(); ok {
+		rep.Rows = append(rep.Rows, analyzeRow{
+			Ticket: orchestratorTicket, Repo: label, Done: false, Outcome: "n/a",
+			Cost: tot, Sessions: sessions,
+		})
+	}
+
 	if asJSON {
 		return emitJSON("report", rep)
 	}
@@ -2803,9 +3050,13 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	fmt.Printf("%-11s %-11s %-9s %-8s %-6s %-6s %-7s %s\n",
 		"TICKET", "REPO", "OUTCOME", "EST $", "TURNS", "STEER", "CACHE%", "FLAGS")
 	for _, r := range rep.Rows {
-		fmt.Printf("%-11s %-11s %-9s %-8s %-6d %-6d %-7s %s\n",
+		line := fmt.Sprintf("%-11s %-11s %-9s %-8s %-6d %-6d %-7s %s",
 			r.Ticket, r.Repo, r.Outcome, fmtUSD(&r.Cost), r.Cost.Turns, r.Steers,
 			fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()), strings.Join(r.Flags, "; "))
+		if r.Ticket == orchestratorTicket {
+			line = dim(line)
+		}
+		fmt.Println(line)
 	}
 	fmt.Printf("\ntotal est $%.2f · %d merged (est $%.2f per merged PR) · est $%.2f on abandoned tickets\n",
 		rep.TotalUSD, rep.MergedCount, rep.USDPerMergedPR, rep.AbandonedUSD)

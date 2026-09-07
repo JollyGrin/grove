@@ -9,6 +9,32 @@
 
 ## Now (2026-07-12)
 
+- [x] Cost: `--context` view — per-call context, growth by source,
+      compactions, delegation (grove-289, 2026-09-07). New
+      `internal/transcript/context.go` (`ParseLines`, every content block
+      of a transcript, not just billable usage) and `internal/cost/context.go`
+      (`Classify`, `Context` — the decomposition: dedup call count,
+      avg/p90/max context size, `floor`/`floor_share`, growth by 14
+      source buckets as a share of `ctx_tokens` via the 1.9 chars/token
+      estimate, top-N amplified reads, `gv sub` delegation rollup from
+      the new `internal/sub` reader package). `gv cost --context
+      [ticket…|--all] [--top N] [--json]` (cmd/gv/main.go); `--analyze`
+      gains `api_calls`/`avg_ctx`/`max_ctx`/`compactions`/`sub_calls`/
+      `est_usd_per_call` plus two flags (`cost.ContextHeavy`,
+      `cost.NeverCompacted`); both `gv cost --json` and `--analyze --json`
+      gain a synthetic `orchestrator` row (the ambient workspace's
+      orchestrator-chat spend, previously invisible). New `compaction`
+      event: the SessionStart hook records one (`internal/hooks/hooks.go`,
+      `Payload.Source == "compact"`) instead of `session_started` on a
+      context-compaction restart; folds into `state.Task.Compactions`
+      (`gv ls`/`gv cost --json`, omitempty); `gv watch --type compaction`
+      (known, not default). `orchestrator/CLAUDE.md` duty 8 now points at
+      `gv cost --context` / the two `--analyze` flags instead of the
+      hand-derived `cache_read_tokens ÷ turns` signal
+      (`TestSeedTeachesCostContext` tripwire). Docs pair updated
+      (`docs/plugins.md`, `.claude/skills/plugin-authoring/SKILL.md`);
+      `e2e/dummy.sh`/`e2e/plugin.sh` extended.
+
 - [x] Unattended 3/4: `gv supervise` as a user systemd unit on the remote
       host — docs + unit file (grove-272, 2026-09-05). Docs only, no Go.
       `docs/remote-host-setup.md` gains a **§Sidecars: user systemd units**

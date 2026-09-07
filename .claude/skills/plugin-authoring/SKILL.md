@@ -24,6 +24,7 @@ repo wins.
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
 | `gv cost --analyze --json` | `report` | outcome-priced ledger |
+| `gv cost --context [ticket…\|--all] --json` | `rows` | per-ticket `{ticket, report}` (grove-289): per-call context size, `growth` by source bucket (share of `ctx_tokens`, 1.9 chars/token estimate), `compactions`, `top` amplified reads, `delegation` (`gv sub` rollup) |
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |
 | `gv doctor --json` | `rows` | connection checks |
 | `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
@@ -60,10 +61,23 @@ row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
 `worker_errored`, `worker_recovered` — the transition engine's delivery
 (PR-facing) and liveness (worker-facing, beyond what the Stop hook sees)
 dimensions, folded into row fields `delivery`/`liveness`
-(`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
-full per-type data table. Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
-that fail to parse (the last line may be torn mid-write).
+(`{state, ...}`, absent means `none`/`ok`); and (grove-289) `compaction`
+— data `{session_id}`, fired by a SessionStart with `source: "compact"`
+(a restart after context compaction, not a new session); folds into the
+task's `compactions` count (`gv ls`/`gv cost --json`, omitted when 0). In
+`--type`'s known vocabulary, NOT the default set (informational). See
+docs/plugins.md for the full per-type data table. Workspace-scoped (empty
+ticket): `workspace_parked`, `orchestrator_closed`. Skip unknown types
+and lines that fail to parse (the last line may be torn mid-write).
+
+`gv cost --analyze --json` rows also carry (grove-289) `api_calls`,
+`avg_ctx`, `max_ctx`, `compactions`, `sub_calls`, `est_usd_per_call` (the
+same walk `gv cost --context` runs), two more deterministic flags
+(`avg_ctx >= 200_000`, `api_calls >= 150 && compactions == 0`), and one
+synthetic `ticket: "orchestrator"` row per ambient workspace (its
+orchestrator chats' spend, `done: false`, `outcome: "n/a"`, a `sessions`
+file count) — present on both `gv cost --json` and `gv cost --analyze
+--json`, omitted on the legacy no-workspace path.
 
 **Steer.** Mutations shell out to `gv` — it resolves the tmux pane, does
 safe paste injection, and appends the event for you:

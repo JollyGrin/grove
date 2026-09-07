@@ -68,6 +68,10 @@ var DefaultTypes = []string{
 // Validating against it turns a typo into an error instead of an
 // indistinguishable silence — the same failure class this command exists to
 // remove.
+//
+// EvCompaction (grove-289) is here but NOT in DefaultTypes: a compaction
+// is informational (`gv cost --context` is the read side of it), not
+// actionable on its own.
 var KnownTypes = []string{
 	state.EvTaskCreated,
 	state.EvSessionStarted,
@@ -96,6 +100,7 @@ var KnownTypes = []string{
 	state.EvWorkerVanished,
 	state.EvWorkerErrored,
 	state.EvWorkerRecovered,
+	state.EvCompaction,
 }
 
 // KnownSentinels is the classifier's vocabulary (internal/hooks.classify):
@@ -392,6 +397,12 @@ func deliveryLivenessDetail(evType string, d map[string]string) string {
 		return d["reason"] + " · " + d["line"]
 	case state.EvWorkerRecovered:
 		return "recovered from " + d["from"]
+	case state.EvCompaction:
+		id := d["session_id"]
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		return "compacted · session " + id
 	default:
 		return ""
 	}
