@@ -786,3 +786,70 @@ claude_config_dir: ~/.cc-work
 		t.Errorf("global claude_config_dir = %q, want %q", c.ClaudeConfigDir, want)
 	}
 }
+
+// grove-288: gv sub defaults apply even when the config carries no sub:
+// block at all.
+func TestSubDefaults(t *testing.T) {
+	setHome(t)
+	writeGlobal(t, ``)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sub.MaxTurns != 12 {
+		t.Errorf("sub.max_turns = %d, want 12", c.Sub.MaxTurns)
+	}
+	if c.Sub.MaxInputChars != 400000 {
+		t.Errorf("sub.max_input_chars = %d, want 400000", c.Sub.MaxInputChars)
+	}
+	if c.Sub.Timeout != "180s" {
+		t.Errorf("sub.timeout = %q, want 180s", c.Sub.Timeout)
+	}
+}
+
+// A workspace that only sets sub.lane must not lose the global sub.max_turns
+// — sub merges field-wise, not wholesale.
+func TestSubMergeLaneOnly(t *testing.T) {
+	setHome(t)
+	globalRepo := t.TempDir()
+	writeGlobal(t, `
+repos:
+  g:
+    path: `+globalRepo+`
+sub:
+  max_turns: 5
+`)
+	wsRepo := t.TempDir()
+	root := newWorkspace(t, `
+workspace:
+  label: ws
+  scope: parent
+repos:
+  r:
+    path: `+wsRepo+`
+sub:
+  lane: x
+`)
+	c, err := LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sub.Lane != "x" {
+		t.Errorf("sub.lane = %q, want x", c.Sub.Lane)
+	}
+	if c.Sub.MaxTurns != 5 {
+		t.Errorf("sub.max_turns = %d, want 5 (inherited from global, field-wise merge)", c.Sub.MaxTurns)
+	}
+}
+
+func TestSubBadTimeout(t *testing.T) {
+	setHome(t)
+	writeGlobal(t, `
+sub:
+  timeout: not-a-duration
+`)
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "sub.timeout:") {
+		t.Errorf("err = %v, want it to mention sub.timeout:", err)
+	}
+}

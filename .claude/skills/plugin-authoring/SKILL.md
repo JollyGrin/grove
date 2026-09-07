@@ -27,6 +27,9 @@ repo wins.
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |
 | `gv doctor --json` | `rows` | connection checks |
 | `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
+| `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
+| `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
+| `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
@@ -64,6 +67,13 @@ dimensions, folded into row fields `delivery`/`liveness`
 full per-type data table. Workspace-scoped (empty ticket):
 `workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
 that fail to parse (the last line may be torn mid-write).
+
+`<workspace-root>/.grove/state/sub.jsonl` (grove-288) is `gv sub`'s own
+append-only log, one `Record` per call: `{time, v, workspace, ticket,
+lane, model, mode, input_chars, input_tokens, output_tokens,
+cached_tokens, turns, ms, exit, prompt_head}`. The answer text and the
+lane credential are never written to it. Same rules: additive-only,
+unknown keys ignored, last line may be torn.
 
 **Steer.** Mutations shell out to `gv` — it resolves the tmux pane, does
 safe paste injection, and appends the event for you:

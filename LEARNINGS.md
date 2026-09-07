@@ -26,6 +26,23 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-06 · GLM 5.3 Flash via the Anthropic protocol returns zero
+  text unless `thinking` is disabled** (grove-288, `gv sub` bake-off
+  against api.z.ai). A `/v1/messages` call with no `thinking` field (or
+  `thinking` enabled) came back with an empty `content` text block —
+  `gv sub`'s raw mode sends `"thinking":{"type":"disabled"}` by default
+  for exactly this reason (`sub.thinking: false`).
+- **2026-09-06 · `claude -p --output-format json` may print
+  `[claude-code:…]` warning lines before the JSON on a third-party lane**
+  (grove-288). A model slug the lane doesn't recognize (
+  `[claude-code:unrecognized_model]`) prints to stdout ahead of the JSON
+  payload — a consumer must skip to the first `{` rather than
+  `json.Unmarshal` stdout directly.
+- **2026-09-06 · `claude -p --bare` works with `ANTHROPIC_BASE_URL` +
+  `ANTHROPIC_AUTH_TOKEN` on any Anthropic-protocol endpoint, no OAuth
+  needed** (grove-288, verified against api.z.ai). `--bare` skips hooks,
+  CLAUDE.md, skills, and MCP, so a read-only agentic `gv sub --agentic`
+  call never touches this workspace's own context or config.
 - **2026-09-05 · `run_in_background` notifies on EXIT, so it can never
   watch an unbounded stream** (grove-273; verified against the Bash/Monitor
   tool contracts, not a live incident). `gv watch --json` with no

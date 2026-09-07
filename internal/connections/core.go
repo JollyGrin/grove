@@ -86,6 +86,16 @@ func Core(env Env) []Connection {
 		conns = append(conns, workerConnections(env)...)
 		conns = append(conns, agentsMdConnections(env)...)
 		conns = append(conns, remoteHostConnections(env)...)
+
+		conns = append(conns, Connection{
+			ID:          "sub:lane",
+			Kind:        KindCLIAuth,
+			Severity:    SeverityWarn,
+			RequiredFor: []string{"sub"},
+			Title:       "gv sub lane key present",
+			Fix:         "add export <VAR>=… to ~/.config/grove/.env",
+			Check:       checkSubLane,
+		})
 	}
 
 	// The orchestrator brain's seed-drift row (grove-190): the cockpit
@@ -132,6 +142,54 @@ func checkConfig(e Env) Status {
 		return Status{State: StateMissing, Info: e.CfgErr.Error()}
 	}
 	return Status{State: StateOK, Info: fmt.Sprintf("%d repo(s)", len(e.Cfg.Repos))}
+}
+
+// checkSubLane reports whether `gv sub`'s configured lane (grove-288) has
+// a resolvable credential. An empty sub.lane means gv sub is disabled —
+// that's fine, not a warning. Otherwise the lane's token env var must
+// resolve from the process env or the secrets file for the row to pass.
+func checkSubLane(e Env) Status {
+	if e.Cfg.Sub.Lane == "" {
+		return Status{State: StateOK, Info: "gv sub not configured (sub.lane empty)"}
+	}
+	tokenEnv := "ANTHROPIC_API_KEY"
+	if e.Cfg.Sub.Lane != "anthropic" {
+		p, ok := e.Cfg.ModelProfiles[e.Cfg.Sub.Lane]
+		if !ok || p == nil {
+			return Status{State: StateWarn, Info: fmt.Sprintf("sub.lane %q is not a configured model profile", e.Cfg.Sub.Lane)}
+		}
+		tokenEnv = p.AuthTokenEnv
+	}
+	if e.Getenv(tokenEnv) != "" {
+		return Status{State: StateOK, Info: tokenEnv + " set"}
+	}
+	secretsPath := filepath.Join(e.Home, ".config", "grove", ".env")
+	if envFileHasVar(e, secretsPath, tokenEnv) {
+		return Status{State: StateOK, Info: tokenEnv + " in " + secretsPath}
+	}
+	return Status{State: StateWarn, Info: fmt.Sprintf("%s not set (process env or %s)", tokenEnv, secretsPath)}
+}
+
+// envFileHasVar tolerantly parses a `export NAME=value` secrets file
+// (mirrors internal/openrouter's key parsing) via e.ReadFile so the check
+// is testable without touching disk.
+func envFileHasVar(e Env, path, varName string) bool {
+	raw, err := e.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		v, ok := strings.CutPrefix(line, varName+"=")
+		if ok && strings.TrimSpace(strings.Trim(v, `"'`)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // providerConnections declares readiness for the configured task backend.

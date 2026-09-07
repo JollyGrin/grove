@@ -558,3 +558,51 @@ func TestRemoteHostRows(t *testing.T) {
 		t.Errorf("nil Output seam = %+v, want missing", st)
 	}
 }
+
+// grove-288: sub:lane is ok when disabled, ok when the key resolves
+// (process env or secrets file), warn otherwise.
+func TestSubLaneRow(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	baseCfg := func(lane string) *config.Config {
+		c := &config.Config{ModelProfiles: map[string]*config.ModelProfile{
+			"flat-x": {AuthTokenEnv: "FLAT_X_KEY"},
+		}}
+		c.Sub.Lane = lane
+		return c
+	}
+
+	// disabled — ok, no complaint.
+	st := checkSubLane(Env{Cfg: baseCfg(""), Getenv: noEnv})
+	if st.State != StateOK {
+		t.Errorf("disabled lane = %+v, want ok", st)
+	}
+
+	// key present via process env — ok.
+	st = checkSubLane(Env{Cfg: baseCfg("flat-x"), Getenv: func(k string) string {
+		if k == "FLAT_X_KEY" {
+			return "shh"
+		}
+		return ""
+	}})
+	if st.State != StateOK {
+		t.Errorf("key via env = %+v, want ok", st)
+	}
+
+	// key present via secrets file — ok.
+	st = checkSubLane(Env{
+		Cfg: baseCfg("flat-x"), Getenv: noEnv, Home: "/home/u",
+		ReadFile: func(string) ([]byte, error) { return []byte("export FLAT_X_KEY=shh\n"), nil },
+	})
+	if st.State != StateOK {
+		t.Errorf("key via secrets file = %+v, want ok", st)
+	}
+
+	// no key anywhere — warn.
+	st = checkSubLane(Env{
+		Cfg: baseCfg("flat-x"), Getenv: noEnv, Home: "/home/u",
+		ReadFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if st.State != StateWarn {
+		t.Errorf("no key = %+v, want warn", st)
+	}
+}

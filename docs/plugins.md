@@ -64,6 +64,9 @@ payload under one named key.
 | `gv doctor --json` | `rows` | array — connection checks |
 | `gv brains --json` | `brains` | array — one row per REGISTERED workspace (not just the ones behind): `{label, root, state, have, want, command, note}` (grove-236). `state` is `current` · `stale` · `unstamped` · `absent` · `missing-root`; `have` is the seed stamp found on disk (empty when unstamped, absent or missing-root) and `want` is the stamp of the seed the running binary embeds; `command` is the `gv init --only orchestrator-md` line to run **from `root`**, empty when there is nothing to run (current, or a root that is gone). Pure read — the sweep never writes, and grove never overwrites a brain |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
+| `gv sub "<prompt>" [path…] --json` | `sub` | object — one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
+| `gv sub --lanes --json` | `lanes` | array — usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
+| `gv sub --ledger --json` | `rows` | array — this workspace's `sub.jsonl` history, one `Record` per row (see below) |
 
 ```sh
 $ gv ls --json --no-pr --no-cost
@@ -308,6 +311,27 @@ over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
 itself does the same).
+
+## `sub.jsonl` — `gv sub`'s call history
+
+`<workspace>/.grove/state/sub.jsonl` (or the global state dir's, outside
+a workspace) is an append-only, flock-guarded JSONL log of every `gv sub`
+call (grove-288) — one `Record` per line, newest last:
+
+```json
+{"time":"2026-09-06T18:00:00Z","v":1,"workspace":"grove","ticket":"grove-288","lane":"zai-plan-glm-flash","model":"glm-4.5-air","mode":"raw","input_chars":58213,"input_tokens":14200,"output_tokens":180,"cached_tokens":0,"turns":0,"ms":24000,"exit":0,"prompt_head":"list every top-level func: name, exact line, one-line purpose"}
+```
+
+Fields: `time`, `v` (schema version), `workspace` (label or empty),
+`ticket` (empty when the call didn't run from inside a tracked task's
+worktree), `lane`, `model`, `mode` (`raw` | `agentic`), `input_chars`,
+`input_tokens`, `output_tokens`, `cached_tokens`, `turns` (agentic only,
+0 for raw), `ms`, `exit` (the process exit code `gv sub` used for this
+call), `prompt_head` (first 80 runes of the prompt, newlines flattened to
+spaces). **The answer text and the lane credential are never written to
+this file.** Consumers MUST ignore unknown keys — additive-only, same
+rule as everywhere else on this page. The last line may be torn
+mid-write; skip lines that fail to parse.
 
 Polling vs streaming: at e-ink/bot cadence, polling `gv ls --json` every
 30–60s and using `gv watch` (or your own tail) for wake-ups is sufficient.
