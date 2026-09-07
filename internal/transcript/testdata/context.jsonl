@@ -1,0 +1,12 @@
+{"type":"user","message":{"role":"user","content":"please read internal/x.go and internal/y.go"}}
+{"type":"assistant","requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-5","content":[{"type":"text","text":"Let me look at those files."}],"usage":{"input_tokens":1000,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}
+{"type":"assistant","requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"tu-1","name":"Read","input":{"file_path":"internal/x.go"}}],"usage":{"input_tokens":1000,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"package main\n\nfunc main() {}\n"}]}}
+{"type":"assistant","requestId":"req-2","message":{"id":"msg-2","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"tu-2","name":"Bash","input":{"command":"cat internal/y.go"}}],"usage":{"input_tokens":1500,"output_tokens":15,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-2","content":[{"type":"text","text":"package y\n\nfunc Y() {}\n"}]}]}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":150000,"postTokens":9000}}
+{"type":"assistant","requestId":"req-3","message":{"id":"msg-3","model":"<synthetic>","content":[{"type":"text","text":"synthetic notice"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"user","message":{"role":"user","content":"continue"}}
+{"type":"assistant","requestId":"req-4","message":{"id":"msg-4","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"tu-3","name":"Edit","input":{"file_path":"internal/y.go","old_string":"a","new_string":"b"}}],"usage":{"input_tokens":2000,"output_tokens":30,"cache_read_input_tokens":1800,"cache_creation_input_tokens":0}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-3","content":"applied"}]}}
+{"type":"assistant","requestId":"req-5","message":{"id":"msg-5","model":"claude-sonnet-5","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":2200,"output_tokens":10,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0}}}

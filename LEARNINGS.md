@@ -67,6 +67,32 @@
   "delivered is not submitted" guard is a no-op until it learns the ─-rule
   input box.
 
+- **2026-09-07 · `gv cost --context`'s growth shares are a 1.9 chars/token
+  estimate, not a token count** (grove-289; docs/plans/2026-09-06-token-
+  diet-research.md §7 — not present in this checkout, so treat the ratio
+  as inherited from that research rather than re-derived here). A
+  tool_result/tool_use/text block's byte length is the only number a
+  transcript actually carries; converting it to tokens for the `growth`
+  map (`internal/cost/context.go`) needs a constant, and 1.9 is what the
+  spec's research settled on for the mixed prose/code/log content grove
+  transcripts actually carry. Any consumer of `growth` (a plugin, the
+  orchestrator's context-rot duty) must read it as a relative-effort
+  share of `ctx_tokens`, never a precise count — the same "estimate, not
+  billing" caveat `gv cost`'s dollar figures already carry.
+- **A session restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Distinguishing it
+  matters for two reasons: folding it as `session_started` would flip a
+  worker's glyph and inflate its session count for something that isn't a
+  fresh pickup, and `gv cost --context`'s compaction count depends on
+  seeing it as its own event (`state.EvCompaction`) rather than losing it
+  inside `session_started`. The ticket's research draft additionally
+  claims sessions pinned to the `[1m]` cache tier never hit Claude Code's
+  auto-compact threshold in practice — plausible (a 1h cache write keeps
+  far more of the transcript "hot" before the context window fills), but
+  this session had no live long-running `[1m]`-pinned transcript to
+  independently reproduce that against; treat it as a hypothesis to watch
+  `gv cost --context`'s `compactions`/`NeverCompacted` flag for, not yet
+  independently confirmed here.
 - **2026-09-06 · GLM 5.3 Flash via the Anthropic protocol returns zero
   text unless `thinking` is disabled** (grove-288, `gv sub` bake-off
   against api.z.ai). A `/v1/messages` call with no `thinking` field (or

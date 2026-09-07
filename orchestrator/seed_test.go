@@ -75,6 +75,25 @@ func TestSeedTeachesSupervise(t *testing.T) {
 	}
 }
 
+// TestSeedTeachesCostContext (grove-289) guards duty 8's context-rot
+// rescue paragraph: it must point the orchestrator at `gv cost --context`
+// / the two `--analyze` flags, not the retired hand-derived
+// `cache_read_tokens ÷ turns` signal.
+func TestSeedTeachesCostContext(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv cost --context") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv cost --context` — restore it in duty 8's " +
+			"context-rot rescue section")
+	}
+	if !strings.Contains(ClaudeMd, "context: avg ≥ 200k") || !strings.Contains(ClaudeMd, "never compacted") {
+		t.Error("orchestrator/CLAUDE.md is missing the two `gv cost --analyze` context flags — " +
+			"restore them in duty 8's context-rot rescue section")
+	}
+	if strings.Contains(ClaudeMd, "cache_read_tokens ÷ turns") {
+		t.Error("orchestrator/CLAUDE.md still teaches the retired `cache_read_tokens ÷ turns` " +
+			"signal — grove-289 replaced it with `gv cost --context` / the --analyze flags")
+	}
+}
+
 // TestSeedTeachesLaneBilling guards the #234 lane-billing paragraph
 // (zai-plan vs openrouter-) against silent deletion.
 func TestSeedTeachesLaneBilling(t *testing.T) {
