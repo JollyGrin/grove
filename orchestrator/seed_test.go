@@ -104,3 +104,70 @@ func TestSeedLabelsTicketNumbers(t *testing.T) {
 		}
 	}
 }
+
+// seedSection returns the body of a `## <name>` section of the seed —
+// everything up to the next `## `. Asserting INSIDE the section is what
+// makes the mandate tripwire real: `gv answer` appears all over
+// CLAUDE.md, so a substring search over the whole file would stay green
+// after the section was deleted.
+func seedSection(t *testing.T, heading string) string {
+	t.Helper()
+	i := strings.Index(ClaudeMd, "\n## "+heading)
+	if i < 0 {
+		t.Fatalf("orchestrator/CLAUDE.md has no `## %s` section — restore it", heading)
+	}
+	body := ClaudeMd[i+1:]
+	if j := strings.Index(body[3:], "\n## "); j >= 0 {
+		body = body[:j+3]
+	}
+	return body
+}
+
+// TestSeedTeachesSupervisionMandate guards the grove-273 mandate section:
+// the standing, scoped pre-authorization that lets an orchestrator woken
+// at 03:00 steer a worker instead of stalling until morning. Every
+// assertion is scoped to the section itself, and the in/out split is the
+// whole point — an orchestrator that reads the section but loses the
+// out-of-scope list would `gv done` a task overnight.
+func TestSeedTeachesSupervisionMandate(t *testing.T) {
+	sec := seedSection(t, "Supervision mandate")
+
+	// How it watches: the workspace-wide stream, as a Monitor.
+	for _, want := range []string{"gv watch --json", "Monitor", "run_in_background"} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("`## Supervision mandate` no longer mentions %q — the section must say to "+
+				"watch the scope with one `gv watch --json` Monitor, and why `run_in_background` "+
+				"is the wrong tool for a stream that never exits", want)
+		}
+	}
+
+	// In scope: steering only. Out of scope: anything that ends a task or
+	// reaches outside the fleet — each of those becomes an ntfy push.
+	in, out, ok := strings.Cut(sec, "**Out of scope")
+	if !ok {
+		t.Fatal("`## Supervision mandate` has no `**Out of scope` block — the mandate is only " +
+			"safe because the set it authorizes is closed; restore the out-of-scope list")
+	}
+	for _, verb := range []string{"gv answer", "gv nudge"} {
+		if !strings.Contains(in, verb) {
+			t.Errorf("`## Supervision mandate` no longer lists %q as in-scope — restore it", verb)
+		}
+	}
+	for _, verb := range []string{"untrack", "done", "adopt"} {
+		if !strings.Contains(out, "`"+verb+"`") {
+			t.Errorf("`## Supervision mandate` no longer lists `%s` as OUT of scope — a mandated "+
+				"orchestrator would end a task unattended; restore it", verb)
+		}
+	}
+	if !strings.Contains(out, "ntfy") {
+		t.Error("`## Supervision mandate`'s out-of-scope block no longer mentions ntfy — an " +
+			"out-of-scope event must become a push to the operator, not a silent stall; " +
+			"restore the curl form")
+	}
+
+	// Length is cost: this file is resident in every orchestrator turn.
+	if n := strings.Count(sec, "\n"); n > 95 {
+		t.Errorf("`## Supervision mandate` is %d lines (want <= 95): it is resident in every "+
+			"orchestrator turn, so growth is paid on every request — tighten it", n)
+	}
+}

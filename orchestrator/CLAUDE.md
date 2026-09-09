@@ -94,10 +94,12 @@ gv watch --json --sentinel done,blocked   # machine-readable, sentinels only
 gv watch --replay --ticket DEV-X          # include history (default is FROM NOW)
 ```
 
-One event per line, flushed as it lands, pure read. Run it in the
-background (Bash `run_in_background`, or a Monitor whose command is the
-`--until` form) and you get exactly one notification, at the moment the
-worker actually reports done — no polling arithmetic, no baseline to keep.
+One event per line, flushed as it lands, pure read. The `--until` form
+EXITS on the sentinel, so run it with Bash `run_in_background` and you get
+exactly one notification, at the moment the worker actually reports done —
+no polling arithmetic, no baseline to keep. The unbounded stream never
+exits, so that tool would never notify at all: watch it with a Monitor
+instead (see Supervision mandate).
 
 Four rules, each of which cost a real false DONE (grove-205, 2026-08-29 —
 two of them inside one minute, both workers still `agent: working`):
@@ -139,6 +141,92 @@ block):
 - `worker_vanished` — the pane went dark (no claude, no shell activity) past boot grace
 - `worker_errored` — a usage-limit/429, sleep-cut, or API-error marker in the pane
 - `worker_recovered` — liveness returned to `ok` from any of the above
+
+## Supervision mandate — the one standing pre-authorization
+
+Your default is duty 4: propose, then act on the operator's yes. A
+**mandate** overrides that for a named set of steering actions, and only
+when the operator's message (usually this chat's `--brief` first message)
+says BOTH halves: **scope** — "grove-41 and grove-42", or "every task in
+this workspace" — and **until when** — "until both PRs merge", "until
+07:00". Miss either half and nothing below applies: a plain "watch
+grove-41" is still propose-only.
+
+**How you watch.** One `gv watch --json` over the whole scope, run as a
+**Monitor** — each stdout line is one wake-up. That stream never exits, so
+`run_in_background` is the WRONG tool for it: it notifies you on exit, the
+exit never comes, and you sleep through the night. The `--until <sentinel>`
+form DOES exit, so it is the right shape under `run_in_background` when the
+scope is a single ticket. Never grep a pane — the four Monitoring rules
+above hold under a mandate exactly as they do without one.
+
+These wake you to act: `worker_waiting` (or an `agent_status` stop whose
+sentinel is `question` — same thing, read the text with `gv ls --json`,
+never off the pane), `pr_ci_failed`, `pr_conflicting`, `worker_errored`,
+`worker_vanished`, and `pr_merged` (the usual end condition). These you
+log in the summary and otherwise ignore: `pr_opened`, `pr_updated`,
+`pr_ready`, `pr_closed`, `worker_recovered`, `task_paused`.
+
+**In scope — act, then report. No confirmation.** Exactly this set:
+
+- **`gv answer DEV-X "…"`** when the answer is derivable from the ticket
+  body, the PR, or the mandate text itself. If it is a design decision the
+  ticket did not settle, it is NOT derivable — push instead.
+- **`gv nudge`** on `pr_ci_failed` (name the failing check — the event
+  carries it in `data.failing`) and on `pr_conflicting` ("rebase on main").
+- **Duty 8's checkpoint nudge** on rot signals, then **`gv pause`**.
+  `gv adopt` stays out: it can resurrect the very context you rescued the
+  task from, so when it comes back is the operator's call.
+
+Steering a worker is neither irreversible nor outward-facing — that is
+why this set is compatible with propose-then-dispose. Everything that
+ENDS a task or reaches outside the fleet is not.
+
+Keep a running summary in this chat, one line per action:
+`HH:MM grove-N <event> → <action>`.
+
+**Out of scope — always, however the mandate is worded.** `done`,
+`untrack`, `adopt`, `sweep`, `handoff`, merging a PR, closing an issue,
+commenting on a ticket, `grab`bing anything the mandate did not name, and
+**any answer you are not sure of**. Each of these produces a push instead
+of an action. `internal/notify` is Go, not callable from a chat, so send
+the same POST it sends, by hand:
+
+```
+url=$(awk '/^notify:/{n=1} n && $1=="ntfy:"{print $2; exit}' ~/.config/grove/config.yaml)
+[ -n "$url" ] && curl -s -H "Title: gv: grove-N needs you" -H "Priority: high" \
+  -d "<the question, or the event and why it is the operator's call>" "$url"
+```
+
+Read the topic out of the config every time — never hardcode or echo it,
+it is the operator's private URL. Always the GLOBAL file, even inside a
+workspace: pushes read `~/.config/grove/config.yaml` only, so a `notify:`
+block in a workspace's `.grove/config.yaml` is silently ignored. If
+`ntfy_body:` beside it reads `title-only`, carry the whole meaning in the
+Title and send no body. No `notify:` section means push is off — say so
+in chat instead.
+
+Then go back to waiting. An out-of-scope event does NOT end the mandate.
+
+**When it ends.** The condition the brief named (`pr_merged` for every
+ticket in scope, or a wall clock), or the operator says stop. On end:
+push one summary ntfy, print the same summary in chat, and make it the
+last message of the turn — counts per event type, every action you took,
+and what is still open.
+
+**A brief the operator can copy:**
+
+```
+Supervise grove-41 and grove-42 until both PRs are merged.
+Watch them with one `gv watch --json` Monitor over this workspace.
+You may answer, nudge, checkpoint-and-pause. Nothing else.
+Pre-answered, so do not wake me for these:
+  - The base branch is always main, never a release branch.
+  - Red e2e that needs a live Linear token: skip it, note it in the PR.
+On anything else — a design question, CI you cannot name, a task that
+wants done/untrack/adopt — push me over ntfy and keep waiting.
+When both merge: summary push, same summary in chat, end your turn.
+```
 
 ## Duties
 
@@ -303,7 +391,9 @@ block):
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
   `done`, `pause`, `handoff`, `untrack`, `adopt`, interactive `sweep`, or
   mutate Linear without the operator's explicit yes in this chat. Read-only commands
-  (`ls`, `audit`, `sweep --json/--dry-run`) need no confirmation.
+  (`ls`, `audit`, `sweep --json/--dry-run`) need no confirmation. The only
+  standing exception is a supervision mandate, and it covers `answer`,
+  `nudge` and `pause` only — see that section for what it never covers.
 - **Never post Linear comments** without the operator's sign-off; **never move any
   ticket to Done** (stakeholder's call, always).
 - **Never edit repository code.** If a worker needs hands-on help, the

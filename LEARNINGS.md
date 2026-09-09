@@ -26,6 +26,38 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-05 · `run_in_background` notifies on EXIT, so it can never
+  watch an unbounded stream** (grove-273; verified against the Bash/Monitor
+  tool contracts, not a live incident). `gv watch --json` with no
+  `--until` never exits — under `run_in_background` the agent gets exactly
+  zero notifications and simply waits, which looks identical to a quiet
+  fleet. The tool split is by NOTIFICATION COUNT, not by duration: one
+  notification when a command exits → `run_in_background` (the `--until`
+  form, which does exit); one notification per stdout line, indefinitely →
+  a Monitor. This is the whole reason an unattended supervision mandate
+  says "as a Monitor" out loud — an orchestrator that reaches for the
+  familiar background-Bash tool sleeps through the night it was woken to
+  work. Fixed the Monitoring section's wording (it had them backwards) and
+  spelled the mapping out in `## Supervision mandate`.
+
+- **2026-09-05 · the ntfy topic is `notify.ntfy` in `config.yaml`, not a
+  var in `.env`** (grove-273, correcting the ticket's own premise).
+  `internal/config.Notify` is `{ntfy, ntfy_body}` read out of
+  `~/.config/grove/config.yaml` — the GLOBAL file, always;
+  `~/.config/grove/.env` holds provider API keys only. Not the workspace
+  file, and that is the sharper trap: `notify` DOES merge field-wise
+  through `LoadAt` (merge.go:20 names it), but `NotifySettings` never
+  calls `LoadAt` — it is `NotifySettingsFrom(Dir()/config.yaml)`, and
+  `Dir()` is `$HOME/.config/grove` unconditionally (config.go:183 — no
+  env override, unlike `StateDir`). So the workspace layer governs
+  everything EXCEPT the push path, and a `notify:` block in a workspace's
+  `.grove/config.yaml` is read by nothing. A chat cannot call
+  `internal/notify`, so the seed teaches the equivalent `curl` — and it
+  has to read the topic from the right file or the push is silently never
+  sent (`notify.Push` returns early on an empty topic; every failure path
+  in it is silent by design). `ntfy_body: title-only` is the second var
+  and it matters: it drops the body, so the title must carry the meaning.
+
 - **2026-09-04 · hook attribution is cwd + session id; a Bash `cd` moves
   the hook cwd** (grove-250; incident on unbrewed 2026-09-02). Hooks live
   in the profile's global `settings.json`, so EVERY session fires them and
