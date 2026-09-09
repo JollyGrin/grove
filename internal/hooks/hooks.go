@@ -29,6 +29,11 @@ type Payload struct {
 	HookEventName        string `json:"hook_event_name"`
 	Message              string `json:"message"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	// Source (grove-289) is SessionStart's own reason field: "compact" when
+	// Claude Code restarts the session after a context compaction, "" /
+	// "startup" / "resume"/"clear" otherwise. A compact restart is not a
+	// new session — it gets its own event, not session_started.
+	Source string `json:"source"`
 }
 
 // Matches "STATUS: QUESTION — text" with any dash flavor (—, –, -).
@@ -75,6 +80,14 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	switch event {
 	case "session-start":
+		if p.Source == "compact" {
+			// A compact restart is not a new session: no glyph change, no
+			// session_started — just the compaction count (grove-289).
+			return state.Append(stateDir, state.Event{
+				Type: state.EvCompaction, Ticket: task.Ticket,
+				Data: map[string]string{"session_id": p.SessionID},
+			})
+		}
 		glyphWorker(task, state.Glyph(state.AgentWorking, ""))
 		return state.Append(stateDir, state.Event{
 			Type: state.EvSessionStarted, Ticket: task.Ticket,

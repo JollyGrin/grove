@@ -232,11 +232,15 @@ block):
 
 8. **Context-rot rescue** — a worker whose context has gone stale burns
    tokens without converging: it re-reads what it already read, circles
-   the same fix, and its cache-read share climbs while nothing lands.
-   Two cheap signals, both from `gv cost --json` (pure read):
+   the same fix, and its per-call context climbs while nothing lands.
+   Two cheap signals, both pure read:
    - `turns` past ~80 with no PR on the branch (`gv ls --json`), or
-   - `cache_read_tokens ÷ turns` past ~150k — the whole context is being
-     re-sent every turn.
+   - `gv cost --context DEV-X` — `avg_ctx`/`max_ctx` past ~200k with zero
+     `compactions`, or (`gv cost --analyze --json`, grove-289) either flag
+     `"context: avg ≥ 200k"` or `"context: ≥150 calls, never compacted"`
+     on the row. `gv cost --context DEV-X` also shows WHY, not just that:
+     `growth` (which source dominated — a re-read Bash loop, a giant
+     `read_whole`) and `top` (the specific reads amplifying it).
    Neither number is a verdict; they are a reason to LOOK. Confirm by
    reading the task's `last_message` and `gv diff DEV-X --stat`: real
    ground gained since the last commit, or the same ground again?

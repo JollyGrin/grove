@@ -317,10 +317,52 @@ mkdir -p "$PROJ"
 # Two models so the per-task model breakdown (grove-14) has a mix to show.
 # At current sonnet-5 pricing ($2/$10, grove-249) this totals ≈$0.0233;
 # the tiny haiku entry keeps it under $0.025 (still rounds to $0.02).
+#
+# grove-289: the fixture also carries a `gv cost --context` shape — (a) a
+# second assistant line sharing call 1's message/request id (dedup: still
+# one API call), (b) a Bash tool_use (`cat internal/x.go`, classifies
+# bash_read) sharing call 2's ids (a multi-block turn) plus its 2,000-char
+# /60-line tool_result, (c) a compact_boundary, (d) a genuinely new third
+# call sharing NO prior ids. Total: 3 deduped API calls. The (a)/(d)
+# duplicate lines' own usage numbers are irrelevant — Dedup keeps only the
+# first occurrence of each id pair — and call 3's usage is kept tiny so
+# the ledger snapshot below still rounds to $0.02.
+# 60 lines of 32 a's (33 decoded chars each with the JSON-escaped
+# newline) + a trailing 20 z's with no newline: 2,000 decoded chars, 60
+# decoded newlines — no JSON escaping needed (only a/z and literal \n).
+BASH_RESULT_LINE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+BASH_RESULT=""
+for _ in $(seq 1 60); do BASH_RESULT="${BASH_RESULT}${BASH_RESULT_LINE}"; done
+BASH_RESULT="${BASH_RESULT}zzzzzzzzzzzzzzzzzzzz"
 {
-  printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
-  printf '%s\n' '{"timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","content":[{"type":"text","text":"looking"}],"usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","content":[{"type":"text","text":"looking too"}],"usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:00:30.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","content":[{"type":"text","text":"still call 1"}],"usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:01:30.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","content":[{"type":"tool_use","id":"tu-e2e-1","name":"Bash","input":{"command":"cat internal/x.go"}}],"usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '{"type":"user","timestamp":"2026-07-07T10:01:31.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-e2e-1","content":"%s"}]}}\n' "$BASH_RESULT"
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-07T10:02:00.000Z","compactMetadata":{"trigger":"auto","preTokens":150000,"postTokens":9000}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:03:00.000Z","requestId":"req-e2e3","message":{"id":"msg-e2e3","model":"claude-sonnet-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
 } > "$PROJ/e2e-session.jsonl"
+
+say "gv cost --context: per-call decomposition, growth buckets, compactions"
+"$GV" cost --context task-001 --json > "$SCRATCH/cost-context.json"
+grep -q '"api_calls": 3' "$SCRATCH/cost-context.json" || fail "api_calls != 3"
+sed -n '/"compactions": \[/,/\]/p' "$SCRATCH/cost-context.json" | grep -q '"trigger": "auto"' \
+  || fail "compaction trigger != auto"
+sed -n '/"growth": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"bash_read": 0[,}]' \
+  && fail "growth.bash_read is zero"
+sed -n '/"growth": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"bash_read":' \
+  || fail "growth.bash_read missing"
+TOP_BUCKET="$(sed -n '/"top": \[/,/\]/p' "$SCRATCH/cost-context.json" | grep -m1 '"bucket"' | sed -E 's/.*"bucket": "([^"]+)".*/\1/')"
+[ "$TOP_BUCKET" = "bash_read" ] || fail "top[0].bucket = $TOP_BUCKET, want bash_read"
+sed -n '/"delegation": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"calls": 0' \
+  || fail "delegation.calls != 0 before sub.jsonl exists"
+
+say "gv cost --context: delegation joins sub.jsonl once it exists"
+echo '{"time":"2026-07-07T10:04:00Z","v":1,"ticket":"task-001","lane":"x","model":"y","mode":"raw","input_chars":10,"input_tokens":3,"output_tokens":1,"cached_tokens":0,"turns":0,"ms":5,"exit":0,"prompt_head":"p"}' >> "$GROVE_STATE_DIR/sub.jsonl"
+"$GV" cost --context task-001 --json > "$SCRATCH/cost-context2.json"
+sed -n '/"delegation": {/,/}/p' "$SCRATCH/cost-context2.json" | grep -q '"calls": 1' \
+  || fail "delegation.calls != 1 after sub.jsonl append"
 
 say "seed another daemonized build child for the done path (grove-156)"
 perl -e 'sleep 300' -- "$WTDIR2" &

@@ -311,8 +311,13 @@ func Total(entries []transcript.UsageEntry) Totals {
 type Cache struct {
 	mu     sync.Mutex
 	byFile map[fileKey][]transcript.UsageEntry
-	latest map[string]fileKey // path -> newest key, so old generations can be evicted
-	parses int                // test hook: how many files were actually parsed
+	// linesByFile (grove-289) caches ParseLines' decode — the `gv cost
+	// --context`/`--analyze` walk — keyed by the same fileKey as byFile.
+	// A separate map: the two decodings produce unrelated types from the
+	// same bytes, and a --context run has no use for the other's cache.
+	linesByFile map[fileKey][]transcript.Line
+	latest      map[string]fileKey // path -> newest key, so old generations can be evicted
+	parses      int                // test hook: how many files were actually parsed
 }
 
 type fileKey struct {
@@ -322,7 +327,11 @@ type fileKey struct {
 }
 
 func NewCache() *Cache {
-	return &Cache{byFile: map[fileKey][]transcript.UsageEntry{}, latest: map[string]fileKey{}}
+	return &Cache{
+		byFile:      map[fileKey][]transcript.UsageEntry{},
+		linesByFile: map[fileKey][]transcript.Line{},
+		latest:      map[string]fileKey{},
+	}
 }
 
 // ForTask aggregates every session + subagent transcript for a worktree
@@ -384,11 +393,65 @@ func (c *Cache) Retain(keep map[string]struct{}) {
 			delete(c.byFile, key)
 		}
 	}
+	for key := range c.linesByFile {
+		if _, ok := keep[key.path]; !ok {
+			delete(c.linesByFile, key)
+		}
+	}
 	for path := range c.latest {
 		if _, ok := keep[path]; !ok {
 			delete(c.latest, path)
 		}
 	}
+}
+
+// LinesForTask is ParseLines' version of UsageForTask: every session +
+// subagent transcript for a worktree, decoded line-by-line (the `gv cost
+// --context`/`--analyze` walk) rather than into billable usage entries.
+// Concatenated in file order, exactly as SessionFiles returns them —
+// cost.Context relies on that order for CallsAfter accounting.
+func (c *Cache) LinesForTask(worktreePath string) ([]transcript.Line, error) {
+	files, err := transcript.SessionFiles(worktreePath)
+	if err != nil {
+		return nil, err
+	}
+	var all []transcript.Line
+	for _, path := range files {
+		lines, err := c.linesFor(path)
+		if err != nil {
+			continue // unreadable file degrades that file, not the ticket
+		}
+		all = append(all, lines...)
+	}
+	return all, nil
+}
+
+func (c *Cache) linesFor(path string) ([]transcript.Line, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	key := fileKey{path, fi.ModTime().UnixNano(), fi.Size()}
+	c.mu.Lock()
+	cached, ok := c.linesByFile[key]
+	c.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	lines := transcript.ParseLines(f)
+	c.mu.Lock()
+	if old, ok := c.latest[path]; ok && old != key {
+		delete(c.linesByFile, old)
+	}
+	c.linesByFile[key] = lines
+	c.latest[path] = key
+	c.mu.Unlock()
+	return lines, nil
 }
 
 func (c *Cache) entriesFor(path string) ([]transcript.UsageEntry, error) {

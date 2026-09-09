@@ -318,6 +318,7 @@ gv attach DEV-123              # jump into a worker's tmux window
 gv answer DEV-123 "text"       # reply to a waiting worker
 gv diff DEV-123                # review the branch diff without attaching
 gv done DEV-123                # verify merged → clean up
+gv cost --context DEV-123      # per-call context: growth by source, compactions, delegation
 gv supervise                   # headless PR/liveness stream — for a host with no cockpit open
 gv help                        # full command list
 ```
