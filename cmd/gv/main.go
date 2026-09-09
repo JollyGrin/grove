@@ -99,6 +99,13 @@ const usage = `gv — grove
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
   gv cost --ledger | --record on|off          recorded spend history · persistence toggle
+  gv sub "<prompt>" [path …] [--lane L] [--model M]   micro-task on another lane; prints only the answer
+       [--agentic [--start "<cmd>"] [--max-turns N]]   (read-only claude -p --bare on the lane; --start = first command)
+       [--max-tokens N] [--timeout 180s] [--thinking]
+       [--allow-paid] [--allow-write] [--json] [--dry-run] [--quiet]
+  cmd 2>&1 | gv sub "<prompt>"                    stdin is the input when no path is given
+  gv sub --lanes                                  usable lanes: host, models, flat/paid, key present
+  gv sub --ledger [--json]                        this workspace's sub.jsonl as a table
   gv answer <ticket> [text]                   reply to a waiting agent
   gv nudge <ticket> [text]                    follow-up prompt to a session
   gv attach <ticket>                          jump into the tmux window
@@ -426,6 +433,8 @@ func main() {
 		err = cmdAudit(args)
 	case "cost":
 		err = cmdCost(args)
+	case "sub":
+		err = cmdSub(args)
 	case "answer":
 		err = cmdRelay(args, true)
 	case "nudge":

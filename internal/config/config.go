@@ -124,6 +124,7 @@ type Config struct {
 		Effects string `yaml:"effects"`
 		Layout  string `yaml:"layout"`
 	} `yaml:"cockpit"`
+	Sub Sub `yaml:"sub"` // grove-288: gv sub defaults; field-wise merge, workspace overrides global
 }
 
 // IdleAfter resolves audit.idle_after to a duration. Zero, unset, or
@@ -147,6 +148,19 @@ func (c *Config) CockpitLayout() string {
 	default:
 		return "horizontal"
 	}
+}
+
+// Sub configures `gv sub` — a read-only micro-task delegated to a cheaper
+// model_profiles lane (grove-288). Lane empty means gv sub is disabled
+// unless overridden by --lane or GV_SUB_LANE.
+type Sub struct {
+	Lane          string `yaml:"lane"`            // model_profiles key; "" = gv sub disabled
+	Model         string `yaml:"model"`           // slug override; "" = lane's haiku → sonnet → opus
+	MaxTurns      int    `yaml:"max_turns"`       // agentic; default 12
+	MaxInputChars int    `yaml:"max_input_chars"` // raw; default 400000 (~100k tokens)
+	Timeout       string `yaml:"timeout"`         // Go duration; default "180s"
+	Thinking      bool   `yaml:"thinking"`        // raw; default false (GLM returns 0 text with it on)
+	SystemFile    string `yaml:"system_file"`     // replaces the embedded preamble when set
 }
 
 // Notify configures phone push via ntfy. The topic URL is the only secret
@@ -295,6 +309,18 @@ func parse(raw []byte, src string) (*Config, error) {
 	}
 	if len(c.Cost.Pricing) > 0 {
 		cost.Overrides(c.Cost.Pricing)
+	}
+	if c.Sub.MaxTurns <= 0 {
+		c.Sub.MaxTurns = 12
+	}
+	if c.Sub.MaxInputChars <= 0 {
+		c.Sub.MaxInputChars = 400000
+	}
+	if c.Sub.Timeout == "" {
+		c.Sub.Timeout = "180s"
+	}
+	if _, err := time.ParseDuration(c.Sub.Timeout); err != nil {
+		return nil, fmt.Errorf("sub.timeout: %w", err)
 	}
 	return &c, nil
 }

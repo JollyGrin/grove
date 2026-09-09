@@ -92,6 +92,7 @@ func TestFullRowSet(t *testing.T) {
 		{"provider:markdown:demo", "error", "ok", ""},
 		{"worker:ccwork", "error", "ok", ""},
 		{"agents-md:demo", "warn", "warn", ""},
+		{"sub:lane", "warn", "ok", ""},
 		{"hooks:/profiles/work/settings.json", "error", "ok", ""},
 		{"grid:ccwork-plugins", "error", "ok", "grid-interim"},
 		{"grid:dev-linear-mcp", "warn", "warn", "grid-interim"},
@@ -266,7 +267,7 @@ func TestRenderHappy(t *testing.T) {
 		"\033[33m!\033[0m", // yellow warn mark present
 		"AGENTS.md in demo",
 		"→ gv init --only agents-md",
-		"11/13 passed",
+		"12/14 passed",
 		"🌳 ready to grow",
 	} {
 		if !strings.Contains(out, want) {
@@ -311,8 +312,8 @@ func TestRenderJSON(t *testing.T) {
 		t.Errorf("schema_version = %d, want %d", envelope.SchemaVersion, schema.Version)
 	}
 	decoded := envelope.Rows
-	if len(decoded) != 13 {
-		t.Errorf("got %d rows, want 13", len(decoded))
+	if len(decoded) != 14 {
+		t.Errorf("got %d rows, want 14", len(decoded))
 	}
 	if decoded[0].ID != "binary:tmux" || decoded[0].State != "ok" {
 		t.Errorf("first row: %+v", decoded[0])

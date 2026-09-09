@@ -111,6 +111,18 @@ notify:
 #       CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
 #       ENABLE_TOOL_SEARCH: "false"
 
+# gv sub (grove-288): hand a read-only micro-task ("summarise this file",
+# "what failed in this log") to a model_profiles lane so the raw blob
+# never enters a worker/orchestrator's own context. lane empty = disabled.
+# sub:
+#   lane: ""               # a model_profiles key, or "anthropic"; "" disables gv sub
+#   model: ""               # slug override; "" = lane's haiku → sonnet → opus
+#   max_turns: 12           # --agentic turn cap
+#   max_input_chars: 400000 # raw mode input cap (~100k tokens)
+#   timeout: 180s           # per-call timeout (Go duration)
+#   thinking: false         # raw mode; some backends (GLM) return empty text with it on
+#   system_file: ""         # path to a file that replaces the embedded preamble
+
 cost:
   # stuck_turns: 30      # turns with no delivery movement before a stuck flag
   # pricing:             # per-model USD/MTok overrides (estimates only)

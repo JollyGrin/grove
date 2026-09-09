@@ -9,6 +9,15 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
+      raw `/v1/messages` or agentic `claude -p --bare`, prints only the
+      answer (grove-288, 2026-09-07). New `internal/sub/` package
+      (`lane.go`, `prompt.go`, `raw.go`, `agentic.go`, `ledger.go`) +
+      `cmd/gv/sub.go`; `config.Sub` (field-wise merge); doctor row
+      `sub:lane`; `docs/plugins.md` + the plugin-authoring skill gain
+      `sub.jsonl` + the three `--json` rows; `e2e/sub.sh` (15 steps).
+      Ticket B (kickoff/skill text teaching workers to delegate) is
+      separate (grove-290).
 - [x] Unattended 3/4: `gv supervise` as a user systemd unit on the remote
       host — docs + unit file (grove-272, 2026-09-05). Docs only, no Go.
       `docs/remote-host-setup.md` gains a **§Sidecars: user systemd units**

@@ -210,6 +210,17 @@ a `gv supervise` running, since it has no desk cockpit to emit transitions
 — as a systemd unit, so it survives the reboot too (remote-host-setup.md
 §Sidecars).
 
+### Delegating micro-tasks
+
+`gv sub "<prompt>" [path…]` (like `gv diff`, a read-only helper a worker
+or orchestrator shells out to) hands a small read-only task — "summarise
+this file", "what failed in this log", "where is X decided" — to a
+cheaper `model_profiles` lane instead of burning the caller's own
+context on the raw blob; only the answer comes back. Configure it once
+with `sub.lane` in config.yaml, or pass `--lane` per call; `gv sub
+--lanes` lists what's usable and `gv sub --ledger` shows the call
+history.
+
 ### Dashboard keys (left pane)
 
 Press **`?`** for the full help overlay. The main keys:
@@ -342,6 +353,7 @@ gv ls                          # fleet table (add --json for the orchestrator)
 gv attach DEV-123              # jump into a worker's tmux window
 gv answer DEV-123 "text"       # reply to a waiting worker
 gv diff DEV-123                # review the branch diff without attaching
+gv sub "<prompt>" [path…]      # micro-task on a cheaper lane; prints only the answer
 gv done DEV-123                # verify merged → clean up
 gv supervise                   # headless PR/liveness stream — for a host with no cockpit open
 gv help                        # full command list

@@ -30,6 +30,16 @@ changes the behavior.
 
 ## Sessions, resume, transcripts
 
+- `claude -p --bare` skips hooks, CLAUDE.md, skills, and MCP — no
+  project context loads, and it needs no OAuth session — so it works with
+  `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` pointed at any
+  Anthropic-protocol endpoint (verified 2026-09-06 against api.z.ai,
+  grove-288's `gv sub --agentic`).
+- `claude -p --output-format json` may print one or more
+  `[claude-code:…]` warning lines (e.g.
+  `[claude-code:unrecognized_model]`) before the JSON payload on a
+  third-party lane — a consumer must skip to the first `{` rather than
+  `json.Unmarshal` stdout directly (grove-288).
 - Transcripts key on the **encoded cwd**:
   `<CLAUDE_CONFIG_DIR>/projects/<encoded-path>/` where
   `session.EncodePath` replaces `/` and `.` with `-`. Reuse the same
