@@ -13,10 +13,15 @@ a first-run wizard, and a layered learnings system. OSS-ready successor to
   touching tmux (tmux-discipline), the test gate/e2e/merge (shipping-
   gates), or hook/session/transcript code (claude-code-facts). When a new
   learning generalizes into a rule, update the skill too.
-- **When you ship:** one row at the top of [TASKS.md](TASKS.md) §Now.
-  **When surprised:** one dated entry in [LEARNINGS.md](LEARNINGS.md).
-  Both files are small heads (current month); older rows/entries are in
-  `docs/archive/` — grep there, don't read it in.
+- **When you ship / when surprised — append, never read:**
+  `scripts/log-append.py tasks <<'EOF' … EOF` adds your `- [x]` row to
+  the top of [TASKS.md](TASKS.md) §Now; `scripts/log-append.py learnings
+  --section "<name>" <<'EOF' … EOF` adds a dated entry to
+  [LEARNINGS.md](LEARNINGS.md). Both keep the heads under their cap by
+  moving the oldest rows into `docs/archive/` (never deleting; the
+  `internal/guidance` test enforces the cap). Looking for a past row or
+  entry? `grep -r <term> TASKS.md LEARNINGS.md docs/archive/` — pull a
+  file in only for a specific lookup, never as a default read.
 - Read only as the task needs: [DESIGN.md](DESIGN.md) (founding what/why),
   `docs/*-design.md` (deep designs), [docs/roadmap.md](docs/roadmap.md)
   (open phases), [docs/seed-manifest.md](docs/seed-manifest.md) (when

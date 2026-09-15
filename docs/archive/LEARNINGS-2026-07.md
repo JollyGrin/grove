@@ -1,12 +1,19 @@
 # Grove — learnings archive · 2026-07
 
-> Rotated out of [LEARNINGS.md](../../LEARNINGS.md) on 2026-09-05 (grove-275).
-> Same entry format and sections; newest first within each section.
-> The rules these entries taught live in `.claude/skills/`; this is the
-> dated record. Grep `LEARNINGS.md docs/archive/LEARNINGS-*.md` for the full log.
+> Rotated out of [LEARNINGS.md](../../LEARNINGS.md) by
+> `scripts/log-append.py` (grove-275). Same entry format and sections;
+> newest first within each section. The rules these entries taught live
+> in `.claude/skills/`; this is the dated record. Grep `LEARNINGS.md
+> docs/archive/LEARNINGS-*.md` for the full log.
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-07-09 · `--continue` chains key on cwd** — running a profiled
+  orchestrator in a per-profile subdir (`.grove/orchestrator/<profile>/`)
+  gives each backend its own conversation chain, and CLAUDE.md still
+  applies (memory loads recurse up ancestor dirs). Without this, a fresh
+  GLM pane `--continue`d the newest *Claude*-created conversation at ~100%
+  context — wrong model resuming the wrong brain.
 - **2026-07-09 · Claude Code clobbers tmux pane titles on boot** — it sets
   the terminal title via OSC ("✳ Claude Code" / its version string), so a
   `select-pane -T` tag survives only until boot. Durable per-pane tagging
@@ -18,12 +25,6 @@
   shows the real `ANTHROPIC_MODEL` slug (`z-ai/glm-5.2`), so in-app model
   visibility is real once the env override is set — only the model-class
   display name ("Sonnet 5") lies.
-- **2026-07-09 · `--continue` chains key on cwd** — running a profiled
-  orchestrator in a per-profile subdir (`.grove/orchestrator/<profile>/`)
-  gives each backend its own conversation chain, and CLAUDE.md still
-  applies (memory loads recurse up ancestor dirs). Without this, a fresh
-  GLM pane `--continue`d the newest *Claude*-created conversation at ~100%
-  context — wrong model resuming the wrong brain.
 - **2026-07-02 · resume durability** — `claude --resume <id>` still works
   ≥6 days after the tmux window died, provided the transcript dir
   survives; the resumed session fires **SessionStart with the SAME
@@ -92,6 +93,15 @@
   main — grove-78 merged without running it, the grove-79 lesson again);
   regression test `TestPaneTargetHelpersExactSession` now runs every
   affected helper against a scratch server.
+- **2026-07-13 · a bare `capture-pane -p` can miss text that was really
+  delivered** — it captures only the *visible* screen of the *active*
+  pane, and a pasted line the shell then executed both scrolls away
+  (command output pushes it off-screen) and hard-wraps at pane width
+  (default 80 cols splits any longish token across lines). e2e assertions
+  on pane content must capture every pane of the window with scrollback
+  (`capture-pane -p -S -` per `list-panes` pane id) and flatten newlines
+  (`tr -d '\n'`) before grepping. Field-hit: grove-75's plugin smoke test
+  asserted a delivered nudge was "missing" until captured this way.
 - **2026-07-13 · a bare `-t <session>` target matches window names across
   ALL sessions** (grove-78, live repro) — with a session literally named
   `grove` plus a worker window `grove · grove-75-…` in a *different*
@@ -103,15 +113,6 @@
   `internal/tmux` now goes through `tmux.Exact`; regression test
   `TestCreateWindowSessionExactCollision` runs the full collision against
   a scratch server.
-- **2026-07-13 · a bare `capture-pane -p` can miss text that was really
-  delivered** — it captures only the *visible* screen of the *active*
-  pane, and a pasted line the shell then executed both scrolls away
-  (command output pushes it off-screen) and hard-wraps at pane width
-  (default 80 cols splits any longish token across lines). e2e assertions
-  on pane content must capture every pane of the window with scrollback
-  (`capture-pane -p -S -` per `list-panes` pane id) and flatten newlines
-  (`tr -d '\n'`) before grepping. Field-hit: grove-75's plugin smoke test
-  asserted a delivered nudge was "missing" until captured this way.
 - **2026-07-07 · `$TMUX` beats `TMUX_TMPDIR`** — tmux resolves its socket
   as `-S`/`-L` > `$TMUX` > `TMUX_TMPDIR`, so every isolated-tmux-server
   script **must `unset TMUX` first** (or `env -u TMUX` each call), or when
@@ -123,13 +124,13 @@
   server's session list before/after as a canary. Never run bare
   `kill-server` in any script; scope it with `env -u TMUX` + the scratch
   `TMUX_TMPDIR`.
-- **Claude's pane is resolved, never assumed** (2026-07-02) — windows lose
-  splits, panes renumber, and claude's process title is its bare version
-  string; relay/detector/editor-inject all go through `tmux.ClaudePane`.
 - **tmux window-name drift is survivable** (2026-07-02) — live windows
   can show name variants (trailing dash), but `-t session:window` lookups
   still hit because tmux prefix-matches targets. Don't rely on exact
   window-name equality; re-derive + re-store on adopt.
+- **Claude's pane is resolved, never assumed** (2026-07-02) — windows lose
+  splits, panes renumber, and claude's process title is its bare version
+  string; relay/detector/editor-inject all go through `tmux.ClaudePane`.
 
 ## Go / CLI
 
@@ -183,25 +184,19 @@
   it. Bonus field-hit: the suites' bare `capture-pane -p` lost the panic
   reason (alt-screen closes, reason scrolls off) — they capture `-S -300`
   now, matching the tmux-discipline rule.
-- **2026-07-04 · never pipe the test gate** — `go test ./... | tail` (or
-  `| grep -c FAIL`) reports the PIPE's exit status, not the tests'; two
-  red runs merged to main that way in one evening. Gates run bare and
-  check $? — filtering happens on a saved log, never inline.
-- **2026-07-04 · `/dev/null` IS a character device** — detecting "am I
-  interactive?" via `os.Stdin.Stat()` + `ModeCharDevice` passes for
-  `< /dev/null`, so the wizard tried to render forms headless and
-  "aborted". Use `golang.org/x/term.IsTerminal(fd)`; a non-TTY `gv init`
-  must silently become `--yes`, never hang or abort.
-- **2026-07-04 · commands typed into tmux panes resolve via PATH, not via
-  the invoking binary** — the cockpit's dashboard pane ran whatever `gv`
-  was first on PATH (a stale installed build), not the binary that created
-  the session. Any pane/hook command must use the absolute
-  `os.Executable()` path (`buildCockpit` now does; hooks already did).
-- **2026-07-04 · `cmd | grep -q` flakes under `set -o pipefail`** —
-  grep -q exits at its first match, the producer SIGPIPEs writing the
-  rest of its output, and pipefail reports the pipeline failed even
-  though the assertion matched. E2E assertions capture to a file first,
-  then grep.
+- **2026-07-04 · `yaml.Node` keeps flow style when you append** — seeding
+  a config with `repos: {}` and appending via node surgery emits the whole
+  map single-line (`repos: {r: {path: …}}`) because the `{}` scalar's
+  flow style sticks. Set `node.Style = 0` after lookup/creation to force
+  block style. (yaml.v3 round-trip via Node DOES preserve comments —
+  that part worked as hoped in `gv init`.)
+- **2026-07-04 · settings.json hook matching must be basename-precise** —
+  the ovs-era installer predicate matched `"ovs"` as a substring anywhere
+  in the command. The gv equivalent would have CLAIMED (and replaced) ovs
+  entries in the shared `~/.cc-work/settings.json` on `gv hooks install`.
+  Match on the hook command's binary basename (`gv`, `*grove*`) — never
+  substring-across-the-path. Table-tested against a real transition-window
+  settings fixture.
 - **2026-07-04 · shared tmux namespaces during ovs coexistence** — worker
   sessions keep ovs's `pr-<repo>` naming (byte-comparable `internal/tmux`),
   so a repo tracked by BOTH ovs and gv lands windows in the SAME tmux
@@ -210,22 +205,36 @@
   inside an "ovs" session. Same class of clash made us rename the relay
   buffer (`ovs-relay` → `gv-relay`): tmux buffers are server-global, and
   a shared name would let one tool's relay clobber the other's mid-paste.
-- **2026-07-04 · settings.json hook matching must be basename-precise** —
-  the ovs-era installer predicate matched `"ovs"` as a substring anywhere
-  in the command. The gv equivalent would have CLAIMED (and replaced) ovs
-  entries in the shared `~/.cc-work/settings.json` on `gv hooks install`.
-  Match on the hook command's binary basename (`gv`, `*grove*`) — never
-  substring-across-the-path. Table-tested against a real transition-window
-  settings fixture.
-- **2026-07-04 · `yaml.Node` keeps flow style when you append** — seeding
-  a config with `repos: {}` and appending via node surgery emits the whole
-  map single-line (`repos: {r: {path: …}}`) because the `{}` scalar's
-  flow style sticks. Set `node.Style = 0` after lookup/creation to force
-  block style. (yaml.v3 round-trip via Node DOES preserve comments —
-  that part worked as hoped in `gv init`.)
+- **2026-07-04 · `cmd | grep -q` flakes under `set -o pipefail`** —
+  grep -q exits at its first match, the producer SIGPIPEs writing the
+  rest of its output, and pipefail reports the pipeline failed even
+  though the assertion matched. E2E assertions capture to a file first,
+  then grep.
+- **2026-07-04 · commands typed into tmux panes resolve via PATH, not via
+  the invoking binary** — the cockpit's dashboard pane ran whatever `gv`
+  was first on PATH (a stale installed build), not the binary that created
+  the session. Any pane/hook command must use the absolute
+  `os.Executable()` path (`buildCockpit` now does; hooks already did).
+- **2026-07-04 · `/dev/null` IS a character device** — detecting "am I
+  interactive?" via `os.Stdin.Stat()` + `ModeCharDevice` passes for
+  `< /dev/null`, so the wizard tried to render forms headless and
+  "aborted". Use `golang.org/x/term.IsTerminal(fd)`; a non-TTY `gv init`
+  must silently become `--yes`, never hang or abort.
+- **2026-07-04 · never pipe the test gate** — `go test ./... | tail` (or
+  `| grep -c FAIL`) reports the PIPE's exit status, not the tests'; two
+  red runs merged to main that way in one evening. Gates run bare and
+  check $? — filtering happens on a saved log, never inline.
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-07-29 · verifying hot-path fixes live: mtime freeze is strong
+  evidence, ps-sampling is not** — a dirty-flagged derived file proves
+  itself in production by its mtime staying frozen under a running dash
+  (tasks.json sat untouched for the whole observation window; the old code
+  rewrote it every second). But ms-lived execs are effectively invisible to
+  `ps` sampling — 200 samples at 100ms caught zero transient tmux clients
+  even while ticks ran — so exec *counts* are pinned by seam-counting unit
+  tests, never claimed from sampling.
 - **2026-07-29 · a polling TUI's perceived cost is `spawns/sec ×
   cost-per-spawn`, and the second factor varies ~50x by environment** — an
   external user's CPU pegged at 5–6 workers while Dean's larger fleet felt
@@ -237,39 +246,17 @@
   I/O O(new events) via the incremental `state.Folder`. What it changed:
   every per-tick exec or full-file scan in beat code must justify itself at
   write time — the beat multiplies it forever.
-- **2026-07-29 · verifying hot-path fixes live: mtime freeze is strong
-  evidence, ps-sampling is not** — a dirty-flagged derived file proves
-  itself in production by its mtime staying frozen under a running dash
-  (tasks.json sat untouched for the whole observation window; the old code
-  rewrote it every second). But ms-lived execs are effectively invisible to
-  `ps` sampling — 200 samples at 100ms caught zero transient tmux clients
-  even while ticks ran — so exec *counts* are pinned by seam-counting unit
-  tests, never claimed from sampling.
-- **2026-07-09 · throwaway builds for operator testing** — when a change
-  needs the operator's manual verification before merge, build the branch
-  to a scratch path (`go build -o /tmp/gv-<ticket> ./cmd/gv`) and hand
-  over that command — never `go install` from an unmerged branch. The
-  installed `~/go/bin/gv` keeps running live sessions and hooks (hooks
-  reference its absolute path); a temp binary tests the exact change,
-  interrupts nothing, and is thrown away if it doesn't work. Used to
-  verify grove-36's pane tagging live before merge. This is the DEFAULT
-  handoff for "try it yourself" testing.
-- **2026-07-09 · state never forgets a session id** — the events fold
-  clears nothing on `untrack` (it only sets `Done`), so `gv adopt` of a
-  previously-tracked task always `--resume`s the stored conversation.
-  When the old conversation is the problem (corrupted/bloated context),
-  `gv adopt --manual` is the guaranteed-fresh escape hatch — it skips the
-  resume limb — then a `gv nudge` with the work order restores autonomy.
-  Used to reset grove-36 onto a fresh Opus session mid-ticket.
-- **2026-07-09 · prompt caching survives OpenRouter→Z.AI** — Claude Code's
-  ~50k fixed prefix cached at 99.3% on the second GLM request (turn cost
-  $0.065 → $0.014). Long profiled sessions are cheap; the floor cost is
-  per-session, not per-turn. (Verified in the OpenRouter activity view.)
-- **2026-07-09 · OpenRouter returns dated model slugs** — the API answers
-  with `z-ai/glm-5.2-20260616` while humans configure `z-ai/glm-5.2`;
-  any lookup keyed on the configured slug (cost pricing) needs
-  exact-match-then-prefix-match at a `-` boundary or it silently reports
-  unknown.
+- **2026-07-17 · audit called every live worker disconnected — glyphed
+  window names vs exact compare** — grove-47's state glyphs append
+  ` ⏸`/` ●` to live window names; `tmux.WindowExists` compared the
+  listed names against the stored glyph-less name with `==`, so
+  `WindowAlive` was always false and `gv audit` suggested `gv adopt`
+  for healthy, minutes-old workers (caught live on grove-89/90 before
+  any adopt fired). The rule already existed in tmux-discipline
+  ("never rely on exact window-name equality") — the check predated
+  the glyphs and nobody re-audited it when grove-47 shipped. When a
+  feature decorates a shared identifier, grep for every consumer that
+  compares it. Fixed in grove-94 (match exact or `stored + " "` prefix).
 - **2026-07-10 · orchestrator cadence: one long-lived chat per sitting** —
   a fresh orchestrator spawn pays a ~50k-token initial prompt; only ~3.1k
   (~6%) is grove's own files (orchestrator brain + repo CLAUDE.md +
@@ -282,20 +269,34 @@
   close-and-reopen re-pays the floor every cycle for nothing. Trimming
   inherited MCP servers shrinks the floor itself (2026-07-10: user scope
   emptied; posthog/grid moved to thegrid project scope). (grove-48.)
+- **2026-07-09 · OpenRouter returns dated model slugs** — the API answers
+  with `z-ai/glm-5.2-20260616` while humans configure `z-ai/glm-5.2`;
+  any lookup keyed on the configured slug (cost pricing) needs
+  exact-match-then-prefix-match at a `-` boundary or it silently reports
+  unknown.
+- **2026-07-09 · prompt caching survives OpenRouter→Z.AI** — Claude Code's
+  ~50k fixed prefix cached at 99.3% on the second GLM request (turn cost
+  $0.065 → $0.014). Long profiled sessions are cheap; the floor cost is
+  per-session, not per-turn. (Verified in the OpenRouter activity view.)
+- **2026-07-09 · state never forgets a session id** — the events fold
+  clears nothing on `untrack` (it only sets `Done`), so `gv adopt` of a
+  previously-tracked task always `--resume`s the stored conversation.
+  When the old conversation is the problem (corrupted/bloated context),
+  `gv adopt --manual` is the guaranteed-fresh escape hatch — it skips the
+  resume limb — then a `gv nudge` with the work order restores autonomy.
+  Used to reset grove-36 onto a fresh Opus session mid-ticket.
+- **2026-07-09 · throwaway builds for operator testing** — when a change
+  needs the operator's manual verification before merge, build the branch
+  to a scratch path (`go build -o /tmp/gv-<ticket> ./cmd/gv`) and hand
+  over that command — never `go install` from an unmerged branch. The
+  installed `~/go/bin/gv` keeps running live sessions and hooks (hooks
+  reference its absolute path); a temp binary tests the exact change,
+  interrupts nothing, and is thrown away if it doesn't work. Used to
+  verify grove-36's pane tagging live before merge. This is the DEFAULT
+  handoff for "try it yourself" testing.
 - **2026-07-05 · a git-inited $HOME shadows parent-folder detection** —
   `git rev-parse --show-toplevel` from ~/git/unbrewed returned /Users/dev
   (dotfiles repo), so `gv init` made HOME the workspace. Parent-of-repos
   detection must test the cwd ITSELF (≥2 direct child repos AND cwd is not
   the git root) before trusting any enclosing repo root. Field-hit on
   the operator's machine within minutes of shipping.
-- **2026-07-17 · audit called every live worker disconnected — glyphed
-  window names vs exact compare** — grove-47's state glyphs append
-  ` ⏸`/` ●` to live window names; `tmux.WindowExists` compared the
-  listed names against the stored glyph-less name with `==`, so
-  `WindowAlive` was always false and `gv audit` suggested `gv adopt`
-  for healthy, minutes-old workers (caught live on grove-89/90 before
-  any adopt fired). The rule already existed in tmux-discipline
-  ("never rely on exact window-name equality") — the check predated
-  the glyphs and nobody re-audited it when grove-47 shipped. When a
-  feature decorates a shared identifier, grep for every consumer that
-  compares it. Fixed in grove-94 (match exact or `stored + " "` prefix).
