@@ -350,9 +350,13 @@ func (c *Config) HostNames() []string {
 
 // WithModel injects a `--model <model>` flag into a claude command string,
 // right after the executable token, so a single grab can pin a model without
-// editing (and later reverting) a repo's `claude:` line. An empty model
-// returns cmd unchanged. model is single-quoted for the shell — the command
-// is run via a tmux shell, so an unquoted alias with metachars would break it.
+// editing (and later reverting) a repo's `claude:` line. Any `--model`
+// already present in cmd (e.g. a repo's `claude:` line hardcoding one) is
+// stripped first — the claude CLI resolves a repeated flag last-wins, so
+// leaving the config's own --model in place would silently defeat the pin
+// while gv still reported it as applied (grove-142). An empty model returns
+// cmd unchanged. model is single-quoted for the shell — the command is run
+// via a tmux shell, so an unquoted alias with metachars would break it.
 func WithModel(cmd, model string) string {
 	if strings.TrimSpace(model) == "" {
 		return cmd
@@ -365,12 +369,22 @@ func WithModel(cmd, model string) string {
 	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
 		head, rest = cmd[:i], strings.TrimLeft(cmd[i:], " \t")
 	}
+	rest = existingModelFlag.ReplaceAllString(rest, "")
+	rest = strings.TrimSpace(multiSpace.ReplaceAllString(rest, " "))
 	out := head + " --model " + shellQuote(model)
 	if rest != "" {
 		out += " " + rest
 	}
 	return out
 }
+
+// existingModelFlag matches a `--model value` or `--model=value` flag (value
+// bare or single/double-quoted) so WithModel can strip one already present
+// in the configured command before injecting its own.
+var existingModelFlag = regexp.MustCompile(`--model(?:=(?:'[^']*'|"[^"]*"|\S+)|\s+(?:'[^']*'|"[^"]*"|\S+))`)
+
+// multiSpace collapses the gap existingModelFlag's removal leaves behind.
+var multiSpace = regexp.MustCompile(`\s{2,}`)
 
 // shellQuote single-quotes s for safe embedding in a shell command.
 func shellQuote(s string) string {
