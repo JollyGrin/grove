@@ -6,8 +6,8 @@ description: Use when writing or reviewing ANY code, script, or e2e test that to
 # tmux discipline
 
 Grove's workers and cockpit live on the operator's REAL tmux server. The
-rules below are ordered by blast radius. War stories + dates:
-[LEARNINGS.md](../../../LEARNINGS.md) §"tmux / git / detector internals".
+rules below are ordered by blast radius. War stories + dates: LEARNINGS.md
++ `docs/archive/LEARNINGS-*.md` §"tmux / git / detector internals".
 
 ## 1. Isolation: `$TMUX` beats `TMUX_TMPDIR` (the grove-7 crash)
 
@@ -55,9 +55,9 @@ grove worker) silently targets the **real server** unless it clears
   panes renumber, and Claude's process title is its bare version string.
   All relay/detector/editor-inject paths go through `tmux.ClaudePane`.
 - **Pane indices depend on the user's `pane-base-index` — never write a
-  literal `.0`/`.1` target** (grove-168: the common `base-index 1` +
-  `pane-base-index 1` dotfiles pair made fresh installs die at the cockpit
-  build, and sent grab's claude command into the worktree shell). Resolve
+  literal `.0`/`.1` target** (grove-168: `base-index 1` + `pane-base-index
+  1` dotfiles killed the cockpit build and sent grab's claude command into
+  the worktree shell). Resolve
   the `%N` id at creation (`split-window -P -F '#{pane_id}'` —
   `SplitVerticalWindow`/`SpawnPane` return it) or via list-panes
   (`tmux.FirstPaneID` for "the window's first pane", `ClaudePaneTarget`
@@ -126,8 +126,7 @@ grove worker) silently targets the **real server** unless it clears
   (grove-205). Every kickoff template ends with the three `STATUS:
   QUESTION|BLOCKED|DONE — …` placeholder lines, so all three sentinels are
   in every worker's pane from second zero: a pane grep for any of them
-  fires instantly, on every task, forever (it filed two false DONEs in one
-  minute on 2026-08-29). The authoritative signal is the Stop hook's
+  fires instantly, on every task, forever. The authoritative signal is the Stop hook's
   classification of the agent's own last message —
   `gv watch [--ticket X] [--until done]` streams it, one flushed line per
   transition, default from-now. Three sub-rules:
