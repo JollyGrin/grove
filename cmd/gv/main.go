@@ -1686,7 +1686,7 @@ func cmdGrab(args []string) error {
 	// Claude pane: (serialized setup) && claude with the prompt as argv via
 	// command substitution — single line, no send-keys mangling, and the
 	// pane returns to a shell if claude exits.
-	claudeBin := config.WithModel(repo.Claude, *modelFlag)
+	claudeBin := config.PinModel(repo.Claude, *modelFlag)
 	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
 	// Profile wrap applies to the composed claude+prompt command only —
 	// never to repo.Claude itself (hooks resolve the worker's config dir
@@ -3352,7 +3352,7 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	claudeBin := config.WithModel(repo.Claude, *modelFlag)
+	claudeBin := config.PinModel(repo.Claude, *modelFlag)
 	secrets := config.SecretsPath()
 	// Wrap each claude limb separately: WrapProfile ends in `exec`, which
 	// replaces the shell, so a single wrap around `resume || fresh` would make
