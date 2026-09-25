@@ -77,6 +77,9 @@ type Backend interface {
 	Profiles() ([]string, error)
 	// Resume revives an archived chat and returns the session it landed in.
 	Resume(target string) (string, error)
+	// Close ends a live chat (`gv chat close`, grove-294): kills its
+	// session, keeps its transcript. A non-chat row is the CLI's refusal.
+	Close(target string) error
 }
 
 // Server is the http.Handler. Zero configuration beyond its backend: the
@@ -145,6 +148,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleNew(w, r, route.Target)
 	case RouteResume:
 		s.handleSpawn(w, route.Target, s.backend.Resume)
+	case RouteClose:
+		s.handleClose(w, route.Target)
 	}
 }
 
@@ -468,6 +473,17 @@ func (s *Server) handleSpawn(w http.ResponseWriter, target string, spawn func(st
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": session})
+}
+
+// handleClose is End chat. No body: there is nothing to choose. It sits
+// behind the same POST write gate as /send, and the refusal a cockpit or
+// archived row earns is the CLI's own words, verbatim.
+func (s *Server) handleClose(w http.ResponseWriter, target string) {
+	if err := s.backend.Close(target); err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
 }
 
 // --- plumbing ---

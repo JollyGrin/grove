@@ -136,6 +136,8 @@ const usage = `gv — grove
                                               --follow streams appends, --since N resumes after entry N
   gv chat send <s> "<text>"                   relay text into a live chat and verify it SUBMITTED
   gv chat keys <s> <chars>                    raw keystroke, no Enter (option pickers / permission prompts)
+  gv chat close <s> [--host H]                end a live chat (kills its claude process); the transcript
+                                              stays in history, revivable with gv orchestrator new --resume
   gv chat serve [--port 3000] [--bind ADDR]   phone UI for those chats on http://127.0.0.1:3000 — loopback by
                                               default and no auth of its own, so put it behind
                                               "tailscale serve --bg 3000". Off unless invoked; ^C stops it
@@ -368,7 +370,10 @@ func main() {
 	// "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
 	// string-scanning the whole argv would hijack it. Every other
 	// supported verb takes flags only, so whole-argv scanning is safe.
-	if remote.Supported[cmd] {
+	// `chat` relays only its `close` verb (grove-294): send's free text may
+	// legitimately contain "--host pc", so the other chat verbs keep the
+	// unsupported-verb path below rather than a whole-argv scan.
+	if remote.Supported[cmd] && (cmd != "chat" || (len(args) > 0 && args[0] == "close")) {
 		var host string
 		var rest []string
 		if cmd == "answer" || cmd == "nudge" {

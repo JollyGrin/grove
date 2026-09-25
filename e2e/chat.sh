@@ -1286,7 +1286,45 @@ REVIVED="$(sed 's/.*"session":"\([^"]*\)".*/\1/' "$SCRATCH/resume-http.json")"
 remote_tmux capture-pane -p -S - -t "=$REVIVED:chat" | tr -d '\n' > "$SCRATCH/revived.pane"
 grep -q -- "--resume $ARCHIVED_ID" "$SCRATCH/revived.pane" || { cat "$SCRATCH/revived.pane"; fail "the revived pane's launch must carry --resume"; }
 
+say "grove-294: POST /api/chats/<s>/close ends a live chat; its transcript falls back to archived"
+CLOSED_BEFORE="$(grep -c '"reason":"ended"' "$EVENTS" || true)"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$REVIVED/close" > "$SCRATCH/close-http.json" \
+  || { cat "$SCRATCH/close-http.json" "$SERVE_LOG"; fail "POST close failed"; }
+grep -q '"closed":true' "$SCRATCH/close-http.json" || { cat "$SCRATCH/close-http.json"; fail "close must answer closed:true"; }
+if remote_tmux has-session -t "=$REVIVED" 2>/dev/null; then fail "$REVIVED survived End chat"; fi
+grep '"reason":"ended"' "$EVENTS" | grep -q "\"session\":\"$REVIVED\"" \
+  || { cat "$EVENTS"; fail "End chat left no orchestrator_closed event naming $REVIVED in the chat's workspace log"; }
+[ "$(grep -c '"reason":"ended"' "$EVENTS")" -eq $((CLOSED_BEFORE + 1)) ] || fail "want exactly one ended event per close"
+( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls-closed.json"
+grep -B2 -A12 "\"session_id\": \"$ARCHIVED_ID\"" "$SCRATCH/ls-closed.json" | grep -q '"kind": "archived"' \
+  || { cat "$SCRATCH/ls-closed.json"; fail "a closed chat's conversation must come back as kind archived (revivable)"; }
+
+say "grove-294: closing an archived row is refused with the CLI's words; a form post is 415"
+code="$(curl -s -o "$SCRATCH/close-arch.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$ARCHIVED_ID/close")"
+[ "$code" = "409" ] || { cat "$SCRATCH/close-arch.out"; fail "closing an archived chat answered $code, want 409"; }
+grep -q 'already ended' "$SCRATCH/close-arch.out" || { cat "$SCRATCH/close-arch.out"; fail "wrong archived-close refusal"; }
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: text/plain' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/close")"
+[ "$code" = "415" ] || fail "a text/plain close answered $code, want 415 (the /send write gate)"
+remote_tmux has-session -t '=grove-chat-servews-1' 2>/dev/null || fail "a refused close must not kill anything"
+
 serve_stop
+
+say "grove-294: gv chat close --host pc ends a chat on the host"
+( cd "$WS" && "$GV" chat close --host pc grove-chat-servews-1 ) > "$SCRATCH/close-host.out" 2> "$SCRATCH/close-host.err" \
+  || { cat "$SCRATCH/close-host.out" "$SCRATCH/close-host.err"; fail "gv chat close --host failed"; }
+grep -q 'fake ssh\] .* chat close grove-chat-servews-1' "$SCRATCH/close-host.err" \
+  || { cat "$SCRATCH/close-host.err"; fail "the close must relay over ssh as 'chat close <session>'"; }
+grep -q '✓ ended grove-chat-servews-1' "$SCRATCH/close-host.out" || { cat "$SCRATCH/close-host.out"; fail "missing the host's ✓ line"; }
+if remote_tmux has-session -t '=grove-chat-servews-1' 2>/dev/null; then fail "grove-chat-servews-1 survived gv chat close --host"; fi
+grep -q '"session":"grove-chat-servews-1"' "$SERVEWS/.grove/state/events.jsonl" \
+  || fail "the close must log into the CHAT's workspace (servews), not the caller's"
+rc=0
+( cd "$WS" && "$GV" chat send --host pc grove-chat-chatws-2 "hi" ) > "$SCRATCH/send-host.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -q 'not supported' "$SCRATCH/send-host.out" \
+  || { cat "$SCRATCH/send-host.out"; fail "only chat CLOSE relays; send --host keeps the friendly unsupported error"; }
 
 say "a non-loopback bind requires the flag AND warns about what it exposes"
 PORT2="$(pick_port)"

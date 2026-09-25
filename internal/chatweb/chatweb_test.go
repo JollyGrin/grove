@@ -34,6 +34,8 @@ type fakeBackend struct {
 	tailHold bool // keep --follow open until the request context ends
 
 	sendErr, keysErr, spawnErr error
+	closeErr                   error
+	closed                     string
 	picker                     chatweb.Picker
 	newSession                 string
 	profiles                   []string
@@ -100,6 +102,11 @@ func (f *fakeBackend) Profiles() ([]string, error) { return f.profiles, f.profil
 func (f *fakeBackend) Resume(target string) (string, error) {
 	f.resumed = target
 	return f.newSession, f.spawnErr
+}
+
+func (f *fakeBackend) Close(target string) error {
+	f.closed = target
+	return f.closeErr
 }
 
 func id(s string) *string { return &s }
@@ -732,4 +739,35 @@ func lastEventID(t *testing.T, body string) int {
 		}
 	}
 	return last
+}
+
+// grove-294: End chat. A POST with no meaningful body; a refusal comes back
+// as the CLI's own words with a 409, and a cross-origin form post (no JSON
+// content type) never reaches the backend — the same gate as /send.
+func TestCloseRoute(t *testing.T) {
+	b := &fakeBackend{}
+	h := chatweb.NewServer(b)
+	w := post(t, h, "/api/chats/grove-chat-unbrewed-1/close", `{}`)
+	if w.Code != 200 || b.closed != "grove-chat-unbrewed-1" {
+		t.Fatalf("close: %d %s (closed %q)", w.Code, w.Body, b.closed)
+	}
+
+	b = &fakeBackend{closeErr: fmt.Errorf("grove-unbrewed is the cockpit's own orchestrator pane (kind cockpit)")}
+	w = post(t, chatweb.NewServer(b), "/api/chats/grove-unbrewed/close", `{}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "kind cockpit") {
+		t.Fatalf("refused close: %d %s", w.Code, w.Body)
+	}
+
+	b = &fakeBackend{}
+	r := httptest.NewRequest("POST", "/api/chats/grove-chat-unbrewed-1/close", strings.NewReader(""))
+	r.Header.Set("Content-Type", "text/plain")
+	rw := httptest.NewRecorder()
+	chatweb.NewServer(b).ServeHTTP(rw, r)
+	if rw.Code != 415 || b.closed != "" {
+		t.Fatalf("form-type close: %d, closed %q — want 415 and no backend call", rw.Code, b.closed)
+	}
+
+	if w := get(t, chatweb.NewServer(b), "/api/chats/grove-chat-unbrewed-1/close"); w.Code != 405 || b.closed != "" {
+		t.Fatalf("GET close: %d, closed %q — want 405 and no backend call", w.Code, b.closed)
+	}
 }
