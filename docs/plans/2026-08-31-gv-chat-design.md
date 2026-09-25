@@ -187,7 +187,7 @@ GET  /                       embedded index.html
 GET  /api/chats              → gv chat ls --json
 GET  /api/chats/<s>/events   SSE, from gv chat tail --follow
 POST /api/chats/<s>/send     → gv chat send
-POST /api/chats/<s>/keys     raw keys (pickers)
+POST /api/chats/<s>/keys     raw keys (pickers; `tab` only into a menu a fresh capture shows, grove-308)
 POST /api/workspaces/<l>/new → gv orchestrator new --workspace
 POST /api/chats/<s>/resume   → orchestrator new --resume
 ```

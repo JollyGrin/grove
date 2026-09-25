@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -383,6 +384,41 @@ func TestKeysRefusesAnythingButAPickerKey(t *testing.T) {
 	}
 	if b.keyTo != "" {
 		t.Errorf("a refused key still reached the pane: %q/%q", b.keyTo, b.keyLit)
+	}
+}
+
+// grove-308: a menu-only key is gated on a FRESH capture, not on the key
+// alone. The backend's pane here is a real capture run through the real
+// detector, so the test fails if detection and the gate ever disagree.
+func TestKeysMenuKeyNeedsAMenuOnThePane(t *testing.T) {
+	bare := "────\n❯ \n────\n  ? for shortcuts"
+	b := &fakeBackend{picker: chatweb.DetectPicker(bare)}
+	h := chatweb.NewServer(b)
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != http.StatusConflict {
+		t.Errorf("tab into a bare prompt = %d, want 409: %s", w.Code, w.Body)
+	}
+	// Enter and Space are never raw keys, menu or not.
+	for _, k := range []string{"enter", "space", " ", "\r"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
+			t.Errorf("%q into a bare prompt = %d, want 400", k, w.Code)
+		}
+	}
+	if b.keyTo != "" {
+		t.Fatalf("a refused key still reached the pane: %q", b.keyLit)
+	}
+
+	twoq, err := os.ReadFile("testdata/cc2.1.282-twoq.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.picker = chatweb.DetectPicker(string(twoq))
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != 200 || b.keyLit != "\t" {
+		t.Errorf("tab into a tabbed menu = %d, literal %q: %s", w.Code, b.keyLit, w.Body)
+	}
+	for _, k := range []string{"enter", "space"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
+			t.Errorf("%q into a menu = %d, want 400 (a digit answers; Enter submits input boxes)", k, w.Code)
+		}
 	}
 }
 

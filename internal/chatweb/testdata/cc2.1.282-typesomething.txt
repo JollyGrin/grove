@@ -1,0 +1,40 @@
+▎ blocks the rest.
+▎ https://code.claude.com/docs/en/permission-modes
+  1 more notice hidden
+
+❯ Use the AskUserQuestion tool to ask me one single-select question: which fruit, apple or banana
+  (with a short description on each). Do nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which fruit do you prefer? → Banana
+
+● Banana it is.
+
+✻ Brewed for 5s · done 8:09 AM
+
+❯ Now use AskUserQuestion to ask ONE multi-select question (multiSelect true): which colors, red /
+  green / blue, each with a short description. Do nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which colors do you like? → Blue, Red
+
+● You picked Blue and Red.
+
+✻ Churned for 4s · done 8:10 AM
+
+❯ Now ONE AskUserQuestion call with TWO single-select questions: (1) header "Pet": cat or dog; (2)
+  header "Drink": tea or coffee. Short descriptions. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Pet  ☐ Drink  ✔ Submit  →
+
+Which drink do you prefer?
+
+  1. Tea
+     A soothing, brewed beverage available in many varieties.
+  2. Coffee
+     A bold, caffeinated beverage brewed from roasted beans.
+❯ 3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel

@@ -160,6 +160,8 @@ footer { position: relative; flex: none; border-top: 1px solid var(--border); ba
 body.picker #keys { display: flex; }
 #keys .label { font-size: 11px; color: var(--amber); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #keys button { border: 1px solid var(--amber); color: var(--amber); border-radius: 8px; padding: 6px 14px; min-width: 44px; }
+#keys button.opt { flex-basis: 100%; text-align: left; overflow-wrap: anywhere; }
+#keys button.on { background: var(--amber); color: var(--surface-alt); }
 .compose { display: flex; gap: 8px; align-items: flex-end; }
 #text {
   flex: 1; resize: none; font: inherit; color: var(--text); background: var(--surface);

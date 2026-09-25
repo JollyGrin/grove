@@ -667,23 +667,50 @@ function autosize() {
 /* renderKeys grows the raw-key row when the pane scrape sees a modal.
  * Detection is garnish by house rule — it reads the pane, and a pane is
  * the one thing here that is not the transcript — so a miss must be
- * survivable: the row says what to do when it is wrong. */
+ * survivable: the row says what to do when it is wrong.
+ *
+ * grove-308: a menu's options arrive with their labels, so the row shows
+ * "Banana", not a bare 2. A digit answers a single-select outright and
+ * toggles a multi-select row (☐/☑); `next ⇥` (Tab) walks AskUserQuestion's
+ * pages to its Submit page, itself a numbered menu. The free-text row
+ * ("Type something.") moves the menu's caret into a text input — once the
+ * scrape sees it there (typing), the composer's ordinary send answers it. */
+var keyNames = { esc: 'esc', tab: 'next ⇥' };
+
 function renderKeys(p) {
   var box = el('keys');
   box.textContent = '';
   if (!p || !p.detected) { document.body.classList.remove('picker'); return; }
   document.body.classList.add('picker');
-  box.append(h('div', 'label', p.prompt || 'the chat is asking something — answer with a key'));
-  (p.keys || []).forEach(function (k) {
-    var b = h('button', '', k);
-    b.onclick = function () {
-      box.classList.add('busy');
-      api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: k })
-        .catch(showError)
-        .then(function () { box.classList.remove('busy'); });
-    };
-    box.append(b);
+  var label = p.prompt || 'the chat is asking something — answer with a key';
+  if (p.typing) label = 'type your answer below and send — ' + label;
+  box.append(h('div', 'label', label));
+  var labelled = {};
+  (p.options || []).forEach(function (o) {
+    labelled[o.key] = true;
+    var text = o.label;
+    if (p.kind === 'multi') text = (o.checked ? '☑ ' : '☐ ') + text;
+    else if (o.free) text = '✎ ' + text;
+    var b = keyButton(box, o.key, o.key + ' · ' + text);
+    b.classList.add('opt');
+    if (o.checked) b.classList.add('on');
   });
+  (p.keys || []).forEach(function (k) {
+    if (!labelled[k]) keyButton(box, k, keyNames[k] || k);
+  });
+  if (p.typing) el('text').focus();
+}
+
+function keyButton(box, k, text) {
+  var b = h('button', '', text);
+  b.onclick = function () {
+    box.classList.add('busy');
+    api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: k })
+      .catch(showError)
+      .then(function () { box.classList.remove('busy'); });
+  };
+  box.append(b);
+  return b;
 }
 
 /* ---------------- routing ---------------- */

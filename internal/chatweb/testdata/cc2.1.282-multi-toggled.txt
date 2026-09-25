@@ -1,0 +1,40 @@
+ ▐▛███▛█   Claude Code v2.1.282
+▝▜██████▀  Sonnet 5 · Claude Max
+ ▝▝   ▝▝   /…/d5babdc0-5e96-45fb-b592-40ec53cbec67/scratchpad/work
+
+▎ Auto mode is now Claude Code's default permission mode.
+▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for
+▎ risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and
+▎ blocks the rest.
+▎ https://code.claude.com/docs/en/permission-modes
+  1 more notice hidden
+
+❯ Use the AskUserQuestion tool to ask me one single-select question: which fruit, apple or banana
+  (with a short description on each). Do nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which fruit do you prefer? → Banana
+
+● Banana it is.
+
+✻ Brewed for 5s · done 8:09 AM
+
+❯ Now use AskUserQuestion to ask ONE multi-select question (multiSelect true): which colors, red /
+  green / blue, each with a short description. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Colors  ✔ Submit  →
+
+Which colors do you like?
+
+❯ 1. [✔] Red
+         A warm color often associated with passion and energy.
+  2. [ ] Green
+         A cool color often associated with nature and growth.
+  3. [✔] Blue
+         A calming color often associated with sky and water.
+  4. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
