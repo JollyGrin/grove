@@ -491,12 +491,14 @@ function openStream(a, since) {
     try { e = JSON.parse(ev.data); } catch (_) { return; }
     if (e.seq <= view.maxSeq) return;
     view.maxSeq = e.seq;
+    settleReplay();
     appendEntry(e);
   });
   es.addEventListener('picker', function (ev) {
     var p;
     try { p = JSON.parse(ev.data); } catch (_) { return; }
     renderKeys(p);
+    notePicker(a, p);
   });
   es.addEventListener('turn', function (ev) {
     var t;
@@ -510,11 +512,18 @@ function openStream(a, since) {
     showError(new Error(msg));
   });
   es.onerror = function () { document.body.classList.add('offline'); };
-  es.onopen = function () { document.body.classList.remove('offline'); };
+  es.onopen = function () { document.body.classList.remove('offline'); settleReplay(); };
 }
 
 function closeStream() {
   if (view.es) { view.es.close(); view.es = null; }
+  clearTimeout(alerts.settle);
+  alerts.live = false;
+  alerts.endSeq = 0;
+  /* Only the open chat is streamed, so only the open chat is known to be
+   * waiting; leaving it is the operator having seen it. */
+  if (view.addr) { delete alerts.waiting[view.addr]; delete alerts.picked[view.addr]; }
+  syncBadge();
   document.body.classList.remove('picker');
   el('keys').textContent = '';
 }
@@ -800,6 +809,10 @@ function renderWorking() {
   else if (on && state === 'idle') note = 'no reply — the pane may have stopped';
   else if (on && state === 'stopped') note = 'no reply — the pane has stopped';
   var w = el('working');
+  /* The edge of what is SHOWN is the turn end (grove-305): the heuristic
+   * and the pane read have already been reconciled above. A modal is not
+   * an end — the picker alerts for that itself. */
+  if (!w.hidden && !on && state !== 'waiting') onTurnEnd();
   w.hidden = !on;
   w.classList.toggle('fault', !!note);
   el('wtext').textContent = note || 'working…';
@@ -1089,6 +1102,127 @@ function keyButton(box, k, text) {
   return b;
 }
 
+/* ---------------- notifications (grove-305) ---------------- */
+
+/* The phone is in a pocket, and the page is the only thing that knows the
+ * agent is done or asking. Page-side only — no push service: a system
+ * notification fires while the page is open or backgrounded, and nothing
+ * once the browser has frozen it. Off by default, opt-in per device, and
+ * every API is feature-detected, so a browser without them is today's page.
+ *
+ * `live` is the replay guard. A chat opens by replaying its whole history
+ * down the same stream that then follows it, with no marker between the
+ * two, so replay is "the stream until it has been quiet for SETTLE_MS" —
+ * hundreds of replayed turn ends land in well under that. `waiting` is the
+ * set of chats the page has seen sitting on a picker; `picked` is the last
+ * picker state per chat, so only the edge into one alerts. */
+var NOTIFY_KEY = 'gv-chat:notify';
+var SETTLE_MS = 1500;
+var alerts = { live: false, settle: null, waiting: {}, picked: {}, endSeq: 0 };
+
+function notifySupported() {
+  return 'Notification' in window && window.isSecureContext;
+}
+
+function notifyOn() {
+  if (!notifySupported() || Notification.permission !== 'granted') return false;
+  try { return localStorage.getItem(NOTIFY_KEY) === '1'; } catch (_) { return false; }
+}
+
+function paintNotify() {
+  var b = el('notify');
+  b.hidden = !notifySupported();
+  var on = notifyOn();
+  b.textContent = on ? '🔔' : '🔕';
+  b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  b.setAttribute('aria-label', on ? 'notifications on' : 'notifications off');
+}
+
+function toggleNotify() {
+  var set = function (v) {
+    try { localStorage.setItem(NOTIFY_KEY, v ? '1' : '0'); } catch (_) { /* per-device nicety */ }
+    if (!v) { alerts.waiting = {}; syncBadge(true); }
+    paintNotify();
+  };
+  if (notifyOn()) { set(false); return; }
+  if (Notification.permission === 'granted') { set(true); return; }
+  /* Called from the tap itself: Chrome only prompts on a user gesture. A
+   * refusal leaves the bell off, and the browser remembers it. */
+  Promise.resolve(Notification.requestPermission()).then(function (perm) {
+    set(perm === 'granted');
+  }, function () { paintNotify(); });
+}
+
+/* Each entry pushes the settle point back; the stream's open starts it, so
+ * an empty transcript still goes live, and a slow tailnet connect cannot
+ * go live before the replay has even begun. It covers the first turn and
+ * picker reads too (StreamPoll, 1s after connect): those are the chat's
+ * state on arrival, not news. A cache restore's `?since=` catch-up is the
+ * same — what landed while the chat was off screen is read on screen, not
+ * notified. Once live, a reconnect's resumed entries are real news and
+ * stay live. */
+function settleReplay() {
+  if (alerts.live) return;
+  clearTimeout(alerts.settle);
+  alerts.settle = setTimeout(function () { alerts.live = true; }, SETTLE_MS);
+}
+
+/* onTurnEnd is the one place a finished turn alerts from; renderWorking
+ * calls it on the shown working → idle edge. `endSeq` caps it at one per
+ * turn: a real turn always lands transcript entries, while a flicker in
+ * the shown state (a pane read catching up after the send hold) lands
+ * none, so an end at a seq already alerted on is the same end. */
+function onTurnEnd() {
+  if (!alerts.live || !view.addr || view.maxSeq <= alerts.endSeq) return;
+  alerts.endSeq = view.maxSeq;
+  notify(view.addr, 'finished its turn');
+}
+
+function notePicker(a, p) {
+  var on = !!(p && p.detected);
+  var edge = on && !alerts.picked[a];
+  alerts.picked[a] = on;
+  if (on) alerts.waiting[a] = true; else delete alerts.waiting[a];
+  syncBadge();
+  if (!edge || !alerts.live || !notifyOn()) return;
+  /* Vibrate on the picker only: a turn ending is not worth a buzz, a
+   * question blocking the agent is. */
+  if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
+  notify(a, (p.prompt || 'is asking something').slice(0, 160));
+}
+
+/* A notification only fires while the page is not being looked at — a
+ * visible page already shows both events. Tagged by address, so a chat's
+ * alerts replace each other instead of stacking. Android Chrome refuses
+ * `new Notification()` outright; the service worker's showNotification is
+ * the path there, and sw.js routes the tap back to the chat. */
+function notify(a, body) {
+  if (!notifyOn() || document.visibilityState === 'visible') return;
+  var c = chatByAddr(a);
+  var title = c ? chatTitle(c) : a;
+  var hash = '#/c/' + encodeURIComponent(a);
+  var opts = { body: body, tag: 'gv-chat:' + a, renotify: true, icon: 'icon-192.png', data: { hash: hash } };
+  var direct = function () {
+    try {
+      var n = new Notification(title, opts);
+      n.onclick = function () { window.focus(); location.hash = hash; n.close(); };
+    } catch (_) { /* no constructor here (Android): nothing more to try */ }
+  };
+  if (!('serviceWorker' in navigator)) { direct(); return; }
+  navigator.serviceWorker.getRegistration().then(function (reg) {
+    return reg ? reg.showNotification(title, opts) : direct();
+  }).catch(direct);
+}
+
+/* The app badge counts chats sitting on a picker. It only exists on an
+ * installed PWA (grove-296), and only while notifications are on — off is
+ * exactly the old page. */
+function syncBadge(force) {
+  if (!navigator.setAppBadge || (!force && !notifyOn())) return;
+  var n = Object.keys(alerts.waiting).length;
+  (n && notifyOn() ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(function () { /* garnish */ });
+}
+
 /* ---------------- routing ---------------- */
 
 function render() {
@@ -1203,6 +1337,7 @@ document.addEventListener('visibilitychange', function () {
 window.addEventListener('online', function () { if (isListScreen()) refresh(); });
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
 el('refresh').onclick = refresh;
+el('notify').onclick = toggleNotify;
 /* A tap dismisses outright; holding it down pauses the auto-dismiss timer
  * so the toast does not vanish out from under a reader mid-press, and
  * letting go without that turning into a click (e.g. a scroll) resumes
@@ -1254,6 +1389,7 @@ el('main').addEventListener('scroll', function () {
 
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
 pruneDrafts();
+paintNotify();
 render();
 refresh();
 syncPolling();
@@ -1263,4 +1399,10 @@ syncPolling();
  * Secure-context only, which is why the deploy needs tailnet HTTPS. */
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').catch(function () { /* offline shell is a nicety, never a requirement */ });
+  /* A tapped notification (grove-305): sw.js focuses this window and says
+   * which chat; only a chat route is honoured. */
+  navigator.serviceWorker.addEventListener('message', function (ev) {
+    var hash = ev.data && ev.data.gvChatNav;
+    if (typeof hash === 'string' && hash.indexOf('#/c/') === 0) location.hash = hash;
+  });
 }
