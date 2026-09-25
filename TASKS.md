@@ -36,6 +36,18 @@
       1.2s after the request settles: exactly one Esc per tap, since a
       second one opens Claude Code's rewind picker, which a phone would
       then need to dismiss.
+- [x] chat-ux: dismissable error toast, replacing the prepended `.err` box
+      that landed off-screen above a scrolled-down transcript or stacked
+      up on a list screen (grove-298, 2026-09-25). `#toast` is a sibling of
+      `#main`, not a child of it, so the wholesale re-renders every screen
+      does (`main.textContent = ''`) can't wipe it before its 6s timeout;
+      sitting between `#main` and `#footer` in the flex column puts it
+      above the composer on the chat screen and, since `#footer` is hidden
+      on list screens, at the same bottom slot there too — visible without
+      scrolling either way. One at a time (newest replaces), a tap
+      dismisses, holding it down pauses the auto-dismiss so it can't vanish
+      mid-read. Both the `fault` SSE event and every `api()` failure route
+      through it, server text verbatim.
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package
