@@ -9,6 +9,23 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: a `stop` button in the "working…" strip
+      (grove-299, 2026-09-25). No server change — `ValidKey` already allows
+      `esc` and `POST /api/chats/<addr>/keys` already delivers it
+      (grove-225's route), but the page only ever offered keys inside the
+      picker strip, which appears only when the pane scrape detects a
+      modal — nothing mid-turn, which is exactly when a stop is wanted.
+      `#working` (grove-261) gains a `#stop` button, hidden by
+      `composer()`'s own `c.writable` gate (the same input the composer
+      uses, never a separate read of `kind`), so a read-only row never
+      offers it even while "working…" shows. Tapping it POSTs
+      `{key:"esc"}` and clears `working` optimistically on success — the
+      stream corrects it back if the turn is in fact still going — and
+      routes a failure through the page's existing error surface. A
+      `stopBusy` flag plus the shared `.busy` styling block re-taps for
+      1.2s after the request settles: exactly one Esc per tap, since a
+      second one opens Claude Code's rewind picker, which a phone would
+      then need to dismiss.
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package
