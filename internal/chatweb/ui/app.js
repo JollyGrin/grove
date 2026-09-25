@@ -598,11 +598,25 @@ function composer(c) {
       });
   };
   send.onclick = submit;
-  text.onkeydown = function (ev) {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); submit(); }
-  };
+  /* Gboard's Enter on a <textarea> is a plain Enter — there is no Shift on
+   * a touch keyboard — so Enter-sends would make multi-line messages
+   * untypeable. Coarse pointer (touch) gets a newline on Enter and sends
+   * only via the button; a fine pointer (desktop) keeps Enter-sends. */
+  if (isTouch()) {
+    text.enterKeyHint = 'enter';
+    text.onkeydown = null;
+  } else {
+    text.enterKeyHint = 'send';
+    text.onkeydown = function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); submit(); }
+    };
+  }
   text.oninput = autosize;
   autosize();
+}
+
+function isTouch() {
+  return window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
 }
 
 function autosize() {

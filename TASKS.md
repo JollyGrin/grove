@@ -9,6 +9,16 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve` composer: Enter inserts a newline on touch keyboards,
+      only the send button sends (grove-301, 2026-09-25, `chat-ux` train).
+      Gboard's Enter on a `<textarea>` is a plain Enter — there is no Shift
+      on a phone keyboard — so Enter-sends made multi-line messages
+      untypeable. `internal/chatweb/ui/app.js`'s `composer()` now checks
+      `matchMedia('(pointer: coarse)')`: coarse gets `enterkeyhint="enter"`
+      and no `onkeydown` handler (Enter is a plain newline, only `send`
+      submits), fine keeps the existing Enter-sends/Shift+Enter-newline
+      with `enterkeyhint="send"`. `autosize()` and the `flex-end`-aligned
+      compose row were already correct for a tall textarea.
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package
