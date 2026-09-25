@@ -99,6 +99,20 @@ changes the behavior.
   (`.grove/orchestrator/<profile>/`) give each backend its own chain, and
   CLAUDE.md still applies (memory loads recurse up ancestor dirs).
 
+## Modals in the pane (v2.1.282, grove-308)
+
+- Permission prompts, AskUserQuestion and the input box are **unboxed**:
+  bare lines between `─` rules, no `│`. Any scrape keyed on box sides
+  (picker detection, verified-submit) finds nothing.
+- AskUserQuestion: a digit **answers** a single-select; a digit
+  **toggles** a multi-select row; **Tab** walks the `← ☐ A ☐ B ✔ Submit →`
+  pages, and the Submit page is a numbered menu (`1. Submit answers`)
+  with no footer. Enter/Space are never needed from a remote surface.
+- `Type something.` (single-select) moves the caret into an inline text
+  input — a bracketed paste + Enter answers it. In a multi-select it is a
+  checkbox with no input.
+- Captures: `internal/chatweb/testdata/cc2.1.282-*.txt`.
+
 ## Profiles and config dirs
 
 - Claude profiles are **separate worlds**: plugins, marketplaces, and MCP

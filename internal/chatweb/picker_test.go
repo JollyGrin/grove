@@ -6,7 +6,11 @@ package chatweb_test
 // half of them must NOT fire.
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/chatweb"
@@ -121,5 +125,146 @@ func TestValidKeyAndLiteral(t *testing.T) {
 	}
 	if chatweb.KeyLiteral("3") != "3" {
 		t.Error("a digit is itself")
+	}
+}
+
+// --- grove-308: the v2.1.282 chrome, from real captures ---
+//
+// testdata/cc2.1.282-*.txt are `tmux capture-pane -p` of a scratch Claude
+// Code v2.1.282 session (2026-09-25). None of them has a │ box: the modal
+// is bare lines between ─ rules, which the boxed rule above never saw.
+
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "cc2.1.282-"+name+".txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func labels(p chatweb.Picker) []string {
+	var out []string
+	for _, o := range p.Options {
+		s := o.Key + ":" + o.Label
+		if o.Checked {
+			s += "[x]"
+		}
+		if o.Free {
+			s += "(free)"
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func TestDetectPickerCaptures(t *testing.T) {
+	cases := []struct {
+		fixture, kind, prompt string
+		keys, labels          []string
+		typing                bool
+	}{
+		{"single", "menu", "Which fruit do you prefer?",
+			[]string{"1", "2", "3", "4", "esc"},
+			[]string{"1:Apple", "2:Banana", "3:Type something.(free)", "4:Chat about this"}, false},
+		// Two questions: a tab bar, so Tab is offered to walk the pages.
+		{"twoq", "menu", "Which pet do you prefer?",
+			[]string{"1", "2", "3", "4", "tab", "esc"},
+			[]string{"1:Cat", "2:Dog", "3:Type something.(free)", "4:Chat about this"}, false},
+		// The caret on the free row: the composer answers it.
+		{"typesomething", "menu", "Which drink do you prefer?",
+			[]string{"1", "2", "3", "4", "tab", "esc"},
+			[]string{"1:Tea", "2:Coffee", "3:Type something.(free)", "4:Chat about this"}, true},
+		// Multi-select: digits toggle, the free row (a checkbox with no
+		// input behind it) is hidden, Tab reaches Submit.
+		{"multi", "multi", "Which colors do you like?",
+			[]string{"1", "2", "3", "5", "tab", "esc"},
+			[]string{"1:Red", "2:Green", "3:Blue", "5:Chat about this"}, false},
+		{"multi-toggled", "multi", "Which colors do you like?",
+			[]string{"1", "2", "3", "5", "tab", "esc"},
+			[]string{"1:Red[x]", "2:Green", "3:Blue[x]", "5:Chat about this"}, false},
+		// The Submit page has no footer; the tab bar anchors it.
+		{"multi-review", "menu", "Ready to submit your answers?",
+			[]string{"1", "2", "tab", "esc"},
+			[]string{"1:Submit answers", "2:Cancel"}, false},
+		// The permission prompt lost its box too; wrapped option text is a
+		// continuation, not the end of the menu.
+		{"perm", "menu", "Do you want to proceed?",
+			[]string{"1", "2", "3", "4", "esc"}, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.fixture, func(t *testing.T) {
+			got := chatweb.DetectPicker(fixture(t, c.fixture))
+			if !got.Detected {
+				t.Fatalf("must fire, got %+v", got)
+			}
+			if got.Kind != c.kind || got.Prompt != c.prompt || got.Typing != c.typing {
+				t.Errorf("kind/prompt/typing = %q/%q/%v, want %q/%q/%v", got.Kind, got.Prompt, got.Typing, c.kind, c.prompt, c.typing)
+			}
+			if !reflect.DeepEqual(got.Keys, c.keys) {
+				t.Errorf("keys = %v, want %v", got.Keys, c.keys)
+			}
+			if c.labels != nil && !reflect.DeepEqual(labels(got), c.labels) {
+				t.Errorf("options = %v, want %v", labels(got), c.labels)
+			}
+		})
+	}
+}
+
+// The v2.1.282 idle screen: the input box is two ─ rules around "❯ ",
+// with no │ anywhere — every negative below sits on top of it.
+const idleV2 = `
+✻ Churned for 2s · done 8:13 AM
+
+                                                                                  ● high · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ← for agents`
+
+func TestDetectPickerV2Negatives(t *testing.T) {
+	cases := map[string]string{
+		"idle":                        idleV2,
+		"markdown list above the box": "● Three things stand out:\n\n1. grove-215's resolver\n2. grove-216 has no picker path\n3. grove-218 needs both\n" + idleV2,
+		// The operator's own message echoed into the transcript carries a
+		// caret — but no modal chrome follows it.
+		"echoed numbered prompt": "❯ 1. run the gate\n  2. open the PR\n\n● On it.\n" + idleV2,
+		"answered menu":          "● User answered Claude's questions:\n  ⎿  · Which fruit do you prefer? → Banana\n\n● Banana it is.\n" + idleV2,
+		// A list mid-turn: "esc to interrupt" is not "esc to cancel".
+		"list while working":        "● Plan:\n  1. read\n  2. write\n\n✽ Enchanting… (4s · esc to interrupt)\n" + idleV2,
+		"digits typed into the box": strings.Replace(idleV2, "❯ \n", "❯ 1. the resolver and 2. the picker\n", 1),
+		"y/n in the transcript":     "● Shall I? (y/n)\n" + idleV2,
+	}
+	for name, capture := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := chatweb.DetectPicker(capture); got.Detected {
+				t.Fatalf("must NOT fire, got %+v", got)
+			}
+		})
+	}
+}
+
+// The event is additive: a grove-218 client reads detected/keys/prompt and
+// never sees a renamed field.
+func TestPickerJSONIsAdditive(t *testing.T) {
+	raw, err := json.Marshal(chatweb.DetectPicker(fixture(t, "single")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{`"detected":true`, `"keys":[`, `"prompt":"Which fruit`, `"kind":"menu"`, `"options":[`} {
+		if !strings.Contains(string(raw), f) {
+			t.Errorf("picker JSON %s lacks %s", raw, f)
+		}
+	}
+}
+
+func TestMenuKey(t *testing.T) {
+	if !chatweb.MenuKey("tab") || chatweb.KeyLiteral("tab") != "\t" {
+		t.Error("tab is a menu key, sent as a literal tab")
+	}
+	for _, k := range []string{"enter", "space", "\r", "\n", " ", "1", "esc"} {
+		if chatweb.MenuKey(k) {
+			t.Errorf("MenuKey(%q) = true", k)
+		}
 	}
 }

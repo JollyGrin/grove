@@ -9,6 +9,22 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: AskUserQuestion menus answerable from the phone
+      (grove-308, 2026-09-25). Step 0 captured the real v2.1.282 chrome
+      (`internal/chatweb/testdata/cc2.1.282-*.txt`): modals are no longer
+      boxed, so `DetectPicker` missed every one. It now also reads the
+      unboxed shape (caret on an option + `Esc to cancel` footer or the
+      AskUserQuestion tab bar), and the `picker` SSE event gains additive
+      `kind` (`menu|multi|yesno`), `options` (key/label/checked/free) and
+      `typing`. New menu-only key `tab` (walks to the Submit page), sent
+      by `POST /keys` only when a FRESH capture's picker offers it (409
+      otherwise); Enter/Space stay refused — the captures show a digit
+      answers/toggles. Phone renders labelled option buttons, ☐/☑ toggles,
+      `next ⇥`, and hands the free-text row to the composer. Live-verified
+      through the detector + gate against a scratch Claude (multi + single
+      in one call, answer in the transcript); Android Chrome pass is the
+      operator's.
+
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package

@@ -1,0 +1,40 @@
+❯ Now use AskUserQuestion to ask ONE multi-select question (multiSelect true): which colors, red /
+  green / blue, each with a short description. Do nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which colors do you like? → Blue, Red
+
+● You picked Blue and Red.
+
+✻ Churned for 4s · done 8:10 AM
+
+❯ Now ONE AskUserQuestion call with TWO single-select questions: (1) header "Pet": cat or dog; (2)
+  header "Drink": tea or coffee. Short descriptions. Do nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which pet do you prefer? → Dog
+     · Which drink do you prefer? → mate tea
+
+● You picked Dog and mate tea (a custom answer for the drink question).
+
+✻ Crunched for 5s · done 8:11 AM
+
+❯ Again: ONE multi-select AskUserQuestion (multiSelect true), header "Colors": red / green / blue.
+  Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Colors  ✔ Submit  →
+
+Which colors do you like?
+
+❯ 1. [ ] Red
+         A warm color often associated with passion and energy.
+  2. [ ] Green
+         A cool color often associated with nature and growth.
+  3. [ ] Blue
+         A calming color often associated with sky and water.
+  4. [✔] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

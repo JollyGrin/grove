@@ -33,6 +33,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -306,20 +307,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target str
 	}
 }
 
-// same is Picker's change test, so an unchanged modal is not re-sent every
-// second (the phone re-renders its key row on every picker event).
-func (p Picker) same(o Picker) bool {
-	if p.Detected != o.Detected || p.Prompt != o.Prompt || len(p.Keys) != len(o.Keys) {
-		return false
-	}
-	for i := range p.Keys {
-		if p.Keys[i] != o.Keys[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // sse writes one framed event. data must be a single line with no embedded
 // newline — every producer here is compact JSON, which cannot contain a raw
 // one.
@@ -412,8 +399,18 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 	// takes free text is a way to type into somebody's agent while skipping
 	// the relay's verified submit. A picker needs 1–9, y/n and Esc; that is
 	// the whole list, and everything else is `send`'s job.
-	if !ValidKey(body.Key) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("%q is not a picker key — one of 1-9, y, n, esc (prose goes through /send, which verifies the submit)", body.Key))
+	switch {
+	case ValidKey(body.Key):
+	case MenuKey(body.Key):
+		// grove-308: a menu-only key is judged against a FRESH capture,
+		// not the phone's last picker event — the menu may have closed
+		// since, and a Tab into the bare input box is not what was asked.
+		if !slices.Contains(s.backend.Picker(target).Keys, body.Key) {
+			writeErr(w, http.StatusConflict, fmt.Errorf("%q only goes into a menu that offers it, and the chat's pane shows none now", body.Key))
+			return
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%q is not a picker key — one of 1-9, y, n, esc, or tab into a menu (prose goes through /send, which verifies the submit)", body.Key))
 		return
 	}
 	if err := s.backend.Keys(target, KeyLiteral(body.Key)); err != nil {

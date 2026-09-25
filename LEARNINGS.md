@@ -26,6 +26,31 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-25 · Claude Code v2.1.282 draws its modals with NO │ box —
+  so grove-218's picker detector had silently stopped firing on
+  everything** (grove-308). Captured live in a scratch tmux server
+  (`internal/chatweb/testdata/cc2.1.282-*.txt`): the permission prompt,
+  the AskUserQuestion menu and the idle input box are all bare lines
+  between two `─` rules. `DetectPicker` required a `│` left edge, so the
+  phone never got a key row — the operator's "blocked by AskUserQuestion"
+  was detection, not the key set. The ticket's premise was also wrong in
+  the other direction: a **digit ANSWERS a single-select outright** (no
+  Enter), a **digit TOGGLES a multi-select row** (Space/Enter also toggle
+  the caret row; neither submits), and a multi-select (or any
+  multi-question call) is submitted by **Tab** to its `✔ Submit` page —
+  itself a numbered menu (`1. Submit answers / 2. Cancel`) with no
+  "Esc to cancel" footer. The single-select `Type something.` row's digit
+  moves the caret into an inline text input (paste + Enter answers it,
+  verified); the multi-select one is a checkbox with no input behind it.
+  So the phone needed `tab`, not Enter/Space. The unboxed rule anchors on
+  what the transcript never carries: the `❯` caret ON an option, plus the
+  modal's chrome (`Esc to cancel` below, or the `← … ✔ Submit →` tab bar
+  above). **Knock-on, not fixed here:** `internal/tmux`'s verified-submit
+  (`inputBoxContent`/`pasteLanded`) also keys on `│` sides, so on this
+  chrome it finds no box and calls every relay landed — the grove-144
+  "delivered is not submitted" guard is a no-op until it learns the ─-rule
+  input box.
+
 - **2026-09-06 · GLM 5.3 Flash via the Anthropic protocol returns zero
   text unless `thinking` is disabled** (grove-288, `gv sub` bake-off
   against api.z.ai). A `/v1/messages` call with no `thinking` field (or
