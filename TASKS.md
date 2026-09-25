@@ -9,6 +9,20 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: prose in a system sans (grove-306, 2026-09-26,
+      `chat-ux` train). `body` moves to `--sans` (system stack, no font
+      files — CSP `font-src 'self'`) at line-height 1.5; `--mono` stays on
+      `code`/`pre`, tool and steps rows, `#keys`, the composer and
+      `.row .meta`. Assistant h1/h2 get a touch of size since sans bold
+      alone reads weaker. grove-260's wide-content rules untouched.
+- [x] `gv chat serve`: entry timestamps (grove-303, 2026-09-26,
+      `chat-ux` train). Client-only, off the `ts` the stream already
+      carries: a `— today —` / `— yesterday —` / `— 21 Sep —` separator
+      when the local calendar day changes between prose entries (steps
+      get none), and a dim `HH:MM` on each user message and assistant
+      text block. Null `ts` renders no time and leaves the day run alone.
+      `view.day` rides the grove-297 chat cache, and a restore relabels
+      its separators, so replay, live append and restore render alike.
 - [x] `gv chat serve`: re-opening a chat no longer replays it from seq 0
       (grove-297, 2026-09-26, `chat-ux` train). Client-only: leaving a
       chat moves its rendered nodes into a 3-deep cache with maxSeq,

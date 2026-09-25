@@ -32,13 +32,18 @@
   --text: #d6e2d6; --dim: #8fa392; --dimmer: #5c6f5e;
   --green: #7fbf7f; --green-bright: #a8e6a3; --green-deep: #4a7c59; --amber: #e0b458; --red: #d98b7c;
   --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  /* Prose is sans (grove-306): mono on a ~390px screen fits ~40 characters
+     a line. System stack only — CSP is font-src 'self' and no font files
+     ship. Mono stays where columns mean something: code, tool rows, keys,
+     the composer, a session name. */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --pad: env(safe-area-inset-bottom, 0px);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; }
 body {
-  background: var(--bg); color: var(--text); font-family: var(--mono);
-  font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+  background: var(--bg); color: var(--text); font-family: var(--sans);
+  font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
@@ -71,7 +76,7 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 }
 .row:active { border-color: var(--border-bright); }
 .row .title { font-weight: 600; color: var(--green-bright); overflow-wrap: anywhere; }
-.row .meta { font-size: 11.5px; color: var(--dimmer); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row .meta { font-family: var(--mono); font-size: 11.5px; color: var(--dimmer); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .badge { border: 1px solid var(--border-bright); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; color: var(--dim); }
 .badge.chat { color: var(--green); border-color: var(--green-deep); }
 .badge.cockpit { color: var(--amber); }
@@ -96,8 +101,16 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 .msg.user.pending { opacity: .55; }
 .msg.user.failed { border-left-color: var(--red); cursor: pointer; }
 .msg.user.failed .status { color: var(--red); }
+/* Entry times (grove-303): a dim separator where the calendar day turns
+   over between prose entries, and a small clock on each prose entry. */
+.day { text-align: center; font-size: 11px; color: var(--dimmer); letter-spacing: .04em; margin: 4px 0 12px; }
+.msg .at { font-size: 10.5px; color: var(--dimmer); text-align: right; margin-top: 2px; white-space: normal; }
 .msg.assistant :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 .7em; }
 .msg.assistant :is(h1, h2, h3, h4) { font-size: 1em; margin: .9em 0 .35em; color: var(--green-bright); }
+/* In mono, bold alone set a heading apart; sans needs a little size too. */
+.msg.assistant h1 { font-size: 1.15em; }
+.msg.assistant h2 { font-size: 1.07em; }
+.msg.assistant :is(code, pre) { font-family: var(--mono); }
 .msg.assistant code { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: .9em; }
 .msg.assistant pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
 .msg.assistant pre code { background: none; border: none; padding: 0; }
@@ -131,14 +144,14 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
    every entry one tap away rather than hidden. */
 details.steps { margin-bottom: 8px; }
 details.steps > summary {
-  list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim);
+  font-family: var(--mono); list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim);
   background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 details.steps > summary::-webkit-details-marker { display: none; }
 details.steps[open] > summary { color: var(--green); border-radius: 8px 8px 0 0; border-bottom-color: transparent; }
 details.steps > .steps-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px 8px 0; }
-details.tool { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+details.tool { font-family: var(--mono); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
 details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.tool > summary::-webkit-details-marker { display: none; }
 details.tool > pre { padding: 0 10px 10px; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; }
@@ -163,7 +176,7 @@ footer { position: relative; flex: none; border-top: 1px solid var(--border); ba
   box-shadow: 0 2px 10px rgba(0,0,0,.4);
 }
 #jump[hidden] { display: none; }
-#keys { display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
+#keys { font-family: var(--mono); display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
 body.picker #keys { display: flex; }
 #keys .label { font-size: 11px; color: var(--amber); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #keys button { border: 1px solid var(--amber); color: var(--amber); border-radius: 8px; padding: 6px 14px; min-width: 44px; }
@@ -171,7 +184,7 @@ body.picker #keys { display: flex; }
 #keys button.on { background: var(--amber); color: var(--surface-alt); }
 .compose { display: flex; gap: 8px; align-items: flex-end; }
 #text {
-  flex: 1; resize: none; font: inherit; color: var(--text); background: var(--surface);
+  flex: 1; resize: none; font: inherit; font-family: var(--mono); color: var(--text); background: var(--surface);
   border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; max-height: 40vh;
 }
 #text:focus { outline: none; border-color: var(--border-bright); }
