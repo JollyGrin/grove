@@ -127,14 +127,24 @@ height, and the box itself).
   `Bash command`) — an option cursor `❯ 1. Yes` sits deeper in, never on
   the first line. `inputBoxRange` keys on that, so a modal reads as "no
   box" (permissive = landed).
-- **The idle box is not empty in a plain capture**: it shows a dim
-  placeholder (`❯ Try "refactor main.go"`); `capture-pane -p` drops the
-  styling. Never test for an empty box — test whether the probe or a
-  `[Pasted text #N +M lines]` chip is in it.
+- **The idle box is not empty in a plain capture**: it shows DIM text
+  (SGR 2): a placeholder (`Try "refactor main.go"`) or, after a turn, a
+  ghost prompt suggestion (`commit notes.txt`). `capture-pane -p` drops the
+  attribute and reads it as typed text — so the relay's verify capture uses
+  `-e` and `dropDim` removes dim runs before reading the box. A bare Enter
+  on a ghost-only box does nothing (the ghost is not submitted). The
+  prompt is `❯` + U+00A0 (NBSP), not a plain space.
 - **The submitted prompt echoes as `❯ <text>` in the transcript** above
   the box (no rules around it) — that echo is grove-186's uptake evidence.
   `esc to interrupt` was NOT visible in the footer on v2.1.283 during a
   running turn (auto mode showed its own hint), so the echo carries it.
+- **A message relayed MID-TURN is queued, and drawn ABOVE the rules**
+  (v2.1.283, verified through the real `PasteText` path): transcript-style
+  `❯ <text>` (multi-line pastes expanded, not chipped) plus
+  `ctrl+x ctrl+s to send now`, while the box shows the placeholder
+  `Press up to edit queued messages`. So a relay to a busy worker reads as
+  landed and consumed. Text pasted mid-turn without its Enter still sits
+  IN the box and is still caught.
 - Real captures: `internal/tmux/testdata/cc2.1.28[23]-*.txt`. Re-capture on
   an isolated server (tmux-discipline §1; keep `TMUX_TMPDIR` short —
   a long scratchpad path overflows the socket name) when the chrome moves

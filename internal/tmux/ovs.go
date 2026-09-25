@@ -178,6 +178,7 @@ func polls(max, poll time.Duration) int {
 //	           so the caller still records the event and surfaces warn.
 func PasteText(target, text string) (warn string, err error) {
 	capture := func() (string, error) { return CapturePane(target) }
+	styled := func() (string, error) { return capturePaneStyled(target) }
 	if err := waitOutCompact(target, capture, func() { time.Sleep(compactPoll) }); err != nil {
 		return "", err
 	}
@@ -205,7 +206,9 @@ func PasteText(target, text string) (warn string, err error) {
 	// bottom N ROWS, which are blank whenever the app draws from the top
 	// (caught in e2e/relay.sh — the scrape saw nothing but empty rows and
 	// called every relay landed). inputBoxContent finds the box itself.
-	if err := verifySubmit(target, text, capture, enter,
+	// Styled (-e) so pasteLanded can tell Claude's dim ghost suggestion
+	// from typed text (grove-317).
+	if err := verifySubmit(target, text, styled, enter,
 		func() { time.Sleep(submitSettle) }); err != nil {
 		return "", err
 	}
@@ -332,7 +335,7 @@ const pasteProbeRunes = 24
 // landed. Only a box that still visibly holds our text, or a pending
 // "[Pasted text]" chip, is treated as unsent.
 func pasteLanded(capture, text string) bool {
-	box := squeeze(inputBoxContent(capture))
+	box := squeeze(inputBoxContent(dropDim(capture)))
 	if box == "" {
 		return true
 	}
@@ -347,6 +350,95 @@ func pasteLanded(capture, text string) bool {
 		return true
 	}
 	return !strings.Contains(box, probe)
+}
+
+// capturePaneStyled is CapturePane with -e, keeping SGR attributes so
+// dropDim can see which box text is Claude's dim ghost suggestion. Missing
+// pane reads as "" and no error, matching CapturePane.
+func capturePaneStyled(target string) (string, error) {
+	out, err := run("capture-pane", "-p", "-J", "-e", "-t", target)
+	if err != nil {
+		return "", nil
+	}
+	return out, nil
+}
+
+// dropDim turns a styled (-e) capture into plain text with every dim (SGR 2)
+// run removed. Claude Code v2.1.283 draws a ghost prompt suggestion in the
+// idle input box in dim ("❯ \x1b[2mcommit notes.txt\x1b[0m"); a plain capture
+// reads it as typed text, so a short relay ("yes") could match a ghost
+// ("yes, and push it") and a delivered answer would fail as "never
+// submitted" (grove-317). All other escape sequences are dropped; a capture
+// without escapes passes through unchanged. Dim state carries across lines,
+// as the terminal's does.
+func dropDim(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	var b strings.Builder
+	dim := false
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c != 0x1b {
+			if !dim || c == '\n' {
+				b.WriteByte(c)
+			}
+			i++
+			continue
+		}
+		if i+1 >= len(s) {
+			break
+		}
+		switch s[i+1] {
+		case '[': // CSI: params up to a final byte in 0x40–0x7e
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) && s[j] == 'm' {
+				dim = sgrDim(s[i+2:j], dim)
+			}
+			i = j + 1
+		case ']': // OSC (e.g. a hyperlink): up to BEL or ESC \
+			j := i + 2
+			for j < len(s) && s[j] != 0x07 && !(s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\') {
+				j++
+			}
+			if j < len(s) && s[j] == 0x1b {
+				j++
+			}
+			i = j + 1
+		default:
+			i += 2
+		}
+	}
+	return b.String()
+}
+
+// sgrDim applies one SGR parameter list to the dim flag: 2 sets it, 0 / an
+// empty reset / 22 clear it, and extended-colour arguments (38;5;n,
+// 38;2;r;g;b and the 48/58 twins) are skipped so their "2" never reads as
+// dim.
+func sgrDim(params string, dim bool) bool {
+	ps := strings.Split(params, ";")
+	for i := 0; i < len(ps); i++ {
+		switch ps[i] {
+		case "", "0", "22":
+			dim = false
+		case "2":
+			dim = true
+		case "38", "48", "58":
+			if i+1 < len(ps) {
+				switch ps[i+1] {
+				case "5":
+					i += 2
+				case "2":
+					i += 4
+				}
+			}
+		}
+	}
+	return dim
 }
 
 // footerSlack is how many non-box lines may sit below the input box (Claude

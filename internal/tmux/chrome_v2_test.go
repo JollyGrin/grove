@@ -113,3 +113,88 @@ func TestUnboxedRangeShapes(t *testing.T) {
 		}
 	}
 }
+
+// Relays to a worker that is MID-TURN (the orchestrator nudges busy workers
+// constantly). Real v2.1.283 captures through the real PasteText path: a
+// message submitted during a running turn is QUEUED, and Claude draws it
+// ABOVE the rules as a transcript-style "❯ <text>" + "ctrl+x ctrl+s to send
+// now", while the box shows the placeholder "Press up to edit queued
+// messages". So the queued message reads as landed (accepted) AND as
+// consumed — no false "never submitted", no spurious uptake warning — while
+// text pasted mid-turn without its Enter still sits in the box and is
+// caught. No "esc to interrupt" appears anywhere in these captures.
+func TestMidTurnRelayV2Chrome(t *testing.T) {
+	const (
+		queued   = "after that also say the queued-probe-marker word BANANA"
+		chip     = "queued multi line answer one\nline two of it\nline three\nline four\nline five\nline six"
+		unsentMT = "this relay never got its enter while the worker was busy"
+	)
+	busy := fixture(t, "cc2.1.283-busy.txt")
+	if strings.Contains(strings.ToLower(busy), runningTurnMarker) {
+		t.Fatalf("fixture drift: v2.1.283 busy capture shows %q", runningTurnMarker)
+	}
+	cases := []struct {
+		fixture, text    string
+		landed, consumed bool
+	}{
+		{"cc2.1.283-busy-queued.txt", queued, true, true},
+		{"cc2.1.283-busy-queued-chip.txt", chip, true, true},
+		// The guard still bites mid-turn: a paste whose Enter was lost.
+		{"cc2.1.283-busy-unsent.txt", unsentMT, false, false},
+		// Relaying into a busy pane before anything was pasted: the box is
+		// empty, nothing of ours is outside it.
+		{"cc2.1.283-busy.txt", unsentMT, true, false},
+	}
+	for _, c := range cases {
+		capture := fixture(t, c.fixture)
+		if got := pasteLanded(capture, c.text); got != c.landed {
+			t.Errorf("%s: pasteLanded = %v, want %v", c.fixture, got, c.landed)
+		}
+		if got := consumedEvidence(capture, c.text); got != c.consumed {
+			t.Errorf("%s: consumedEvidence = %v, want %v", c.fixture, got, c.consumed)
+		}
+	}
+}
+
+// Claude Code v2.1.283 draws a dim (SGR 2) ghost prompt suggestion in the
+// idle box. cc2.1.283-ghost-e.txt is a real `capture-pane -e` of one
+// ("❯\u00a0\x1b[2mcommit notes.txt\x1b[0m"): plain, it reads as typed text.
+func TestGhostSuggestionV2Chrome(t *testing.T) {
+	ghost := fixture(t, "cc2.1.283-ghost-e.txt")
+	if !strings.Contains(ghost, "❯\u00a0\x1b[2mcommit notes.txt\x1b[0m") {
+		t.Fatal("fixture drift: no dim ghost in the input box")
+	}
+	if got := inputBoxContent(dropDim(ghost)); got != "" {
+		t.Errorf("dim ghost should read as an empty box, got %q", got)
+	}
+	// The false alarm the ghost caused: a short relay matching its prefix.
+	if !pasteLanded(ghost, "commit") {
+		t.Error("a ghost suggestion matching the relay made pasteLanded report unsent")
+	}
+	// Typed (non-dim) text after the ghost vanished is still caught.
+	typed := strings.Replace(ghost, "\x1b[2mcommit notes.txt\x1b[0m", "commit", 1)
+	if typed == ghost {
+		t.Fatal("fixture drift: ghost sequence not found")
+	}
+	if pasteLanded(typed, "commit") {
+		t.Error("typed text in a styled capture must still read as unsent")
+	}
+}
+
+func TestDropDim(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"plain passes through", "❯ hi\n", "❯ hi\n"},
+		{"dim run dropped, rest kept", "❯ \x1b[2mghost\x1b[0m tail", "❯  tail"},
+		{"22 ends dim", "\x1b[2ma\x1b[22mb", "b"},
+		{"combined params", "\x1b[1;2ma\x1b[0mb", "b"},
+		{"256-colour 2 is not dim", "\x1b[38;5;2mgreen\x1b[39m", "green"},
+		{"truecolour 2 is not dim", "\x1b[38;2;2;2;2mx\x1b[0m", "x"},
+		{"dim carries across lines, newline kept", "\x1b[2ma\nb\x1b[0mc", "\nc"},
+		{"OSC hyperlink dropped", "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\", "link"},
+	}
+	for _, c := range cases {
+		if got := dropDim(c.in); got != c.want {
+			t.Errorf("%s: dropDim = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

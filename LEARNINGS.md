@@ -393,7 +393,18 @@
   pair within `footerSlack`, body opening with `❯`; modals don't, so they
   stay "no box"), tried before the boxed one. Also found: the idle box
   shows a dim placeholder that a plain capture can't tell from text, and
-  `esc to interrupt` wasn't in the v2.1.283 footer mid-turn. Regression:
+  `esc to interrupt` wasn't in the v2.1.283 footer mid-turn. Checked
+  because the orchestrator nudges busy workers constantly: a relay
+  mid-turn is QUEUED and drawn above the rules (`❯ <text>` +
+  `ctrl+x ctrl+s to send now`; the box shows `Press up to edit queued
+  messages`), so it reads as landed + consumed, with no false "never
+  submitted" and no spurious uptake warning. And the idle box's dim
+  (SGR 2) ghost prompt suggestion reads as TYPED text in a plain capture:
+  a short relay (`yes`) whose 24-rune probe matched a ghost (`yes, and
+  push`) after a fast turn would fail as "never submitted" though
+  delivered. The verify capture is now `-e`, with dim runs dropped
+  (a bare Enter on a ghost-only box submits nothing, so the retry was
+  never the danger). Regression:
   real captures in `internal/tmux/testdata/` + `e2e/relay.sh` leg 3
   (a stub drawing the v2 chrome — verified it fails on the old finder).
   Lesson: a permissive fallback needs a tripwire per chrome generation,

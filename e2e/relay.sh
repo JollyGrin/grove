@@ -16,8 +16,9 @@
 # box finder was blind to, which made every relay read as landed.
 #
 # Dummy-data pattern (docs/seed-manifest.md): scratch HOME, scratch
-# GROVE_STATE_DIR, scratch remote-less repo, uniquely-named tmux session on
-# the real server (never kill-server — tmux-discipline rule 1).
+# GROVE_STATE_DIR, scratch remote-less repo, and its OWN tmux server
+# (unset TMUX + scratch TMUX_TMPDIR — tmux-discipline rule 1), with the real
+# server's session list checked before/after as a canary.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -46,13 +47,25 @@ snapshot_live() {
   true
 }
 LIVE_BEFORE="$(snapshot_live)"
+real_tmux() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR tmux list-sessions -F '#{session_name}' 2>/dev/null | sort; true; }
+REAL_TMUX_BEFORE="$(real_tmux)"
+
+# $TMUX beats TMUX_TMPDIR in tmux's socket resolution — launched from inside
+# a tmux pane, TMUX_TMPDIR alone is a silent no-op and every tmux call
+# (including cleanup's kill-server) hits the REAL server. Unset first.
+unset TMUX TMUX_PANE
+export TMUX_TMPDIR="$SCRATCH/tmux"   # isolated tmux server — never the user's
+mkdir -p "$TMUX_TMPDIR"
 
 DUMMY="$SCRATCH/repos/relaytest"
-SESSION="grove-relaytest"   # workspace label = repo dir base (grove-29 P2)
 cleanup() {
-  # Scoped kill-session on OUR uniquely named session only — a bare
-  # kill-server once took down every worker on the machine (2026-07-07).
-  tmux kill-session -t "=$SESSION" 2>/dev/null || true
+  # Scoped to the isolated server: TMUX is unset and TMUX_TMPDIR is ours.
+  # A bare kill-server once took down every worker on the machine (2026-07-07).
+  env -u TMUX TMUX_TMPDIR="$TMUX_TMPDIR" tmux kill-server 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
+    sleep 0.2
+  done
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
   rm -rf "$SCRATCH"
 }
@@ -203,6 +216,7 @@ grep -qi 'never submitted' "$SCRATCH/nudge3.out" || {
   || fail "EvAnswered was appended for a v2-chrome relay that never submitted"
 
 say "live state untouched"
+[ "$REAL_TMUX_BEFORE" = "$(real_tmux)" ] || fail "the real tmux server's session list changed"
 LIVE_AFTER="$(snapshot_live)"
 [ "$LIVE_BEFORE" = "$LIVE_AFTER" ] || { printf '%s\n---\n%s\n' "$LIVE_BEFORE" "$LIVE_AFTER"; fail "live grove/overstory state changed"; }
 
