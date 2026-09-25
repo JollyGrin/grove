@@ -178,6 +178,7 @@ func polls(max, poll time.Duration) int {
 //	           so the caller still records the event and surfaces warn.
 func PasteText(target, text string) (warn string, err error) {
 	capture := func() (string, error) { return CapturePane(target) }
+	styled := func() (string, error) { return capturePaneStyled(target) }
 	if err := waitOutCompact(target, capture, func() { time.Sleep(compactPoll) }); err != nil {
 		return "", err
 	}
@@ -205,7 +206,9 @@ func PasteText(target, text string) (warn string, err error) {
 	// bottom N ROWS, which are blank whenever the app draws from the top
 	// (caught in e2e/relay.sh — the scrape saw nothing but empty rows and
 	// called every relay landed). inputBoxContent finds the box itself.
-	if err := verifySubmit(target, text, capture, enter,
+	// Styled (-e) so pasteLanded can tell Claude's dim ghost suggestion
+	// from typed text (grove-317).
+	if err := verifySubmit(target, text, styled, enter,
 		func() { time.Sleep(submitSettle) }); err != nil {
 		return "", err
 	}
@@ -332,7 +335,7 @@ const pasteProbeRunes = 24
 // landed. Only a box that still visibly holds our text, or a pending
 // "[Pasted text]" chip, is treated as unsent.
 func pasteLanded(capture, text string) bool {
-	box := squeeze(inputBoxContent(capture))
+	box := squeeze(inputBoxContent(dropDim(capture)))
 	if box == "" {
 		return true
 	}
@@ -349,41 +352,165 @@ func pasteLanded(capture, text string) bool {
 	return !strings.Contains(box, probe)
 }
 
+// capturePaneStyled is CapturePane with -e, keeping SGR attributes so
+// dropDim can see which box text is Claude's dim ghost suggestion. Missing
+// pane reads as "" and no error, matching CapturePane.
+func capturePaneStyled(target string) (string, error) {
+	out, err := run("capture-pane", "-p", "-J", "-e", "-t", target)
+	if err != nil {
+		return "", nil
+	}
+	return out, nil
+}
+
+// dropDim turns a styled (-e) capture into plain text with every dim (SGR 2)
+// run removed. Claude Code v2.1.283 draws a ghost prompt suggestion in the
+// idle input box in dim ("❯ \x1b[2mcommit notes.txt\x1b[0m"); a plain capture
+// reads it as typed text, so a short relay ("yes") could match a ghost
+// ("yes, and push it") and a delivered answer would fail as "never
+// submitted" (grove-317). All other escape sequences are dropped; a capture
+// without escapes passes through unchanged. Dim state carries across lines,
+// as the terminal's does.
+func dropDim(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	var b strings.Builder
+	dim := false
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c != 0x1b {
+			if !dim || c == '\n' {
+				b.WriteByte(c)
+			}
+			i++
+			continue
+		}
+		if i+1 >= len(s) {
+			break
+		}
+		switch s[i+1] {
+		case '[': // CSI: params up to a final byte in 0x40–0x7e
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) && s[j] == 'm' {
+				dim = sgrDim(s[i+2:j], dim)
+			}
+			i = j + 1
+		case ']': // OSC (e.g. a hyperlink): up to BEL or ESC \
+			j := i + 2
+			for j < len(s) && s[j] != 0x07 && !(s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\') {
+				j++
+			}
+			if j < len(s) && s[j] == 0x1b {
+				j++
+			}
+			i = j + 1
+		default:
+			i += 2
+		}
+	}
+	return b.String()
+}
+
+// sgrDim applies one SGR parameter list to the dim flag: 2 sets it, 0 / an
+// empty reset / 22 clear it, and extended-colour arguments (38;5;n,
+// 38;2;r;g;b and the 48/58 twins) are skipped so their "2" never reads as
+// dim.
+func sgrDim(params string, dim bool) bool {
+	ps := strings.Split(params, ";")
+	for i := 0; i < len(ps); i++ {
+		switch ps[i] {
+		case "", "0", "22":
+			dim = false
+		case "2":
+			dim = true
+		case "38", "48", "58":
+			if i+1 < len(ps) {
+				switch ps[i+1] {
+				case "5":
+					i += 2
+				case "2":
+					i += 4
+				}
+			}
+		}
+	}
+	return dim
+}
+
 // footerSlack is how many non-box lines may sit below the input box (Claude
 // prints a hint/token line or two) before the scrape gives up looking. Bounded
 // so a box scrolled far up in the transcript is never mistaken for the input.
 const footerSlack = 6
 
-// inputBoxContent extracts the bottom-most bordered box from a pane capture —
-// Claude's input box. Tolerates a top border that has scrolled off. Returns ""
-// when no box is visible (a plain shell pane, or unfamiliar chrome).
+// inputBoxContent extracts the bottom-most input box from a pane capture —
+// Claude's input box, in either chrome (see inputBoxRange). Tolerates a top
+// border that has scrolled off. Returns "" when no box is visible (a plain
+// shell pane, or unfamiliar chrome). The unboxed chrome's "❯ " prompt and
+// its continuation indent are stripped, so an idle box reads as "".
 func inputBoxContent(capture string) string {
 	lines := strings.Split(capture, "\n")
 	start, end, ok := inputBoxRange(lines)
 	if !ok {
 		return ""
 	}
-	return strings.Join(lines[start:end+1], "\n")
+	body := lines[start : end+1]
+	if !isBoxSide(strings.TrimSpace(body[0])) { // unboxed chrome
+		out := make([]string, len(body))
+		for i, l := range body {
+			l = strings.TrimSpace(l)
+			if i == 0 {
+				l = strings.TrimSpace(strings.TrimPrefix(l, promptGlyph))
+			}
+			out[i] = l
+		}
+		body = out
+	}
+	return strings.Join(body, "\n")
 }
 
 // outsideInputBox returns the transcript ABOVE the input box — where a
 // consumed prompt is echoed (grove-186). With no box visible (plain shell
 // pane, unfamiliar chrome) the whole capture is "outside", which keeps the
-// e2e shell stubs and any future chrome working.
+// e2e shell stubs and any future chrome working. The unboxed chrome's top
+// rule is excluded along with the body.
 func outsideInputBox(capture string) string {
 	lines := strings.Split(capture, "\n")
 	start, _, ok := inputBoxRange(lines)
 	if !ok {
 		return capture
 	}
+	if start > 0 && isRule(strings.TrimSpace(lines[start-1])) {
+		start--
+	}
 	return strings.Join(lines[:start], "\n")
 }
 
-// inputBoxRange locates the bottom-most bordered box in a pane capture,
+// inputBoxRange locates the bottom-most input box in a pane capture,
 // returning its inclusive body line range. Shared by inputBoxContent (what
 // is IN the box) and outsideInputBox (what is above it) so both read the
-// same chrome the same way.
+// same chrome the same way. Two chromes:
+//
+//   - boxed (Claude Code ≤ v2.1.2xx): │ sides and a ╰/└ bottom border;
+//   - unboxed (v2.1.282+, grove-317): bare lines between two full-width ─
+//     rules, the first body line starting with "❯". Modals share the rules
+//     but not the prompt glyph on their first line, so they read as no box.
+//
+// The unboxed shape is tried first — it is the current chrome, and its
+// ❯-after-a-rule anchor is stricter than a stray │ in transcript output —
+// then the boxed one; neither found means ok=false, which callers treat
+// permissively.
 func inputBoxRange(lines []string) (start, end int, ok bool) {
+	if start, end, ok = unboxedRange(lines); ok {
+		return start, end, true
+	}
+	return boxedRange(lines)
+}
+
+func boxedRange(lines []string) (start, end int, ok bool) {
 	end, skipped := -1, 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		t := strings.TrimSpace(lines[i])
@@ -416,6 +543,64 @@ func inputBoxRange(lines []string) (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	return start, end, true
+}
+
+// unboxedRange finds the bottom-most pair of full-width rules within
+// footerSlack non-blank lines of the end whose body opens with the prompt
+// glyph. Only the bottom-most pair is considered: anything higher is
+// transcript or a modal, never the live input.
+func unboxedRange(lines []string) (start, end int, ok bool) {
+	bottom, skipped := -1, 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t == "" {
+			continue
+		}
+		if isRule(t) {
+			bottom = i
+			break
+		}
+		if skipped++; skipped > footerSlack {
+			return 0, 0, false
+		}
+	}
+	if bottom < 0 {
+		return 0, 0, false
+	}
+	top := -1
+	for i := bottom - 1; i >= 0; i-- {
+		if isRule(strings.TrimSpace(lines[i])) {
+			top = i
+			break
+		}
+	}
+	if top < 0 || bottom-top < 2 {
+		return 0, 0, false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(lines[top+1]), promptGlyph) {
+		return 0, 0, false
+	}
+	return top + 1, bottom - 1, true
+}
+
+// promptGlyph opens the first line of the unboxed input box.
+const promptGlyph = "❯"
+
+// minRuleRunes is how long a line of ─/━ must be to count as the unboxed
+// chrome's full-width rule — longer than any divider a transcript line
+// plausibly carries inline, shorter than the narrowest usable pane.
+const minRuleRunes = 20
+
+// isRule reports whether a trimmed line is nothing but a horizontal rule.
+func isRule(trimmed string) bool {
+	n := 0
+	for _, r := range trimmed {
+		if r != '─' && r != '━' {
+			return false
+		}
+		n++
+	}
+	return n >= minRuleRunes
 }
 
 func isBottomBorder(trimmed string) bool {
