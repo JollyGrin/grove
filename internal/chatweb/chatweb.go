@@ -405,20 +405,18 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 	}
 	// ValidKey, not "anything without a newline": a raw-key endpoint that
 	// takes free text is a way to type into somebody's agent while skipping
-	// the relay's verified submit. A picker needs 1–9, y/n and Esc; that is
-	// the whole list, and everything else is `send`'s job.
-	switch {
-	case ValidKey(body.Key):
-	case MenuKey(body.Key):
-		// grove-308: a menu-only key is judged against a FRESH capture,
-		// not the phone's last picker event — the menu may have closed
-		// since, and a Tab into the bare input box is not what was asked.
-		if !slices.Contains(s.backend.Picker(target).Keys, body.Key) {
-			writeErr(w, http.StatusConflict, fmt.Errorf("%q only goes into a menu that offers it, and the chat's pane shows none now", body.Key))
-			return
-		}
-	default:
+	// the relay's verified submit. A picker needs 1–9, y/n, Tab and Esc;
+	// that is the whole list, and everything else is `send`'s job.
+	if !ValidKey(body.Key) && !MenuKey(body.Key) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("%q is not a picker key — one of 1-9, y, n, esc, or tab into a menu (prose goes through /send, which verifies the submit)", body.Key))
+		return
+	}
+	// grove-308/318: every picker key is judged against a FRESH capture,
+	// not the phone's last picker event — the menu may have closed since,
+	// and a digit into the bare input box types it there. Esc alone is
+	// ungated: the stop button (grove-299) sends it mid-turn on purpose.
+	if body.Key != "esc" && !slices.Contains(s.backend.Picker(target).Keys, body.Key) {
+		writeErr(w, http.StatusConflict, fmt.Errorf("%q only goes into a picker that offers it, and the chat's pane shows none now", body.Key))
 		return
 	}
 	if err := s.backend.Keys(target, KeyLiteral(body.Key)); err != nil {

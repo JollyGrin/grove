@@ -810,10 +810,14 @@ function autosize() {
  * scrape sees it there (typing), the composer's ordinary send answers it. */
 var keyNames = { esc: 'esc', tab: 'next ⇥' };
 
+/* wasTyping: focus only on the edge into typing (grove-318) — re-focusing
+ * on every picker event re-pops the Android keyboard after each toggle. */
+var wasTyping = false;
+
 function renderKeys(p) {
   var box = el('keys');
   box.textContent = '';
-  if (!p || !p.detected) { document.body.classList.remove('picker'); return; }
+  if (!p || !p.detected) { wasTyping = false; document.body.classList.remove('picker'); return; }
   document.body.classList.add('picker');
   var label = p.prompt || 'the chat is asking something — answer with a key';
   if (p.typing) label = 'type your answer below and send — ' + label;
@@ -831,7 +835,8 @@ function renderKeys(p) {
   (p.keys || []).forEach(function (k) {
     if (!labelled[k]) keyButton(box, k, keyNames[k] || k);
   });
-  if (p.typing) el('text').focus();
+  if (p.typing && !wasTyping) el('text').focus();
+  wasTyping = !!p.typing;
 }
 
 function keyButton(box, k, text) {

@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: harden picker detection + gate every picker key
+      (grove-318, 2026-09-26, `chat-ux` train; follow-up to PR #314). The
+      unboxed rule's "Esc to cancel" now counts only in the capture's last
+      3 non-blank lines, and a `●` line or a `─` rule after the option run
+      closes it (the transcript went on, or the run is in the idle box);
+      unboxed `>` is no longer a caret. The three probes that fired —
+      echoed `❯ 1.` prompt with a reply mentioning the footer, a `> 1.`
+      list, digits typed into the idle box — are negative fixtures.
+      `/keys` now needs a fresh capture offering the key for digits, y, n
+      and tab (409 otherwise); esc stays ungated for the stop button
+      (grove-299). The composer focuses only on the edge into `typing`.
 - [x] `gv chat serve`: optimistic pending bubble + per-chat drafts
       (grove-316, 2026-09-26, `chat-ux` train). A send shows at once as a
       dimmed `sending…`/`sent ✓` bubble and the composer stays free; the

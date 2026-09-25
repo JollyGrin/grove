@@ -359,7 +359,7 @@ func TestSendRejectsEmptyAndGarbage(t *testing.T) {
 // --- keys ---
 
 func TestKeys(t *testing.T) {
-	b := &fakeBackend{}
+	b := &fakeBackend{picker: chatweb.Picker{Detected: true, Keys: []string{"1", "2", "esc"}}}
 	w := post(t, chatweb.NewServer(b), "/api/chats/grove-chat-unbrewed-1/keys", `{"key":"2"}`)
 	if w.Code != 200 || b.keyLit != "2" {
 		t.Fatalf("status %d, literal %q: %s", w.Code, b.keyLit, w.Body)
@@ -419,6 +419,39 @@ func TestKeysMenuKeyNeedsAMenuOnThePane(t *testing.T) {
 		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
 			t.Errorf("%q into a menu = %d, want 400 (a digit answers; Enter submits input boxes)", k, w.Code)
 		}
+	}
+}
+
+// grove-318: a digit is gated like tab. Into the idle input box it would
+// type itself there; into a menu it answers. Esc stays ungated — the stop
+// button sends it mid-turn, with no picker on the pane.
+func TestKeysDigitNeedsAPickerOnThePane(t *testing.T) {
+	idle := "────\n❯ \n────\n  ? for shortcuts"
+	b := &fakeBackend{picker: chatweb.DetectPicker(idle)}
+	h := chatweb.NewServer(b)
+	for _, k := range []string{"1", "y", "n"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%q into the idle box = %d, want 409: %s", k, w.Code, w.Body)
+		}
+	}
+	if b.keyTo != "" {
+		t.Fatalf("a refused key still reached the pane: %q", b.keyLit)
+	}
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"esc"}`); w.Code != 200 || b.keyLit != "\x1b" {
+		t.Errorf("esc into the idle box = %d, literal %q: esc is never gated", w.Code, b.keyLit)
+	}
+
+	single, err := os.ReadFile("testdata/cc2.1.282-single.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.picker = chatweb.DetectPicker(string(single))
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"2"}`); w.Code != 200 || b.keyLit != "2" {
+		t.Errorf("2 into a menu = %d, literal %q: %s", w.Code, b.keyLit, w.Body)
+	}
+	// A digit the menu does not offer is refused too.
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"7"}`); w.Code != http.StatusConflict {
+		t.Errorf("7 into a four-option menu = %d, want 409", w.Code)
 	}
 }
 
