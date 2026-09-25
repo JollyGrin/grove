@@ -11,6 +11,9 @@
 # Leg 2 (failure path): a stub that swallows the Enter and redraws a fake
 # Claude input box still holding the text — gv must retry, then fail loudly,
 # exit non-zero, and record NO answered event.
+# Leg 3 (grove-317): the same swallow, redrawn in Claude Code v2.1.282+'s
+# unboxed chrome (bare lines between full-width ─ rules) — the chrome the
+# box finder was blind to, which made every relay read as landed.
 #
 # Dummy-data pattern (docs/seed-manifest.md): scratch HOME, scratch
 # GROVE_STATE_DIR, scratch remote-less repo, uniquely-named tmux session on
@@ -69,6 +72,7 @@ grep -q 'kind: markdown' "$WCFG" || fail "workspace config missing markdown prov
 
 say "seed a second task for the failure leg"
 sed 's/task-001/task-002/' .grove/tasks/task-001.md > .grove/tasks/task-002.md
+sed 's/task-001/task-003/' .grove/tasks/task-001.md > .grove/tasks/task-003.md
 
 # --- the stubs: fake agents whose ONLY input is a submitted line ---
 STUBS="$SCRATCH/stubs"; mkdir -p "$STUBS"
@@ -96,7 +100,20 @@ printf '╰───────────────────────
 printf '  ? for shortcuts\n'
 sleep 300
 EOF
-chmod +x "$STUBS/reader" "$STUBS/swallow"
+# Leg 3's stub: the same swallow, drawn in the v2.1.282+ unboxed chrome.
+RULE="$(printf '─%.0s' $(seq 1 60))"
+cat > "$STUBS/swallow-v2" <<EOF
+#!/usr/bin/env bash
+touch "$SCRATCH/swallow-v2.ready"
+IFS= read -r line
+clear
+printf '%s\n' "$RULE"
+printf '❯ %s\n' "\$line"
+printf '%s\n' "$RULE"
+printf '  ⏵⏵ auto mode on (shift+tab to cycle)\n'
+sleep 300
+EOF
+chmod +x "$STUBS/reader" "$STUBS/swallow" "$STUBS/swallow-v2"
 
 wait_for() { # wait_for <file> <what>
   for _ in $(seq 1 100); do [ -e "$1" ] && return 0; sleep 0.1; done
@@ -163,8 +180,30 @@ say "an unverified submit records NOTHING (the silent-failure fix)"
 [ "$(grep -c '"type":"answered"' "$GROVE_STATE_DIR/events.jsonl")" -eq "$ANSWERED_AFTER_OK" ] \
   || fail "EvAnswered was appended for a relay that never submitted"
 
+# --- leg 3 (grove-317): the same swallow in the v2.1.282+ unboxed chrome ---
+
+say "point the worker command at the v2-chrome swallow stub"
+perl -pi -e "s|claude: .*/swallow\$|claude: $STUBS/swallow-v2|" "$WCFG"
+grep -q "claude: $STUBS/swallow-v2" "$WCFG" || fail "v2 swallow stub not wired into the workspace config"
+
+say "gv grab task-003"
+"$GV" grab task-003 > "$SCRATCH/grab3.out"
+wait_for "$SCRATCH/swallow-v2.ready" "the v2 swallow stub to start in the worker pane"
+
+say "gv nudge task-003 — unsent text in the unboxed chrome must fail loudly"
+if "$GV" nudge task-003 "this one gets swallowed too" > "$SCRATCH/nudge3.out" 2>&1; then
+  cat "$SCRATCH/nudge3.out"
+  fail "nudge reported success while the text sat unsent in the v2 input box"
+fi
+grep -qi 'never submitted' "$SCRATCH/nudge3.out" || {
+  cat "$SCRATCH/nudge3.out"
+  fail "v2 failure message does not say the relay never submitted"
+}
+[ "$(grep -c '"type":"answered"' "$GROVE_STATE_DIR/events.jsonl")" -eq "$ANSWERED_AFTER_OK" ] \
+  || fail "EvAnswered was appended for a v2-chrome relay that never submitted"
+
 say "live state untouched"
 LIVE_AFTER="$(snapshot_live)"
 [ "$LIVE_BEFORE" = "$LIVE_AFTER" ] || { printf '%s\n---\n%s\n' "$LIVE_BEFORE" "$LIVE_AFTER"; fail "live grove/overstory state changed"; }
 
-say "PASS — relay delivers and submits; a swallowed Enter fails loudly and records nothing"
+say "PASS — relay delivers and submits; a swallowed Enter fails loudly and records nothing, in both chromes"

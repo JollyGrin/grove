@@ -111,6 +111,35 @@ changes the behavior.
   [tmux-discipline](../tmux-discipline/SKILL.md) §4 for the durable-tag
   pattern.
 
+## TUI chrome (what pane scrapers see)
+
+Scraping is garnish, hooks are truth — but the relay's verified submit
+(grove-144) and uptake warning (grove-186) do read the input box, and the
+chrome has changed under us three times (spinner glyph, bottom-chrome
+height, and the box itself).
+
+- **v2.1.282+ is unboxed** (grove-317): the input box is bare lines between
+  two full-width `─` rules; the first body line starts with `❯ `,
+  continuation lines are indented two spaces; 2+ footer lines sit below
+  (cwd/branch, mode hint). No `│` sides, no `╭`/`╰` corners.
+- **Modals reuse the rules** (AskUserQuestion, permission prompts) but
+  their first body line is not `❯` (`☐ Header`, `←  ☒ Pet …`,
+  `Bash command`) — an option cursor `❯ 1. Yes` sits deeper in, never on
+  the first line. `inputBoxRange` keys on that, so a modal reads as "no
+  box" (permissive = landed).
+- **The idle box is not empty in a plain capture**: it shows a dim
+  placeholder (`❯ Try "refactor main.go"`); `capture-pane -p` drops the
+  styling. Never test for an empty box — test whether the probe or a
+  `[Pasted text #N +M lines]` chip is in it.
+- **The submitted prompt echoes as `❯ <text>` in the transcript** above
+  the box (no rules around it) — that echo is grove-186's uptake evidence.
+  `esc to interrupt` was NOT visible in the footer on v2.1.283 during a
+  running turn (auto mode showed its own hint), so the echo carries it.
+- Real captures: `internal/tmux/testdata/cc2.1.28[23]-*.txt`. Re-capture on
+  an isolated server (tmux-discipline §1; keep `TMUX_TMPDIR` short —
+  a long scratchpad path overflows the socket name) when the chrome moves
+  again.
+
 ## Costs
 
 - Transcript pricing follows ccusage's rules: dedup by

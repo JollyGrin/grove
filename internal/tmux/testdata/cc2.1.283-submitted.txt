@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   ~/git/.worktrees/grove/grove-317-tmux-relay-verified-submit-is-a · /rc
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ Reply with just the word OK and nothing else, do not use tools
+
+⏺ OK
+
+✻ Cogitated for 3s · done 12:06 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL ~/git/.worktrees/grove/grove-317-tmux-relay-verified-submit-is-a (grove-317-tmux-relay…
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

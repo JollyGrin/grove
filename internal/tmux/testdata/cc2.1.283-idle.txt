@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   ~/git/.worktrees/grove/grove-317-tmux-relay-verified-submit-is-a · /rc
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scro…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "refactor main.go"
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL ~/git/.worktrees/grove/grove-317-tmux-relay-verified-submit-is-a (grove-317-tmux-relay…
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

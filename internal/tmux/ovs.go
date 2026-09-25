@@ -354,36 +354,71 @@ func pasteLanded(capture, text string) bool {
 // so a box scrolled far up in the transcript is never mistaken for the input.
 const footerSlack = 6
 
-// inputBoxContent extracts the bottom-most bordered box from a pane capture —
-// Claude's input box. Tolerates a top border that has scrolled off. Returns ""
-// when no box is visible (a plain shell pane, or unfamiliar chrome).
+// inputBoxContent extracts the bottom-most input box from a pane capture —
+// Claude's input box, in either chrome (see inputBoxRange). Tolerates a top
+// border that has scrolled off. Returns "" when no box is visible (a plain
+// shell pane, or unfamiliar chrome). The unboxed chrome's "❯ " prompt and
+// its continuation indent are stripped, so an idle box reads as "".
 func inputBoxContent(capture string) string {
 	lines := strings.Split(capture, "\n")
 	start, end, ok := inputBoxRange(lines)
 	if !ok {
 		return ""
 	}
-	return strings.Join(lines[start:end+1], "\n")
+	body := lines[start : end+1]
+	if !isBoxSide(strings.TrimSpace(body[0])) { // unboxed chrome
+		out := make([]string, len(body))
+		for i, l := range body {
+			l = strings.TrimSpace(l)
+			if i == 0 {
+				l = strings.TrimSpace(strings.TrimPrefix(l, promptGlyph))
+			}
+			out[i] = l
+		}
+		body = out
+	}
+	return strings.Join(body, "\n")
 }
 
 // outsideInputBox returns the transcript ABOVE the input box — where a
 // consumed prompt is echoed (grove-186). With no box visible (plain shell
 // pane, unfamiliar chrome) the whole capture is "outside", which keeps the
-// e2e shell stubs and any future chrome working.
+// e2e shell stubs and any future chrome working. The unboxed chrome's top
+// rule is excluded along with the body.
 func outsideInputBox(capture string) string {
 	lines := strings.Split(capture, "\n")
 	start, _, ok := inputBoxRange(lines)
 	if !ok {
 		return capture
 	}
+	if start > 0 && isRule(strings.TrimSpace(lines[start-1])) {
+		start--
+	}
 	return strings.Join(lines[:start], "\n")
 }
 
-// inputBoxRange locates the bottom-most bordered box in a pane capture,
+// inputBoxRange locates the bottom-most input box in a pane capture,
 // returning its inclusive body line range. Shared by inputBoxContent (what
 // is IN the box) and outsideInputBox (what is above it) so both read the
-// same chrome the same way.
+// same chrome the same way. Two chromes:
+//
+//   - boxed (Claude Code ≤ v2.1.2xx): │ sides and a ╰/└ bottom border;
+//   - unboxed (v2.1.282+, grove-317): bare lines between two full-width ─
+//     rules, the first body line starting with "❯". Modals share the rules
+//     but not the prompt glyph on their first line, so they read as no box.
+//
+// The unboxed shape is tried first — it is the current chrome, and its
+// ❯-after-a-rule anchor is stricter than a stray │ in transcript output —
+// then the boxed one; neither found means ok=false, which callers treat
+// permissively.
 func inputBoxRange(lines []string) (start, end int, ok bool) {
+	if start, end, ok = unboxedRange(lines); ok {
+		return start, end, true
+	}
+	return boxedRange(lines)
+}
+
+func boxedRange(lines []string) (start, end int, ok bool) {
 	end, skipped := -1, 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		t := strings.TrimSpace(lines[i])
@@ -416,6 +451,64 @@ func inputBoxRange(lines []string) (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	return start, end, true
+}
+
+// unboxedRange finds the bottom-most pair of full-width rules within
+// footerSlack non-blank lines of the end whose body opens with the prompt
+// glyph. Only the bottom-most pair is considered: anything higher is
+// transcript or a modal, never the live input.
+func unboxedRange(lines []string) (start, end int, ok bool) {
+	bottom, skipped := -1, 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t == "" {
+			continue
+		}
+		if isRule(t) {
+			bottom = i
+			break
+		}
+		if skipped++; skipped > footerSlack {
+			return 0, 0, false
+		}
+	}
+	if bottom < 0 {
+		return 0, 0, false
+	}
+	top := -1
+	for i := bottom - 1; i >= 0; i-- {
+		if isRule(strings.TrimSpace(lines[i])) {
+			top = i
+			break
+		}
+	}
+	if top < 0 || bottom-top < 2 {
+		return 0, 0, false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(lines[top+1]), promptGlyph) {
+		return 0, 0, false
+	}
+	return top + 1, bottom - 1, true
+}
+
+// promptGlyph opens the first line of the unboxed input box.
+const promptGlyph = "❯"
+
+// minRuleRunes is how long a line of ─/━ must be to count as the unboxed
+// chrome's full-width rule — longer than any divider a transcript line
+// plausibly carries inline, shorter than the narrowest usable pane.
+const minRuleRunes = 20
+
+// isRule reports whether a trimmed line is nothing but a horizontal rule.
+func isRule(trimmed string) bool {
+	n := 0
+	for _, r := range trimmed {
+		if r != '─' && r != '━' {
+			return false
+		}
+		n++
+	}
+	return n >= minRuleRunes
 }
 
 func isBottomBorder(trimmed string) bool {
