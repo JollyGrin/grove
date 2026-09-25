@@ -9,6 +9,12 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: prose in a system sans (grove-306, 2026-09-26,
+      `chat-ux` train). `body` moves to `--sans` (system stack, no font
+      files — CSP `font-src 'self'`) at line-height 1.5; `--mono` stays on
+      `code`/`pre`, tool and steps rows, `#keys`, the composer and
+      `.row .meta`. Assistant h1/h2 get a touch of size since sans bold
+      alone reads weaker. grove-260's wide-content rules untouched.
 - [x] `gv chat serve`: entry timestamps (grove-303, 2026-09-26,
       `chat-ux` train). Client-only, off the `ts` the stream already
       carries: a `— today —` / `— yesterday —` / `— 21 Sep —` separator
