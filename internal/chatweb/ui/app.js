@@ -321,6 +321,7 @@ function screenChat(a) {
    * the stream that is about to replay decides both. */
   view.group = null;
   setWorking(false);
+  el('jump').hidden = true;
   if (!c) {
     main.append(h('div', 'empty', 'this chat is not in the current list — pull ⟳ to refresh'));
     el('footer').hidden = true;
@@ -424,7 +425,13 @@ function appendEntry(e) {
    * touches the composer. Replay lands on the same answer as live append,
    * since each entry sets it and the last one wins. */
   setWorking(!(e.role === 'assistant' && e.kind === 'text'));
+  /* Sticky readers follow the bottom silently, as always. A reader who has
+   * scrolled away gets the pill instead of a silent append below their
+   * view (grove-304) — the whole reason `stick` existed was to know when
+   * to leave them alone; this is the other half, telling them something
+   * landed while they were. */
   if (stick) main.scrollTop = main.scrollHeight;
+  else el('jump').hidden = false;
 }
 
 /* A step is the machinery of a turn rather than a thing said. tool_result
@@ -825,6 +832,22 @@ el('stop').onclick = function () {
       }, 1200);
     });
 };
+
+/* Tapping the pill jumps to the bottom and hides it; scrolling back within
+ * the stick threshold on your own does the same without a tap — either way
+ * the pill only ever means "you are not at the bottom right now" (grove-304).
+ * `auto` (instant) over `smooth` under reduced motion, per the composer's
+ * own pulse animation a few lines up in index.html. */
+el('jump').onclick = function () {
+  var main = el('main');
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  main.scrollTo({ top: main.scrollHeight, behavior: reduce ? 'auto' : 'smooth' });
+  el('jump').hidden = true;
+};
+el('main').addEventListener('scroll', function () {
+  var main = el('main');
+  if (main.scrollHeight - main.scrollTop - main.clientHeight < 120) el('jump').hidden = true;
+});
 
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
 render();
