@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: honest working indicator (grove-300, 2026-09-26,
+      `chat-ux` train). New additive SSE event `turn`
+      (`{"state","reason"?,"line"?}` — running | idle | waiting | errored |
+      stopped | unknown) from the pane read the stream already does each
+      poll (`chatweb.ClassifyTurn`); quiet states only after 3 identical
+      polls. The phone keeps its transcript heuristic but lets `turn`
+      overrule it: a message nobody answers ends as `no reply — the pane
+      may have stopped` / `…has stopped`, a dead turn as `turn errored —
+      <the pane's error line>`; composer untouched. Signal chosen over the
+      Stop hook: no hook fires for a dead pane, the API-error hook
+      (StopFailure) isn't installed, and chats aren't tracked tasks.
+      `detect.Spinning` + `detect.ErrorMarker` (moved from supervise); the
+      two garnish reads share one ≤900ms `chatReport`.
 - [x] `gv chat serve`: harden picker detection + gate every picker key
       (grove-318, 2026-09-26, `chat-ux` train; follow-up to PR #314). The
       unboxed rule's "Esc to cancel" now counts only in the capture's last

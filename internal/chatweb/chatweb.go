@@ -65,6 +65,11 @@ type Backend interface {
 	// Picker reads the chat's pane for a modal prompt. Best-effort
 	// garnish: an unreadable pane is the zero Picker, never an error.
 	Picker(target string) Picker
+	// Turn reads the chat's pane for the state of its current turn
+	// (grove-300) — ClassifyTurn over one capture. Garnish like Picker:
+	// never an error, and a chat with no pane or no claude in it is
+	// TurnStopped, not a failure.
+	Turn(target string) Turn
 	// NewChat spawns a fresh chat in a registered workspace and returns
 	// the `grove-chat-<label>-<n>` it created. profile is a model-profile
 	// name, "" for the host's own Claude — the same axis `gv orchestrator
@@ -232,11 +237,19 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 
 // --- SSE ---
 
-// handleEvents streams a chat over Server-Sent Events. Two named events:
+// handleEvents streams a chat over Server-Sent Events. Three named events
+// (plus `fault`/`eof` when the tail ends):
 //
 //	entry  — one `gv chat tail` JSONL line, forwarded BYTE FOR BYTE. The
 //	         browser parses exactly what a piped CLI would.
 //	picker — the modal state from a pane scrape, sent on change only.
+//	turn   — grove-300, additive: {"state", "reason"?, "line"?} from the
+//	         same scrape (ClassifyTurn): running | idle | waiting |
+//	         errored | stopped | unknown. Sent on change only, and a quiet
+//	         state only once it has held for turnSettle polls. It is what
+//	         ends the transcript heuristic's two lies — a message nobody
+//	         answered, a turn that died mid-tool — and it is garnish: it
+//	         never gates the composer and never means "done" (grove-205).
 //
 // `?since=N` resumes where a client left off, which is what makes a phone
 // waking from sleep cheap: it reconnects with the last seq it rendered
@@ -281,6 +294,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target str
 	defer ticker.Stop()
 	var last Picker
 	first := true
+	// Turn debounce: cand is the latest read and polls how many
+	// consecutive reads agreed with it; sent is what the phone last heard.
+	var cand, sent Turn
+	polls := 0
 	// EVERY write to w happens on this goroutine — the tail runs on its
 	// own and hands bytes over a channel — because an http.ResponseWriter
 	// is not safe for concurrent use.
@@ -310,6 +327,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, target str
 				last, first = p, false
 				raw, _ := json.Marshal(p)
 				sse(w, "picker", raw)
+			}
+			if t := s.backend.Turn(target); t == cand {
+				polls++
+			} else {
+				cand, polls = t, 1
+			}
+			if cand != sent && cand.settled(polls) {
+				sent = cand
+				raw, _ := json.Marshal(cand)
+				sse(w, "turn", raw)
 			}
 			// A comment line is the SSE keep-alive: it costs three bytes
 			// and stops an idle chat's stream from being reaped by a proxy

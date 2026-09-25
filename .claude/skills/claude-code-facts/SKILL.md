@@ -120,6 +120,12 @@ changes the behavior.
   input — a bracketed paste + Enter answers it. In a multi-select it is a
   checkbox with no input.
 - Captures: `internal/chatweb/testdata/cc2.1.282-*.txt`.
+- **Running vs idle from one capture (2.1.283, grove-300):** the spinner
+  glyph cycles `· ✢ ✳ ✶ ✻ ✽`, so match the line's SHAPE — glyph, verb
+  with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
+  the finished form. `esc to interrupt` is gone; the input caret is
+  followed by U+00A0. No hook fires when a pane dies, and an API-error end
+  fires `StopFailure` (not installed by grove) — not `Stop`.
 
 ## Profiles and config dirs
 

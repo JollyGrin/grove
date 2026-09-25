@@ -296,7 +296,7 @@ func livenessTransitions(obs Observation, mem *Memory) []state.Event {
 	// errored — immediate, no hysteresis: a marker in the pane capture
 	// means the turn is already dead, waiting out a debounce only delays
 	// the alert.
-	if reason, line, ok := detectErrorMarker(obs.Live.PaneContent); ok {
+	if reason, line, ok := detect.ErrorMarker(obs.Live.PaneContent); ok {
 		mem.forget(t.Ticket)
 		if prev == state.LivenessErrored {
 			return nil
@@ -352,31 +352,4 @@ func livenessTransitions(obs Observation, mem *Memory) []state.Event {
 			map[string]string{"from": prev})}
 	}
 	return nil
-}
-
-// detectErrorMarker scans the pane capture for the markers that mean the
-// turn already died silently — checked line by line so the reported `line`
-// is the specific matched line, not the whole capture.
-func detectErrorMarker(pane string) (reason, line string, ok bool) {
-	for l := range strings.SplitSeq(pane, "\n") {
-		switch {
-		case strings.Contains(l, "Usage limit reached"), strings.Contains(l, "Request rejected (429)"):
-			return "usage_limit", truncateRunes(l), true
-		case strings.Contains(l, "computer went to sleep"):
-			return "sleep", truncateRunes(l), true
-		case strings.Contains(l, "API Error:"):
-			return "api_error", truncateRunes(l), true
-		}
-	}
-	return "", "", false
-}
-
-// truncateRunes caps the matched line at 200 runes, rune-safe (never
-// mid-codepoint — the grove-131 class of bug).
-func truncateRunes(s string) string {
-	r := []rune(strings.TrimSpace(s))
-	if len(r) > 200 {
-		r = r[:200]
-	}
-	return string(r)
 }
