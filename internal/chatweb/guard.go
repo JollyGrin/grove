@@ -71,6 +71,7 @@ func BindWarning(bind string, port int) string {
 const ContentSecurityPolicy = "default-src 'none'; " +
 	"script-src 'self'; style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; connect-src 'self'; font-src 'self'; " +
+	"manifest-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // ContentTypeJSON is the content type every mutating request must carry.

@@ -61,6 +61,19 @@
       smooth). Plain arrow, no count — grouped steps don't map to a
       per-entry count without complicating grove-261's group logic.
 
+- [x] `gv chat serve` is installable as a PWA on Android Chrome (grove-296,
+      2026-09-25): `internal/chatweb/ui/manifest.json` (`name`/`short_name`
+      "gv chat", `start_url`/`scope` `"./"`, `display: standalone`,
+      background/theme color `#0a0f0b`) + three generated PNG icons — a
+      tree on the app's dark ground, 192, 512 and a 512 `maskable` —
+      referenced by `<link rel="manifest">` in `index.html` and cached by
+      `sw.js`'s `SHELL` for offline install. Two server-side gotchas:
+      `ContentSecurityPolicy` (guard.go) gains `manifest-src 'self'` (Chrome
+      refuses to fetch a manifest `default-src 'none'` blocks) and
+      `chatweb.go`'s asset handler sets `Content-Type: application/json`
+      explicitly on `/manifest.json` rather than trust the host's mime
+      table for `.json`. `go test ./internal/chatweb/` gains
+      `TestServesManifest`.
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package

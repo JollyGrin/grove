@@ -14,7 +14,7 @@
 'use strict';
 
 var CACHE = 'gv-chat-shell-v1';
-var SHELL = ['./', 'index.html', 'app.js', 'marked.min.js'];
+var SHELL = ['./', 'index.html', 'app.js', 'marked.min.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'icon-512-maskable.png'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).then(function () {
