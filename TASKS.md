@@ -9,6 +9,15 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: optimistic pending bubble + per-chat drafts
+      (grove-316, 2026-09-26, `chat-ux` train). A send shows at once as a
+      dimmed `sending…`/`sent ✓` bubble and the composer stays free; the
+      transcript's own `user` entry replaces it (whitespace-normalized
+      match), so it never shows twice. A failed send becomes
+      `failed — tap to retry` plus a toast. Drafts live in `localStorage`
+      under `gv-chat-draft:<addr>`, restored only for that address
+      (grove-116 holds by construction), cleared on a successful send,
+      pruned after 7 days. Client-only.
 - [x] `gv chat serve` composer: Enter inserts a newline on touch keyboards,
       only the send button sends (grove-301, 2026-09-25, `chat-ux` train).
       Gboard's Enter on a `<textarea>` is a plain Enter — there is no Shift
