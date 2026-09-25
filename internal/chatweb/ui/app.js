@@ -18,7 +18,7 @@ var el = function (id) { return document.getElementById(id); };
 /* `group` is the turn's open "N steps" row, or null when the last thing
  * rendered was prose (grove-261); `working` is the indicator's state. Both
  * are pure view state — nothing on the wire knows they exist. */
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false };
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [] };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -309,8 +309,11 @@ function screenChat(a) {
    * from the chat you just left is a message delivered to the wrong agent
    * one tap later — the exact failure the rest of this subsystem refuses
    * to risk (grove-116/78). */
-  if (view.addr !== a) el('text').value = '';
+  if (view.addr !== a) el('text').value = loadDraft(a);
   view.addr = a;
+  /* Pending bubbles belong to the transcript being wiped below; a message
+   * that did land comes back on the replay like any other entry. */
+  view.pending = [];
   var back = function () {
     location.hash = c ? '#/w/' + encodeURIComponent(c.workspace) : '#/';
   };
@@ -413,6 +416,7 @@ function appendEntry(e) {
       node.innerHTML = window.marked ? window.marked.parse(e.text || '') : '';
       if (!window.marked) node.textContent = e.text || '';
     } else {
+      settlePending(e.text);
       node = h('div', 'msg user', e.text || '');
     }
     main.append(node);
@@ -614,27 +618,16 @@ function composer(c) {
   var submit = function () {
     var body = text.value.trim();
     if (!body) return;
-    text.disabled = send.disabled = true;
-    send.textContent = 'sending…';
-    /* The reply is NOT rendered from this response — it arrives on the
-     * stream, out of the transcript, like every other entry. Sending is
-     * slow on purpose (bracketed paste, settle, a separate Enter, then a
-     * scrape proving it SUBMITTED), so the button says so. */
-    api('/api/chats/' + encodeURIComponent(addr(c)) + '/send', { text: body })
-      .then(function () {
-        text.value = '';
-        autosize();
-        /* Delivered, so the turn is running — say so now rather than
-         * waiting for the agent's first thinking block to land. The
-         * stream takes the indicator over from here. */
-        setWorking(true);
-      })
-      .catch(showError)
-      .then(function () {
-        text.disabled = send.disabled = false;
-        send.textContent = 'send';
-        text.focus();
-      });
+    /* The composer is free the moment the bubble shows: the pending
+     * bubble, not a disabled box, is what says a send is in flight. */
+    text.value = '';
+    autosize();
+    /* The draft holds this message until the send succeeds, so a failed
+     * send survives a reload too. */
+    clearTimeout(draftTimer);
+    saveDraft(addr(c), body);
+    sendPending(c, body);
+    text.focus();
   };
   send.onclick = submit;
   /* Gboard's Enter on a <textarea> is a plain Enter — there is no Shift on
@@ -650,8 +643,119 @@ function composer(c) {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); submit(); }
     };
   }
-  text.oninput = autosize;
+  text.oninput = function () {
+    autosize();
+    /* Address and value are captured NOW, so a save still pending when
+     * the operator backs out can only ever land under the chat it was
+     * typed in. */
+    var a = addr(c), v = text.value;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(function () { saveDraft(a, v); }, 400);
+  };
   autosize();
+}
+
+/* sendPending shows the operator's message at once as a dimmed bubble
+ * (grove-316): on a slow tailnet the verified-submit relay — bracketed
+ * paste, settle, a separate Enter, then a scrape proving it SUBMITTED —
+ * takes seconds, and the real entry takes longer still to come back out
+ * of the transcript. The bubble is a placeholder, never the record: the
+ * transcript's own `user` entry replaces it when it lands (settlePending),
+ * so the message never shows twice. */
+function sendPending(c, body) {
+  var node = h('div', 'msg user pending', body);
+  var status = h('div', 'status', 'sending…');
+  node.append(status);
+  var p = { norm: normText(body), node: node };
+  view.pending.push(p);
+  var main = el('main');
+  main.append(node);
+  main.scrollTop = main.scrollHeight;
+  var a = addr(c);
+  api('/api/chats/' + encodeURIComponent(a) + '/send', { text: body })
+    .then(function () {
+      status.textContent = 'sent ✓';
+      /* Only the draft that WAS this message goes; one typed since stays. */
+      if (loadDraft(a).trim() === body) saveDraft(a, '');
+      /* Delivered, so the turn is running — say so now rather than
+       * waiting for the agent's first thinking block to land. The
+       * stream takes the indicator over from here. */
+      setWorking(true);
+      /* A transcript that never echoes it back is not an error — the
+       * relay already proved the submit. After a minute the bubble just
+       * stops looking in-flight; it still matches if the entry arrives. */
+      setTimeout(function () { node.classList.remove('pending'); }, 60000);
+    }, function (e) {
+      dropPending(p);
+      node.classList.remove('pending');
+      node.classList.add('failed');
+      status.textContent = 'failed — tap to retry';
+      node.onclick = function () {
+        node.remove();
+        if (view.addr === a) sendPending(c, body);
+      };
+      showError(e);
+    });
+}
+
+/* settlePending removes the pending bubble a transcript `user` entry
+ * stands for. Text is compared whitespace-normalized; a paste can come
+ * back with its line endings or trailing space reshaped. */
+function settlePending(text) {
+  var n = normText(text);
+  for (var i = 0; i < view.pending.length; i++) {
+    if (view.pending[i].norm === n) {
+      view.pending[i].node.remove();
+      view.pending.splice(i, 1);
+      return;
+    }
+  }
+}
+
+function dropPending(p) {
+  var i = view.pending.indexOf(p);
+  if (i >= 0) view.pending.splice(i, 1);
+}
+
+function normText(s) { return (s || '').replace(/\s+/g, ' ').trim(); }
+
+/* ---------------- drafts ---------------- */
+
+/* Per-chat drafts (grove-316). Keyed by chat address, restored only for
+ * THAT address, so opening chat B can never show chat A's text — the
+ * wrong-agent rule (grove-116) holds by construction. Storage is a
+ * nicety: a private window may have none, so every touch is guarded and
+ * a failure just means no draft. */
+var DRAFT_PREFIX = 'gv-chat-draft:';
+var DRAFT_TTL_MS = 7 * 24 * 3600 * 1000;
+var draftTimer = null;
+
+function loadDraft(a) {
+  try {
+    var d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + a) || 'null');
+    return d && typeof d.text === 'string' ? d.text : '';
+  } catch (_) { return ''; }
+}
+
+function saveDraft(a, v) {
+  try {
+    if (v.trim()) localStorage.setItem(DRAFT_PREFIX + a, JSON.stringify({ text: v, at: Date.now() }));
+    else localStorage.removeItem(DRAFT_PREFIX + a);
+  } catch (_) { /* no storage — no drafts */ }
+}
+
+function pruneDrafts() {
+  try {
+    var stale = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k.indexOf(DRAFT_PREFIX) !== 0) continue;
+      var d = null;
+      try { d = JSON.parse(localStorage.getItem(k)); } catch (_) { /* unreadable: drop */ }
+      if (!d || !(Date.now() - d.at < DRAFT_TTL_MS)) stale.push(k);
+    }
+    stale.forEach(function (k) { localStorage.removeItem(k); });
+  } catch (_) { /* no storage — nothing to prune */ }
 }
 
 function isTouch() {
@@ -877,6 +981,7 @@ el('main').addEventListener('scroll', function () {
 });
 
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
+pruneDrafts();
 render();
 refresh();
 syncPolling();
