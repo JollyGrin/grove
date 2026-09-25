@@ -19,8 +19,10 @@ var el = function (id) { return document.getElementById(id); };
  * rendered was prose (grove-261); `working` is the stream heuristic's
  * guess at the turn. Both are pure view state — nothing on the wire knows
  * they exist. `turn` is the server's pane read (grove-300's `turn` event)
- * and `turnHold` the moment until which it is too old to trust. */
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0 };
+ * and `turnHold` the moment until which it is too old to trust. `day` is
+ * the local calendar day of the last prose entry that carried a time
+ * (grove-303) — what decides whether the next one needs a separator. */
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '' };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -387,6 +389,7 @@ function screenChat(a) {
   /* A fresh transcript starts with no open group and nothing running —
    * the stream that is about to replay decides both. */
   view.group = null;
+  view.day = '';
   view.turn = null;
   setWorking(false);
   el('jump').hidden = true;
@@ -421,7 +424,11 @@ function screenChat(a) {
     main.append(kept.node);
     view.maxSeq = kept.maxSeq;
     view.group = kept.group;
+    view.day = kept.day;
     view.pending = kept.pending;
+    /* A separator painted as "today" before midnight is "yesterday" now;
+     * relabel so the restore reads the same as a fresh replay would. */
+    kept.node.querySelectorAll('.day').forEach(function (d) { d.textContent = dayLabel(d.dataset.day); });
     view.turnHold = kept.turnHold;
     setWorking(kept.working);
     main.scrollTop = kept.top;
@@ -444,7 +451,7 @@ function keepChat() {
   var main = el('main');
   var entry = {
     addr: view.addr, sid: (chatByAddr(view.addr) || {}).session_id,
-    maxSeq: view.maxSeq, group: view.group, working: view.working,
+    maxSeq: view.maxSeq, group: view.group, day: view.day, working: view.working,
     pending: view.pending, turnHold: view.turnHold,
     top: main.scrollTop, jump: el('jump').hidden, node: document.createDocumentFragment(),
   };
@@ -543,6 +550,7 @@ function appendEntry(e) {
      * nothing from the server: a turn's boundary is already visible in the
      * shape of the stream. */
     view.group = null;
+    stampDay(main, e.ts);
     var node;
     if (e.role === 'assistant') {
       node = h('div', 'msg assistant');
@@ -554,6 +562,8 @@ function appendEntry(e) {
       settlePending(e.text);
       node = h('div', 'msg user', e.text || '');
     }
+    var at = clock(e.ts);
+    if (at) node.append(h('div', 'at', at));
     main.append(node);
   }
   /* "working…" is read off the shape of the stream, not off any state the
@@ -572,6 +582,55 @@ function appendEntry(e) {
    * landed while they were. */
   if (stick) main.scrollTop = main.scrollHeight;
   else el('jump').hidden = false;
+}
+
+/* ---------------- entry times (grove-303) ----------------
+ * Local time, from the browser: `ts` is RFC 3339 on the wire and null when
+ * the transcript line had none. A null renders no time and leaves `day`
+ * alone, so it can neither open a separator nor break the run of the ones
+ * around it. Only prose calls in here — a turn's steps sit inside its
+ * group and get no separator or time of their own. */
+
+/* dayKey is the local calendar day as a sortable-enough key, '' for none. */
+function dayKey(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  if (isNaN(d)) return '';
+  return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+}
+
+/* stampDay appends a separator when this prose entry's day differs from
+ * the last one rendered — including the first, so the top of a transcript
+ * says when it started. Replay, live append and a cache restore all get
+ * here with `view.day` describing what is already on screen. */
+function stampDay(main, ts) {
+  var k = dayKey(ts);
+  if (!k || k === view.day) return;
+  view.day = k;
+  var sep = h('div', 'day', dayLabel(k));
+  sep.dataset.day = k;
+  main.append(sep);
+}
+
+var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dayLabel(k) {
+  var p = k.split('-').map(Number);
+  var now = new Date();
+  var yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  var label;
+  if (k === dayKey(now)) label = 'today';
+  else if (k === dayKey(yest)) label = 'yesterday';
+  else label = p[2] + ' ' + MONTHS[p[1] - 1] + (p[0] === now.getFullYear() ? '' : ' ' + p[0]);
+  return '— ' + label + ' —';
+}
+
+/* clock is the entry's local HH:MM, '' when it has no usable time. */
+function clock(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  if (isNaN(d)) return '';
+  var two = function (n) { return (n < 10 ? '0' : '') + n; };
+  return two(d.getHours()) + ':' + two(d.getMinutes());
 }
 
 /* A step is the machinery of a turn rather than a thing said. tool_result
