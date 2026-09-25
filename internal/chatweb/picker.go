@@ -148,7 +148,9 @@ func DetectPicker(capture string) Picker {
 		if boxed && yesNoRe.MatchString(body) {
 			return Picker{Detected: true, Kind: "yesno", Keys: []string{"y", "n", "esc"}, Prompt: strings.TrimSpace(body)}
 		}
-		if m := optionRe.FindStringSubmatch(body); m != nil {
+		if m := optionRe.FindStringSubmatch(body); m != nil && (boxed || !strings.HasPrefix(m[1], ">")) {
+			// grove-318: unboxed, ">" is a markdown quote marker, not a
+			// caret — v2.1.282's modals draw ❯ only.
 			n := m[2]
 			if cur == nil || n != string(rune('1'+len(cur.opts))) {
 				// Out of sequence is not this menu — restart the run at it
@@ -187,20 +189,42 @@ func DetectPicker(capture string) Picker {
 }
 
 // modalChrome is the unboxed rule's anchor: the caret is ON an option (a
-// transcript list never has one), and the modal's own chrome surrounds it —
-// "Esc to cancel" below, or the AskUserQuestion tab bar above (its Submit
-// page has no footer).
+// transcript list never has one), nothing after the run says the
+// transcript went on, and the modal's own chrome surrounds it — "Esc to
+// cancel" as one of the capture's last few lines, or the AskUserQuestion
+// tab bar above (its Submit page has no footer).
+//
+// grove-318: the footer used to count anywhere below the run, so the
+// operator's echoed "❯ 1. … 2. …" prompt fired on a reply that merely
+// mentioned "Esc to cancel". A modal is the last thing on the pane: a ●
+// line (the transcript continuing) or a ─ rule (the idle input box's)
+// after the run means the run is not a modal.
 func modalChrome(lines []string, r *run) bool {
 	if r.caret == "" {
 		return false
 	}
 	for _, l := range lines[r.end+1:] {
-		if strings.Contains(strings.ToLower(l), "esc to cancel") {
+		if _, kind := classify(l); kind == lineRule || strings.HasPrefix(strings.TrimSpace(l), "●") {
+			return false
+		}
+	}
+	tail := 0
+	for i := len(lines) - 1; i > r.end && tail < footerLookback; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		tail++
+		if strings.Contains(strings.ToLower(lines[i]), "esc to cancel") {
 			return true
 		}
 	}
 	return tabBar(lines[:r.start])
 }
+
+// footerLookback is how many of the capture's last non-blank lines may
+// carry a modal's "Esc to cancel" footer. The v2.1.282 captures put it on
+// the very last one; the slack is for a status line drawn beneath.
+const footerLookback = 3
 
 func tabBar(lines []string) bool {
 	for _, l := range lines {

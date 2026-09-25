@@ -234,6 +234,13 @@ func TestDetectPickerV2Negatives(t *testing.T) {
 		"list while working":        "● Plan:\n  1. read\n  2. write\n\n✽ Enchanting… (4s · esc to interrupt)\n" + idleV2,
 		"digits typed into the box": strings.Replace(idleV2, "❯ \n", "❯ 1. the resolver and 2. the picker\n", 1),
 		"y/n in the transcript":     "● Shall I? (y/n)\n" + idleV2,
+		// grove-318: the three probes that fired on PR #314's rule. A reply
+		// that mentions the footer is transcript, not chrome.
+		"echoed prompt, reply mentions the footer": "❯ 1. run the gate\n  2. open the PR\n\n● Done. The footer reads Esc to cancel.\n" + idleV2,
+		"assistant list with > markers":            "● Options:\n> 1. foo\n> 2. bar\n\nEsc to cancel",
+		"digits typed into the box above the footer": strings.Replace(
+			strings.Replace(idleV2, "❯ \n", "❯ 1. a\n  2. b\n", 1),
+			"⏸ manual mode on", "⏸ Esc to cancel", 1),
 	}
 	for name, capture := range cases {
 		t.Run(name, func(t *testing.T) {
