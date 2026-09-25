@@ -20,6 +20,11 @@
       `/keys` now needs a fresh capture offering the key for digits, y, n
       and tab (409 otherwise); esc stays ungated for the stop button
       (grove-299). The composer focuses only on the edge into `typing`.
+      Follow-up: `e2e/chat.sh` moved to the new contract — a digit into a
+      bare chat pane is 409 and leaves the pane untouched, esc still goes
+      through, and a fake claude drawing a v2.1.282-style menu takes an
+      offered digit, refuses an unoffered one, and refuses again once the
+      menu has closed.
 - [x] `gv chat serve`: optimistic pending bubble + per-chat drafts
       (grove-316, 2026-09-26, `chat-ux` train). A send shows at once as a
       dimmed `sending…`/`sent ✓` bubble and the composer stays free; the

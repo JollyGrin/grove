@@ -1263,17 +1263,78 @@ remote_tmux kill-session -t '=grove-chat-servews-2' 2>/dev/null || true
 remote_tmux kill-session -t '=grove-chat-servews-3' 2>/dev/null || true
 
 say "raw keys: only a picker key, never free text"
-curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
-  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys" > /dev/null || fail "a picker key must be accepted"
+# grove-318: every picker key but esc is judged against a FRESH capture of
+# the pane, and a bare chat input box offers none — a digit there would sit
+# in the agent's prompt as typed text. So the bare pane refuses it (409)
+# and stays exactly as it was.
+remote_tmux capture-pane -p -t '=grove-chat-servews-1:chat' > "$SCRATCH/servekeys-before.txt"
+code="$(curl -s -o "$SCRATCH/servekeys.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys")"
+[ "$code" = "409" ] || { cat "$SCRATCH/servekeys.out"; fail "a digit into a bare chat pane answered $code, want 409 (no picker offers it)"; }
+grep -q 'only goes into a picker' "$SCRATCH/servekeys.out" || { cat "$SCRATCH/servekeys.out"; fail "the 409 must say why"; }
 sleep 0.5
 remote_tmux capture-pane -p -t '=grove-chat-servews-1:chat' > "$SCRATCH/servekeys.txt"
-LASTLINE="$(grep -v '^[[:space:]]*$' "$SCRATCH/servekeys.txt" | tail -1)"
-[ "$LASTLINE" = "7" ] || { cat "$SCRATCH/servekeys.txt"; fail "the raw key must sit UNSUBMITTED on the input line, got '$LASTLINE'"; }
+cmp -s "$SCRATCH/servekeys-before.txt" "$SCRATCH/servekeys.txt" \
+  || { diff "$SCRATCH/servekeys-before.txt" "$SCRATCH/servekeys.txt"; fail "a refused key must leave the pane untouched"; }
+# Esc alone is ungated: the stop button (grove-299) sends it mid-turn, when
+# no picker is on screen, on purpose.
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"esc"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys" > /dev/null || fail "esc must be accepted on a bare pane (the stop button)"
 for bad in '{"key":"gv done"}' '{"key":"\n"}' '{"key":"Enter"}'; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$bad" \
     "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys")"
   [ "$code" = "400" ] || fail "keys $bad answered $code — a raw-key endpoint must not take free text"
 done
+
+say "grove-318: a digit the pane's picker offers IS sent, and one it doesn't is refused"
+# A fake claude that draws a v2.1.282-style single-select (the shape of
+# internal/chatweb/testdata/cc2.1.282-single.txt: ❯ caret, numbered run,
+# "Esc to cancel" footer as the last line), then reads ONE raw key and
+# says what it got. Short lines, so no pane width can wrap the chrome.
+MENUWS="$SCRATCH/menuws"
+mkrepo "$MENUWS"
+( cd "$MENUWS" && "$GV" init --yes --label menuws > /dev/null )
+cat > "$SCRATCH/bin/menuclaude" <<'EOF'
+#!/usr/bin/env bash
+clear
+printf ' ☐ Fruit\n\nWhich fruit?\n\n❯ 1. Apple\n  2. Banana\n  3. Type something.\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n'
+IFS= read -rsn1 k
+clear
+printf 'picked: %s\n' "$k"
+exec sleep 3600
+EOF
+chmod +x "$SCRATCH/bin/menuclaude"
+cat >> "$MENUWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/menuclaude
+EOF
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/workspaces/menuws/new" > "$SCRATCH/new-menu.json" || { cat "$SERVE_LOG"; fail "POST new (menuws) failed"; }
+grep -q '"session":"grove-chat-menuws-1"' "$SCRATCH/new-menu.json" || { cat "$SCRATCH/new-menu.json"; fail "the menu chat did not spawn"; }
+for _ in $(seq 1 50); do
+  remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' 2>/dev/null | grep -q 'Esc to cancel' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' > "$SCRATCH/menu.pane"
+grep -q 'Esc to cancel' "$SCRATCH/menu.pane" || { cat "$SCRATCH/menu.pane"; fail "precondition: the fake menu never drew"; }
+code="$(curl -s -o "$SCRATCH/menu7.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys")"
+[ "$code" = "409" ] || { cat "$SCRATCH/menu7.out"; fail "a digit the menu does not offer answered $code, want 409"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"2"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys" > "$SCRATCH/menu2.out" \
+  || { cat "$SCRATCH/menu2.out"; remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat'; fail "a digit the menu offers must be sent"; }
+for _ in $(seq 1 30); do
+  remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' | grep -q 'picked: 2' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' > "$SCRATCH/menu-after.pane"
+grep -q 'picked: 2' "$SCRATCH/menu-after.pane" || { cat "$SCRATCH/menu-after.pane"; fail "the menu never received the digit"; }
+# The menu has closed: the same digit is now refused — the fresh-capture
+# gate, not the phone's stale picker event, decides.
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"2"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys")"
+[ "$code" = "409" ] || fail "a digit after the menu closed answered $code, want 409"
+remote_tmux kill-session -t '=grove-chat-menuws-1' 2>/dev/null || true
 
 say "POST /api/chats/<s>/resume revives an archived chat (grove-217 through HTTP)"
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
