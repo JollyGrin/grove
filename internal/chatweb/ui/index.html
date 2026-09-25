@@ -132,7 +132,21 @@ details.tool > pre { padding: 0 10px 10px; font-size: 12px; color: var(--dim); w
 details.think > summary { font-style: italic; color: var(--dimmer); }
 
 /* ---- composer ---- */
-footer { flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
+footer { position: relative; flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
+/* The jump-to-latest pill (grove-304): `appendEntry` shows it whenever an
+   entry lands while the reader has scrolled away from the bottom (`stick`
+   false, grove-261). It floats just above the composer regardless of the
+   composer's own height (working strip, keys, autosized textarea) because
+   it is anchored to footer's top edge, not to a fixed pixel offset. */
+#jump {
+  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+  margin-bottom: 10px; z-index: 5;
+  background: var(--green-deep); color: var(--bg);
+  border: 1px solid var(--green-bright); border-radius: 999px;
+  padding: 8px 18px; font-size: 13px; font-weight: 600;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+#jump[hidden] { display: none; }
 #keys { display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
 body.picker #keys { display: flex; }
 #keys .label { font-size: 11px; color: var(--amber); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -188,6 +202,7 @@ body.picker #keys { display: flex; }
   <div id="offline">not connected — showing what was last loaded</div>
   <main id="main"></main>
   <footer id="footer" hidden>
+    <button id="jump" hidden>↓ new</button>
     <div id="keys"></div>
     <div id="working" hidden><span class="pulse"></span>working…</div>
     <div id="why"></div>

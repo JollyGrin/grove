@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: jump-to-latest pill (grove-304, 2026-09-25):
+      `appendEntry` only followed the bottom while the reader was within
+      120px of it (`stick`, grove-261) — scroll up mid-turn and new entries
+      landed silently below with no way back but a long flick. A `#jump`
+      pill (`↓ new`) now sits above the composer, anchored to `footer`'s
+      top edge so it floats correctly regardless of the composer's own
+      height (working strip, keys row, autosized textarea); `appendEntry`
+      shows it on the same `!stick` branch that already skipped the
+      auto-scroll, a tap or scrolling back within the threshold hides it,
+      and the scroll respects `prefers-reduced-motion` (instant, not
+      smooth). Plain arrow, no count — grouped steps don't map to a
+      per-entry count without complicating grove-261's group logic.
+
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package
