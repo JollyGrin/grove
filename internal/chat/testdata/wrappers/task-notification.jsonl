@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-09-20T10:00:00Z","message":{"role":"user","content":"check the e2e suites"}}
+{"type":"assistant","timestamp":"2026-09-20T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"Running them in the background."}]}}
+{"type":"user","timestamp":"2026-09-20T10:03:00Z","message":{"role":"user","content":"<task-notification>\n<task-id>by681nbmt</task-id>\n<tool-use-id>toolu_017</tool-use-id>\n<output-file>/tmp/tasks/by681nbmt.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run e2e suites\" completed (exit code 0)</summary>\n</task-notification>"}}

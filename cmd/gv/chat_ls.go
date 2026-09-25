@@ -200,6 +200,17 @@ func scanProcs() []chat.Proc {
 	return chat.ParseProcs(string(out))
 }
 
+// chatLabel titles a chat by its transcript (grove-315). FirstPrompt is
+// used as-is when it is plain prose; only a prompt carrying a wrapper (a
+// caveat, a slash command, a paste) or none at all costs a second read of
+// the file's head, to find the first line that is the operator's own words.
+func chatLabel(configDir, dir string, s transcript.Session) string {
+	if s.FirstPrompt != "" && !strings.Contains(s.FirstPrompt, "<") {
+		return s.FirstPrompt
+	}
+	return chat.Label(filepath.Join(transcript.ProjectDirIn(configDir, dir), s.ID+".jsonl"), s.FirstPrompt)
+}
+
 // chatRows is the `ls` projection: records without their handles.
 func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
 	recs := chatRecords(targets, look)
@@ -338,7 +349,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		var label string
 		var lastActive time.Time
 		if s, ok := transcriptFor(sessions, id); ok {
-			label, lastActive = s.FirstPrompt, s.ModTime
+			label, lastActive = chatLabel(lp.configDir, lp.pane.Dir, s), s.ModTime
 		}
 		recs = append(recs, chatRecord{Row: chat.Live{
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
@@ -354,7 +365,9 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 					continue
 				}
 				claimed[s.ID] = true
-				recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir, ConfigDir: cfgDir})
+				row := chat.ArchivedRow(ws.Label, s)
+				row.Label = chatLabel(cfgDir, dir, s)
+				recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir})
 			}
 		}
 	}

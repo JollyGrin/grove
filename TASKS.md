@@ -18,6 +18,20 @@
       under `gv-chat-draft:<addr>`, restored only for that address
       (grove-116 holds by construction), cleared on a successful send,
       pruned after 7 days. Client-only.
+- [x] `gv chat`: clean labels + collapse harness wrappers (grove-315,
+      2026-09-26, `chat-ux` train). Claude Code writes a slash command's
+      echo, its stdout, `!` escapes and background-task notices as plain
+      `user` lines, so ~half of `gv chat ls` was titled
+      `<local-command-caveat>…` and the phone showed raw-tag "user"
+      bubbles. `internal/chat/meta.go` classifies them: `chat.Label` reads
+      the transcript head for the first prompt that is the operator's own
+      words (fallback: the first slash command), and the Projector emits
+      them as the additive `kind: "meta"` (`tool` = `command` ·
+      `task-notification` · `bash` · `bash-output` · `local-stdout`).
+      The phone renders `meta` as a dim `⌘ /model` / `⚙ …` / `$ ls` chip
+      that neither closes a step group nor flips `working…`. Kept out of
+      `internal/transcript` (ovs byte-comparable). Mac: 197 → 0 labels
+      starting with `<`.
 - [x] `gv chat serve` composer: Enter inserts a newline on touch keyboards,
       only the send button sends (grove-301, 2026-09-25, `chat-ux` train).
       Gboard's Enter on a `<textarea>` is a plain Enter — there is no Shift

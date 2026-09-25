@@ -400,6 +400,15 @@ function closeStream() {
 function appendEntry(e) {
   var main = el('main');
   var stick = main.scrollHeight - main.scrollTop - main.clientHeight < 120;
+  if (e.kind === 'meta') {
+    /* A harness wrapper (grove-315): a slash command, a `!` escape, a
+     * background task's notice. Not prose, so it neither closes the turn's
+     * group nor says anything about whether the agent is working. */
+    (view.group ? view.group.body : main).append(metaChip(e));
+    if (stick) main.scrollTop = main.scrollHeight;
+    else el('jump').hidden = false;
+    return;
+  }
   if (isStep(e)) {
     growGroup(main, e);
   } else {
@@ -481,6 +490,17 @@ function stepRow(e) {
   var head = use ? toolSummary(e.tool, e.text) : oneLine(e.text);
   node.append(h('summary', '', (use ? '▸ ' : '◂ ') + (e.tool || 'tool') + ' — ' + head));
   node.append(h('pre', '', use ? toolDetail(e.text) : (e.text || '')));
+  return node;
+}
+
+/* metaChip is a meta entry's row: a small dim chip naming the wrapper,
+ * expandable to its text. */
+var META_GLYPH = { command: '⌘', 'task-notification': '⚙', bash: '$', 'bash-output': '◂', 'local-stdout': '◂' };
+function metaChip(e) {
+  var node = h('details', 'tool meta');
+  var head = oneLine(e.text) || (e.tool === 'task-notification' ? 'background task finished' : e.tool);
+  node.append(h('summary', '', (META_GLYPH[e.tool] || '·') + ' ' + head));
+  node.append(h('pre', '', e.text || ''));
   return node;
 }
 

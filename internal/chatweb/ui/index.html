@@ -143,6 +143,9 @@ details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; f
 details.tool > summary::-webkit-details-marker { display: none; }
 details.tool > pre { padding: 0 10px 10px; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; }
 details.think > summary { font-style: italic; color: var(--dimmer); }
+details.meta { display: inline-block; max-width: 100%; background: none; border-style: dashed; }
+details.meta[open] { display: block; }
+details.meta > summary { padding: 3px 9px; font-size: 12px; color: var(--dimmer); }
 
 /* ---- composer ---- */
 footer { position: relative; flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
