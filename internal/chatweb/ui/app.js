@@ -542,6 +542,10 @@ function composer(c) {
   footer.hidden = false;
   el('why').textContent = '';
   resume.hidden = true;
+  /* `stop` reuses the same server answer as the composer gate below — a
+   * read-only row gets no stop button even mid-"working", since the server
+   * would 4xx the /keys POST anyway (grove-299). */
+  el('stop').hidden = !c.writable;
 
   /* `writable` is the server's answer and the ONLY input to this gate. */
   if (!c.writable) {
@@ -761,6 +765,31 @@ document.addEventListener('visibilitychange', function () {
 window.addEventListener('online', function () { if (isListScreen()) refresh(); });
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
 el('refresh').onclick = refresh;
+
+/* `stop` interrupts a running turn with a single Esc — the same key and the
+ * same /keys route the picker strip already uses (grove-225), just offered
+ * while the turn is running rather than only when the pane scrape sees a
+ * modal (grove-299). Exactly one Esc per tap: a second one opens Claude
+ * Code's rewind picker, which a phone would then need to dismiss, so `.busy`
+ * (shared styling with #keys) blocks re-taps for a beat after the request
+ * settles rather than for the request's own duration alone. */
+var stopBusy = false;
+el('stop').onclick = function () {
+  if (stopBusy || !view.addr) return;
+  stopBusy = true;
+  el('stop').classList.add('busy');
+  api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: 'esc' })
+    /* Optimistic: the stream corrects this back to "working…" if the turn
+     * is in fact still going (an Esc during a tool call, say). */
+    .then(function () { setWorking(false); })
+    .catch(showError)
+    .then(function () {
+      setTimeout(function () {
+        stopBusy = false;
+        el('stop').classList.remove('busy');
+      }, 1200);
+    });
+};
 
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
 render();
