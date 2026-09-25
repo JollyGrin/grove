@@ -1046,6 +1046,12 @@ grep -q 'setWorking' "$SCRATCH/app.js" \
 # It is an indicator, never a gate: the composer must not be disabled by it.
 grep -q 'setWorking(true);' "$SCRATCH/app.js" \
   || fail "sending must light the indicator before the first entry lands (grove-261)"
+# Re-opening a chat re-attaches what was rendered and resumes the stream
+# past it, rather than replaying from seq 0 (grove-297).
+grep -q 'function keepChat' "$SCRATCH/app.js" \
+  || fail "leaving a chat must keep its rendered transcript (grove-297)"
+grep -q "'?since=' + since" "$SCRATCH/app.js" \
+  || fail "a re-opened chat must open its stream with ?since= (grove-297)"
 curl -fsS "http://127.0.0.1:$PORT/marked.min.js" > "$SCRATCH/marked.js" || fail "marked.min.js is not served"
 grep -q 'marked v12.0.2' "$SCRATCH/marked.js" || fail "the vendored marked must stay pinned at v12.0.2"
 curl -fsS "http://127.0.0.1:$PORT/sw.js" > /dev/null || fail "the service worker is not served"

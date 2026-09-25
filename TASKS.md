@@ -9,6 +9,14 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: re-opening a chat no longer replays it from seq 0
+      (grove-297, 2026-09-26, `chat-ux` train). Client-only: leaving a
+      chat moves its rendered nodes into a 3-deep cache with maxSeq,
+      group, working, pending bubbles, turnHold, scroll offset and pill
+      state; re-opening re-attaches them and opens the stream with
+      `?since=<maxSeq>`. `turn` is dropped (the new stream re-sends a
+      fresh read). Invalidated on revive, on spawn, and when the
+      address's session_id changed. `sw.js` untouched.
 - [x] `gv chat serve`: honest working indicator (grove-300, 2026-09-26,
       `chat-ux` train). New additive SSE event `turn`
       (`{"state","reason"?,"line"?}` — running | idle | waiting | errored |

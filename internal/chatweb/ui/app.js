@@ -26,6 +26,13 @@ var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: 
  * refocus cannot stack fetches, and the signature of what is currently
  * painted. */
 var poll = { timer: null, inflight: false, sig: null };
+/* The last few chats left, kept rendered (grove-297): without this, every
+ * trip back into a chat replayed its whole transcript from seq 0 — a long
+ * orchestrator chat re-parsed hundreds of markdown blocks and scrolled the
+ * reader through all of it. Newest last; CHAT_CACHE bounds the DOM held
+ * off screen. */
+var chatCache = [];
+var CHAT_CACHE = 3;
 var POLL_MS = 5000;
 
 /* ---------------- transport ---------------- */
@@ -267,6 +274,7 @@ function spawnChat(label, profile, add) {
   if (profile) body.profile = profile;
   return api('/api/workspaces/' + encodeURIComponent(label) + '/new', body)
     .then(function (j) {
+      if (j.session) forgetChat(j.session);
       return loadChats().then(function () {
         location.hash = j.session ? '#/c/' + encodeURIComponent(j.session) : '#/w/' + encodeURIComponent(label);
         if (!j.session) render();
@@ -363,7 +371,8 @@ function screenChat(a) {
   if (view.addr !== a) el('text').value = loadDraft(a);
   view.addr = a;
   /* Pending bubbles belong to the transcript being wiped below; a message
-   * that did land comes back on the replay like any other entry. */
+   * that did land comes back on the replay like any other entry. A cached
+   * transcript brings its own back further down. */
   view.pending = [];
   var back = function () {
     location.hash = c ? '#/w/' + encodeURIComponent(c.workspace) : '#/';
@@ -400,20 +409,75 @@ function screenChat(a) {
         : 'no session id — nothing to read here'));
     return;
   }
+  var kept = takeChat(a);
+  /* Same address, different conversation (restarted at the desk, say):
+   * resuming at the old seq would silently skip the new one's start. */
+  if (kept && kept.sid !== c.session_id) kept = null;
+  if (kept) {
+    /* Re-attach what was rendered and ask only for what landed since. The
+     * stream's first picker and turn events are fresh reads, so the cached
+     * `turn` is dropped rather than trusted (turnHold, a send's own clock,
+     * rides along). The seq guard makes any overlap harmless. */
+    main.append(kept.node);
+    view.maxSeq = kept.maxSeq;
+    view.group = kept.group;
+    view.pending = kept.pending;
+    view.turnHold = kept.turnHold;
+    setWorking(kept.working);
+    main.scrollTop = kept.top;
+    el('jump').hidden = kept.jump;
+    openStream(a, view.maxSeq);
+    return;
+  }
   view.maxSeq = 0;
-  openStream(a);
+  view.turnHold = 0;
+  openStream(a, 0);
 }
+
+/* keepChat moves the open chat's rendered transcript off screen along with
+ * every piece of view state that describes it, so re-opening it is a
+ * re-attach plus a `?since=` stream rather than a replay. Only a chat with
+ * a live stream is kept: the no-session and not-in-list screens are one
+ * line each and have nothing to resume. */
+function keepChat() {
+  if (!view.es || !view.addr) return;
+  var main = el('main');
+  var entry = {
+    addr: view.addr, sid: (chatByAddr(view.addr) || {}).session_id,
+    maxSeq: view.maxSeq, group: view.group, working: view.working,
+    pending: view.pending, turnHold: view.turnHold,
+    top: main.scrollTop, jump: el('jump').hidden, node: document.createDocumentFragment(),
+  };
+  /* Moving the nodes (not cloning them) keeps `group` and the pending
+   * bubbles pointing at the very elements they update. */
+  while (main.firstChild) entry.node.append(main.firstChild);
+  forgetChat(view.addr);
+  chatCache.push(entry);
+  if (chatCache.length > CHAT_CACHE) chatCache.shift();
+}
+
+function takeChat(a) {
+  for (var i = 0; i < chatCache.length; i++) {
+    if (chatCache[i].addr === a) return chatCache.splice(i, 1)[0];
+  }
+  return null;
+}
+
+/* forgetChat drops a kept transcript that no longer describes the chat at
+ * that address: a revive or a spawn starts a new conversation there. */
+function forgetChat(a) { takeChat(a); }
 
 /* openStream replays the transcript and then follows it. Replay and live
  * append come down ONE stream, so there is no seam to get wrong. The
  * reconnect a phone waking up or a tailnet blip forces is the browser's
  * own: every entry arrives stamped `id: <seq>`, so EventSource replays that
  * back as Last-Event-ID and the server resumes past it (grove-259) — no URL
- * to rewrite here. The seq check below makes a duplicate replay harmless
- * either way. */
-function openStream(a) {
+ * to rewrite for that. `since` is the other entry point: a chat re-opened
+ * from the cache resumes past what it kept (grove-297). The seq check
+ * below makes a duplicate replay harmless either way. */
+function openStream(a, since) {
   closeStream();
-  var es = new EventSource('/api/chats/' + encodeURIComponent(a) + '/events');
+  var es = new EventSource('/api/chats/' + encodeURIComponent(a) + '/events' + (since ? '?since=' + since : ''));
   view.es = es;
   es.addEventListener('entry', function (ev) {
     var e;
@@ -722,6 +786,13 @@ function composer(c) {
         resume.textContent = 'reviving…';
         api('/api/chats/' + encodeURIComponent(addr(c)) + '/resume', {})
           .then(function (j) {
+            /* A revived chat is a new session: neither the archived
+             * transcript on screen nor any kept copy may be resumed into
+             * it. Closing the stream first is what stops render() from
+             * keeping the one on screen. */
+            closeStream();
+            forgetChat(addr(c));
+            if (j.session) forgetChat(j.session);
             return loadChats().then(function () {
               location.hash = '#/c/' + encodeURIComponent(j.session || addr(c));
               render();
@@ -800,8 +871,15 @@ function sendPending(c, body) {
       /* Delivered, so the turn is running — say so now rather than
        * waiting for the agent's first thinking block to land. The
        * stream takes the indicator over from here. */
-      holdTurn();
-      setWorking(true);
+      if (view.es && view.addr === a) {
+        holdTurn();
+        setWorking(true);
+      } else {
+        /* The reader left before the relay answered: mark the kept copy,
+         * so re-opening it does not claim nothing is running. */
+        var kept = chatCache.filter(function (k) { return k.addr === a; })[0];
+        if (kept) { kept.working = true; kept.turnHold = Date.now() + TURN_HOLD; }
+      }
       /* A transcript that never echoes it back is not an error — the
        * relay already proved the submit. After a minute the bubble just
        * stops looking in-flight; it still matches if the entry arrives. */
@@ -955,6 +1033,7 @@ function keyButton(box, k, text) {
 /* ---------------- routing ---------------- */
 
 function render() {
+  keepChat();
   closeStream();
   closeSheet();
   var parts = (location.hash || '#/').slice(1).split('/');
@@ -1059,9 +1138,8 @@ document.addEventListener('visibilitychange', function () {
   refreshList();
 });
 /* Regaining the network refreshes the LISTS. A chat screen is deliberately
- * left alone: re-rendering it wipes the transcript and re-opens the stream
- * from seq 0, which is the full replay the SSE resume exists to avoid
- * (grove-259). Its EventSource reconnects on its own, carrying
+ * left alone: re-rendering it would tear down a stream that is already
+ * resuming on its own (grove-259). Its EventSource reconnects on its own, carrying
  * Last-Event-ID, and onopen clears the offline class when it lands. */
 window.addEventListener('online', function () { if (isListScreen()) refresh(); });
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
