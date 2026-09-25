@@ -26,6 +26,22 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-26 · A one-shot pane capture reads a RUNNING Claude Code
+  2.1.283 turn as idle on about half its frames** (grove-300). The
+  spinner glyph cycles `· ✢ ✳ ✶ ✻ ✽` frame by frame, and the stats'
+  `thinking/thought` suffix comes and goes, so `classifyPaneOutput`'s ✢/✽
+  + stats checks miss e.g. `✶ Crunching… (2m 41s · ↓ 14.1k tokens)` and
+  fall through to idle on the prompt + hints below (the `Detector` hides
+  this behind its hash-change upgrade; a stateless read can't). The
+  stable marker is the SHAPE: glyph, a verb with `…`, then `(<digit>` —
+  `detect.Spinning`. The finished form is `✻ Baked for 55s · done 12:13
+  AM` (no ellipsis, no parens). `esc to interrupt` no longer shows at
+  all, so it now matches only as text the operator TYPED into the box —
+  and the input caret is followed by U+00A0, not a space. Also: Claude
+  Code 2.1.283 has a `StopFailure` hook event (turn ended by an API
+  error); grove doesn't install it — the upgrade path if the pane read
+  ever proves too weak for `turn errored`.
+
 - **2026-09-25 · Claude Code v2.1.282 draws its modals with NO │ box —
   so grove-218's picker detector had silently stopped firing on
   everything** (grove-308). Captured live in a scratch tmux server

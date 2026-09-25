@@ -1,0 +1,59 @@
+      299 +        if reason, line, ok := detect.ErrorMarker(obs.Live.PaneContent); ok {
+      300                  mem.forget(t.Ticket)
+      301                  if prev == state.LivenessErrored {
+      302                          return nil
+     ...
+      353          }
+      354          return nil
+      355  }
+      356 -
+      357 -// detectErrorMarker scans the pane capture for the markers that mean the
+      358 -// turn already died silently — checked line by line so the reported `line`
+      359 -// is the specific matched line, not the whole capture.
+      360 -func detectErrorMarker(pane string) (reason, line string, ok bool) {
+      361 -        for l := range strings.SplitSeq(pane, "\n") {
+      362 -                switch {
+      363 -                case strings.Contains(l, "Usage limit reached"), strings.Contains(l, "Request rejected (429)"):
+      364 -                        return "usage_limit", truncateRunes(l), true
+      365 -                case strings.Contains(l, "computer went to sleep"):
+      366 -                        return "sleep", truncateRunes(l), true
+      367 -                case strings.Contains(l, "API Error:"):
+      368 -                        return "api_error", truncateRunes(l), true
+      369 -                }
+      370 -        }
+      371 -        return "", "", false
+      372 -}
+      373 -
+      374 -// truncateRunes caps the matched line at 200 runes, rune-safe (never
+      375 -// mid-codepoint — the grove-131 class of bug).
+      376 -func truncateRunes(s string) string {
+      377 -        r := []rune(strings.TrimSpace(s))
+      378 -        if len(r) > 200 {
+      379 -                r = r[:200]
+      380 -        }
+      381 -        return string(r)
+      382 -}
+
+  Ran 3 shell commands
+
+⏺ The live pane shows a ✶ spinner, which classifyPaneOutput doesn't match; it only caught busy here via the "thought for" stats.
+  Sampling more frames to get a reliable running marker.
+
+  Ran 4 shell commands
+
+⏺ Found real shapes: active spinner ✶ Crunching… (2m 41s · …) vs finished ✻ Baked for 55s · done. Saving live captures as test
+  fixtures.
+
+⏺ Running 1 shell command…
+  ⎿  $ cd /Users/grins/git/.worktrees/grove/grove-300-gv-chat-serve-honest-working/internal/chatweb/testdata && trim(){ sed -e :a -e
+     '/^\n*$/{$d;N;ba' -e '}'; }; tmux capture-pane -p -t %51 | trim > cc2.1.283-running.txt; tmux capture-pane -p -t %12 | trim >
+     cc2.1.283-idle.txt; tmux capture-pane -p -t %…
+
+✢ Crunching… (3m 6s · ↓ 16.0k tokens)
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL ~/git/.worktrees/grove/grove-300-gv-chat-serve-honest-working (grove-300-gv-chat-serve-honest-working) Opus 5.5 ctx:10%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents

@@ -55,6 +55,11 @@ func findChat(target string) (chatRecord, error) {
 	if err != nil {
 		return chatRecord{}, err
 	}
+	return matchChat(recs, target)
+}
+
+// matchChat is findChat's second half: chat.Match over a report's rows.
+func matchChat(recs []chatRecord, target string) (chatRecord, error) {
 	rows := make([]chat.Row, len(recs))
 	for i, r := range recs {
 		rows[i] = r.Row

@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -164,7 +165,7 @@ func (chatBackend) Keys(target, literal string) error {
 // is not writable, a tmux that has gone away all mean "no picker", because
 // a failed scrape must never look like a modal the operator should answer.
 func (chatBackend) Picker(target string) chatweb.Picker {
-	rec, err := findChat(target)
+	rec, err := paneRead.find(target)
 	if err != nil || rec.Pane == "" || !rec.Row.Writable {
 		return chatweb.Picker{}
 	}
@@ -173,6 +174,58 @@ func (chatBackend) Picker(target string) chatweb.Picker {
 		return chatweb.Picker{}
 	}
 	return chatweb.DetectPicker(capture)
+}
+
+// Turn is the pane read behind the phone's "working…" strip (grove-300).
+// Unlike Picker it reads read-only rows too — the cockpit's orchestrator
+// can be watched from the phone, and its turn state is as honest as any.
+// Every failure to read is TurnStopped or TurnUnknown, never an error: a
+// chat whose pane is gone has, truthfully, stopped.
+func (chatBackend) Turn(target string) chatweb.Turn {
+	rec, err := paneRead.find(target)
+	if err != nil {
+		return chatweb.Turn{State: chatweb.TurnUnknown}
+	}
+	if rec.Pane == "" || !rec.Row.Busy {
+		return chatweb.ClassifyTurn("", false)
+	}
+	capture, err := tmux.CapturePane(rec.Pane)
+	if err != nil {
+		return chatweb.Turn{State: chatweb.TurnUnknown}
+	}
+	return chatweb.ClassifyTurn(capture, true)
+}
+
+// paneRead shares one chatReport between a stream tick's two pane reads.
+// Picker and Turn both run every StreamPoll on every open stream, and a
+// report is ~1s of registry + identity work — two per tick would be most of
+// a core per watching phone (grove-300). The TTL is under one poll, so a
+// tick never sees a report older than the previous tick's. Only the PANE
+// RESOLUTION is shared — every caller still takes its own fresh capture, so
+// handleKeys' fresh-capture gate (grove-318) holds. Send, Keys and every
+// CLI verb still resolve through findChat.
+var paneRead = &reportCache{ttl: 900 * time.Millisecond}
+
+type reportCache struct {
+	mu   sync.Mutex
+	ttl  time.Duration
+	at   time.Time
+	recs []chatRecord
+	err  error
+}
+
+func (c *reportCache) find(target string) (chatRecord, error) {
+	c.mu.Lock()
+	if time.Since(c.at) > c.ttl {
+		c.recs, c.err = chatReport()
+		c.at = time.Now()
+	}
+	recs, err := c.recs, c.err
+	c.mu.Unlock()
+	if err != nil {
+		return chatRecord{}, err
+	}
+	return matchChat(recs, target)
 }
 
 // NewChat is `+ New chat` on the phone. profile is a model-profile name

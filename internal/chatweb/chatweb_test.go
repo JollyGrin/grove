@@ -37,6 +37,8 @@ type fakeBackend struct {
 	closeErr                   error
 	closed                     string
 	picker                     chatweb.Picker
+	turns                      []chatweb.Turn // one per Turn call; the last repeats
+	turnCalls                  int
 	newSession                 string
 	profiles                   []string
 	profilesErr                error
@@ -91,6 +93,17 @@ func (f *fakeBackend) Keys(target, literal string) error {
 }
 
 func (f *fakeBackend) Picker(string) chatweb.Picker { return f.picker }
+
+func (f *fakeBackend) Turn(string) chatweb.Turn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.turns) == 0 {
+		return chatweb.Turn{State: chatweb.TurnUnknown}
+	}
+	i := min(f.turnCalls, len(f.turns)-1)
+	f.turnCalls++
+	return f.turns[i]
+}
 
 func (f *fakeBackend) NewChat(label, profile string) (string, error) {
 	f.spawned, f.spawnProfile = label, profile

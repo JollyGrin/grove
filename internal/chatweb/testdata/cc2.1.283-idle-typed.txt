@@ -1,0 +1,59 @@
+  ⎿  Updated TASKS.md (+7 -0)
+       9
+      10  ## Now (2026-07-12)
+      11
+      12 +- [x] tmux relay: verified submit reads Claude Code v2.1.282+'s unboxed
+      13 +      input box (grove-317, 2026-09-26). `inputBoxRange` now finds the
+      14 +      bottom-most `─` rule pair whose body opens with `❯` (boxed chrome
+      15 +      kept as fallback); `inputBoxContent` strips the prompt glyph,
+      16 +      `outsideInputBox` excludes the box + its top rule. Real captures in
+      17 +      `internal/tmux/testdata/`; `e2e/relay.sh` leg 3 swallows in v2
+      18 +      chrome.
+      19  - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
+      20        raw `/v1/messages` or agentic `claude -p --bare`, prints only the
+      21        answer (grove-288, 2026-09-07). New `internal/sub/` package
+  ⎿  1 skill available
+
+⏺ Gate green. Running e2e/all.sh now.
+
+  Created PR #323, ran 1 shell command
+
+⏺ I've opened PR #323. Relays into Claude Code's new input box are now checked properly again: a paste that sits unsent there now fails
+  loudly instead of reporting "sent". The unit tests, the full e2e/all.sh run (including the hostile-conf runs), go build/vet/test and
+  gofmt all pass.
+
+  - The fix: the box finder in internal/tmux/ovs.go now recognises the new box shape: the bottom pair of full-width ─ lines near the
+    end of the pane, where the first line inside starts with ❯. It tries this shape before the old │/╰ one, which still works for older
+    Claude Code. Text sitting in the box no longer counts as delivered.
+  - Popups are safe: question pickers and permission prompts use the same full-width ─ lines. Their first line doesn't start with ❯, so
+    they're not mistaken for the input box and relays to them still count as delivered.
+  - Fixtures: I captured real screens from Claude Code 2.1.283 in an isolated tmux server (idle box, unsent text, a [Pasted text #1 +6
+    lines] chip, a running turn, a submitted prompt). I also added two 2.1.282 popup captures from the chat-ux branch. The new tests
+    check the cases you listed: unsent text and a pasted-text chip read as not delivered, an idle box as delivered, and text still in
+    the box is not counted as picked up.
+  - e2e/relay.sh: the fake claude now also draws the new box, in a third test leg. With the old code in place that leg fails (✓ sent to
+    task-003); with the fix it passes.
+  - Docs: added a dated LEARNINGS.md entry, a TASKS.md row, and a new "TUI chrome" section in the claude-code-facts skill. That skill
+    had no section on how the Claude Code screen is drawn, so I created one.
+
+  Two things I found while capturing:
+  - The idle box isn't empty in a plain capture. It shows a greyed-out suggestion (Try "refactor main.go") that looks like typed text.
+    It does no harm here, because the check looks for the relayed text itself rather than an empty box.
+  - esc to interrupt didn't show during a running turn on 2.1.283. That text is one of the two signals the grove-186 warning uses to
+    see that a message was picked up. The other signal, the sent text appearing above the box, still works, so the warning holds up for
+    now. It's worth its own ticket before that signal becomes the only one.
+
+  STATUS: DONE — Relay verification now recognises Claude Code 2.1.282+'s input box (full-width ─ lines, first line ❯), so text left
+  unsent in it fails loudly instead of reporting "sent", and text still in the box no longer counts as picked up. The old box shape is
+  still supported, question and permission popups still read as delivered, and "no box found counts as delivered" remains only for
+  unknown layouts. Checked with real 2.1.283 captures in internal/tmux/testdata/ plus unit tests, and a new e2e/relay.sh leg drawing
+  the new box that fails on the old code and passes with the fix. go build/vet/test and gofmt are clean, and e2e/all.sh passes.
+  LEARNINGS, TASKS and the claude-code-facts skill are updated; PR #323 closes #317 and the issue is relabelled in-review.
+
+✻ Churned for 8m 31s · done 12:13 AM
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ file a ticket for the esc to interrupt gap
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL ~/git/.worktrees/grove/grove-317-tmux-relay-verified-submit-is-a (grove-317-tmux-relay-verified-submit-is-a) Opus 5.5 ctx…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #323 · ← for agents

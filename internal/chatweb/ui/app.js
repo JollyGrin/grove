@@ -16,9 +16,11 @@
 
 var el = function (id) { return document.getElementById(id); };
 /* `group` is the turn's open "N steps" row, or null when the last thing
- * rendered was prose (grove-261); `working` is the indicator's state. Both
- * are pure view state — nothing on the wire knows they exist. */
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [] };
+ * rendered was prose (grove-261); `working` is the stream heuristic's
+ * guess at the turn. Both are pure view state — nothing on the wire knows
+ * they exist. `turn` is the server's pane read (grove-300's `turn` event)
+ * and `turnHold` the moment until which it is too old to trust. */
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0 };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -376,6 +378,7 @@ function screenChat(a) {
   /* A fresh transcript starts with no open group and nothing running —
    * the stream that is about to replay decides both. */
   view.group = null;
+  view.turn = null;
   setWorking(false);
   el('jump').hidden = true;
   if (!c) {
@@ -423,6 +426,12 @@ function openStream(a) {
     var p;
     try { p = JSON.parse(ev.data); } catch (_) { return; }
     renderKeys(p);
+  });
+  es.addEventListener('turn', function (ev) {
+    var t;
+    try { t = JSON.parse(ev.data); } catch (_) { return; }
+    view.turn = t;
+    renderWorking();
   });
   es.addEventListener('fault', function (ev) {
     var msg = '';
@@ -487,8 +496,9 @@ function appendEntry(e) {
    * server keeps: anything that is not the agent's prose means the turn is
    * still going, and the prose is what ends it. Garnish, so it is wrong in
    * the cases a heuristic is wrong (a turn that died mid-tool, a chat left
-   * on the operator's last message) — which is exactly why it never
-   * touches the composer. Replay lands on the same answer as live append,
+   * on the operator's last message) — the server's `turn` event overrules
+   * it there (renderWorking, grove-300) — and it never touches the
+   * composer. Replay lands on the same answer as live append,
    * since each entry sets it and the last one wins. */
   setWorking(!(e.role === 'assistant' && e.kind === 'text'));
   /* Sticky readers follow the bottom silently, as always. A reader who has
@@ -639,7 +649,44 @@ function parseInput(text) {
  * is how the desk works too. */
 function setWorking(on) {
   view.working = !!on;
-  el('working').hidden = !on;
+  renderWorking();
+}
+
+/* renderWorking reconciles the stream heuristic with the server's pane
+ * read (grove-300). The heuristic alone lies forever when a message is
+ * never answered or a turn dies mid-tool — nothing more ever lands in the
+ * transcript to correct it. The `turn` event is what ends those lies:
+ *
+ *   running           — the spinner is up: working…, whatever the stream says
+ *   idle / stopped    — nobody is answering: say so, if we claimed working
+ *   errored           — the turn died: say so, with the pane's error line
+ *   waiting           — a modal holds the turn; the picker row speaks
+ *   unknown / nothing — keep the heuristic
+ *
+ * A read older than the last send is stale (the pane has not caught up
+ * yet), so it is ignored until turnHold passes. Garnish still: none of
+ * this touches the composer, and none of it means "done" (grove-205). */
+var TURN_HOLD = 8000;
+function renderWorking() {
+  var t = view.turn && Date.now() >= view.turnHold ? view.turn : null;
+  var state = t ? t.state : '';
+  var on = view.working, note = '';
+  if (state === 'running') on = true;
+  else if (state === 'waiting') on = false;
+  else if (on && state === 'errored') note = 'turn errored' + (t.line ? ' — ' + t.line : '');
+  else if (on && state === 'idle') note = 'no reply — the pane may have stopped';
+  else if (on && state === 'stopped') note = 'no reply — the pane has stopped';
+  var w = el('working');
+  w.hidden = !on;
+  w.classList.toggle('fault', !!note);
+  el('wtext').textContent = note || 'working…';
+}
+
+/* A fresh send or stop makes the last pane read stale: ignore it until the
+ * pane has had time to show the new turn (or its absence). */
+function holdTurn() {
+  view.turnHold = Date.now() + TURN_HOLD;
+  setTimeout(renderWorking, TURN_HOLD + 50);
 }
 
 function oneLine(s) {
@@ -753,6 +800,7 @@ function sendPending(c, body) {
       /* Delivered, so the turn is running — say so now rather than
        * waiting for the agent's first thinking block to land. The
        * stream takes the indicator over from here. */
+      holdTurn();
       setWorking(true);
       /* A transcript that never echoes it back is not an error — the
        * relay already proved the submit. After a minute the bubble just
@@ -1041,7 +1089,7 @@ el('stop').onclick = function () {
   api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: 'esc' })
     /* Optimistic: the stream corrects this back to "working…" if the turn
      * is in fact still going (an Esc during a tool call, say). */
-    .then(function () { setWorking(false); })
+    .then(function () { holdTurn(); setWorking(false); })
     .catch(showError)
     .then(function () {
       setTimeout(function () {

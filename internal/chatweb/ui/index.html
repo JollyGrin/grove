@@ -186,6 +186,13 @@ body.picker #keys { display: flex; }
 #working .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 1.3s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { #working .pulse { animation: none; opacity: .8; } }
+/* grove-300: the pane says nobody is answering (or the turn errored), so
+   the strip stops pulsing and says what happened instead. Stop has nothing
+   left to stop. The composer is untouched either way. */
+#working.fault { color: var(--amber); }
+#working.fault .pulse { animation: none; background: var(--amber); opacity: 1; }
+#working.fault #stop { display: none; }
+#wtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* `stop` sends a single Esc (grove-299) — the same key the picker strip
    already sends via /keys, just reachable while a turn is running rather
    than only when the pane scrape sees a modal. Hidden on read-only rows;
@@ -236,7 +243,7 @@ body.picker #keys { display: flex; }
   <footer id="footer" hidden>
     <button id="jump" hidden>↓ new</button>
     <div id="keys"></div>
-    <div id="working" hidden><span class="pulse"></span>working…<button id="stop" hidden>stop</button></div>
+    <div id="working" hidden><span class="pulse"></span><span id="wtext">working…</span><button id="stop" hidden>stop</button></div>
     <div id="why"></div>
     <div class="compose">
       <textarea id="text" rows="1" placeholder="message this chat…" enterkeyhint="send"></textarea>
