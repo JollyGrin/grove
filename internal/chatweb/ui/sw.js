@@ -47,3 +47,22 @@ self.addEventListener('fetch', function (e) {
     })
   );
 });
+
+/* A tapped notification (grove-305) opens the chat it was about: focus an
+ * open window of the app and tell it which chat, or open one at that hash.
+ * The page sets its own hash — a service worker cannot change a client's
+ * fragment without reloading it. */
+self.addEventListener('notificationclick', function (e) {
+  e.notification.close();
+  var hash = (e.notification.data && e.notification.data.hash) || '';
+  if (hash.indexOf('#/c/') !== 0) hash = '';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+    for (var i = 0; i < list.length; i++) {
+      if ('focus' in list[i]) {
+        list[i].postMessage({ gvChatNav: hash });
+        return list[i].focus();
+      }
+    }
+    return self.clients.openWindow(new URL('./' + hash, self.registration.scope).href);
+  }));
+});

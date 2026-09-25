@@ -9,6 +9,21 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: page-side notifications + app badge (grove-305,
+      2026-09-26, `chat-ux` train; no server push). A 🔕/🔔 header toggle
+      requests `Notification` permission; off by default, persisted per
+      device in `localStorage` (`gv-chat:notify`). With it on and the page
+      not visible, a turn end (the SHOWN working → idle edge in
+      `renderWorking`, i.e. heuristic + `turn` event reconciled, via
+      `onTurnEnd()`; capped at one per transcript seq so the send hold's
+      flicker cannot double it) and the edge into a `detected` picker
+      post a notification tagged by address; the picker also vibrates. The
+      service worker's `showNotification` is the Android path and its
+      `notificationclick` focuses the app on `#/c/<addr>`. The app badge
+      counts chats waiting on a picker. Replay alerts nothing: the stream
+      only goes live 1.5 s after open with no entry, which also covers a
+      cache restore's `?since=` catch-up (grove-297) and the first
+      turn/picker reads.
 - [x] `gv chat serve`: prose in a system sans (grove-306, 2026-09-26,
       `chat-ux` train). `body` moves to `--sans` (system stack, no font
       files — CSP `font-src 'self'`) at line-height 1.5; `--mono` stays on
