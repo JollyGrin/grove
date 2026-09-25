@@ -700,16 +700,25 @@ function sendPending(c, body) {
 
 /* settlePending removes the pending bubble a transcript `user` entry
  * stands for. Text is compared whitespace-normalized; a paste can come
- * back with its line endings or trailing space reshaped. */
+ * back with its line endings or trailing space reshaped. Failing an exact
+ * match, the oldest bubble whose text is CONTAINED in the entry's (tags
+ * stripped) settles: the transcript may store a bracketed paste wrapped
+ * in a <pasted_content …> tag, and an unmatched bubble would sit beside
+ * the real entry forever. */
 function settlePending(text) {
-  var n = normText(text);
-  for (var i = 0; i < view.pending.length; i++) {
-    if (view.pending[i].norm === n) {
-      view.pending[i].node.remove();
-      view.pending.splice(i, 1);
-      return;
-    }
+  var n = normText(text), i;
+  for (i = 0; i < view.pending.length; i++) {
+    if (view.pending[i].norm === n) return settleAt(i);
   }
+  var bare = normText((text || '').replace(/<[^>]*>/g, ' '));
+  for (i = 0; i < view.pending.length; i++) {
+    if (view.pending[i].norm && bare.indexOf(view.pending[i].norm) >= 0) return settleAt(i);
+  }
+}
+
+function settleAt(i) {
+  view.pending[i].node.remove();
+  view.pending.splice(i, 1);
 }
 
 function dropPending(p) {
