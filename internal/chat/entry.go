@@ -34,6 +34,11 @@ const (
 	EntryToolUse    = "tool_use"
 	EntryToolResult = "tool_result"
 	EntryThinking   = "thinking"
+	// EntryMeta (grove-315) is a harness wrapper Claude Code wrote as a
+	// user line — a slash command, a `!` escape, a background task's
+	// completion — never the operator's prose. Tool names the wrapper
+	// (Meta* in meta.go); Text is its cleaned inner text.
+	EntryMeta = "meta"
 )
 
 // Entry is one projected transcript entry — the `gv chat tail` line shape.
@@ -132,6 +137,16 @@ func (p *Projector) Line(line []byte) []Entry {
 	var out []Entry
 	for _, e := range p.blocks(raw.Message.Content) {
 		e.Role, e.Ts = role, ts
+		if role == RoleUser && e.Kind == EntryText {
+			tool, text, meta := classify(e.Text)
+			if meta && tool == "" {
+				continue // a local-command caveat: pure chrome
+			}
+			e.Text = text
+			if meta {
+				e.Kind, e.Tool = EntryMeta, tool
+			}
+		}
 		if e.Kind != EntryToolUse && strings.TrimSpace(e.Text) == "" {
 			// An empty text/thinking block is chrome (a redacted thinking
 			// block carries a signature and no text); a tool_use with no

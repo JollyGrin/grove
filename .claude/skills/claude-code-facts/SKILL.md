@@ -70,6 +70,14 @@ changes the behavior.
   context, not something anyone said. A `thinking` block can arrive with a
   signature and NO text (redacted) — an empty-text block is chrome.
   `internal/chat` (grove-216) is the worked implementation.
+- **Harness wrappers are plain user lines.** Only the
+  `<local-command-caveat>` is `isMeta`; a slash command's
+  `<command-name>`/`<command-args>` echo, its `<local-command-stdout>`, a
+  `!` escape's `<bash-input>`/`<bash-stdout>`, and a background task's
+  `<task-notification>` are ordinary `type: user` lines, so "first user
+  prompt" titles any chat that began with `/model` by its caveat
+  (grove-315, 2026-09-26). Classify them before treating a user line as
+  something the operator said — `internal/chat/meta.go`.
 - **Following a transcript is a byte offset, not a diff** — it is
   append-only. Consume COMPLETE lines only (a terminatorless trailing line
   is the writer mid-append), with `bufio.Reader`; `bufio.Scanner` silently
