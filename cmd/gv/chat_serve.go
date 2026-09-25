@@ -225,6 +225,12 @@ func (chatBackend) Resume(target string) (string, error) {
 	return spawnAndName(rec.Row.Workspace, chatSpawnReq{Label: rec.Row.Workspace, Resume: *rec.Row.SessionID})
 }
 
+// Close is `gv chat close` for the phone's End chat (grove-294).
+func (chatBackend) Close(target string) error {
+	_, err := closeChat(target)
+	return err
+}
+
 // spawnAndName runs a spawn and answers with the session it created, so the
 // phone can navigate straight into the new chat.
 //

@@ -15,6 +15,12 @@ package chatweb
 // of always taking the host's default. It reaches nothing the spawn route
 // could not already reach.
 //
+// grove-294 added End chat — POST /api/chats/<s>/close — within the same
+// boundary: it ends a live chat's claude PROCESS and nothing else. The
+// transcript stays (the row turns archived and revivable), and the gate is
+// the CLI's own (chat.CloseRefusal): only a kind-chat row, never the
+// cockpit's pane.
+//
 // Parsing lives away from net/http so the whole table — including every
 // path that must 404 — is testable without a listener.
 
@@ -28,6 +34,7 @@ const (
 	RouteKeys   = "keys"   // POST /api/chats/<s>/keys
 	RouteNew    = "new"    // POST /api/workspaces/<l>/new
 	RouteResume = "resume" // POST /api/chats/<s>/resume
+	RouteClose  = "close"  // POST /api/chats/<s>/close   (grove-294: End chat)
 	// grove-225: the profile picker's list. Read-only, no target.
 	RouteProfiles = "profiles" // GET  /api/profiles
 )
@@ -78,6 +85,8 @@ func ParseRoute(path string) (r Route, api bool) {
 			return Route{Kind: RouteKeys, Target: target, Method: "POST"}, true
 		case "resume":
 			return Route{Kind: RouteResume, Target: target, Method: "POST"}, true
+		case "close":
+			return Route{Kind: RouteClose, Target: target, Method: "POST"}, true
 		}
 	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "new":
 		return Route{Kind: RouteNew, Target: parts[1], Method: "POST"}, true

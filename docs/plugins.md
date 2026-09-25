@@ -294,7 +294,10 @@ worktree's cwd is NOT the recorded one (an orchestrator whose shell
 fresh pickup session still takes over. Records written before grove-250
 have no `session_id`; treat a missing one as unknown, never as foreign.
 Workspace-scoped (empty `ticket`): `workspace_parked`,
-`orchestrator_closed`, `orchestrator_spawned` (grove-198, additive: data
+`orchestrator_closed` (data `{reason, ticket?}`; grove-294, additive: a
+chat ended from outside by `gv chat close` / the phone's End chat carries
+`reason: "ended"` plus `{session, workspace, session_id?}`, logged in the
+chat's own workspace before the kill), `orchestrator_spawned` (grove-198, additive: data
 `{workspace, session, profile?, op_id?, resume?, brief?}` — a detached
 orchestrator chat started for a workspace by `gv orchestrator new
 --workspace <label>`, the receiving half of `--host`; `session` is its

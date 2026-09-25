@@ -132,3 +132,50 @@ func chatNameOf(r Row) string {
 	}
 	return "?"
 }
+
+// grove-294: `gv chat close` ends ONLY a live detached chat. The cockpit's
+// own pane is someone else's keyboard, an archived row has nothing to end,
+// and a row claiming kind chat whose session is not a grove-chat-* name is
+// refused rather than believed — kill-session on a cockpit is a park.
+func TestCloseRefusal(t *testing.T) {
+	cases := []struct {
+		name  string
+		row   Row
+		want  bool // refused?
+		hints []string
+	}{
+		{"a live chat can be ended", row("grove-chat-x-1", KindChat, "aaaa"), false, nil},
+		{
+			"the cockpit's own pane is refused",
+			row("grove-unbrewed", KindCockpit, "bbbb"),
+			true,
+			[]string{"cockpit", "gv park"},
+		},
+		{
+			"an archived transcript has nothing running",
+			row("", KindArchived, "cccc"),
+			true,
+			[]string{"already ended", "gv orchestrator new --resume cccc"},
+		},
+		{
+			"a chat row on a non-chat session is refused",
+			row("grove-unbrewed", KindChat, "dddd"),
+			true,
+			[]string{"grove-chat-"},
+		},
+		{"an unknown kind is refused", row("grove-chat-x-2", "something-new", "eeee"), true, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CloseRefusal(tc.row)
+			if (got != "") != tc.want {
+				t.Fatalf("CloseRefusal = %q, refused=%v want %v", got, got != "", tc.want)
+			}
+			for _, hint := range tc.hints {
+				if !strings.Contains(got, hint) {
+					t.Errorf("refusal %q is missing %q", got, hint)
+				}
+			}
+		})
+	}
+}

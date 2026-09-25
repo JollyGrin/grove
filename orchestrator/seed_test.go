@@ -14,7 +14,7 @@ import (
 var seedCoveredRemoteVerbs = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true,
-	"untrack": true, "orchestrator": true,
+	"untrack": true, "orchestrator": true, "chat": true,
 }
 
 // TestSeedDocumentsRemoteVerbs fails the moment internal/remote.Supported

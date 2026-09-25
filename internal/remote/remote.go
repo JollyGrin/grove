@@ -24,15 +24,16 @@ import (
 // adopt + handoff for the remote half of `gv handoff`; grove-184 the
 // relay/read/control five); anything else is "not supported yet".
 // grove-198 added `orchestrator` — only its `new` subcommand relays; the
-// dispatcher rejects the others with the same friendly shape.
+// dispatcher rejects the others with the same friendly shape. grove-294
+// added `chat` the same way — only `chat close` relays.
 var Supported = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true, "untrack": true,
-	"orchestrator": true,
+	"orchestrator": true, "chat": true,
 }
 
 // SupportedList is the human-readable form for error messages.
-const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new"
+const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new, chat close"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A

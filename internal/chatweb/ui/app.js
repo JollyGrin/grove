@@ -164,6 +164,7 @@ function setHeader(title, sub, back) {
   el('subtitle').textContent = sub;
   el('back').hidden = !back;
   el('back').onclick = back || null;
+  el('end').hidden = true;
 }
 
 /* ---------------- screen 1: projects ---------------- */
@@ -241,6 +242,12 @@ function screenWorkspace(label) {
     if (c.busy) meta.append(h('span', 'dot'));
     if (!c.writable) meta.append(h('span', '', 'read-only'));
     if (!c.session_id) meta.append(h('span', '', 'unidentified'));
+    if (c.kind === 'chat') {
+      var end = h('span', 'end', 'end');
+      end.setAttribute('role', 'button');
+      end.onclick = function (ev) { ev.stopPropagation(); openEndSheet(c); };
+      meta.append(end);
+    }
     b.append(meta);
     b.onclick = function () { location.hash = '#/c/' + encodeURIComponent(addr(c)); };
     main.append(b);
@@ -301,6 +308,48 @@ function openProfileSheet(label, add) {
 
 function closeSheet() { el('sheet').hidden = true; }
 
+/* grove-294: End chat. The sheet EXPLAINS before it acts — the operator
+ * could not tell what "archived" meant or how to stop a chat eating
+ * memory, so the words say exactly what ending does and does not lose.
+ * Only a live kind-chat row gets here; the server refuses anything else in
+ * the CLI's own words either way. After ending, home: the row is history
+ * now, revivable from there. */
+function openEndSheet(c) {
+  var panel = el('sheet-panel');
+  panel.textContent = '';
+  panel.append(h('div', 'sheet-title', 'end ' + chatTitle(c) + '?'));
+  panel.append(h('div', 'sheet-body',
+    'Ends the Claude process running this chat (frees its memory and stops any work in progress). ' +
+    'The conversation is kept in history, and you can revive it later.'));
+  if (view.working && view.addr === addr(c)) {
+    panel.append(h('div', 'sheet-body', 'It is working right now; ending stops that turn.'));
+  }
+  var go = h('button', 'row danger');
+  go.append(h('div', 'title', 'End chat'));
+  go.append(h('div', 'meta', c.session || ''));
+  go.onclick = function () {
+    go.classList.add('busy');
+    go.querySelector('.title').textContent = 'ending…';
+    api('/api/chats/' + encodeURIComponent(addr(c)) + '/close', {})
+      .then(function () {
+        closeSheet();
+        closeStream();
+        return loadChats().then(function () {
+          if (location.hash === '#/' || location.hash === '') render();
+          else location.hash = '#/';
+        });
+      })
+      .catch(function (e) { closeSheet(); showError(e); });
+  };
+  panel.append(go);
+  var cancel = h('button', 'cancel', 'cancel');
+  cancel.onclick = closeSheet;
+  panel.append(cancel);
+  var sheet = el('sheet');
+  sheet.onclick = function (ev) { if (ev.target === sheet) closeSheet(); };
+  sheet.hidden = false;
+}
+
 /* ---------------- screen 3: one chat ---------------- */
 
 function screenChat(a) {
@@ -318,6 +367,10 @@ function screenChat(a) {
     location.hash = c ? '#/w/' + encodeURIComponent(c.workspace) : '#/';
   };
   setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + c.kind : 'chat', back);
+  if (c && c.kind === 'chat') {
+    el('end').hidden = false;
+    el('end').onclick = function () { openEndSheet(c); };
+  }
   var main = el('main');
   main.textContent = '';
   /* A fresh transcript starts with no open group and nothing running —

@@ -34,7 +34,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
 	}
 	switch args[0] {
 	case "ls":
@@ -45,12 +45,14 @@ func cmdChat(args []string) error {
 		return cmdChatSend(args[1:])
 	case "keys":
 		return cmdChatKeys(args[1:])
+	case "close":
+		return cmdChatClose(args[1:])
 	case "restamp":
 		return cmdChatRestamp(args[1:])
 	case "serve":
 		return cmdChatServe(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, restamp, serve)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, restamp, serve)", args[0])
 	}
 }
 
@@ -134,6 +136,9 @@ type chatRecord struct {
 	// than re-derived (grove-227). "" is the ambient default, which is every
 	// workspace but one.
 	ConfigDir string
+	// Root is the workspace root the chat belongs to — where its state dir
+	// (and so its activity log) lives, for `gv chat close` (grove-294).
+	Root string
 }
 
 // workspaceClaudeConfigDir resolves a workspace's claude_config_dir: the
@@ -355,7 +360,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
 			SessionID: id, Label: label, LastActive: lastActive,
-		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir})
+		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
 	}
 	for _, ws := range targets {
 		cfgDir := configDirOf(ws)
@@ -367,7 +372,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 				claimed[s.ID] = true
 				row := chat.ArchivedRow(ws.Label, s)
 				row.Label = chatLabel(cfgDir, dir, s)
-				recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir})
+				recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir, Root: ws.Root})
 			}
 		}
 	}

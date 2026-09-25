@@ -97,6 +97,28 @@ func WriteRefusal(r Row) string {
 	}
 }
 
+// CloseRefusal is the one gate on `gv chat close` and the phone's End chat
+// (grove-294): "" when the row is a live detached chat that may be ended,
+// else why not. Same kinds as WriteRefusal — only a `grove-chat-*` session
+// is ours to end — plus a belt on the session NAME: kill-session on a
+// cockpit would be a park, so a kind-chat row that is not on a chat
+// session is refused rather than trusted.
+func CloseRefusal(r Row) string {
+	switch r.Kind {
+	case KindChat:
+		if !strings.HasPrefix(r.Session, "grove-chat-") {
+			return fmt.Sprintf("%s is not a grove-chat-<label>-<n> session — refusing to end it", idOf(r))
+		}
+		return ""
+	case KindCockpit:
+		return fmt.Sprintf("%s is the cockpit's own orchestrator pane (kind cockpit) — it is not a detached chat; `gv orchestrator close` from inside it, or `gv park` the workspace", r.Session)
+	case KindArchived:
+		return fmt.Sprintf("%s has already ended (kind archived) — nothing is running; revive it with `gv orchestrator new --resume %s`", idOf(r), idOf(r))
+	default:
+		return fmt.Sprintf("%s cannot be ended (kind %s)", idOf(r), r.Kind)
+	}
+}
+
 // idOf names a row that may have no tmux session (an archived one does not).
 func idOf(r Row) string {
 	if r.Session != "" {
