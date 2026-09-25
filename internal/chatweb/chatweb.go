@@ -176,6 +176,14 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, s.ui, "index.html")
 		return
 	}
+	// Go's builtin mime table has no .webmanifest, and a minimal host may
+	// have no /etc/mime.types registering .json either — either way
+	// http.FileServer would risk application/octet-stream, which Chrome
+	// refuses to parse as a manifest. Set it explicitly rather than lean on
+	// host mime config.
+	if r.URL.Path == "/manifest.json" {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	s.assets.ServeHTTP(w, r)
 }
 

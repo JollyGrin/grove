@@ -165,6 +165,26 @@ func TestServesEmbeddedUI(t *testing.T) {
 	}
 }
 
+// grove-296: the manifest must be servable at all (Chrome refuses to
+// install a page whose manifest fetch fails), with a JSON content type
+// (Go's mime table has no .webmanifest, and a host with no /etc/mime.types
+// entry for .json would otherwise serve application/octet-stream, which
+// Chrome also refuses) and the CSP that allows Chrome to fetch it in the
+// first place.
+func TestServesManifest(t *testing.T) {
+	h := chatweb.NewServer(&fakeBackend{})
+	w := get(t, h, "/manifest.json")
+	if w.Code != 200 {
+		t.Fatalf("GET /manifest.json = %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("GET /manifest.json Content-Type = %q, want application/json", ct)
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "manifest-src 'self'") {
+		t.Errorf("GET /manifest.json CSP = %q, want it to carry manifest-src 'self'", csp)
+	}
+}
+
 // The vendored file is pinned, and this is where a silent swap gets caught.
 func TestVendoredMarkedIsPinned(t *testing.T) {
 	body := get(t, chatweb.NewServer(&fakeBackend{}), "/marked.min.js").Body.String()

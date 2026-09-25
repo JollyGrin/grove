@@ -77,7 +77,7 @@ func TestContentSecurityPolicy(t *testing.T) {
 	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") || strings.Contains(csp, "script-src 'unsafe-inline'") {
 		t.Fatalf("script-src must not allow inline script — it is what makes rendering agent markdown safe:\n%s", csp)
 	}
-	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "connect-src 'self'"} {
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "connect-src 'self'", "manifest-src 'self'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP is missing %q:\n%s", want, csp)
 		}
