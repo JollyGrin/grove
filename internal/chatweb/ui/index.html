@@ -78,7 +78,15 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
 .new { color: var(--green); border: 1px dashed var(--border-bright); }
 .empty { color: var(--dimmer); text-align: center; padding: 32px 12px; font-size: 13px; }
-.err { color: var(--red); border: 1px solid #4a2a26; background: #1a100e; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; overflow-wrap: anywhere; }
+/* A sibling of #main, not a child of it: every screen wholesale-replaces
+   main's content on render (screenProjects/screenWorkspace/screenChat all
+   do `main.textContent = ''`), so a toast living inside main would vanish
+   on the next repaint before its 6s were up. Sitting between main and
+   footer in the flex column puts it just above the composer on the chat
+   screen and, since footer is hidden on list screens, at the same bottom
+   edge there too — visible without scrolling either way (grove-298). */
+#toast { color: var(--red); border: 1px solid #4a2a26; background: #1a100e; border-radius: 8px; padding: 10px 12px; margin: 0 12px 10px; font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
+#toast[hidden] { display: none; }
 
 /* ---- transcript (screen 3) ---- */
 .msg { margin-bottom: 14px; overflow-wrap: anywhere; }
@@ -187,6 +195,7 @@ body.picker #keys { display: flex; }
   </header>
   <div id="offline">not connected — showing what was last loaded</div>
   <main id="main"></main>
+  <div id="toast" hidden></div>
   <footer id="footer" hidden>
     <div id="keys"></div>
     <div id="working" hidden><span class="pulse"></span>working…</div>

@@ -126,9 +126,37 @@ function chatTitle(c) {
   return c.label || c.session || c.session_id || 'unidentified chat';
 }
 
+/* The toast: one at a time, newest replaces (grove-298). It never lives
+ * inside #main — see index.html's note on #toast — so it survives the
+ * wholesale re-renders that would otherwise wipe a prepended error before
+ * its timeout was up, and stays visible without scrolling on both the
+ * chat screen (above the composer) and the list screens (footer is
+ * hidden there, so the same bottom slot serves as "above the list"). */
+var toastTimer = null;
+
+function showToast(text) {
+  var box = el('toast');
+  box.textContent = text;
+  box.hidden = false;
+  restartToastTimer();
+}
+
+function restartToastTimer() {
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, 6000);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  toastTimer = null;
+  el('toast').hidden = true;
+}
+
+/* fault SSE events and every api() failure both land here, and the text is
+ * always the server's own — never invented in this file (the house rule
+ * at the top of the file). */
 function showError(e) {
-  var box = h('div', 'err', String(e && e.message ? e.message : e));
-  el('main').prepend(box);
+  showToast(String(e && e.message ? e.message : e));
 }
 
 function setHeader(title, sub, back) {
@@ -747,6 +775,13 @@ document.addEventListener('visibilitychange', function () {
 window.addEventListener('online', function () { if (isListScreen()) refresh(); });
 window.addEventListener('offline', function () { document.body.classList.add('offline'); });
 el('refresh').onclick = refresh;
+/* A tap dismisses outright; holding it down pauses the auto-dismiss timer
+ * so the toast does not vanish out from under a reader mid-press, and
+ * letting go without that turning into a click (e.g. a scroll) resumes
+ * the countdown rather than leaving it paused forever. */
+el('toast').onclick = hideToast;
+el('toast').addEventListener('pointerdown', function () { clearTimeout(toastTimer); });
+el('toast').addEventListener('pointerup', restartToastTimer);
 
 if (window.marked) window.marked.use({ gfm: true, breaks: true });
 render();
