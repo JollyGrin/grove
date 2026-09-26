@@ -111,3 +111,27 @@ func RunsModel(launch string, p *ModelProfile, settingsModel string) string {
 	}
 	return AccountDefault
 }
+
+// TierForModel maps a concrete Claude model id (a transcript's
+// message.model, e.g. claude-haiku-4-5-20251001) back to the ONE
+// configured tier it names (grove-337): the tier whose name the id
+// contains, case-insensitively. Anything else — no tier named, or more
+// than one — is ambiguous and answers "", so a caller leaves the model to
+// the host default rather than guess.
+func (c *Config) TierForModel(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == "" {
+		return ""
+	}
+	match := ""
+	for _, tier := range c.OrchestratorModels() {
+		if !strings.Contains(id, strings.ToLower(tier)) {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = tier
+	}
+	return match
+}

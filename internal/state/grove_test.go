@@ -322,3 +322,31 @@ func TestAnsweredEventByteShape(t *testing.T) {
 		t.Errorf("a relayed hop's event must stamp data.op_id: %s", lines[1])
 	}
 }
+
+// TestSpawnModel (grove-337): the LAST spawn naming the id — as the id it
+// ran on, or the one it revived — decides the model a revival re-applies.
+func TestSpawnModel(t *testing.T) {
+	spawned := func(data map[string]string) Event { return Event{Type: EvOrchestratorSpawned, Data: data} }
+	events := []Event{
+		spawned(map[string]string{"session_id": "aaaa1111", "model": "haiku"}),
+		{Type: "answered", Data: map[string]string{"session_id": "aaaa1111", "model": "opus"}},
+		spawned(map[string]string{"session_id": "bbbb2222", "model": "opus"}),
+	}
+	if got := SpawnModel(events, "aaaa1111"); got != "haiku" {
+		t.Fatalf("fresh spawn model = %q, want haiku", got)
+	}
+	events = append(events, spawned(map[string]string{"resume": "aaaa1111", "session_id": "aaaa1111", "model": "sonnet"}))
+	if got := SpawnModel(events, "aaaa1111"); got != "sonnet" {
+		t.Fatalf("after a re-pinned revival = %q, want sonnet (the last one wins)", got)
+	}
+	if got := SpawnModel(events, "cccc3333"); got != "" {
+		t.Fatalf("unknown id = %q", got)
+	}
+	// A pre-grove-337 revive event carries only `resume`.
+	if got := SpawnModel([]Event{spawned(map[string]string{"resume": "dddd4444", "model": "haiku"})}, "dddd4444"); got != "haiku" {
+		t.Fatalf("resume-only event = %q", got)
+	}
+	if got := SpawnModel(events, ""); got != "" {
+		t.Fatalf("empty id = %q", got)
+	}
+}

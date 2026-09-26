@@ -428,7 +428,14 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		}
 		profile, revived = name, s.FirstPrompt
 	}
-	plan, err := chatSpawnPlan(cfg, ws, profile, r.Model, r.Resume, r.Brief, tmux.SessionNames())
+	// grove-337: a revival keeps the model it ran on unless --model says
+	// otherwise — reviving a haiku chat must not silently run it on opus.
+	model := r.Model
+	if r.Resume != "" && model == "" {
+		events, _ := state.ReadEvents(twinState, 0)
+		model = revivedModel(cfg, events, r.Resume, profile, resumeTranscriptPath(ws, profile, r.Resume))
+	}
+	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Resume, r.Brief, tmux.SessionNames())
 	if err != nil {
 		return err
 	}
@@ -483,6 +490,11 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	if plan.Resume != "" {
 		data["resume"] = plan.Resume
+	}
+	// grove-337: the Claude session id the chat runs on, so a later
+	// revival can find the model this spawn was pinned to.
+	if plan.SessionID != "" {
+		data["session_id"] = plan.SessionID
 	}
 	if plan.BriefPath != "" {
 		data["brief"] = plan.BriefPath
@@ -616,6 +628,42 @@ func resumeTarget(ws *workspace.Workspace, id string, panes []tmux.LivePane) (pr
 		return "", s, fmt.Errorf("chat %s ran in %s, which is not %s nor one of its profile dirs — resume it by hand from that directory", id, d.Dir, orchDir)
 	}
 	return name, found, nil
+}
+
+// revivedModel is the tier a revived chat is re-pinned to when the revive
+// names none (grove-337): the model its last orchestrator_spawned event
+// recorded, else the tier its transcript's last assistant turn ran — but
+// only on the host's own Claude, where message.model is a Claude id, and
+// only when that id names exactly one configured tier. "" leaves it to the
+// host default, as before. A recorded tier the config no longer allows is
+// dropped rather than failing the revive.
+func revivedModel(cfg *config.Config, events []state.Event, id, profile, transcriptPath string) string {
+	if m := state.SpawnModel(events, id); m != "" && cfg.CheckOrchestratorModel(m) == nil {
+		return m
+	}
+	if profile != "" {
+		return ""
+	}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	usage := transcript.ParseUsage(f)
+	if len(usage) == 0 {
+		return ""
+	}
+	return cfg.TierForModel(usage[len(usage)-1].Model)
+}
+
+// resumeTranscriptPath is the transcript file of chat id in the brain dir
+// (profile "") or its per-profile subdir — the dir resumeTarget found it in.
+func resumeTranscriptPath(ws *workspace.Workspace, profile, id string) string {
+	dir := orchestratorDirAt(ws.Root)
+	if profile != "" {
+		dir = filepath.Join(dir, profile)
+	}
+	return filepath.Join(transcript.ProjectDirIn(workspaceClaudeConfigDir(*ws), dir), id+".jsonl")
 }
 
 // chatProfileSuffix names the backend in the success line, or says nothing
