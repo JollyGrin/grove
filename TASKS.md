@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: list screens over SSE (grove-307, 2026-09-26,
+      `chat-ux` train). `GET /api/chats/events` pushes the `/api/chats`
+      envelope byte for byte — once on connect, then only when it changed
+      — plus a `:` keep-alive every 25s. ONE server-side enumeration per
+      5s (`listFeed`) is shared by every open stream, starts with the first
+      subscriber and stops with the last. The page opens it wherever the
+      list is wanted (visible list screen, or anywhere with notifications
+      on) and drops its 5s/15s fetch interval while it is healthy
+      (`poll.timer` null); an error hands back to the poll, and the
+      `visibilitychange` refetch stays. A chat literally addressed
+      `events` is refused (404) rather than read as the list stream.
+      Verified: two headless tabs, `+ new chat` in one showed in the
+      other in 3.5s with no client interval.
 - [x] `gv chat serve`: live-chats home (grove-302, 2026-09-26, `chat-ux`
       train). Screen 1 is every live row (kind chat, plus cockpit
       read-only) across all workspaces, ordered needs you → running → most

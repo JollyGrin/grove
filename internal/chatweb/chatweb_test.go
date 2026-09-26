@@ -25,9 +25,10 @@ import (
 
 // fakeBackend records what it was asked and answers what it was told to.
 type fakeBackend struct {
-	mu       sync.Mutex
-	rows     []chat.Row
-	chatsErr error
+	mu         sync.Mutex
+	rows       []chat.Row
+	chatsErr   error
+	chatsCalls int
 
 	lines    []string // JSONL the tail emits, one per element
 	tailErr  error
@@ -52,7 +53,19 @@ type fakeBackend struct {
 	tailFollow       bool
 }
 
-func (f *fakeBackend) Chats() ([]chat.Row, error) { return f.rows, f.chatsErr }
+func (f *fakeBackend) Chats() ([]chat.Row, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatsCalls++
+	return f.rows, f.chatsErr
+}
+
+// setRows swaps the list under a running feed.
+func (f *fakeBackend) setRows(rows []chat.Row) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows = rows
+}
 
 func (f *fakeBackend) Tail(ctx context.Context, target string, since int, follow bool, w io.Writer) error {
 	f.mu.Lock()

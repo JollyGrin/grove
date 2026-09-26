@@ -28,6 +28,12 @@ var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: 
  * refocus cannot stack fetches, and the signature of what is currently
  * painted. */
 var poll = { timer: null, inflight: false, sig: null, at: 0 };
+/* The list stream (grove-307): the server pushes /api/chats on change, so
+ * while it is `healthy` the poll above stays stopped (poll.timer null) and
+ * is only the fallback. `ages` is a repaint-only beat — no fetch — that
+ * keeps the rows' "5m ago" labels moving while the list itself is quiet. */
+var feed = { es: null, healthy: false, ages: null };
+var AGES_MS = 30000;
 /* The last few chats left, kept rendered (grove-297): without this, every
  * trip back into a chat replayed its whole transcript from seq 0 — a long
  * orchestrator chat re-parsed hundreds of markdown blocks and scrolled the
@@ -1418,13 +1424,73 @@ function refreshList() {
   return loadChats().then(done, done);
 }
 
-/* The timer exists only while it is allowed to fetch, so a backgrounded tab
- * or an open chat costs literally nothing rather than a guarded wake-up —
- * unless notifications are on, when watching for `waiting` is the point. */
+/* The list is wanted on a visible list screen, and — with notifications
+ * on — everywhere, since watching for `waiting` is the point (grove-302).
+ * Otherwise nothing runs: a backgrounded tab or an open chat costs
+ * literally nothing rather than a guarded wake-up. */
+function wantList() {
+  return (isListScreen() && !document.hidden) || notifyOn();
+}
+
 function syncPolling() {
-  var want = (isListScreen() && !document.hidden) || notifyOn();
+  syncFeed(wantList());
+  syncTimer();
+}
+
+/* The fetch interval runs only while the list is wanted AND the stream is
+ * not carrying it — the 5s/15s beats are the fallback, not the transport. */
+function syncTimer() {
+  var want = wantList() && !feed.healthy;
   if (want && !poll.timer) poll.timer = setInterval(refreshList, POLL_MS);
   else if (!want && poll.timer) { clearInterval(poll.timer); poll.timer = null; }
+  var ages = feed.healthy && isListScreen() && !document.hidden;
+  if (ages && !feed.ages) feed.ages = setInterval(repaintIdle, AGES_MS);
+  else if (!ages && feed.ages) { clearInterval(feed.ages); feed.ages = null; }
+}
+
+/* repaintList, minus the one moment it must not run: under an open sheet,
+ * which render() would dismiss mid-answer. A skipped repaint is caught by
+ * the next beat. */
+function repaintIdle() {
+  if (el('sheet').hidden) repaintList();
+}
+
+/* syncFeed opens the list stream (grove-307) when the list is wanted and
+ * closes it when not. ONE server-side enumeration feeds every phone, and a
+ * `chats` event arrives only when the list changed — the same envelope as
+ * GET /api/chats. On an error the browser reconnects on its own; until it
+ * lands, the poll takes over. A stream the browser gave up on (an older
+ * server 404s the route) is dropped, and the next navigation or refocus
+ * tries again while the poll carries the list. */
+function syncFeed(want) {
+  if (want && !feed.es && window.EventSource) openFeed();
+  else if (!want && feed.es) {
+    feed.es.close();
+    feed.es = null;
+    feed.healthy = false;
+  }
+}
+
+function openFeed() {
+  var es = feed.es = new EventSource('/api/chats/events');
+  es.addEventListener('chats', function (ev) {
+    var j;
+    try { j = JSON.parse(ev.data); } catch (_) { return; }
+    view.chats = j.chats || [];
+    view.loaded = true;
+    noteRows();
+    repaintIdle();
+  });
+  es.onopen = function () {
+    feed.healthy = true;
+    document.body.classList.remove('offline');
+    syncTimer();
+  };
+  es.onerror = function () {
+    feed.healthy = false;
+    if (es.readyState === EventSource.CLOSED && feed.es === es) feed.es = null;
+    syncTimer();
+  };
 }
 
 function refresh() {
@@ -1437,8 +1503,9 @@ window.addEventListener('hashchange', function () {
   render();
   syncPolling();
   /* Coming back from a chat must not show the list as stale as when it was
-   * left — the cached rows paint instantly, then this catches them up. */
-  refreshList();
+   * left — the cached rows paint instantly, then this catches them up. A
+   * healthy stream has kept them current already. */
+  if (!feed.healthy) refreshList();
 });
 /* Unlocking the phone or switching back to the tab is the other moment the
  * list is guaranteed stale, and the one the operator notices most. */
