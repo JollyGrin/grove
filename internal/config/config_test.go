@@ -366,6 +366,12 @@ func TestWithModel(t *testing.T) {
 		{"alias passthrough", "claude --dangerously-skip-permissions", "sonnet", "claude --model 'sonnet' --dangerously-skip-permissions"},
 		{"quotes metachars", "claude", "a b", "claude --model 'a b'"},
 		{"empty cmd unchanged", "", "opus", ""},
+		{"strips existing --model space form", "claude --flag --model opus", "sonnet", "claude --model 'sonnet' --flag"},
+		{"strips existing --model= form", "claude --flag --model=opus", "sonnet", "claude --model 'sonnet' --flag"},
+		{"strips existing --model single-quoted", "claude --flag --model 'opus'", "sonnet", "claude --model 'sonnet' --flag"},
+		{"strips existing --model at end", "claude --dangerously-skip-permissions --model opus", "sonnet", "claude --model 'sonnet' --dangerously-skip-permissions"},
+		{"strips existing --model between flags", "claude --a --model opus --b", "sonnet", "claude --model 'sonnet' --a --b"},
+		{"no existing --model unchanged rest", "claude --dangerously-skip-permissions", "sonnet", "claude --model 'sonnet' --dangerously-skip-permissions"},
 	}
 	for _, tc := range cases {
 		if got := WithModel(tc.cmd, tc.model); got != tc.want {
