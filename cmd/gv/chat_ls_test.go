@@ -572,3 +572,43 @@ func TestChatAgeReadsActivityNotBirth(t *testing.T) {
 		t.Errorf("a row with no times at all must print nothing, got %q", got)
 	}
 }
+
+// grove-302: `waiting` reads the pane ONLY for a live chat running claude,
+// and says true only when DetectPicker does.
+func TestMarkWaiting(t *testing.T) {
+	perm, err := os.ReadFile(filepath.Join("..", "..", "internal", "chatweb", "testdata", "cc2.1.282-perm.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := os.ReadFile(filepath.Join("..", "..", "internal", "chatweb", "testdata", "cc2.1.283-idle.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	panes := map[string]string{"%1": string(perm), "%2": string(idle), "%3": string(perm), "%4": string(perm)}
+	var captured []string
+	capture := func(p string) (string, error) {
+		captured = append(captured, p)
+		if p == "%5" {
+			return "", os.ErrNotExist
+		}
+		return panes[p], nil
+	}
+	recs := []chatRecord{
+		{Row: chat.Row{Kind: chat.KindChat, Busy: true}, Pane: "%1"},    // on a picker
+		{Row: chat.Row{Kind: chat.KindChat, Busy: true}, Pane: "%2"},    // idle prompt
+		{Row: chat.Row{Kind: chat.KindCockpit, Busy: true}, Pane: "%3"}, // never read
+		{Row: chat.Row{Kind: chat.KindChat, Busy: false}, Pane: "%4"},   // shell: never read
+		{Row: chat.Row{Kind: chat.KindChat, Busy: true}, Pane: "%5"},    // capture fails
+		{Row: chat.Row{Kind: chat.KindArchived}},                        // no pane
+	}
+	markWaiting(recs, capture)
+	want := []bool{true, false, false, false, false, false}
+	for i, w := range want {
+		if recs[i].Row.Waiting != w {
+			t.Errorf("row %d waiting = %v, want %v", i, recs[i].Row.Waiting, w)
+		}
+	}
+	if len(captured) != 3 {
+		t.Errorf("captured %v; only live busy chat panes may be read", captured)
+	}
+}

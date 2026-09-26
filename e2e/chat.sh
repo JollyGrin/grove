@@ -391,6 +391,10 @@ BIRTH="$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 created)"
   || { cat "$SCRATCH/active.json"; fail "a live chat with a transcript must report its mtime as last_active"; }
 [ "$ACT" != "$BIRTH" ] \
   || { cat "$SCRATCH/active.json"; fail "last_active must be the transcript's mtime, not the pane's birth ($BIRTH)"; }
+# grove-302: `waiting` is on every row (additive), and false on a pane that
+# shows no picker — the scratch chat's pane is sitting at a shell.
+[ "$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 waiting)" = "false" ] \
+  || { cat "$SCRATCH/active.json"; fail "a live chat with no picker on screen must report waiting: false"; }
 rm -f "$(proj_dir "$ORCH")/$ID1.jsonl"
 
 say "grove-222: the decoy transcripts are NOT handed to a live pane"

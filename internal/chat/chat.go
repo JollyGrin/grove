@@ -70,6 +70,12 @@ type Row struct {
 	// for Go callers.
 	LastActive time.Time `json:"last_active"`
 	Writable   bool      `json:"writable"`
+	// Waiting is "needs you" (grove-302): a live kind-chat row whose pane
+	// shows a modal picker — a permission prompt or a question the agent is
+	// blocked on. Pane-scrape garnish like the phone's picker strip, read
+	// only on live chat rows running claude; false on every other row and
+	// whenever the scrape fails. Additive to the contract.
+	Waiting bool `json:"waiting"`
 }
 
 // Activity is the row's recency: last_active, falling back to created when
@@ -215,8 +221,8 @@ func IsOrchestratorPane(paneDir, orchDir string) bool {
 }
 
 // Sort orders the report: workspace, then live chats before cockpit panes
-// before archived transcripts, then chat number, then most recently ACTIVE
-// first. Stable across calls so a client can diff two `ls` runs.
+// before archived transcripts, then most recently ACTIVE first, then chat
+// number. Stable across calls so a client can diff two `ls` runs.
 func Sort(rows []Row) {
 	sort.SliceStable(rows, func(i, j int) bool { return Less(rows[i], rows[j]) })
 }
@@ -231,13 +237,15 @@ func Less(a, b Row) bool {
 	if a.Kind != b.Kind {
 		return kindOrder(a.Kind) < kindOrder(b.Kind)
 	}
-	if a.N != b.N {
-		return a.N < b.N
-	}
 	// Recency, not birth (grove-228): a chat steered two minutes ago belongs
 	// above one that has been idle since Tuesday, whatever their pane ages.
+	// And recency beats the chat NUMBER (grove-302): `chat-1` must not pin
+	// above a `chat-3` used a minute ago just because it was spawned first.
 	if actA, actB := a.Activity(), b.Activity(); !actA.Equal(actB) {
 		return actA.After(actB)
+	}
+	if a.N != b.N {
+		return a.N < b.N
 	}
 	if !a.Created.Equal(b.Created) {
 		return a.Created.After(b.Created)

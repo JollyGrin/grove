@@ -9,6 +9,24 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: live-chats home (grove-302, 2026-09-26, `chat-ux`
+      train). Screen 1 is every live row (kind chat, plus cockpit
+      read-only) across all workspaces, ordered needs you → running → most
+      recently active (`liveOrder`, the page's one order rule), each tagged
+      with its workspace; one tap to the composer. Per workspace: `+ new
+      chat` and an inline `history (N)` disclosure with the explainer
+      "history = conversations with no running Claude process; tap one to
+      revive it." "archived" is "history" in all UI copy; the contract's
+      `kind: "archived"` is unchanged. A live chat idle > 3h shows
+      `idle 5h · end?` → grove-294's End sheet. `#/w/<label>` stays a deep
+      link (history open); a chat's back is always home. Contract
+      (additive): `gv chat ls` rows carry `waiting` — one pane capture per
+      live busy kind-chat row through `DetectPicker` (`markWaiting`,
+      shared by `ls` and serve). The page sorts/marks waiting rows, badges
+      the count (union with the open chat's stream) and notifies on a
+      row's false→true edge (never the first load, never the open chat);
+      with notifications on the list is watched every 15s while hidden or
+      in a chat. `chat.Less`: recency now beats chat number within a kind.
 - [x] `gv chat serve`: page-side notifications + app badge (grove-305,
       2026-09-26, `chat-ux` train; no server push). A 🔕/🔔 header toggle
       requests `Notification` permission; off by default, persisted per

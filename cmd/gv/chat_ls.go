@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
@@ -81,7 +82,12 @@ func cmdChatLs(args []string) error {
 	if err != nil {
 		return err
 	}
-	rows := chatRows(targets, liveChatLookup(isCockpit))
+	recs := chatRecords(targets, liveChatLookup(isCockpit))
+	markWaiting(recs, tmux.CapturePane)
+	rows := make([]chat.Row, 0, len(recs))
+	for _, r := range recs {
+		rows = append(rows, r.Row)
+	}
 	if *asJSON {
 		return emitJSON("chats", rows)
 	}
@@ -214,6 +220,27 @@ func chatLabel(configDir, dir string, s transcript.Session) string {
 		return s.FirstPrompt
 	}
 	return chat.Label(filepath.Join(transcript.ProjectDirIn(configDir, dir), s.ID+".jsonl"), s.FirstPrompt)
+}
+
+// markWaiting fills each row's `waiting` (grove-302): one pane capture per
+// live kind-chat row that is running claude, read through the same
+// DetectPicker the phone's picker strip uses, so "needs you" on the list
+// and the keys row in the chat can never disagree. The cap is the cost
+// bound — a cockpit pane, an archived transcript or a pane sitting at a
+// shell is never captured. A failed capture is false, never an error: a
+// scrape that cannot read must not look like a question to answer.
+func markWaiting(recs []chatRecord, capture func(pane string) (string, error)) {
+	for i := range recs {
+		r := &recs[i]
+		if r.Row.Kind != chat.KindChat || !r.Row.Busy || r.Pane == "" {
+			continue
+		}
+		out, err := capture(r.Pane)
+		if err != nil {
+			continue
+		}
+		r.Row.Waiting = chatweb.DetectPicker(out).Detected
+	}
 }
 
 // chatRows is the `ls` projection: records without their handles.
