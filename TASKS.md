@@ -9,6 +9,21 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat`: pick a Claude model for a new chat (grove-293,
+      2026-09-26, `chat-ux` train). `gv orchestrator new --model <tier>`
+      (cockpit pane, `--workspace`, and relayed over `--host` at a fixed
+      argv place) pins the BARE launch before any profile wrap, so on a
+      profile it runs that tier's slug. Tiers: `orchestrator.models`, else
+      built-in opus/sonnet/haiku; an unknown one is refused like an
+      unknown profile. `config.RunsModel` names what a spawn will ACTUALLY
+      run (flag → settings.json → literal `account default`; on a profile,
+      the tier's slug); the pane is tagged `@grove_model` and `gv chat ls`
+      rows carry it as `model` (the phone's chat subtitle). Phone: ONE
+      sheet from `GET /api/workspaces/<l>/models` — host default, Claude
+      tiers, profiles — every row saying `runs <model>`; POST `.../new`
+      takes an optional `model`. Verified: unit + e2e/chat.sh (sheet rows,
+      pinned argv + tag + row, unknown-tier 409 = CLI text, byte-equal
+      op-id retry), e2e/all.sh green.
 - [x] `gv chat serve`: running build on the phone (grove-286, 2026-09-26,
       `chat-ux` train). `GET /api/version` → `{"version": "<stamp>"}` in
       the contract envelope (`dev` unstamped, never blank), threaded from

@@ -86,12 +86,22 @@ func PinModel(cmd, model string) string {
 // dir's settings.json ("" when absent or unreadable).
 //
 // Precedence is claude's own: an explicit --model, then settings.json, then
-// the account default. On a profile the answer is the slug WrapProfile
-// exports for that launch's tier — the same function, so the label and the
-// spawn can never disagree.
+// the account default. On a profile, claude's --model beats the
+// ANTHROPIC_MODEL WrapProfile exports, and a tier ALIAS resolves through the
+// ANTHROPIC_DEFAULT_*_MODEL slugs the wrap also exports — so a flag of any
+// spelling naming a tier is that tier's slug, no flag is the wrap's own
+// ANTHROPIC_MODEL (modelSlot, the same function WrapProfile uses), and a
+// full model id is sent to the backend as written.
 func RunsModel(launch string, p *ModelProfile, settingsModel string) string {
 	if p != nil {
-		return p.slugFor(modelSlot(launch))
+		switch flag := ModelFlag(launch); strings.ToLower(flag) {
+		case "":
+			return p.slugFor(modelSlot(launch))
+		case "opus", "sonnet", "haiku":
+			return p.slugFor(strings.ToLower(flag))
+		default:
+			return flag
+		}
 	}
 	if m := ModelFlag(launch); m != "" {
 		return m

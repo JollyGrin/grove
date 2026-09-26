@@ -80,6 +80,8 @@ func TestRunsModel(t *testing.T) {
 		{"profile default tier", "claude --x", "opus", p, "glm-4.6"},
 		{"profile pinned tier", PinModel("claude --x", "opus"), "", p, "glm-5"},
 		{"profile haiku", PinModel("claude", "haiku"), "", p, "glm-air"},
+		{"profile, hand-written alias", "claude --model opus --x", "", p, "glm-5"},
+		{"profile, full id goes as written", PinModel("claude", "claude-opus-4-5"), "", p, "claude-opus-4-5"},
 	}
 	for _, c := range cases {
 		if got := RunsModel(c.launch, c.p, c.settings); got != c.want {

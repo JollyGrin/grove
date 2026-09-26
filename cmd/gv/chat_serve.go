@@ -37,6 +37,7 @@ import (
 	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/workspace"
 )
 
 // cmdChatServe runs the server until interrupted. OFF unless invoked: no
@@ -235,8 +236,53 @@ func (c *reportCache) find(target string) (chatRecord, error) {
 // profiled spawn path unchanged, including its refusals: an unknown name
 // dies in chatSpawnPlan's ResolveProfile before a dir, a session or an
 // event exists (grove-225).
-func (chatBackend) NewChat(label, profile string) (string, error) {
-	return spawnAndName(label, chatSpawnReq{Label: label, Profile: profile})
+//
+// model (grove-293) rides the same way — `gv orchestrator new --model`.
+func (chatBackend) NewChat(label, profile, model string) (string, error) {
+	return spawnAndName(label, chatSpawnReq{Label: label, Profile: profile, Model: model})
+}
+
+// NewChatOptions is the new-chat sheet for one workspace (grove-293),
+// resolved against THAT workspace's config — the same twin and config a
+// spawn from the sheet resolves, so each row's `runs` is what the spawn
+// will actually run.
+func (chatBackend) NewChatOptions(label string) ([]chatweb.NewChatOption, error) {
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	ws, err := workspace.ResolveTwin(list, label, "")
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.LoadAt(ws.Root)
+	if err != nil {
+		return nil, err
+	}
+	return chatNewOptions(cfg, ws.Root, claudeSettingsModel(cfg.ClaudeConfigDir)), nil
+}
+
+// chatNewOptions lists the sheet's rows in render order: the host default,
+// then one row per orchestrator.models tier on the host's own Claude, then
+// one per model profile at its default tier. Each names what it runs via
+// config.RunsModel over the exact bare launch its spawn would build.
+func chatNewOptions(cfg *config.Config, root, settingsModel string) []chatweb.NewChatOption {
+	launch := orchestratorLaunch(cfg, root)
+	opts := []chatweb.NewChatOption{{Runs: config.RunsModel(launch, nil, settingsModel)}}
+	for _, m := range cfg.OrchestratorModels() {
+		opts = append(opts, chatweb.NewChatOption{Model: m, Runs: config.RunsModel(config.PinModel(launch, m), nil, settingsModel)})
+	}
+	names, action := cfg.ResolveOrchestratorProfile()
+	if action == config.ProfilePick {
+		for _, name := range names {
+			_, p, err := cfg.ResolveProfile(name, nil)
+			if err != nil || p == nil {
+				continue
+			}
+			opts = append(opts, chatweb.NewChatOption{Profile: name, Runs: config.RunsModel(launch, p, settingsModel)})
+		}
+	}
+	return opts
 }
 
 // Profiles lists the model profiles this machine has configured, on the

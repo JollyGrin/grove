@@ -492,7 +492,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	if err := state.Append(twinState, state.Event{Type: state.EvOrchestratorSpawned, Data: data}); err != nil {
 		return err
 	}
-	fmt.Printf("✓ orchestrator chat %s — workspace %s%s%s%s\n", plan.Session, label, chatProfileSuffix(plan.Profile), chatModelSuffix(plan.Runs), chatResumeSuffix(plan.Resume, revived))
+	fmt.Printf("✓ orchestrator chat %s — workspace %s%s%s%s\n", plan.Session, label, chatProfileSuffix(plan.Profile), chatResumeSuffix(plan.Resume, revived), chatModelSuffix(plan.Runs))
 	fmt.Println(remote.ChatAttachLine(plan.Session))
 	if plan.Resume != "" {
 		// Verified 2026-08-31: `claude --resume` re-fires SessionStart with
@@ -504,7 +504,8 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	return nil
 }
 
-// chatModelSuffix names the model the chat runs in the success line — the
+// chatModelSuffix names the model the chat runs at the END of the success
+// line (appended, so earlier parsers of the line still match) — the
 // same resolved answer the pane is tagged with.
 func chatModelSuffix(runs string) string {
 	if runs == "" {

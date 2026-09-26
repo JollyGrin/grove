@@ -289,13 +289,23 @@ function chatRow(c, showWs) {
   return b;
 }
 
-/* newChat is `+ new chat`, wherever it is tapped. With profiles configured
- * the choice is always SHOWN, never inferred — the desk's own rule
- * (grove-105: `)` opens the picker even for a lone profile). Zero profiles:
- * no sheet, straight to the host default. */
+/* newChat is `+ new chat`, wherever it is tapped. The choice is always
+ * SHOWN, never inferred — the desk's own rule (grove-105). grove-293: the
+ * sheet's rows come from the workspace itself, each naming the model it
+ * will run, and there are always Claude tiers to pick from. If that list
+ * cannot be read, the pre-293 behavior stands: the profile sheet when
+ * profiles exist, else straight to the host default — a broken model list
+ * must never be a broken new-chat button. */
 function newChat(label, add) {
-  if (view.profiles.length) return openProfileSheet(label, add);
-  spawnChat(label, '', add);
+  api('/api/workspaces/' + encodeURIComponent(label) + '/models').then(function (j) {
+    var opts = j.models || [];
+    if (opts.length) return openModelSheet(label, add, opts);
+    if (view.profiles.length) return openProfileSheet(label, add);
+    spawnChat(label, '', '', add);
+  }, function () {
+    if (view.profiles.length) return openProfileSheet(label, add);
+    spawnChat(label, '', '', add);
+  });
 }
 
 /* One workspace's footer on the home screen: its name, `+ new chat`, and
@@ -377,14 +387,15 @@ function screenWorkspace(label) {
 }
 
 /* spawnChat is the one place `+ new chat` reaches the server, whichever
- * row was tapped. An empty profile sends NO profile key at all, so the
+ * row was tapped. An empty profile or model sends NO key at all, so the
  * request is byte-identical to the one grove-218 sent and the host spawns
  * on its own Claude. */
-function spawnChat(label, profile, add) {
+function spawnChat(label, profile, model, add) {
   add.classList.add('busy');
   (add.querySelector('.title') || add).textContent = 'starting a chat…';
   var body = {};
   if (profile) body.profile = profile;
+  if (model) body.model = model;
   return api('/api/workspaces/' + encodeURIComponent(label) + '/new', body)
     .then(function (j) {
       if (j.session) forgetChat(j.session);
@@ -405,7 +416,7 @@ function openProfileSheet(label, add) {
   panel.textContent = '';
   panel.append(h('div', 'sheet-title', 'new chat in ' + label + ' — on which backend?'));
   var pick = function (profile) {
-    return function () { closeSheet(); spawnChat(label, profile, add); };
+    return function () { closeSheet(); spawnChat(label, profile, '', add); };
   };
   var host = h('button', 'row');
   host.append(h('div', 'title', 'Claude (host default)'));
@@ -425,6 +436,39 @@ function openProfileSheet(label, add) {
   var sheet = el('sheet');
   /* Tapping the dimmed backdrop dismisses it — the sheet spends money when
    * it is answered, so backing out must be the easiest thing on screen. */
+  sheet.onclick = function (ev) { if (ev.target === sheet) closeSheet(); };
+  sheet.hidden = false;
+}
+
+/* tierName: "opus" → "Opus" for a built-in tier; an operator's own
+ * orchestrator.models entry (a full model id) is shown as written. */
+function tierName(m) {
+  return /^(opus|sonnet|haiku)$/.test(m) ? m.charAt(0).toUpperCase() + m.slice(1) : m;
+}
+
+/* The new-chat sheet (grove-293): ONE sheet, rows in the server's order —
+ * the host default, the Claude tiers, then each model profile. Every row's
+ * meta line is the server's `runs`: the model that spawn will actually run
+ * ("account default" when nothing on the host names one). The page never
+ * resolves a model itself; it renders what it was told and POSTs back the
+ * row's {profile, model} unchanged. */
+function openModelSheet(label, add, opts) {
+  var panel = el('sheet-panel');
+  panel.textContent = '';
+  panel.append(h('div', 'sheet-title', 'new chat in ' + label + ' — on which model?'));
+  opts.forEach(function (o) {
+    var b = h('button', 'row');
+    var title = o.profile ? o.profile : o.model ? 'Claude · ' + tierName(o.model) : 'Claude (host default)';
+    var kind = o.profile ? 'model profile' : o.model ? 'Claude tier' : 'the operator’s own Claude';
+    b.append(h('div', 'title', title));
+    b.append(h('div', 'meta', 'runs ' + (o.runs || 'account default') + ' · ' + kind));
+    b.onclick = function () { closeSheet(); spawnChat(label, o.profile || '', o.model || '', add); };
+    panel.append(b);
+  });
+  var cancel = h('button', 'cancel', 'cancel');
+  cancel.onclick = closeSheet;
+  panel.append(cancel);
+  var sheet = el('sheet');
   sheet.onclick = function (ev) { if (ev.target === sheet) closeSheet(); };
   sheet.hidden = false;
 }
@@ -490,7 +534,9 @@ function screenChat(a) {
   /* Back is always home (grove-302): the live list is one tap from every
    * chat, including one opened cold from a notification. */
   var back = function () { location.hash = '#/'; };
-  setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + kindWord(c) : 'chat', back);
+  /* grove-293: the model the chat was spawned to run (its pane tag), when
+   * grove tagged one — the same name its new-chat sheet row showed. */
+  setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + kindWord(c) + (c.model ? ' · ' + c.model : '') : 'chat', back);
   if (c && c.kind === 'chat') {
     el('end').hidden = false;
     el('end').onclick = function () { openEndSheet(c); };

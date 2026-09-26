@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -756,5 +757,41 @@ func TestChatHopArgsModel(t *testing.T) {
 	}
 	if m := chatManualRetry(req); !strings.Contains(m, "--profile glm --model opus") {
 		t.Fatalf("chatManualRetry = %q", m)
+	}
+}
+
+// TestChatNewOptions (grove-293): every sheet row names the model it will
+// actually run — the host default from orchestrator.claude's --model, else
+// settings.json, else the literal "account default"; the tiers; and each
+// profile's slug for the launch's default tier.
+func TestChatNewOptions(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"zai-plan-glm": {BaseURL: "https://api.z.ai/api/anthropic", AuthTokenEnv: "Z", Opus: "glm-5", Sonnet: "glm-4.6", Haiku: "glm-air"},
+	}
+	got := chatNewOptions(cfg, "/w", "")
+	want := []chatweb.NewChatOption{
+		{Runs: config.AccountDefault},
+		{Model: "opus", Runs: "opus"}, {Model: "sonnet", Runs: "sonnet"}, {Model: "haiku", Runs: "haiku"},
+		{Profile: "zai-plan-glm", Runs: "glm-4.6"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %+v\nwant %+v", got, want)
+	}
+	if got := chatNewOptions(cfg, "/w", "claude-sonnet-5"); got[0].Runs != "claude-sonnet-5" {
+		t.Errorf("settings.json model not named: %q", got[0].Runs)
+	}
+	cfg.Orchestrator.Claude = "claude --model opus"
+	cfg.Orchestrator.Models = []string{"claude-haiku-4-5"}
+	// A hand-written --model opus beats the wrap's ANTHROPIC_MODEL and
+	// resolves through its DEFAULT_OPUS slug, so the profile row says glm-5.
+	got = chatNewOptions(cfg, "/w", "claude-sonnet-5")
+	if got[0].Runs != "opus" || len(got) != 3 || got[1].Model != "claude-haiku-4-5" || got[2].Runs != "glm-5" {
+		t.Errorf("flag/override options = %+v", got)
+	}
+	cfg.ModelProfiles = nil
+	if got := chatNewOptions(cfg, "/w", ""); len(got) != 2 {
+		t.Errorf("no profiles = %+v, want default + one tier", got)
 	}
 }
