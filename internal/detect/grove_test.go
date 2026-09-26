@@ -36,3 +36,25 @@ func TestErrorMarker(t *testing.T) {
 		t.Fatal("a clean pane matched an error marker")
 	}
 }
+
+// grove-342: an expired Claude login prints one of these (captured live on
+// groveremote, 2.1.283) and the pane otherwise reads as quiet idle — the
+// phone showed a calm chat and supervise never woke. Matching is
+// case-insensitive: the auth wording is not stable across versions.
+func TestErrorMarkerAuthExpired(t *testing.T) {
+	for _, l := range []string{
+		"Login expired · Please run /login",
+		"Failed to authenticate: OAuth session expired and could not be refreshed",
+		"login expired — please run /login to continue",
+	} {
+		reason, line, ok := ErrorMarker("x\n" + l + "\n❯ ")
+		if !ok || reason != "auth" || line != l {
+			t.Errorf("auth expiry %q: got %q %q %v", l, reason, line, ok)
+		}
+	}
+	// A transcript merely quoting /login is not a dead login (and in the
+	// turn classifier the bottom-N trim keeps scrollback quoting out too).
+	if _, _, ok := ErrorMarker("  ⎿ the fix suggested in the transcript: run /login again\n❯ "); ok {
+		t.Fatal("a transcript quoting /login matched an auth marker")
+	}
+}

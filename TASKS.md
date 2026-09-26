@@ -9,6 +9,12 @@
 
 ## Now (2026-07-12)
 
+- [x] detect: an expired Claude login is visible (grove-342,
+      2026-09-26). `ErrorMarker` gains reason `auth` for the lines an
+      expired login prints ("Login expired · Please run /login", "OAuth
+      session expired …"; case-insensitive), so `gv chat serve` flips the
+      phone's turn to errored with the matched line verbatim and supervise
+      emits `worker_errored` — instead of both reading a quiet idle pane.
 - [x] Hooks: a nested `claude` in a live worker's worktree can no longer
       re-register, idle or kill the task (grove-339, 2026-09-26; seen on
       grove-317). Captured on 2.1.283: a nested `claude -p` fires
