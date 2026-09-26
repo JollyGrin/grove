@@ -16,7 +16,7 @@ gv ls --json --no-pr      # same, faster (skips gh)
 gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
      --until done          #   it lands. --until exits 0 exactly when that
                            #   sentinel arrives. Read the Monitoring section
-                           #   below before writing ANY completion detector.
+                           #   below before writing a completion detector.
 gv supervise              # HEADLESS loop that emits the transitions gv watch
      [--interval 30s]      #   streams — an OPEN cockpit already is one (it holds
                            #   the lock); on a host with no desk cockpit
@@ -132,8 +132,8 @@ worker was still `agent: working`:
    produces a line. A detector that only watches for the happy event
    reports "still working" forever.
 
-**Never write a monitor script.** The stream now carries delivery (PR
-state) and liveness (what a Stop hook cannot see) too — `gv watch --until
+**Never write a monitor script.** The stream also carries delivery (PR
+state) and liveness (what a Stop hook cannot see) — `gv watch --until
 pr_ready` or `--until worker_waiting` is the whole surface, for any of
 these eleven types (`gv supervise` is what emits them; see the tools
 block):
@@ -273,24 +273,23 @@ When both merge: summary push, same summary in chat, end your turn.
    flat plan is capped. When you propose a grab with `--profile`, say which lane
    it is and why in the same line.
 
-   **Dispatch-and-dismiss (fire-and-forget).** ONLY when the operator's message
-   this turn explicitly tells you to close/dismiss/exit this chat when done
+   **Dispatch-and-dismiss (fire-and-forget).** When the operator's message
+   this turn explicitly asks you to close or dismiss this chat when done
    (e.g. "investigate DEV-42, add detail if needed, grab it, then close this
-   chat"), you are pre-authorized to self-close — do the work, then run
+   chat"), you are pre-authorized to self-close: do the work, then run
    `gv orchestrator close --ticket DEV-42`. That kills this pane (and this
-   chat) so the operator's cockpit stays clean; the grab already shows on their
-   dashboard, so nothing is lost. **All three must hold or you STAY OPEN
-   and ask instead:**
-   (a) the worker actually launched — confirm with `gv ls --json` that the
-       ticket you grabbed is now tracked and not dead;
-   (b) you have zero questions for the operator;
-   (c) the only thing left is to watch the PR (which the operator does from the
-       dashboard).
-   If anything is ambiguous — the ticket needs a decision, the grab failed,
-   you'd normally ask something — do NOT close. Leaving a pane open is free;
-   closing one with an unanswered question is not. Never self-close a chat
-   the operator didn't pre-authorize this turn, and never close after a plain
-   question-and-answer exchange.
+   chat) so the operator's cockpit stays clean; the grab already shows on
+   their dashboard, so nothing is lost. Close only when all three hold:
+   (a) the worker actually launched — `gv ls --json` shows the ticket you
+       grabbed as tracked and not dead;
+   (b) you have no questions for the operator;
+   (c) the only thing left is to watch the PR (which the operator does
+       from the dashboard).
+   Otherwise stay open and ask — an ambiguous ticket, a failed grab,
+   anything you would normally ask about. Leaving a pane open is free;
+   closing one with an unanswered question is not. Without that explicit
+   request this turn — including after a plain question-and-answer
+   exchange — the chat stays open.
 
 4. **Unstick** — "what's DEV-X stuck on?" → read its question/last_message
    from `gv ls --json`, capture its pane if needed, investigate the ticket,
@@ -395,7 +394,7 @@ When both merge: summary push, same summary in chat, end your turn.
 
    Propose a handoff, never run one unasked: it untracks the task here.
 
-## Guardrails (team rules — not optional)
+## Guardrails
 
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
   `done`, `pause`, `handoff`, `untrack`, `adopt`, interactive `sweep`,
