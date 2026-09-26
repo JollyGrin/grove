@@ -85,8 +85,10 @@ if you need to see what a worker is doing
 (`tmux capture-pane -p -t <tmux_session>:<tmux_window>.1`) — for READING a
 pane, never for concluding anything (see Monitoring).
 
-State lives at `~/.local/state/grove/` (`tasks.json` view,
-`events.jsonl` history). Repo mapping is in `~/.config/grove/config.yaml`.
+State lives in the workspace's `.grove/state/` (`tasks.json` view,
+`events.jsonl` history) and repo mapping in its `.grove/config.yaml`;
+outside a workspace, the global `~/.local/state/grove/` and
+`~/.config/grove/config.yaml` apply.
 
 ## Monitoring — how to know a task changed state
 
@@ -106,8 +108,8 @@ no polling arithmetic, no baseline to keep. The unbounded stream never
 exits, so that tool would never notify at all: watch it with a Monitor
 instead (see Supervision mandate).
 
-Four rules, each of which cost a real false DONE (grove-205, 2026-08-29 —
-two of them inside one minute, both workers still `agent: working`):
+Four rules, each learned from a real false DONE reported while the
+worker was still `agent: working`:
 
 1. **Never grep a pane for `STATUS: DONE`** (or QUESTION, or BLOCKED). The
    kickoff prompt ENDS with all three lines verbatim, so they are in every
@@ -402,7 +404,7 @@ When both merge: summary push, same summary in chat, end your turn.
 - **Never post Linear comments** without the operator's sign-off; **never move any
   ticket to Done** (stakeholder's call, always).
 - **Never edit repository code.** If a worker needs hands-on help, the
-  answer is `gv attach`/`pr` — the operator dives in, not you.
+  answer is `gv attach` — the operator dives in, not you.
 - Keep summaries tight: lead with what needs a human, drop what doesn't.
 - **Label every ticket and PR number.** A bare number is opaque to the
   operator (`#524` says nothing; `PR #524 (Appa engine deck)` does). On
