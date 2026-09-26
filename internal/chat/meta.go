@@ -154,9 +154,9 @@ const labelScanLines = 400
 
 // Label is the title for the transcript at path: the first user prompt
 // that is the operator's own words, cleaned. Falls back to the first slash
-// command (`/model`) for a chat that never said anything else, then to
-// CleanLabel(fallback) — transcript.Session.FirstPrompt — when the file
-// cannot be read.
+// command (`/model`), then the first `!` shell escape (`$ tmux kill-pane`)
+// for a chat that never said anything else, then to CleanLabel(fallback) —
+// transcript.Session.FirstPrompt — when the file cannot be read.
 func Label(path, fallback string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -170,10 +170,14 @@ func Label(path, fallback string) string {
 }
 
 // labelFrom scans transcript lines for Label; ok=false when nothing in the
-// scanned span could title the chat.
+// scanned span could title the chat. Prose wins; a chat of pure chrome is
+// titled by its first slash command, then by its first `!` shell escape
+// (grove-341) — otherwise those chats title as "" and clients show the raw
+// session id.
 func labelFrom(r io.Reader) (string, bool) {
 	br := bufio.NewReader(r)
 	command := ""
+	bash := ""
 	for range labelScanLines {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
@@ -183,6 +187,9 @@ func labelFrom(r io.Reader) (string, bool) {
 				case meta:
 					if tool == MetaCommand && command == "" {
 						command = text
+					}
+					if tool == MetaBash && bash == "" {
+						bash = text
 					}
 				case text == "" || isBoilerplate(text):
 				default:
@@ -196,6 +203,9 @@ func labelFrom(r io.Reader) (string, bool) {
 	}
 	if command != "" {
 		return shortLabel(command), true
+	}
+	if bash != "" {
+		return shortLabel("$ " + bash), true
 	}
 	return "", false
 }
