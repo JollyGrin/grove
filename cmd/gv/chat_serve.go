@@ -98,6 +98,7 @@ func (chatBackend) Chats() ([]chat.Row, error) {
 	if err != nil {
 		return nil, err
 	}
+	markWaiting(recs, tmux.CapturePane)
 	rows := make([]chat.Row, 0, len(recs))
 	for _, r := range recs {
 		rows = append(rows, r.Row)

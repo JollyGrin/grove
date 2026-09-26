@@ -1,8 +1,8 @@
 /* gv chat — the phone client (grove-218). Hand-written, no toolchain.
  *
  * Three screens, routed on the hash so the phone's back button works:
- *   #/            projects  (one card per registered workspace)
- *   #/w/<label>   that project's chats
+ *   #/            home: every live chat, history behind a disclosure
+ *   #/w/<label>   one project's chats, its history open (a deep link)
  *   #/c/<addr>    one chat: history, live stream, composer
  *
  * The one rule that shapes the whole file: THE SERVER DECIDES, THE PAGE
@@ -22,12 +22,12 @@ var el = function (id) { return document.getElementById(id); };
  * and `turnHold` the moment until which it is too old to trust. `day` is
  * the local calendar day of the last prose entry that carried a time
  * (grove-303) — what decides whether the next one needs a separator. */
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '' };
+var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '', hist: {} };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
  * painted. */
-var poll = { timer: null, inflight: false, sig: null };
+var poll = { timer: null, inflight: false, sig: null, at: 0 };
 /* The last few chats left, kept rendered (grove-297): without this, every
  * trip back into a chat replayed its whole transcript from seq 0 — a long
  * orchestrator chat re-parsed hundreds of markdown blocks and scrolled the
@@ -36,6 +36,11 @@ var poll = { timer: null, inflight: false, sig: null };
 var chatCache = [];
 var CHAT_CACHE = 3;
 var POLL_MS = 5000;
+/* With notifications on, the list keeps being read while nobody is looking
+ * at it (tab hidden, or a chat open) so a chat going `waiting` elsewhere
+ * can alert (grove-302). Slower than the on-screen beat: it is the
+ * operator's battery, and a question keeps. */
+var WATCH_MS = 15000;
 
 /* ---------------- transport ---------------- */
 
@@ -69,6 +74,7 @@ function loadChats() {
   return api('/api/chats').then(function (j) {
     view.chats = j.chats || [];
     view.loaded = true;
+    noteRows();
     return view.chats;
   });
 }
@@ -178,91 +184,166 @@ function setHeader(title, sub, back) {
   el('end').hidden = true;
 }
 
-/* ---------------- screen 1: projects ---------------- */
+/* ---------------- screen 1: home — the live chats (grove-302) ---------------- */
 
-function screenProjects() {
-  setHeader('gv chat', 'orchestrator chats', null);
-  el('footer').hidden = true;
-  var main = el('main');
-  main.textContent = '';
+/* The home screen answers "which chat do I open?" in one tap. It used to be
+ * a projects list that only carried counts (`2 live · 14 other`), so the
+ * chat you actually use was three taps away. Now every live row (kind chat,
+ * plus the cockpit's read-only pane) across every workspace is on screen,
+ * and the past sits behind a per-workspace `history (N)` disclosure.
+ *
+ * "archived" is the contract's word (kind: "archived"); "history" is the
+ * page's. Every string the operator reads says history. */
+
+/* A live chat quiet for longer than this offers to be ended: it is holding
+ * a Claude process (and its memory) that nobody has spoken to in hours. */
+var IDLE_HINT_S = 3 * 3600;
+var HISTORY_EXPLAIN = 'history = conversations with no running Claude process; tap one to revive it.';
+
+/* liveOrder is the home screen's whole order rule, and the only one this
+ * file has: needs you → running → most recently active. It deliberately
+ * spans workspaces — a question blocking an agent in unbrewed outranks a
+ * quiet chat in grove, whatever their labels. The server's `ls` order
+ * (chat.Less: workspace, kind, recency, number) is what ties fall back to,
+ * because the sort is stable. */
+function liveOrder(a, b) {
+  if (!!a.waiting !== !!b.waiting) return a.waiting ? -1 : 1;
+  if (!!a.busy !== !!b.busy) return a.busy ? -1 : 1;
+  return new Date(activeAt(b)).getTime() - new Date(activeAt(a)).getTime();
+}
+
+/* The kind as the operator reads it — the badge and the chat subtitle. */
+function kindWord(c) { return c.kind === 'archived' ? 'history' : c.kind; }
+
+/* idleFor is the `idle 5h · end?` label, or '' when the row gets no hint:
+ * only a live kind-chat row can be ended, and one sitting on a question is
+ * not idle, it is waiting on the operator. Same rounding as ago(), so the
+ * list signature (which folds ago) moves whenever this label does. */
+function idleFor(c) {
+  if (c.kind !== 'chat' || c.waiting) return '';
+  var s = (Date.now() - new Date(activeAt(c)).getTime()) / 1000;
+  if (!(s > IDLE_HINT_S)) return '';
+  return 'idle ' + (s < 172800 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd') + ' · end?';
+}
+
+function stateBadge(c) {
+  if (c.kind === 'archived') return h('span', 'badge history', 'history');
+  if (c.waiting) return h('span', 'badge waiting', 'needs you');
+  if (c.kind === 'cockpit') return h('span', 'badge cockpit', 'cockpit');
+  return h('span', 'badge chat', c.busy ? 'running' : 'not running');
+}
+
+/* chatRow is one tappable chat, on every list. showWs tags it with its
+ * workspace — on the home screen, where rows from different workspaces sit
+ * together; not where the workspace is already the heading. */
+function chatRow(c, showWs) {
+  var b = h('button', 'row' + (c.waiting ? ' waiting' : ''));
+  b.append(h('div', 'title', chatTitle(c)));
+  var meta = h('div', 'meta');
+  if (showWs) meta.append(h('span', 'ws', c.workspace));
+  meta.append(stateBadge(c));
+  if (c.busy) meta.append(h('span', 'dot'));
+  var idle = idleFor(c);
+  if (!idle) meta.append(h('span', '', ago(activeAt(c))));
+  if (c.kind === 'cockpit') meta.append(h('span', '', 'read-only'));
+  if (!c.session_id) meta.append(h('span', '', 'unidentified'));
+  if (idle) {
+    /* grove-294's End-chat sheet, reached from the row: it explains what
+     * ending keeps before it does anything. */
+    var end = h('span', 'idle', idle);
+    end.setAttribute('role', 'button');
+    end.onclick = function (ev) { ev.stopPropagation(); openEndSheet(c); };
+    meta.append(end);
+  }
+  b.append(meta);
+  b.onclick = function () { location.hash = '#/c/' + encodeURIComponent(addr(c)); };
+  return b;
+}
+
+/* newChat is `+ new chat`, wherever it is tapped. With profiles configured
+ * the choice is always SHOWN, never inferred — the desk's own rule
+ * (grove-105: `)` opens the picker even for a lone profile). Zero profiles:
+ * no sheet, straight to the host default. */
+function newChat(label, add) {
+  if (view.profiles.length) return openProfileSheet(label, add);
+  spawnChat(label, '', add);
+}
+
+/* One workspace's footer on the home screen: its name, `+ new chat`, and
+ * its history behind a disclosure that expands INLINE (Dean, 2026-09-25) —
+ * open state is per workspace and survives the 5s poll's repaints.
+ * forceOpen is the #/w/<label> deep link, which exists to show history. */
+function workspaceBlock(label, rows, forceOpen) {
+  var sec = h('section', 'ws-block');
+  var head = h('div', 'ws-head');
+  head.append(h('span', 'ws-name', label));
+  var add = h('button', 'ws-new', '+ new chat');
+  add.setAttribute('aria-label', 'new chat in ' + label);
+  add.onclick = function () { newChat(label, add); };
+  head.append(add);
+  sec.append(head);
+  var past = rows.filter(function (c) { return c.kind === 'archived'; });
+  if (!past.length) return sec;
+  var open = forceOpen || !!view.hist[label];
+  var t = h('button', 'disclosure', (open ? '▾ ' : '▸ ') + 'history (' + past.length + ')');
+  t.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (forceOpen) t.disabled = true;
+  else t.onclick = function () {
+    view.hist[label] = !open;
+    var main = el('main'), top = main.scrollTop;
+    render();
+    main.scrollTop = top;
+  };
+  sec.append(t);
+  if (open) {
+    sec.append(h('div', 'explain', HISTORY_EXPLAIN));
+    past.forEach(function (c) { sec.append(chatRow(c, false)); });
+  }
+  return sec;
+}
+
+function byWorkspace() {
   var labels = [], by = {};
   view.chats.forEach(function (c) {
     if (!by[c.workspace]) { by[c.workspace] = []; labels.push(c.workspace); }
     by[c.workspace].push(c);
   });
   labels.sort();
-  if (!labels.length) {
+  return { labels: labels, by: by };
+}
+
+function screenHome() {
+  setHeader('gv chat', 'live chats', null);
+  el('footer').hidden = true;
+  var main = el('main');
+  main.textContent = '';
+  var g = byWorkspace();
+  if (!g.labels.length) {
     main.append(h('div', 'empty', view.loaded
       ? 'no orchestrator chats on this machine yet'
       : 'loading…'));
     return;
   }
-  labels.forEach(function (label) {
-    var rows = by[label];
-    var live = rows.filter(function (c) { return c.kind === 'chat'; }).length;
-    var arch = rows.length - live;
-    /* The card answers "where was I?", which counts alone never could:
-     * the freshest activity in the project, across all three kinds. */
-    var last = rows.reduce(function (best, c) {
-      var t = new Date(activeAt(c)).getTime();
-      return t > best ? t : best;
-    }, 0);
-    var b = h('button', 'row');
-    b.append(h('div', 'title', label));
-    var meta = h('div', 'meta');
-    meta.append(h('span', '', live + ' live'), h('span', '', arch + ' other'));
-    if (last > 0) meta.append(h('span', '', ago(new Date(last).toISOString())));
-    if (rows.some(function (c) { return c.busy; })) meta.append(h('span', 'dot'));
-    b.append(meta);
-    b.onclick = function () { location.hash = '#/w/' + encodeURIComponent(label); };
-    main.append(b);
-  });
+  var live = view.chats.filter(function (c) { return c.kind !== 'archived'; }).sort(liveOrder);
+  if (live.length) live.forEach(function (c) { main.append(chatRow(c, true)); });
+  else main.append(h('div', 'empty', 'no live chats — start one below, or revive one from history'));
+  g.labels.forEach(function (label) { main.append(workspaceBlock(label, g.by[label], false)); });
 }
 
-/* ---------------- screen 2: a project's chats ---------------- */
+/* ---------------- #/w/<label>: one workspace ---------------- */
 
+/* Kept as a deep link (grove-302): the same rows as home, one workspace,
+ * with its history already open. */
 function screenWorkspace(label) {
   setHeader(label, 'chats in this project', function () { location.hash = '#/'; });
   el('footer').hidden = true;
   var main = el('main');
   main.textContent = '';
-
-  var add = h('button', 'row new');
-  add.append(h('div', 'title', '+ new chat'));
-  add.append(h('div', 'meta', view.profiles.length
-    ? 'spawns grove-chat-' + label + '-<n> on a backend you pick'
-    : 'spawns grove-chat-' + label + '-<n> and opens it'));
-  /* With profiles configured the choice is always SHOWN, never inferred —
-   * the desk's own rule (grove-105: `)` opens the picker even for a lone
-   * profile). Zero profiles: no sheet, straight to the host default. */
-  add.onclick = function () {
-    if (view.profiles.length) return openProfileSheet(label, add);
-    spawnChat(label, '', add);
-  };
-  main.append(add);
-
   var rows = view.chats.filter(function (c) { return c.workspace === label; });
-  if (!rows.length) { main.append(h('div', 'empty', 'no chats here yet')); return; }
-  rows.forEach(function (c) {
-    var b = h('button', 'row');
-    b.append(h('div', 'title', chatTitle(c)));
-    var meta = h('div', 'meta');
-    meta.append(h('span', 'badge ' + c.kind, c.kind));
-    if (c.session) meta.append(h('span', '', c.session));
-    meta.append(h('span', '', ago(activeAt(c))));
-    if (c.busy) meta.append(h('span', 'dot'));
-    if (!c.writable) meta.append(h('span', '', 'read-only'));
-    if (!c.session_id) meta.append(h('span', '', 'unidentified'));
-    if (c.kind === 'chat') {
-      var end = h('span', 'end', 'end');
-      end.setAttribute('role', 'button');
-      end.onclick = function (ev) { ev.stopPropagation(); openEndSheet(c); };
-      meta.append(end);
-    }
-    b.append(meta);
-    b.onclick = function () { location.hash = '#/c/' + encodeURIComponent(addr(c)); };
-    main.append(b);
-  });
+  rows.filter(function (c) { return c.kind !== 'archived'; }).sort(liveOrder)
+    .forEach(function (c) { main.append(chatRow(c, false)); });
+  main.append(workspaceBlock(label, rows, true));
+  if (!rows.length) main.append(h('div', 'empty', 'no chats here yet'));
 }
 
 /* spawnChat is the one place `+ new chat` reaches the server, whichever
@@ -271,15 +352,15 @@ function screenWorkspace(label) {
  * on its own Claude. */
 function spawnChat(label, profile, add) {
   add.classList.add('busy');
-  add.querySelector('.title').textContent = 'starting a chat…';
+  (add.querySelector('.title') || add).textContent = 'starting a chat…';
   var body = {};
   if (profile) body.profile = profile;
   return api('/api/workspaces/' + encodeURIComponent(label) + '/new', body)
     .then(function (j) {
       if (j.session) forgetChat(j.session);
       return loadChats().then(function () {
-        location.hash = j.session ? '#/c/' + encodeURIComponent(j.session) : '#/w/' + encodeURIComponent(label);
-        if (!j.session) render();
+        if (j.session) location.hash = '#/c/' + encodeURIComponent(j.session);
+        else render();
       });
     })
     .catch(function (e) { render(); showError(e); });
@@ -376,10 +457,10 @@ function screenChat(a) {
    * that did land comes back on the replay like any other entry. A cached
    * transcript brings its own back further down. */
   view.pending = [];
-  var back = function () {
-    location.hash = c ? '#/w/' + encodeURIComponent(c.workspace) : '#/';
-  };
-  setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + c.kind : 'chat', back);
+  /* Back is always home (grove-302): the live list is one tap from every
+   * chat, including one opened cold from a notification. */
+  var back = function () { location.hash = '#/'; };
+  setHeader(c ? chatTitle(c) : a, c ? c.workspace + ' · ' + kindWord(c) : 'chat', back);
   if (c && c.kind === 'chat') {
     el('end').hidden = false;
     el('end').onclick = function () { openEndSheet(c); };
@@ -849,7 +930,7 @@ function composer(c) {
     text.placeholder = 'read-only';
     el('why').textContent = c.kind === 'cockpit'
       ? 'this is the cockpit’s own orchestrator pane — someone may be typing in it at the desk, so it is read-only here'
-      : 'archived: no live pane. revive it to continue the same conversation.';
+      : 'history: no running Claude process. revive it to continue the same conversation.';
     if (c.kind === 'archived' && c.session_id) {
       resume.hidden = false;
       resume.textContent = 'revive this chat';
@@ -858,7 +939,7 @@ function composer(c) {
         resume.textContent = 'reviving…';
         api('/api/chats/' + encodeURIComponent(addr(c)) + '/resume', {})
           .then(function (j) {
-            /* A revived chat is a new session: neither the archived
+            /* A revived chat is a new session: neither the history
              * transcript on screen nor any kept copy may be resumed into
              * it. Closing the stream first is what stops render() from
              * keeping the one on screen. */
@@ -1118,7 +1199,7 @@ function keyButton(box, k, text) {
  * picker state per chat, so only the edge into one alerts. */
 var NOTIFY_KEY = 'gv-chat:notify';
 var SETTLE_MS = 1500;
-var alerts = { live: false, settle: null, waiting: {}, picked: {}, endSeq: 0 };
+var alerts = { live: false, settle: null, waiting: {}, picked: {}, endSeq: 0, rows: null };
 
 function notifySupported() {
   return 'Notification' in window && window.isSecureContext;
@@ -1143,6 +1224,7 @@ function toggleNotify() {
     try { localStorage.setItem(NOTIFY_KEY, v ? '1' : '0'); } catch (_) { /* per-device nicety */ }
     if (!v) { alerts.waiting = {}; syncBadge(true); }
     paintNotify();
+    syncPolling();
   };
   if (notifyOn()) { set(false); return; }
   if (Notification.permission === 'granted') { set(true); return; }
@@ -1214,12 +1296,36 @@ function notify(a, body) {
   }).catch(direct);
 }
 
-/* The app badge counts chats sitting on a picker. It only exists on an
- * installed PWA (grove-296), and only while notifications are on — off is
- * exactly the old page. */
+/* noteRows is "needs you" off the LIST (grove-302): every live chat's
+ * `waiting`, which the server reads from a pane capture per row. Before it,
+ * only the open chat's stream knew a picker was up, so a question blocking
+ * any other chat stayed silent. `rows` is the last list's waiting set; null
+ * until the first load, which is a baseline and never alerts — opening the
+ * app is not news. Only the false→true edge alerts, and never for the open
+ * chat: its own stream's picker event (notePicker) already does that. */
+function noteRows() {
+  var now = {};
+  view.chats.forEach(function (c) { if (c.waiting) now[addr(c)] = true; });
+  var base = alerts.rows;
+  alerts.rows = now;
+  syncBadge();
+  if (!base || !notifyOn()) return;
+  Object.keys(now).forEach(function (a) {
+    if (base[a] || (view.es && a === view.addr)) return;
+    notify(a, 'needs you — it is waiting on a question');
+  });
+}
+
+/* The app badge counts chats sitting on a picker: the list's `waiting`
+ * rows plus the open chat's own stream, which sees one within a second.
+ * It only exists on an installed PWA (grove-296), and only while
+ * notifications are on — off is exactly the old page. */
 function syncBadge(force) {
   if (!navigator.setAppBadge || (!force && !notifyOn())) return;
-  var n = Object.keys(alerts.waiting).length;
+  var set = {};
+  Object.keys(alerts.waiting).forEach(function (a) { set[a] = true; });
+  if (alerts.rows) Object.keys(alerts.rows).forEach(function (a) { set[a] = true; });
+  var n = Object.keys(set).length;
   (n && notifyOn() ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(function () { /* garnish */ });
 }
 
@@ -1232,7 +1338,7 @@ function render() {
   var parts = (location.hash || '#/').slice(1).split('/');
   if (parts[1] === 'w' && parts[2]) screenWorkspace(decodeURIComponent(parts[2]));
   else if (parts[1] === 'c' && parts[2]) screenChat(decodeURIComponent(parts[2]));
-  else screenProjects();
+  else screenHome();
   /* Whatever just landed on screen IS the painted state, however it got
    * there (first load, ⟳, a tap, a poll). Recording it here is what keeps
    * repaintList's change check honest from every entry point. */
@@ -1260,10 +1366,11 @@ function isListScreen() {
  * a poll that returns an identical list is a no-op down to the DOM. */
 function listSig() {
   if (!isListScreen()) return null;
-  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0];
+  var open = Object.keys(view.hist).filter(function (k) { return view.hist[k]; }).sort().join(',');
+  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0, open];
   view.chats.forEach(function (c) {
     parts.push(c.workspace, c.kind, c.session || '', c.session_id || '',
-      chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, ago(activeAt(c)));
+      chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, c.waiting ? 1 : 0, ago(activeAt(c)));
   });
   return parts.join('\u0000');
 }
@@ -1287,9 +1394,17 @@ function repaintList() {
  * closes the sheet, so a poll underneath an open sheet would dismiss the
  * question the operator is mid-way through answering. */
 function refreshList() {
-  if (!isListScreen() || document.hidden || poll.inflight) return;
-  if (!el('sheet').hidden) return;
+  if (poll.inflight) return;
+  if (isListScreen() && !document.hidden) {
+    if (!el('sheet').hidden) return;
+  } else if (!notifyOn() || Date.now() - poll.at < WATCH_MS) {
+    /* Off screen, the list is only read to watch for `waiting` — and
+     * only for an operator who asked to be notified. repaintList below is
+     * inert there: listSig is null off a list screen. */
+    return;
+  }
   poll.inflight = true;
+  poll.at = Date.now();
   /* Re-phase the timer so a hashchange or a refocus and the next tick do
    * not land back to back. */
   if (poll.timer) { clearInterval(poll.timer); poll.timer = setInterval(refreshList, POLL_MS); }
@@ -1304,9 +1419,10 @@ function refreshList() {
 }
 
 /* The timer exists only while it is allowed to fetch, so a backgrounded tab
- * or an open chat costs literally nothing rather than a guarded wake-up. */
+ * or an open chat costs literally nothing rather than a guarded wake-up —
+ * unless notifications are on, when watching for `waiting` is the point. */
 function syncPolling() {
-  var want = isListScreen() && !document.hidden;
+  var want = (isListScreen() && !document.hidden) || notifyOn();
   if (want && !poll.timer) poll.timer = setInterval(refreshList, POLL_MS);
   else if (!want && poll.timer) { clearInterval(poll.timer); poll.timer = null; }
 }
