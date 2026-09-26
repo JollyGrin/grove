@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -676,9 +677,8 @@ func TestReceiveStopNoRecordedIDFallsBackToCwd(t *testing.T) {
 	}
 }
 
-// session-start is exempt from the gate: a NEW id at the same cwd is how
-// `gv adopt`'s fresh pickup session registers, and the fold re-points the
-// task's SessionID at it.
+// A NEW id at the same cwd is how `gv adopt`'s fresh pickup session
+// registers, and the fold re-points the task's SessionID at it.
 func TestReceiveSessionStartNewIDRegisters(t *testing.T) {
 	withNtfy(t, config.Notify{})
 	dir := t.TempDir()
@@ -689,6 +689,10 @@ func TestReceiveSessionStartNewIDRegisters(t *testing.T) {
 	if got := refresh(t, dir)["DEV-1"].SessionID; got != "s-old" {
 		t.Fatalf("recorded id = %q, want s-old", got)
 	}
+	// gv adopt appends task_adopted before the pickup session boots. No
+	// refresh: the scanned tasks.json still says working/s-old, so the
+	// receiver must consult the log itself (grove-339).
+	adopt(t, dir, "DEV-1")
 	before := countLines(t, dir)
 	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-new", cwd, ""))); err != nil {
 		t.Fatal(err)
@@ -725,7 +729,10 @@ func TestReceiveSessionEndGatedOnCurrentSession(t *testing.T) {
 	withNtfy(t, config.Notify{})
 	dir := t.TempDir()
 	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
-	for _, id := range []string{"s-old", "s-new"} {
+	for i, id := range []string{"s-old", "s-new"} {
+		if i > 0 {
+			adopt(t, dir, "DEV-1") // the replacement goes through gv adopt
+		}
 		if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", id, cwd, ""))); err != nil {
 			t.Fatal(err)
 		}
@@ -764,5 +771,108 @@ func TestReceiveSessionEndGatedOnCurrentSession(t *testing.T) {
 	}
 	if task := refresh(t, dir)["DEV-1"]; task.Agent != state.AgentDead {
 		t.Errorf("agent = %s after the current session's end, want dead", task.Agent)
+	}
+}
+
+// --- nested sessions in a live worker's worktree (grove-339) ---
+
+// adopt appends what `gv adopt` does before launching the pickup session.
+func adopt(t *testing.T, stateDir, ticket string) {
+	t.Helper()
+	if err := state.Append(stateDir, state.Event{Type: state.EvTaskAdopted, Ticket: ticket}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The payload shapes a nested `claude -p "reply OK"` fires from inside the
+// worktree, captured verbatim (paths aside) on Claude Code 2.1.283: every
+// one carries the NESTED session's own id — nothing is empty.
+func nestedPayloads(cwd string) (start, stop, end string) {
+	const id = "4d64710d-9099-4986-98ab-4bed64554e18"
+	tp := "/Users/x/.claude/projects/-wt/" + id + ".jsonl"
+	start = fmt.Sprintf(`{"session_id":%q,"transcript_path":%q,"cwd":%q,"hook_event_name":"SessionStart","source":"startup"}`, id, tp, cwd)
+	stop = fmt.Sprintf(`{"session_id":%q,"transcript_path":%q,"cwd":%q,"prompt_id":"19d1a6a9-2831-472b-88ca-6a13f27f609f","permission_mode":"default","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"OK","background_tasks":[],"session_crons":[]}`, id, tp, cwd)
+	end = fmt.Sprintf(`{"session_id":%q,"transcript_path":%q,"cwd":%q,"prompt_id":"19d1a6a9-2831-472b-88ca-6a13f27f609f","hook_event_name":"SessionEnd","reason":"other"}`, id, tp, cwd)
+	return
+}
+
+// The grove-317 incident: a nested claude's start/stop/end land at the
+// live worker's cwd. None may touch the task (no re-registration, no
+// idle, no dead), and the worker's own events still land afterwards.
+func TestReceiveNestedSessionLeavesWorkerUntouched(t *testing.T) {
+	withNtfy(t, config.Notify{})
+	dir := t.TempDir()
+	cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+	if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-worker", cwd, ""))); err != nil {
+		t.Fatal(err)
+	}
+	refresh(t, dir)
+
+	evData, evMtime := snapshot(t, filepath.Join(dir, "events.jsonl"))
+	start, stop, end := nestedPayloads(cwd)
+	for _, c := range []struct{ event, payload string }{
+		{"session-start", start}, {"stop", stop}, {"session-end", end},
+	} {
+		if err := Receive(single(dir), c.event, strings.NewReader(c.payload)); err != nil {
+			t.Fatalf("nested %s must be a silent no-op, got %v", c.event, err)
+		}
+		refresh(t, dir) // a cockpit tick between hooks must not help the intruder either
+	}
+	assertUnchanged(t, filepath.Join(dir, "events.jsonl"), evData, evMtime)
+	task := refresh(t, dir)["DEV-1"]
+	if task.SessionID != "s-worker" || task.Agent != state.AgentWorking || task.LastMessage != "" {
+		t.Fatalf("nested session corrupted the worker: session=%q agent=%s last=%q", task.SessionID, task.Agent, task.LastMessage)
+	}
+
+	before := countLines(t, dir)
+	if err := Receive(single(dir), "stop", strings.NewReader(payloadFor("Stop", "s-worker", cwd, "STATUS: DONE — shipped"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(t, dir); got != before+1 {
+		t.Fatalf("worker's own stop: %d → %d events, want +1", before, got)
+	}
+	if task := refresh(t, dir)["DEV-1"]; task.Sentinel != "done" {
+		t.Errorf("worker's stop did not land: sentinel=%s", task.Sentinel)
+	}
+}
+
+// Legitimate id changes still register: a restart after the worker
+// exited (dead), a paused task revived, and a /clear in the worker pane.
+func TestReceiveSessionStartNewIDWhenNotLive(t *testing.T) {
+	cases := []struct {
+		name   string
+		before func(t *testing.T, dir, cwd string)
+		source string
+	}{
+		{"after session end", func(t *testing.T, dir, cwd string) {
+			if err := Receive(single(dir), "session-end", strings.NewReader(payloadFor("SessionEnd", "s-old", cwd, ""))); err != nil {
+				t.Fatal(err)
+			}
+		}, "startup"},
+		{"paused", func(t *testing.T, dir, cwd string) {
+			if err := state.Append(dir, state.Event{Type: state.EvTaskPaused, Ticket: "DEV-1"}); err != nil {
+				t.Fatal(err)
+			}
+		}, "startup"},
+		{"clear in the live pane", func(*testing.T, string, string) {}, "clear"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withNtfy(t, config.Notify{})
+			dir := t.TempDir()
+			cwd := seedFleet(t, dir, "DEV-1", t.TempDir())
+			if err := Receive(single(dir), "session-start", strings.NewReader(payloadFor("SessionStart", "s-old", cwd, ""))); err != nil {
+				t.Fatal(err)
+			}
+			refresh(t, dir)
+			c.before(t, dir, cwd)
+			b, _ := json.Marshal(map[string]string{"session_id": "s-new", "cwd": cwd, "hook_event_name": "SessionStart", "source": c.source})
+			if err := Receive(single(dir), "session-start", strings.NewReader(string(b))); err != nil {
+				t.Fatal(err)
+			}
+			if task := refresh(t, dir)["DEV-1"]; task.SessionID != "s-new" || task.Paused {
+				t.Errorf("session=%q paused=%v, want s-new registered", task.SessionID, task.Paused)
+			}
+		})
 	}
 }

@@ -27,6 +27,19 @@ changes the behavior.
   `dead` genuinely means crashed/exited.
 - When an agent drops the `STATUS:` sentinel, classification degrades to
   `stalled` — correct behavior, not a defect.
+- **A nested `claude` (e.g. `claude -p` from a worker's Bash tool) fires
+  the full hook set from the worktree**: SessionStart (`source:
+  "startup"`), Stop and SessionEnd, each carrying the NESTED session's own
+  non-empty `session_id` (2.1.283, grove-339). So a tracked cwd plus a new
+  id at SessionStart is not proof of a restart. Only a non-live row
+  (setup/dead/paused) or `source: "clear"` may re-register a task. The hook
+  env has no reliable nesting marker (`CLAUDE_CODE_CHILD_SESSION=1` also
+  shows up at the top level).
+- SessionStart `source` is one of `startup | resume | clear | compact`.
+- **Hook commands pin an absolute binary path** (`os.Executable()` at
+  `gv hooks install`). If the hooks point somewhere `gv update` does not
+  write, every hook-side fix silently never ships. Check the path in
+  `settings.json`.
 
 ## Sessions, resume, transcripts
 

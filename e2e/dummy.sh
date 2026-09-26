@@ -175,6 +175,21 @@ printf '{"session_id":"s-intruder","cwd":"%s","hook_event_name":"Stop","last_ass
 [ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -eq "$EV_BEFORE_INTRUDER" ] || fail "a foreign session's stop hijacked the worker (appended an event)"
 grep -q 's-intruder' "$GROVE_STATE_DIR/events.jsonl" && fail "intruder session id leaked into events.jsonl" || true
 
+say "hook session gate: a nested claude in the live worker's worktree cannot re-register, idle or kill it (grove-339)"
+# The full hook set a nested `claude -p` fires from the worktree (Claude
+# Code 2.1.283 shapes): its own session id on every payload, SessionStart
+# included. That start used to be exempt and re-point the task at itself.
+EV_BEFORE_NESTED=$(wc -l < "$GROVE_STATE_DIR/events.jsonl")
+printf '{"session_id":"s-nested","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$WTDIR" | "$GV" hook session-start
+"$GV" ls --json --no-pr --no-cost > /dev/null # a fold between hooks must not help it either
+printf '{"session_id":"s-nested","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"OK"}' "$WTDIR" | "$GV" hook stop
+printf '{"session_id":"s-nested","cwd":"%s","hook_event_name":"SessionEnd","reason":"other"}' "$WTDIR" | "$GV" hook session-end
+[ "$(wc -l < "$GROVE_STATE_DIR/events.jsonl")" -eq "$EV_BEFORE_NESTED" ] || fail "a nested session's hooks appended to the worker's task"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-nested.json"
+grep -q '"claude_session_id": *"s-pause-1"' "$SCRATCH/ls-nested.json" || fail "nested session re-registered the task"
+grep -q '"agent": *"dead"' "$SCRATCH/ls-nested.json" && fail "nested session-end stamped the live worker dead" || true
+grep -q '"agent": *"idle"' "$SCRATCH/ls-nested.json" && fail "nested stop stamped the live worker idle" || true
+
 say "gv pause guards a mid-turn worker (agent working) behind --force"
 ("$GV" pause task-001 2>&1 || true) > "$SCRATCH/pause-guard.out"
 grep -q 'mid-turn' "$SCRATCH/pause-guard.out" || fail "pause should warn about the in-flight turn"

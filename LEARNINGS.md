@@ -135,6 +135,34 @@
   makes a task unreachable. The brain rule "never `cd` into a tracked
   worktree from the orchestrator" stays as belt; this is the braces.
 
+- **2026-09-26 · a nested `claude` fires the FULL hook set, SessionStart
+  included, each with its own session id; exempting SessionStart handed
+  it the task** (grove-339; incident on grove-317). Captured raw on Claude
+  Code 2.1.283 with `claude -p "reply OK"` run from inside another
+  session's Bash tool: SessionStart
+  (`{"session_id","transcript_path","cwd","hook_event_name","source":"startup"}`),
+  Stop (adds `prompt_id`, `permission_mode`, `stop_hook_active`,
+  `last_assistant_message`, `background_tasks`, `session_crons`) and
+  SessionEnd (`"reason":"other"`) all carry the nested session's own
+  non-empty id. So the ticket's suspect "print mode omits session_id" was
+  wrong. The hole was the grove-250 exemption: the nested SessionStart
+  re-pointed the task's `claude_session_id` at itself, its Stop then
+  passed the gate as `idle` ("OK"), and its SessionEnd as `dead`, while the
+  worker spun mid-turn. Worse, the real worker's later events were then
+  dropped as foreign. Now a SessionStart with a NEW id registers only
+  when the row is not live (setup after grab/adopt, dead, paused) or its
+  `source` is `clear`. The derived tasks.json can lag an adopt by a fold,
+  so a mismatch is re-checked with a read-only `state.Peek` fold before it
+  is dropped. The hook env carries no usable nesting marker:
+  `CLAUDE_CODE_CHILD_SESSION=1` was already set in a top-level session's
+  env too. **Second finding on the live host:** both `~/.claude` and
+  `~/.cc-work` `settings.json` point the hooks at `~/.local/bin/gv`, a
+  v0.1.3 binary from 2026-08-19, while `gv update` refreshes
+  `~/go/bin/gv` (v0.1.50). No grove-250 guard ran in production at all;
+  grove-317's `agent_status` records have no `session_id` field for that
+  reason. Hooks bake in `os.Executable()` at `gv hooks install` time, so
+  a re-install from the updated binary is the operator's fix.
+
 - **2026-08-31 · `claude --session-id <uuid>` exists — mint identity, never
   infer it; and a claude holds NO fd on its transcript** (grove-222, fixing
   the grove-215 resolver). Two facts, both verified live. (1) The CLI takes
