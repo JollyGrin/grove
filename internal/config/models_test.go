@@ -67,6 +67,33 @@ func TestPinModelReplacesAHandWrittenFlag(t *testing.T) {
 	}
 }
 
+// TestPinModelStripsRepoHardcodedModel is grove-142's exact repro: a repo's
+// `claude:` line hardcodes its own --model (e.g. unbrewed-p2p's `claude
+// --dangerously-skip-permissions --model opus`). Before PinModel existed,
+// grab/adopt ran this through the bare WithModel, which left the repo's
+// --model in place; claude's own last-flag-wins parser then silently ran
+// opus while gv reported the sonnet pin as applied.
+func TestPinModelStripsRepoHardcodedModel(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+	}{
+		{"space form", "claude --dangerously-skip-permissions --model opus"},
+		{"equals form", "claude --dangerously-skip-permissions --model=opus"},
+		{"quoted form", "claude --dangerously-skip-permissions --model 'opus'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PinModel(tc.cmd, "sonnet")
+			if ModelFlag(got) != "sonnet" {
+				t.Fatalf("PinModel(%q, sonnet) = %q, reads back %q, want sonnet", tc.cmd, got, ModelFlag(got))
+			}
+			if strings.Contains(got, "opus") {
+				t.Fatalf("PinModel(%q, sonnet) = %q, the repo's opus flag survived", tc.cmd, got)
+			}
+		})
+	}
+}
+
 func TestRunsModel(t *testing.T) {
 	p := &ModelProfile{Opus: "glm-5", Sonnet: "glm-4.6", Haiku: "glm-air"}
 	cases := []struct {
