@@ -50,11 +50,6 @@ type Turn struct {
 	Line string `json:"line,omitempty"`
 }
 
-// errorTail is how far up from the bottom a death marker still counts.
-// Claude Code prints the error just above its input box; one further up is
-// scrollback from a turn the operator has since moved past.
-const errorTail = 15
-
 // ClassifyTurn reads one pane capture. alive is whether the pane exists
 // AND runs a claude process (chat.Busy) — that is the only thing busy is
 // good for: it says "claude is here", never "claude is mid-turn".
@@ -73,7 +68,9 @@ func ClassifyTurn(capture string, alive bool) Turn {
 	case status == detect.StatusWaiting:
 		return Turn{State: TurnWaiting}
 	}
-	if reason, line, ok := detect.ErrorMarker(bottomLines(capture, errorTail)); ok {
+	// grove-347: ErrorMarker windows to its own bottom-of-pane tail and
+	// skips code/diff gutter lines, so the full capture goes in as-is.
+	if reason, line, ok := detect.ErrorMarker(capture); ok {
 		return Turn{State: TurnErrored, Reason: reason, Line: line}
 	}
 	if status == detect.StatusIdle && hasClaude {

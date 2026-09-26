@@ -226,6 +226,31 @@ func TestLivenessTransitions_ErroredIsImmediate(t *testing.T) {
 	}
 }
 
+// grove-347: a worker's pane merely showing internal/detect/grove.go (a
+// source or diff view quoting every marker string, well within tmux's
+// bottom-30 PaneContent capture) must not fire worker_errored — the
+// supervisor passes the pane through untrimmed, so detect.ErrorMarker
+// alone must window and gutter-skip to get this right.
+func TestLivenessTransitions_SourceViewIsNotAnError(t *testing.T) {
+	task := newTask("gr-347")
+	pane := "    54\t\t\tcase strings.Contains(l, \"Usage limit reached\"), strings.Contains(l, \"Request rejected (429)\"):\n" +
+		"    55\t\t\t\treturn \"usage_limit\", truncateRunes(l), true\n" +
+		"    56\t\t\tcase strings.Contains(l, \"computer went to sleep\"):\n" +
+		"    57\t\t\t\treturn \"sleep\", truncateRunes(l), true\n" +
+		"    58\t\t\tcase strings.Contains(l, \"API Error:\"):\n" +
+		"    59\t\t\t\treturn \"api_error\", truncateRunes(l), true\n" +
+		"    63\t\t\tcase strings.Contains(low, \"login expired\"),\n" +
+		"    64\t\t\t\tstrings.Contains(low, \"please run /login\"),\n" +
+		"    65\t\t\t\tstrings.Contains(low, \"oauth session expired\"):\n" +
+		"    66\t\t\t\treturn \"auth\", truncateRunes(l), true\n" +
+		"❯ "
+	live := detect.LiveInfo{Exists: true, HasClaude: true, Status: detect.StatusIdle, PaneContent: pane}
+	evs := Transitions(Observation{Task: task, PRKnown: true, Live: live, Now: t0()}, NewMemory())
+	if len(evs) != 0 {
+		t.Fatalf("a worker viewing its own source flapped an event: %+v", evs)
+	}
+}
+
 func TestLivenessTransitions_RecoveryEmitsOnce(t *testing.T) {
 	task := newTask("gr-13")
 	task.Liveness = &state.Liveness{State: state.LivenessErrored}
