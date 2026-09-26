@@ -21,6 +21,7 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/eeeb1234/resume", true, chatweb.RouteResume, "eeeb1234", "POST"},
 		{"/api/chats/grove-chat-unbrewed-1/close", true, chatweb.RouteClose, "grove-chat-unbrewed-1", "POST"},
 		{"/api/workspaces/unbrewed/new", true, chatweb.RouteNew, "unbrewed", "POST"},
+		{"/api/workspaces/unbrewed/models", true, chatweb.RouteModels, "unbrewed", "GET"},
 		// grove-225: the one route added to the closed table, and a READ.
 		{"/api/profiles", true, chatweb.RouteProfiles, "", "GET"},
 		// grove-307: the list screens' stream — and a chat addressed
@@ -45,6 +46,7 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/x", true, "", "", ""},
 		{"/api/chats/x/y/z", true, "", "", ""},
 		{"/api/workspaces/unbrewed", true, "", "", ""},
+		{"/api/workspaces//models", true, "", "", ""},
 		{"/api/workspaces//new", true, "", "", ""},
 		{"/api/profiles/", true, "", "", ""},
 		{"/api/profiles/openrouter-glm", true, "", "", ""},

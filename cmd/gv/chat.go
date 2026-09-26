@@ -30,6 +30,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -54,6 +55,7 @@ import (
 type chatSpawnReq struct {
 	Label   string // the REGISTERED workspace label, resolved on the far side
 	Profile string // model profile name, "" = the host's own Claude
+	Model   string // grove-293: pin the chat to this orchestrator.models tier, "" = the host default
 	Resume  string // grove-217: revive this Claude session id instead of starting fresh
 	Brief   string // grove-271: the chat's FIRST user message (the standing brief), text only
 	OpID    string // idempotency receipt for a relayed spawn
@@ -68,6 +70,11 @@ func chatHopArgs(r chatSpawnReq) []string {
 	args := []string{"new", "--op-id", r.OpID, "--as", r.Host, "--workspace", r.Label}
 	if r.Profile != "" {
 		args = append(args, "--profile", r.Profile)
+	}
+	// grove-293: --model rides between the profile and the brief, at one
+	// fixed place, so an op-id retry stays byte-equal to the hop it repeats.
+	if r.Model != "" {
+		args = append(args, "--model", r.Model)
 	}
 	if r.Resume != "" {
 		args = append(args, "--resume", r.Resume)
@@ -89,6 +96,9 @@ func chatManualRetry(r chatSpawnReq) string {
 	cmd := "gv orchestrator new --host " + remote.Quote(r.Host) + " --op-id " + r.OpID + " --workspace " + remote.Quote(r.Label)
 	if r.Profile != "" {
 		cmd += " --profile " + remote.Quote(r.Profile)
+	}
+	if r.Model != "" {
+		cmd += " --model " + remote.Quote(r.Model)
 	}
 	if r.Resume != "" {
 		cmd += " --resume " + remote.Quote(r.Resume)
@@ -187,6 +197,7 @@ func writeChatBrief(path, brief string) error {
 func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	fs := flag.NewFlagSet("orchestrator new --host", flag.ExitOnError)
 	profile := fs.String("profile", "", "open the remote chat on one of the HOST's model profiles")
+	model := fs.String("model", "", "pin the remote chat to one of the HOST's orchestrator.models tiers (default opus|sonnet|haiku)")
 	label := fs.String("workspace", "", "target this workspace label on the host (default: the ambient workspace's)")
 	resume := fs.String("resume", "", "revive one of the HOST's archived chats by Claude session id")
 	brief := fs.String("brief", "", "seed the remote chat's FIRST message with this text (the standing brief)")
@@ -219,7 +230,7 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	if *resume != "" && !chat.ValidSessionID(*resume) {
 		return 0, fmt.Errorf("--resume %q is not a Claude session id — run `gv chat ls --workspace %s` on %s to list them", *resume, *label, host)
 	}
-	req := chatSpawnReq{Label: *label, Profile: *profile, Resume: *resume, Brief: briefText, OpID: *opID, Host: host}
+	req := chatSpawnReq{Label: *label, Profile: *profile, Model: *model, Resume: *resume, Brief: briefText, OpID: *opID, Host: host}
 	cfg, err := loadCfg()
 	if err != nil {
 		return 0, err
@@ -253,6 +264,8 @@ type chatPlan struct {
 	Dir       string // the chat pane's cwd: OrchDir, or OrchDir/<profile>
 	Cmd       string // the orchestrator launch command
 	Profile   string // resolved profile name ("" = the host's own Claude)
+	Model     string // grove-293: the pinned tier ("" = the host default)
+	Runs      string // the model this chat WILL run (config.RunsModel) — its pane tag
 	Resume    string // the Claude session id being revived ("" = a fresh chat)
 	SessionID string // grove-222: the id this chat WILL run on — minted here for a
 	// fresh chat, the revived id for a --resume — so the pane can be stamped
@@ -274,16 +287,25 @@ type chatPlan struct {
 // profile wrapper goes on LAST, because WrapProfile ends in `exec <cmd> )`:
 // a flag appended after the wrap lands outside the subshell and is handed
 // to the shell instead of to claude.
-func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume, brief string, sessions []string) (chatPlan, error) {
+//
+// model (grove-293) pins a tier from the twin's orchestrator.models; an
+// unknown one fails here like an unknown profile. It is applied to the BARE
+// launch first — PinModel puts it right after the binary token — so the
+// profile wrap reads it and exports that tier's slug.
+func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, resume, brief string, sessions []string) (chatPlan, error) {
 	name, p, err := cfg.ResolveProfile(profile, nil)
 	if err != nil {
+		return chatPlan{}, err
+	}
+	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return chatPlan{}, err
 	}
 	if resume != "" && !chat.ValidSessionID(resume) {
 		return chatPlan{}, fmt.Errorf("--resume %q is not a Claude session id", resume)
 	}
 	orchDir := orchestratorDirFor(ws, cfg)
-	launch := orchestratorLaunch(cfg, ws.Root)
+	launch := config.PinModel(orchestratorLaunch(cfg, ws.Root), model)
+	runs := chatRunsModel(cfg, launch, p)
 	// grove-222: a FRESH chat gets its id minted here and handed to claude
 	// (`--session-id <uuid>`), so the pane's identity is known before the
 	// agent boots. A revival already has one — its own — and the two flags
@@ -315,6 +337,8 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, resume,
 		Dir:       orchDir,
 		Cmd:       launch,
 		Profile:   name,
+		Model:     model,
+		Runs:      runs,
 		Resume:    resume,
 		SessionID: id,
 		Brief:     brief,
@@ -404,7 +428,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		}
 		profile, revived = name, s.FirstPrompt
 	}
-	plan, err := chatSpawnPlan(cfg, ws, profile, r.Resume, r.Brief, tmux.SessionNames())
+	plan, err := chatSpawnPlan(cfg, ws, profile, r.Model, r.Resume, r.Brief, tmux.SessionNames())
 	if err != nil {
 		return err
 	}
@@ -443,12 +467,19 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 			fmt.Fprintf(os.Stderr, "warning: could not stamp %s with session id %s: %v\n", plan.Session, plan.SessionID, err)
 		}
 	}
+	// grove-293: the pane wears the model it runs, which `gv chat ls` reads
+	// back as the row's `model` (the phone's chat subtitle). Best-effort,
+	// like the stamp above.
+	tagChatSessionModel(plan.Session, plan.Runs)
 	data := map[string]string{"workspace": label, "session": plan.Session}
 	if r.OpID != "" {
 		data["op_id"] = r.OpID
 	}
 	if plan.Profile != "" {
 		data["profile"] = plan.Profile
+	}
+	if plan.Model != "" {
+		data["model"] = plan.Model
 	}
 	if plan.Resume != "" {
 		data["resume"] = plan.Resume
@@ -461,7 +492,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	if err := state.Append(twinState, state.Event{Type: state.EvOrchestratorSpawned, Data: data}); err != nil {
 		return err
 	}
-	fmt.Printf("✓ orchestrator chat %s — workspace %s%s%s\n", plan.Session, label, chatProfileSuffix(plan.Profile), chatResumeSuffix(plan.Resume, revived))
+	fmt.Printf("✓ orchestrator chat %s — workspace %s%s%s%s\n", plan.Session, label, chatProfileSuffix(plan.Profile), chatResumeSuffix(plan.Resume, revived), chatModelSuffix(plan.Runs))
 	fmt.Println(remote.ChatAttachLine(plan.Session))
 	if plan.Resume != "" {
 		// Verified 2026-08-31: `claude --resume` re-fires SessionStart with
@@ -471,6 +502,69 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		fmt.Println("  (resumed idle — it answers when you send something)")
 	}
 	return nil
+}
+
+// chatModelSuffix names the model the chat runs at the END of the success
+// line (appended, so earlier parsers of the line still match) — the
+// same resolved answer the pane is tagged with.
+func chatModelSuffix(runs string) string {
+	if runs == "" {
+		return ""
+	}
+	return ", model " + runs
+}
+
+// chatRunsModel is config.RunsModel over this config's Claude settings:
+// the model a bare (pinned, un-wrapped) launch will run.
+func chatRunsModel(cfg *config.Config, launch string, p *config.ModelProfile) string {
+	return config.RunsModel(launch, p, claudeSettingsModel(cfg.ClaudeConfigDir))
+}
+
+// claudeConfigDir resolves a Claude config dir the way the transcript
+// reader does (configDir, else GV_CLAUDE_CONFIG_DIR, else ~/.claude) — read
+// back out of transcript.ProjectDirIn rather than re-derived, so the two can
+// never drift, and without touching internal/transcript (ovs-byte-comparable).
+func claudeConfigDir(configDir string) string {
+	return filepath.Dir(filepath.Dir(transcript.ProjectDirIn(configDir, "/")))
+}
+
+// claudeSettingsModel reads the `model` key of a Claude config dir's
+// settings.json (configDir "" = the ambient dir, see claudeConfigDir).
+// Missing file, bad JSON or no key are all "": the caller then says
+// "account default" rather than guessing.
+func claudeSettingsModel(configDir string) string {
+	b, err := os.ReadFile(filepath.Join(claudeConfigDir(configDir), "settings.json"))
+	if err != nil {
+		return ""
+	}
+	var s struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Model)
+}
+
+// tagChatSessionModel tags a detached chat session's pane with its model.
+func tagChatSessionModel(session, runs string) {
+	pane, err := tmux.ChatSessionPane(session)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not tag %s with model %q: %v\n", session, runs, err)
+		return
+	}
+	tagOrchestratorPaneModel(pane, runs)
+}
+
+// tagOrchestratorPaneModel tags one pane with the model it runs.
+// Best-effort, like stampOrchestratorPane: never fails a spawn.
+func tagOrchestratorPaneModel(pane, runs string) {
+	if pane == "" || runs == "" {
+		return
+	}
+	if err := tmux.SetPaneModel(pane, runs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not tag %s with model %q: %v\n", pane, runs, err)
+	}
 }
 
 // chatResumeSuffix names the revived conversation in the success line: the

@@ -87,6 +87,11 @@ type Config struct {
 		// silently ignored like any unknown field.)
 		Hotkeys map[string]string `yaml:"hotkeys"`
 		Claude  string            `yaml:"claude"`
+		// Models overrides the Claude tiers a new orchestrator chat can be
+		// pinned to (grove-293: `gv orchestrator new --model`, the phone's
+		// new-chat sheet). Absent/empty = DefaultOrchestratorModels, so the
+		// choice exists on every host without a YAML edit.
+		Models []string `yaml:"models"`
 	} `yaml:"orchestrator"`
 	Audit struct {
 		StaleDays int    `yaml:"stale_days"` // no-PR + dead/idle tasks older than this classify abandoned (default 7)

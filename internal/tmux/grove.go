@@ -456,6 +456,27 @@ func SetPaneProfile(pane, profile string) error {
 	return err
 }
 
+// SetPaneModel tags a chat pane with the model it was spawned to run
+// (grove-293) — the resolved name, e.g. "opus", a profile's slug, or
+// "account default" — as the pane user option @grove_model, which the chat
+// report reads back into each row's `model`. A user option for the same
+// reason as @grove_profile: claude's own OSC title writes cannot touch it.
+// An empty model clears the option.
+func SetPaneModel(pane, model string) error {
+	if model == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_model")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_model", model)
+	return err
+}
+
+// ChatSessionPane resolves a detached chat session's single pane to its
+// immutable %id — the target StampChatSession stamps, for the other tags.
+func ChatSessionPane(session string) (string, error) {
+	return FirstPaneID(Exact(session) + ":" + chatWindow)
+}
+
 // SetPaneRemote tags a cockpit pane as a REMOTE chat (grove-199) — an
 // `ssh … tmux attach` pane whose claude runs on <host>, not here. Same
 // carrier and the same reasoning as SetPaneProfile: a pane USER OPTION
@@ -918,6 +939,9 @@ type ChatSession struct {
 	Pane      string `json:"pane"`
 	Dir       string `json:"dir"`
 	SessionID string `json:"session_id,omitempty"`
+	// grove-293: the model the chat was spawned to run (@grove_model), ""
+	// for a chat spawned before the tag existed. Additive, like the above.
+	Model string `json:"model,omitempty"`
 }
 
 // paneListFormat asks list-panes for everything a chat report needs in one
@@ -926,7 +950,7 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}"
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -943,6 +967,7 @@ type LivePane struct {
 	Index       int    // pane_index, honoring the user's pane-base-index
 	Dir         string // pane_current_path
 	ChatSession string // @grove_chat_session, "" when unstamped
+	Model       string // @grove_model (grove-293), "" when untagged
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -973,6 +998,7 @@ func ParsePanes(out string) []LivePane {
 			Pane:        paneField(f, 5),
 			Dir:         paneField(f, 7),
 			ChatSession: paneField(f, 8),
+			Model:       paneField(f, 9),
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1045,7 +1071,7 @@ func ChatSessionsIn(panes []LivePane, label string, isCockpit CockpitCheck) []Ch
 		chats = append(chats, ChatSession{
 			Session: p.Session, N: n, PID: p.PID, Command: p.Command,
 			Attached: p.Attached, Created: p.Created,
-			Pane: p.Pane, Dir: p.Dir, SessionID: p.ChatSession,
+			Pane: p.Pane, Dir: p.Dir, SessionID: p.ChatSession, Model: p.Model,
 		})
 	}
 	sort.Slice(chats, func(i, j int) bool { return chats[i].N < chats[j].N })

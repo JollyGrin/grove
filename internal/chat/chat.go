@@ -76,6 +76,11 @@ type Row struct {
 	// only on live chat rows running claude; false on every other row and
 	// whenever the scrape fails. Additive to the contract.
 	Waiting bool `json:"waiting"`
+	// Model is the model a live chat was spawned to run (grove-293): the
+	// pane's @grove_model tag — "opus", a profile's slug, or "account
+	// default". "" when grove did not tag it (an archived row, a cockpit's
+	// first pane, a chat spawned before the tag). Additive to the contract.
+	Model string `json:"model"`
 }
 
 // Activity is the row's recency: last_active, falling back to created when
@@ -111,6 +116,7 @@ type Live struct {
 	// a pane with no transcript has no activity to report and guessing one
 	// (the pane's own birth) would re-tell exactly the grove-228 lie.
 	LastActive time.Time
+	Model      string // @grove_model, "" when untagged
 }
 
 // Row projects a live pane into the contract shape.
@@ -128,6 +134,7 @@ func (l Live) Row() Row {
 		Created:    l.Created,
 		LastActive: l.LastActive,
 		Writable:   Writable(l.Kind),
+		Model:      l.Model,
 	}
 }
 

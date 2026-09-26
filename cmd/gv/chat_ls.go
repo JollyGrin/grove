@@ -281,7 +281,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		for _, c := range tmux.ChatSessionsIn(look.panes, ws.Label, look.isCockpit) {
 			pending = append(pending, livePane{ws: ws, configDir: cfgDir, kind: chat.KindChat, n: c.N, pane: tmux.LivePane{
 				Session: c.Session, PID: c.PID, Command: c.Command, Attached: c.Attached,
-				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID,
+				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID, Model: c.Model,
 			}})
 		}
 		cockpit := cockpitSessionForLabel(ws.Label)
@@ -386,7 +386,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		recs = append(recs, chatRecord{Row: chat.Live{
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
-			SessionID: id, Label: label, LastActive: lastActive,
+			SessionID: id, Label: label, LastActive: lastActive, Model: lp.pane.Model,
 		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
 	}
 	for _, ws := range targets {

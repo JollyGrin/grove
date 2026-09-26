@@ -21,6 +21,10 @@ package chatweb
 // the CLI's own (chat.CloseRefusal): only a kind-chat row, never the
 // cockpit's pane.
 //
+// grove-293 added one more READ: /api/workspaces/<l>/models, the rows of
+// the new-chat sheet — each spawn choice with the model it will actually
+// run, resolved against THAT workspace's config.
+//
 // grove-307 added one more READ: /api/chats/events is /api/chats pushed
 // over SSE, for the list screens. grove-286 another: /api/version, the
 // running build's stamp.
@@ -45,6 +49,8 @@ const (
 	RouteChatsEvents = "chats-events" // GET  /api/chats/events   (SSE)
 	// grove-286: the running build's version. Read-only, no target.
 	RouteVersion = "version" // GET  /api/version
+	// grove-293: the new-chat sheet's rows for one workspace. Read-only.
+	RouteModels = "models" // GET  /api/workspaces/<l>/models
 )
 
 // Route is a parsed API request. Target is the chat address for the chat
@@ -104,6 +110,8 @@ func ParseRoute(path string) (r Route, api bool) {
 		}
 	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "new":
 		return Route{Kind: RouteNew, Target: parts[1], Method: "POST"}, true
+	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "models":
+		return Route{Kind: RouteModels, Target: parts[1], Method: "GET"}, true
 	}
 	return Route{}, true
 }

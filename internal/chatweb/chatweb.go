@@ -75,7 +75,15 @@ type Backend interface {
 	// name, "" for the host's own Claude — the same axis `gv orchestrator
 	// new --profile` moves on, and an unknown one is the CLI's own refusal
 	// rather than a fallback to the default (grove-225).
-	NewChat(label, profile string) (string, error)
+	//
+	// model (grove-293) pins the chat to one of the workspace's
+	// orchestrator.models tiers, "" for the host default — `gv orchestrator
+	// new --model`. On a profile it picks that profile's slug for the tier.
+	// An unknown one is the CLI's own refusal, like an unknown profile.
+	NewChat(label, profile, model string) (string, error)
+	// NewChatOptions is the new-chat sheet for one workspace (grove-293):
+	// every spawn choice, each naming the model it will actually run.
+	NewChatOptions(label string) ([]NewChatOption, error)
 	// Profiles is the host's configured model profile names, sorted, on
 	// ResolveOrchestratorProfile's semantics: none configured is an empty
 	// list, which the phone renders as no picker at all.
@@ -175,6 +183,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleKeys(w, r, route.Target)
 	case RouteNew:
 		s.handleNew(w, r, route.Target)
+	case RouteModels:
+		s.handleModels(w, route.Target)
 	case RouteResume:
 		s.handleSpawn(w, route.Target, s.backend.Resume)
 	case RouteClose:
@@ -269,6 +279,36 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 		names = []string{}
 	}
 	writeJSON(w, http.StatusOK, schema.Envelope("profiles", names))
+}
+
+// NewChatOption is one row of the new-chat sheet (grove-293): the
+// {profile, model} pair the page POSTs back to .../new verbatim, and Runs,
+// the model that spawn will actually run — "opus", a profile's slug, a
+// host's settings.json model, or the literal "account default" when
+// nothing grove can read names one. Never a guess dressed as a fact.
+//
+// The host default is the row with both profile and model empty; a Claude
+// tier row has only model; a profile row has only profile (its default
+// tier). Like /api/profiles, no base_url or auth env ever leaves the host.
+type NewChatOption struct {
+	Profile string `json:"profile"`
+	Model   string `json:"model"`
+	Runs    string `json:"runs"`
+}
+
+// handleModels serves the sheet's rows for one workspace, in the order the
+// page renders them. An empty list is [] and a 200; an unknown workspace is
+// the backend's refusal with a 404 — there is no sheet for it to show.
+func (s *Server) handleModels(w http.ResponseWriter, label string) {
+	opts, err := s.backend.NewChatOptions(label)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	if opts == nil {
+		opts = []NewChatOption{}
+	}
+	writeJSON(w, http.StatusOK, schema.Envelope("models", opts))
 }
 
 // --- SSE ---
@@ -546,6 +586,9 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 // default was chosen".
 type newBody struct {
 	Profile string `json:"profile"`
+	// Model (grove-293) is optional the same way: absent and "" are the
+	// host default, so a pre-293 client's request is unchanged.
+	Model string `json:"model"`
 }
 
 // handleNew is `+ New chat`. The profile travels straight into the same
@@ -560,7 +603,7 @@ func (s *Server) handleNew(w http.ResponseWriter, r *http.Request, label string)
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	session, err := s.backend.NewChat(label, body.Profile)
+	session, err := s.backend.NewChat(label, body.Profile, body.Model)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return

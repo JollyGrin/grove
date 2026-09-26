@@ -8,6 +8,7 @@ package chatweb_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,6 +49,10 @@ type fakeBackend struct {
 	keyTo, keyLit    string
 	spawned, resumed string
 	spawnProfile     string
+	spawnModel       string
+	options          []chatweb.NewChatOption
+	optionsErr       error
+	optionsFor       string
 	tailTarget       string
 	tailSince        int
 	tailFollow       bool
@@ -118,9 +123,14 @@ func (f *fakeBackend) Turn(string) chatweb.Turn {
 	return f.turns[i]
 }
 
-func (f *fakeBackend) NewChat(label, profile string) (string, error) {
-	f.spawned, f.spawnProfile = label, profile
+func (f *fakeBackend) NewChat(label, profile, model string) (string, error) {
+	f.spawned, f.spawnProfile, f.spawnModel = label, profile, model
 	return f.newSession, f.spawnErr
+}
+
+func (f *fakeBackend) NewChatOptions(label string) ([]chatweb.NewChatOption, error) {
+	f.optionsFor = label
+	return f.options, f.optionsErr
 }
 
 func (f *fakeBackend) Profiles() ([]string, error) { return f.profiles, f.profilesErr }
@@ -828,5 +838,68 @@ func TestCloseRoute(t *testing.T) {
 
 	if w := get(t, chatweb.NewServer(b), "/api/chats/grove-chat-unbrewed-1/close"); w.Code != 405 || b.closed != "" {
 		t.Fatalf("GET close: %d, closed %q — want 405 and no backend call", w.Code, b.closed)
+	}
+}
+
+// grove-293: the tier a phone picked reaches the spawn unchanged, and every
+// "no choice" spelling — absent body, {}, an empty model — is the host
+// default, byte-compatible with a pre-293 client.
+func TestNewChatCarriesTheModel(t *testing.T) {
+	cases := []struct{ name, body, model, profile string }{
+		{"no body", "", "", ""},
+		{"empty object", `{}`, "", ""},
+		{"explicit default", `{"model":""}`, "", ""},
+		{"a tier", `{"model":"opus"}`, "opus", ""},
+		{"a tier on a profile", `{"profile":"glm","model":"haiku"}`, "haiku", "glm"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := &fakeBackend{newSession: "grove-chat-unbrewed-2"}
+			w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", c.body)
+			if w.Code != 200 || b.spawnModel != c.model || b.spawnProfile != c.profile {
+				t.Fatalf("status %d, spawned %q/%q, want %q/%q", w.Code, b.spawnProfile, b.spawnModel, c.profile, c.model)
+			}
+		})
+	}
+	// An unknown tier is the CLI's own words with a 409, like a profile.
+	b := &fakeBackend{spawnErr: errors.New(`unknown model "opsu" (configured: opus, sonnet, haiku — add it to orchestrator.models to allow it)`)}
+	w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", `{"model":"opsu"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `unknown model \"opsu\"`) {
+		t.Fatalf("unknown tier = %d %s", w.Code, w.Body)
+	}
+}
+
+// grove-293: the sheet's rows ride the contract envelope; none is [] and a
+// 200; an unknown workspace is a 404; it is a READ (POST is 405).
+func TestModelsRoute(t *testing.T) {
+	b := &fakeBackend{options: []chatweb.NewChatOption{
+		{Runs: "account default"}, {Model: "opus", Runs: "opus"}, {Profile: "glm", Runs: "glm-4.6"},
+	}}
+	h := chatweb.NewServer(b)
+	w := get(t, h, "/api/workspaces/unbrewed/models")
+	if w.Code != 200 || b.optionsFor != "unbrewed" {
+		t.Fatalf("GET models = %d for %q", w.Code, b.optionsFor)
+	}
+	var env struct {
+		SchemaVersion int                     `json:"schema_version"`
+		Models        []chatweb.NewChatOption `json:"models"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.SchemaVersion == 0 || len(env.Models) != 3 || env.Models[2].Runs != "glm-4.6" {
+		t.Fatalf("envelope = %s (%v)", w.Body, err)
+	}
+	if !strings.Contains(w.Body.String(), `{"profile":"","model":"","runs":"account default"}`) {
+		t.Fatalf("every field must be present on every row: %s", w.Body)
+	}
+
+	w = get(t, chatweb.NewServer(&fakeBackend{}), "/api/workspaces/unbrewed/models")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"models":[]`) {
+		t.Fatalf("none = %d %s, want 200 and []", w.Code, w.Body)
+	}
+	w = get(t, chatweb.NewServer(&fakeBackend{optionsErr: errors.New(`no registered workspace "x"`)}), "/api/workspaces/x/models")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown workspace = %d", w.Code)
+	}
+	if w := post(t, h, "/api/workspaces/unbrewed/models", `{}`); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST models = %d, want 405", w.Code)
 	}
 }

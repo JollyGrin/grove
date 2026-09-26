@@ -240,10 +240,16 @@ say "grove-198: an ssh-255 retry spawns exactly once (op-id receipt)"
 # unknown to the sender. The sender must re-run the SAME argv once; the
 # twin's receipt makes that a no-op. Want: 2 hops, ONE new session, the
 # retry printing "already applied" with the SAME session name.
+# grove-293: the retried hop carries --model, which must be relayed at its
+# fixed place so the retry stays byte-equal to the hop it repeats.
 touch "$SCRATCH/ssh-fail-first"
-( cd "$WS" && "$GV" orchestrator new --host pc ) > "$SCRATCH/retry.out" 2> "$SCRATCH/retry.err"
+( cd "$WS" && "$GV" orchestrator new --host pc --model opus ) > "$SCRATCH/retry.out" 2> "$SCRATCH/retry.err"
 cat "$SCRATCH/retry.out" "$SCRATCH/retry.err"
 rm -f "$SCRATCH/ssh-fail-first"
+[ "$(grep -c -- '--workspace chatws --model opus$' "$SCRATCH/retry.err")" -eq 2 ] \
+  || fail "grove-293: both hops must relay --model opus at the same place"
+[ "$(grep '\[fake ssh\]' "$SCRATCH/retry.err" | sort -u | wc -l | tr -d ' ')" -eq 1 ] \
+  || fail "grove-293: the retried hop must be byte-equal to the first"
 grep -q 'retrying once with the same op id' "$SCRATCH/retry.err" || fail "ssh 255 did not trigger the same-op-id retry"
 grep -q 'already applied' "$SCRATCH/retry.out" || fail "the retry did not hit the op-id receipt"
 grep -q 'already applied (op .*) — orchestrator chat grove-chat-chatws-3' "$SCRATCH/retry.out" \
@@ -1277,6 +1283,58 @@ code="$(curl -s -o "$SCRATCH/typo.out" -w '%{http_code}' -X POST \
   "http://127.0.0.1:$PORT/api/workspaces/servews/new")"
 [ "$code" = "400" ] || { cat "$SCRATCH/typo.out"; fail "an unknown body field answered $code, want 400"; }
 [ "$(chat_sessions servews)" = "$BEFORE_TYPO" ] || fail "a refused body must create no session"
+
+say "grove-293: the new-chat sheet names the model every row will run"
+curl -fsS "http://127.0.0.1:$PORT/api/workspaces/servews/models" > "$SCRATCH/models.json" || { cat "$SERVE_LOG"; fail "GET models failed"; }
+cat "$SCRATCH/models.json"
+grep -q '"schema_version"' "$SCRATCH/models.json" || fail "the models route must carry the contract envelope"
+grep -q '"models":\[{"profile":"","model":"","runs":"account default"}' "$SCRATCH/models.json" \
+  || fail "first row must be the host default, honestly 'account default' when nothing names a model"
+grep -q '{"profile":"","model":"opus","runs":"opus"},{"profile":"","model":"sonnet","runs":"sonnet"},{"profile":"","model":"haiku","runs":"haiku"}' "$SCRATCH/models.json" \
+  || fail "the built-in tiers must be offered with no config edit"
+grep -q '{"profile":"e2e-glm","model":"","runs":"z-ai/glm-5.2"}' "$SCRATCH/models.json" \
+  || fail "a profile row must name its default-tier slug"
+grep -q 'ZETA_API_KEY\|openrouter.ai' "$SCRATCH/models.json" \
+  && fail "the models route must not serve base_url / auth env" || true
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/workspaces/nope/models")"
+[ "$code" = "404" ] || fail "models for an unknown workspace answered $code, want 404"
+grep -q "/models'" "$SCRATCH/app.js" || fail "the embedded page never asks for the model list"
+
+say "grove-293: POST new with a tier pins the chat, and chat ls reports the model"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"model":"opus"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-opus.json" \
+  || { cat "$SERVE_LOG"; fail "a pinned POST new failed"; }
+OPUS_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-opus.json")"
+[ -n "$OPUS_S" ] || { cat "$SCRATCH/new-opus.json"; fail "the pinned spawn must name its session"; }
+pane_cmd "$OPUS_S" | grep -q -- "--model 'opus'" || { pane_cmd "$OPUS_S"; fail "the pinned chat's argv must carry --model 'opus'"; }
+[ "$(remote_tmux show-options -p -v -t "=$OPUS_S:chat" @grove_model)" = "opus" ] || fail "the pinned pane must be tagged @grove_model=opus"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-model.json"
+grep -q "\"session\":\"$OPUS_S\"[^}]*\"model\":\"opus\"" "$SCRATCH/chats-model.json" \
+  || { cat "$SCRATCH/chats-model.json"; fail "the chat row must report model opus (the phone's subtitle)"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"profile":"e2e-glm","model":"haiku"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-glm-haiku.json" \
+  || { cat "$SERVE_LOG"; fail "a pinned profiled POST new failed"; }
+GH_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-glm-haiku.json")"
+pane_cmd "$GH_S" | grep -q "ANTHROPIC_MODEL='z-ai/glm-4.5-air'" || { pane_cmd "$GH_S"; fail "--model haiku on a profile must run its haiku slug"; }
+[ "$(remote_tmux show-options -p -v -t "=$GH_S:chat" @grove_model)" = "z-ai/glm-4.5-air" ] || fail "profiled pinned pane tag wrong"
+
+say "grove-293: an unknown tier is the CLI's own refusal, and spawns nothing"
+BEFORE_BADM="$(chat_sessions servews)"
+code="$(curl -s -o "$SCRATCH/badmodel.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -d '{"model":"opsu"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new")"
+[ "$code" = "409" ] || { cat "$SCRATCH/badmodel.out"; fail "an unknown model answered $code, want 409"; }
+[ "$(chat_sessions servews)" = "$BEFORE_BADM" ] || fail "a refused model must create no session"
+rc=0
+( cd "$SERVEWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace servews --model opsu ) \
+  > "$SCRATCH/badmodel-cli.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "the CLI must refuse an unknown model too"
+CLI_MREF="$(grep -o 'unknown model "opsu".*' "$SCRATCH/badmodel-cli.out" | head -1)"
+sed 's/\\"/"/g' "$SCRATCH/badmodel.out" > "$SCRATCH/badmodel.txt"
+[ -n "$CLI_MREF" ] && grep -qF "$CLI_MREF" "$SCRATCH/badmodel.txt" \
+  || { cat "$SCRATCH/badmodel.txt" "$SCRATCH/badmodel-cli.out"; fail "the HTTP refusal must be the CLI's text verbatim"; }
+remote_tmux kill-session -t "=$OPUS_S" 2>/dev/null || true
+remote_tmux kill-session -t "=$GH_S" 2>/dev/null || true
 
 remote_tmux kill-session -t '=grove-chat-servews-2' 2>/dev/null || true
 remote_tmux kill-session -t '=grove-chat-servews-3' 2>/dev/null || true
