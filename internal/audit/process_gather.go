@@ -22,6 +22,12 @@ const PSFormat = "pid,ppid,pcpu,rss,etime,args"
 // grove itself created — the `worktree` field of tasks.json rows — are
 // ever matched, and only when the task is done or its directory is gone
 // (an active task's worktree legitimately hosts build children).
+//
+// grove-350 note: unlike scanOrphans, this does NOT need a sibling-
+// workspace read. reapable is built only from tasks this workspace
+// tracks, but a ticket has exactly one owning workspace (grove-191
+// routing) — a sibling's live worker is never a key in this workspace's
+// own tasks map, done or not, so it can never be marked reapable here.
 func scanProcesses(tasks map[string]*state.Task) ([]OrphanProcess, []WorktreeProcess) {
 	psOut, err := exec.Command("ps", "-Ao", PSFormat).Output()
 	if err != nil {

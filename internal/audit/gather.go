@@ -13,6 +13,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/workspace"
 	"github.com/JollyGrin/grove/internal/worktree"
 )
 
@@ -66,8 +67,11 @@ type Report struct {
 }
 
 // Gather cross-checks every active task against reality and scans for
-// orphans and stale prompt files. Pure read.
-func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) Report {
+// orphans and stale prompt files. Pure read. siblings is the caller's
+// registered-workspace registry (grove-350) — passed in, never loaded
+// here, so this stays unit-testable without touching $HOME/.config/grove;
+// see scanOrphans.
+func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string, siblings []workspace.Workspace) Report {
 	staleAfter := time.Duration(cfg.Audit.StaleDays) * 24 * time.Hour
 	idleAfter := cfg.IdleAfter()
 	active := state.Active(tasks)
@@ -91,7 +95,7 @@ func Gather(cfg *config.Config, tasks map[string]*state.Task, stateDir string) R
 	rows = append(rows, handedOffRows(tasks)...)
 
 	rep := Report{Tasks: rows}
-	rep.Orphans = scanOrphans(cfg, tasks)
+	rep.Orphans = scanOrphans(cfg, tasks, siblings)
 	rep.OrphanProcesses, rep.WorktreeProcesses = scanProcesses(tasks)
 	rep.StalePrompts = scanStalePrompts(stateDir, tasks)
 	if fi, err := os.Stat(filepath.Join(stateDir, "events.jsonl")); err == nil {
@@ -160,11 +164,30 @@ func auditTask(cfg *config.Config, t *state.Task, staleAfter, idleAfter time.Dur
 	return res
 }
 
-func scanOrphans(cfg *config.Config, tasks map[string]*state.Task) []Orphan {
+// scanOrphans lists worktrees no active task tracks. grove-350: on a host
+// where every workspace inherits the same repo table (e.g. groveremote's
+// global repo list), a sibling workspace's live worker is a FOREIGN
+// worktree, not an orphan — so "tracked" is the union of this workspace's
+// own tasks, every OTHER registered+alive workspace's tasks (siblings,
+// read via workspace.ActiveWorktrees), and the legacy global state dir
+// (pre-workspace hosts, or a workspace that still has old tasks sitting
+// there). All three reads are best-effort: a missing/unreadable state dir
+// contributes nothing rather than failing the scan.
+func scanOrphans(cfg *config.Config, tasks map[string]*state.Task, siblings []workspace.Workspace) []Orphan {
 	tracked := map[string]bool{}
 	for _, t := range tasks {
 		if !t.Done {
 			tracked[realpath(t.Worktree)] = true
+		}
+	}
+	for _, p := range workspace.ActiveWorktrees(siblings) {
+		tracked[realpath(p)] = true
+	}
+	if legacy, err := state.Peek(legacyStateDir()); err == nil {
+		for _, t := range legacy {
+			if t != nil && !t.Done {
+				tracked[realpath(t.Worktree)] = true
+			}
 		}
 	}
 	var orphans []Orphan
@@ -206,4 +229,17 @@ func realpath(p string) string {
 		return r
 	}
 	return filepath.Clean(p)
+}
+
+// legacyStateDir mirrors config.StateDir's path resolution without its
+// side-effecting MkdirAll — this read-only cross-workspace scan must not
+// create ~/.local/state/grove as a side effect on a host that has never
+// used the legacy (pre-workspace) layer. Same rationale as workspace's own
+// creation-free stateDir helper.
+func legacyStateDir() string {
+	if d := os.Getenv("GROVE_STATE_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "grove")
 }

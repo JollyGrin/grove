@@ -9,6 +9,14 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv audit`: a sibling workspace's live worktree is no longer reported
+      as an orphan on shared-repo hosts (grove-350, 2026-09-26). `scanOrphans`
+      now unions this workspace's tasks with every other registered+alive
+      workspace's tasks (`workspace.ActiveWorktrees`) and the legacy global
+      state dir before walking `cfg.Repos`; a missing/unreadable sibling
+      state dir is skipped, not fatal. `scanProcesses` audited too — its
+      `reapable` set can't cross workspace boundaries (ticket ownership is
+      exclusive), so it needed no change.
 - [x] hooks: status/doctor/update detect hooks pointing at a different gv
       binary (grove-348, 2026-09-26). Hook commands pin an absolute path at
       install time, so a stale copy (observed: v0.1.3 running the hooks

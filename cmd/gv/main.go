@@ -2431,7 +2431,11 @@ func cmdAudit(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep := audit.Gather(cfg, tasks, stateDir())
+	// grove-350: registered siblings so a shared-repo host's orphan scan
+	// doesn't flag another workspace's live worker. A registry read
+	// failure degrades to no siblings rather than failing the audit.
+	siblings, _ := workspace.LoadRegistry()
+	rep := audit.Gather(cfg, tasks, stateDir(), siblings)
 	// grove-203: the workspace's detached chats are not tasks and live in
 	// their own tmux sessions, so nothing in Gather's reconciliation can
 	// see them — and nothing else on the machine reports them either.
@@ -3704,7 +3708,8 @@ func cmdSweep(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep := audit.Gather(cfg, tasks, stateDir())
+	siblings, _ := workspace.LoadRegistry()
+	rep := audit.Gather(cfg, tasks, stateDir(), siblings)
 
 	items := audit.SweepOffers(rep.Tasks)
 	// Decorate abandoned offers with the worktree-guard preview — impure
