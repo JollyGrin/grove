@@ -9,6 +9,16 @@
 
 ## Now (2026-07-12)
 
+- [x] Prompt audit 2/2: repo skills (grove-355, 2026-09-26; supersedes
+      #275 for `.claude/skills/*`). Anthropic prompt-audit against Opus
+      5.5, one commit per finding group: stale facts fixed (e.g.
+      `transcript.EncodePath`, all.sh's full suite list, a nonexistent
+      `zai-glm` profile, plugin-authoring missing `gv chat`/`brains`/
+      `supervise`), incident IDs/dates dropped (LEARNINGS.md keeps them),
+      migration-relative phrasing restated, and model-lanes' hand
+      arithmetic moved into `calibrate.sh`/`gate0.py`/`openrouter-rank.py`
+      with dated data in `calibration.md`. Triggers unchanged; every rule
+      kept.
 - [x] hooks: status/doctor/update detect hooks pointing at a different gv
       binary (grove-348, 2026-09-26). Hook commands pin an absolute path at
       install time, so a stale copy (observed: v0.1.3 running the hooks

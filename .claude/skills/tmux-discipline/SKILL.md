@@ -9,7 +9,7 @@ Grove's workers and cockpit live on the operator's REAL tmux server. The
 rules below are ordered by blast radius. War stories + dates:
 [LEARNINGS.md](../../../LEARNINGS.md) §"tmux / git / detector internals".
 
-## 1. Isolation: `$TMUX` beats `TMUX_TMPDIR` (the grove-7 crash)
+## 1. Isolation: `$TMUX` beats `TMUX_TMPDIR`
 
 tmux resolves its socket as `-S`/`-L` > `$TMUX` > `TMUX_TMPDIR`. Any
 "isolated tmux server" script run from inside a tmux pane (i.e. from any
@@ -19,8 +19,8 @@ grove worker) silently targets the **real server** unless it clears
 - Every isolation script must `unset TMUX` up front, or wrap every tmux
   call in `env -u TMUX`.
 - **Never run bare `tmux kill-server` in any script.** Always scope it:
-  `env -u TMUX TMUX_TMPDIR=<scratch> tmux kill-server`. A bare one killed
-  every session and worker on the machine (2026-07-07).
+  `env -u TMUX TMUX_TMPDIR=<scratch> tmux kill-server`. A bare one kills
+  every session and worker on the machine.
 - `tapes/run.sh` snapshots the real server's session list before/after as
   a canary — copy that pattern for new scripted-tmux suites.
 
@@ -35,7 +35,7 @@ grove worker) silently targets the **real server** unless it clears
   raw, without Enter-wrapping.
 - tmux buffers are **server-global**. Use the `gv-relay` buffer name;
   never invent a generic name another tool could clobber mid-paste.
-- **Delivered is not submitted** (grove-144). `paste-buffer` immediately
+- **Delivered is not submitted.** `paste-buffer` immediately
   followed by `send-keys Enter` loses the Enter: the receiving TUI is
   still ingesting the paste and swallows it into the input, leaving an
   unsent `[Pasted text]`. Paste **bracketed** (`-p`), settle ~250ms, press
@@ -45,8 +45,8 @@ grove worker) silently targets the **real server** unless it clears
   than a loud failure.
 - Scraping to verify reads the **whole visible pane**, never
   `CapturePaneBottom`: that helper takes the pane's bottom N *rows*, which
-  are blank whenever the app draws from the top (it silently passed every
-  relay until `e2e/relay.sh` caught it). Keep the check permissive —
+  are blank whenever the app draws from the top, so the check silently
+  passes every relay (`e2e/relay.sh` guards this). Keep the check permissive —
   unreadable pane or no recognizable box counts as landed.
 
 ## 3. Finding things: resolve, never assume
@@ -55,9 +55,9 @@ grove worker) silently targets the **real server** unless it clears
   panes renumber, and Claude's process title is its bare version string.
   All relay/detector/editor-inject paths go through `tmux.ClaudePane`.
 - **Pane indices depend on the user's `pane-base-index` — never write a
-  literal `.0`/`.1` target** (grove-168: the common `base-index 1` +
-  `pane-base-index 1` dotfiles pair made fresh installs die at the cockpit
-  build, and sent grab's claude command into the worktree shell). Resolve
+  literal `.0`/`.1` target** — the common `base-index 1` +
+  `pane-base-index 1` dotfiles pair makes a literal index kill the cockpit
+  build and send grab's claude command into the worktree shell. Resolve
   the `%N` id at creation (`split-window -P -F '#{pane_id}'` —
   `SplitVerticalWindow`/`SpawnPane` return it) or via list-panes
   (`tmux.FirstPaneID` for "the window's first pane", `ClaudePaneTarget`
@@ -69,7 +69,7 @@ grove worker) silently targets the **real server** unless it clears
   modes (the default scratch-HOME servers can never catch this class).
 - Window names drift (trailing dashes, glyph changes), so never rely on
   exact window-name equality; re-derive and re-store on adopt. But tmux's
-  window-side **prefix matching is a trap, not the answer** (grove-116):
+  window-side **prefix matching is a trap, not the answer**:
   worker names are prefixes of each other (`repo · grove-1` vs
   `repo · grove-10`), so a `session:name` target is ambiguous while both
   live (a live glyphed worker reads as dead) and **silently resolves to
@@ -78,22 +78,19 @@ grove worker) silently targets the **real server** unless it clears
   name: resolve through `tmux.WindowID` (list-windows +
   `matchesWindowName`, glyph-tolerant) and target the immutable `@N` id;
   relay text via `tmux.ClaudePaneTarget`'s `%N` pane id.
-- The session-side twin of that rule (grove-78): a BARE `-t <session>`
+- The session-side twin of that rule: a BARE `-t <session>`
   target resolves against **window names across all sessions** too — a
   session literally named `grove` collides with every `grove · <ticket>`
-  worker window (`new-window -t grove` died on "index 1 in use" in a
+  worker window (`new-window -t grove` dies on "index 1 in use" in a
   different session). Every session-scoped `-t` must be `=`-anchored; the
-  window side is never name-targeted at all since grove-116 — windows
-  resolve to `@N` ids via `tmux.WindowID` (glyph tolerance lives in
-  `matchesWindowName`, not in tmux's matcher).
-- But the anchor form depends on the command's target KIND (grove-99,
-  tmux 3.6a): `tmux.Exact` (`-t '=grove'`) is only valid where `-t` is a
+  window side is never name-targeted at all (the `@N` rule above).
+- But the anchor form depends on the command's target KIND (tmux 3.6a): `tmux.Exact` (`-t '=grove'`) is only valid where `-t` is a
   *target-session* (`has-session`, `kill-session`, `new-window`,
   `list-windows`, `switch-client`, `attach-session`). Commands whose `-t`
   is a *target-pane/window* (`set-option`, `show-options`,
   `select-layout`, `split-window`, `display-message`) reject bare `=name`
   ("no such session") and need `tmux.ExactActive` (`-t '=grove:'` — exact
-  session, active window). Getting this wrong broke every cockpit build;
+  session, active window). Getting this wrong breaks every cockpit build;
   `e2e/cockpit.sh` is the tripwire — actually run it.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
@@ -102,12 +99,12 @@ grove worker) silently targets the **real server** unless it clears
   printed for the operator to paste, or a pane/window command tmux runs
   through `$SHELL -c` — single-quote it: `-t '=grove-chat-x-1'`. zsh
   (macOS's default) equals-expands a word that starts with `=` and aborts
-  the line before the command runs (grove-207); bash does not, so this
-  never shows up on Linux. `remote.Quote` handles it, but only since it
-  stopped treating a leading `=`/`~` as safe — do not hand-roll the check.
+  the line before the command runs; bash does not, so this
+  never shows up on Linux. `remote.Quote` force-quotes any word with a
+  leading `=`/`~` — use it, never a hand-rolled check.
 
-- **`kill-window` kills the foreground process group, not the tree**
-  (grove-156): daemonizing children (jest-worker et al.) survive,
+- **`kill-window` kills the foreground process group, not the tree**:
+  daemonizing children (jest-worker et al.) survive,
   reparent to launchd, and can spin forever. Teardown that removes a
   worktree must first SIGTERM every process whose argv references that
   worktree path — and match only paths grove itself created (tasks.json
@@ -120,14 +117,13 @@ grove worker) silently targets the **real server** unless it clears
   (`set-option -p @grove_…`) rendered via a conditional
   `pane-border-format` — foreground programs can't touch those.
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
-  and chrome layout have both changed under us — activity checks scan the
-  full ~30-line capture, never a bottom window.
-- **Never derive a task's COMPLETION from pane text — use `gv watch`**
-  (grove-205). Every kickoff template ends with the three `STATUS:
+  and chrome layout have both changed under us — activity checks scan
+  every line of the ~30-line capture, never just its last few rows.
+- **Never derive a task's COMPLETION from pane text — use `gv watch`.**
+  Every kickoff template ends with the three `STATUS:
   QUESTION|BLOCKED|DONE — …` placeholder lines, so all three sentinels are
   in every worker's pane from second zero: a pane grep for any of them
-  fires instantly, on every task, forever (it filed two false DONEs in one
-  minute on 2026-08-29). The authoritative signal is the Stop hook's
+  fires instantly, on every task, forever. The authoritative signal is the Stop hook's
   classification of the agent's own last message —
   `gv watch [--ticket X] [--until done]` streams it, one flushed line per
   transition, default from-now. Three sub-rules:
@@ -146,4 +142,4 @@ grove worker) silently targets the **real server** unless it clears
 - e2e assertions on pane content: a bare `capture-pane -p` sees only the
   visible screen of the active pane — delivered text scrolls off and
   hard-wraps at pane width. Capture every pane with `-S -` (scrollback)
-  and `tr -d '\n'` before grepping (grove-75 field-hit).
+  and `tr -d '\n'` before grepping.
