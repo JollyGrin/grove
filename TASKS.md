@@ -9,6 +9,13 @@
 
 ## Now (2026-07-12)
 
+- [x] `e2e/dummy.sh` runs on its own tmux server (grove-340,
+      2026-09-26). It used to create/kill `grove-dummy` on the operator's
+      REAL server; now it `unset TMUX TMUX_PANE`, exports a scratch
+      `TMUX_TMPDIR`, kills only that server at exit, and fails if the
+      real server's session list changed (relay.sh/chat.sh canary).
+      `grep -L 'unset TMUX' e2e/*.sh` lists only all/brains/sub/wizard,
+      each carrying a `# tmux:` line saying it never talks to a server.
 - [x] `gv chat`: reviving a chat keeps its model (grove-337,
       2026-09-26, `chat-ux` train). `gv orchestrator new --resume <id>`
       with no `--model` re-pins the tier the chat last ran on: the

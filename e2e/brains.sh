@@ -11,6 +11,7 @@
 # into its count, and — the invariant — that the sweep mutates NOTHING:
 # both brains are byte-compared before and after, and no CLAUDE.md.new
 # may appear anywhere.
+# tmux: never talks to a tmux server, so no tmux isolation needed.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
