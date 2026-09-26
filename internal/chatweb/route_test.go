@@ -30,6 +30,10 @@ func TestParseRoute(t *testing.T) {
 		// grove-286: the build stamp.
 		{"/api/version", true, chatweb.RouteVersion, "", "GET"},
 		{"/api/version/", true, "", "", ""},
+		// grove-334: two reads — the workspace list, a pane snapshot.
+		{"/api/workspaces", true, chatweb.RouteWorkspaces, "", "GET"},
+		{"/api/chats/grove-chat-unbrewed-1/pane", true, chatweb.RoutePane, "grove-chat-unbrewed-1", "GET"},
+		{"/api/workspaces/", true, "", "", ""},
 		{"/api/chats/events/events", true, "", "", ""},
 		{"/api/chats/events/send", true, "", "", ""},
 		{"/api/chats/events/", true, "", "", ""},

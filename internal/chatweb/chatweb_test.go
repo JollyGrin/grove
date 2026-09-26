@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,18 @@ type fakeBackend struct {
 	tailTarget       string
 	tailSince        int
 	tailFollow       bool
+	workspaces       []string
+	workspacesErr    error
+	pane             string
+	paneErr          error
+	paneFor          string
+}
+
+func (f *fakeBackend) Workspaces() ([]string, error) { return f.workspaces, f.workspacesErr }
+
+func (f *fakeBackend) Pane(target string) (string, error) {
+	f.paneFor = target
+	return f.pane, f.paneErr
 }
 
 func (f *fakeBackend) Chats() ([]chat.Row, error) {
@@ -901,5 +914,62 @@ func TestModelsRoute(t *testing.T) {
 	}
 	if w := post(t, h, "/api/workspaces/unbrewed/models", `{}`); w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST models = %d, want 405", w.Code)
+	}
+}
+
+// grove-334: home lists every registered workspace, chats or not.
+func TestWorkspacesRoute(t *testing.T) {
+	h := chatweb.NewServer(&fakeBackend{workspaces: []string{"grove", "sb"}})
+	w := get(t, h, "/api/workspaces")
+	if w.Code != 200 {
+		t.Fatalf("GET /api/workspaces = %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Workspaces []string `json:"workspaces"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !reflect.DeepEqual(got.Workspaces, []string{"grove", "sb"}) {
+		t.Fatalf("body %s (%v)", w.Body, err)
+	}
+	// None registered is [] — never null, never an error.
+	w = get(t, chatweb.NewServer(&fakeBackend{}), "/api/workspaces")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"workspaces":[]`) {
+		t.Fatalf("empty registry = %d %s", w.Code, w.Body)
+	}
+	if w := post(t, h, "/api/workspaces", "{}"); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/workspaces = %d, want 405", w.Code)
+	}
+}
+
+// grove-334: "show pane" is the bottom PaneLines of one capture, read-only.
+func TestPaneRoute(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 50; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	f := &fakeBackend{pane: strings.Join(lines, "\n") + "\n\n\n"}
+	h := chatweb.NewServer(f)
+	w := get(t, h, "/api/chats/grove-chat-sb-1/pane")
+	if w.Code != 200 {
+		t.Fatalf("GET pane = %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Pane string `json:"pane"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if f.paneFor != "grove-chat-sb-1" {
+		t.Errorf("read pane of %q", f.paneFor)
+	}
+	want := strings.Join(lines[50-chatweb.PaneLines:], "\n")
+	if got.Pane != want {
+		t.Errorf("pane = %q, want the bottom %d lines", got.Pane, chatweb.PaneLines)
+	}
+	f.paneErr = fmt.Errorf("grove-chat-sb-1 has no live pane")
+	if w := get(t, h, "/api/chats/grove-chat-sb-1/pane"); w.Code != 404 || !strings.Contains(w.Body.String(), "no live pane") {
+		t.Errorf("paneless chat = %d %s", w.Code, w.Body)
+	}
+	if w := post(t, h, "/api/chats/grove-chat-sb-1/pane", "{}"); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST pane = %d, want 405", w.Code)
 	}
 }

@@ -229,10 +229,18 @@ func chatLabel(configDir, dir string, s transcript.Session) string {
 // bound — a cockpit pane, an archived transcript or a pane sitting at a
 // shell is never captured. A failed capture is false, never an error: a
 // scrape that cannot read must not look like a question to answer.
+//
+// grove-334: the same capture fills `turn` (ClassifyTurn), so a list row
+// can say working / idle / needs you instead of "running" for any live
+// process; a chat pane at a shell is "stopped" without a capture.
 func markWaiting(recs []chatRecord, capture func(pane string) (string, error)) {
 	for i := range recs {
 		r := &recs[i]
-		if r.Row.Kind != chat.KindChat || !r.Row.Busy || r.Pane == "" {
+		if r.Row.Kind != chat.KindChat || r.Pane == "" {
+			continue
+		}
+		if !r.Row.Busy {
+			r.Row.Turn = chatweb.TurnStopped
 			continue
 		}
 		out, err := capture(r.Pane)
@@ -240,6 +248,7 @@ func markWaiting(recs []chatRecord, capture func(pane string) (string, error)) {
 			continue
 		}
 		r.Row.Waiting = chatweb.DetectPicker(out).Detected
+		r.Row.Turn = chatweb.ClassifyTurn(out, true).State
 	}
 }
 

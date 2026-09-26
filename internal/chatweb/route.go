@@ -29,6 +29,12 @@ package chatweb
 // over SSE, for the list screens. grove-286 another: /api/version, the
 // running build's stamp.
 //
+// grove-334 added two more READS: /api/workspaces, the registered
+// workspaces (so home offers `+ new chat` where no chat exists yet), and
+// /api/chats/<s>/pane, the bottom of a chat's pane as text — the "show
+// pane" escape hatch for a modal the picker scrape cannot read. Neither
+// writes anything; the pane is already read every second for the picker.
+//
 // Parsing lives away from net/http so the whole table — including every
 // path that must 404 — is testable without a listener.
 
@@ -51,6 +57,9 @@ const (
 	RouteVersion = "version" // GET  /api/version
 	// grove-293: the new-chat sheet's rows for one workspace. Read-only.
 	RouteModels = "models" // GET  /api/workspaces/<l>/models
+	// grove-334: the registered workspaces, and a chat's pane snapshot.
+	RouteWorkspaces = "workspaces" // GET  /api/workspaces
+	RoutePane       = "pane"       // GET  /api/chats/<s>/pane
 )
 
 // Route is a parsed API request. Target is the chat address for the chat
@@ -90,6 +99,8 @@ func ParseRoute(path string) (r Route, api bool) {
 		return Route{Kind: RouteProfiles, Method: "GET"}, true
 	case len(parts) == 1 && parts[0] == "version":
 		return Route{Kind: RouteVersion, Method: "GET"}, true
+	case len(parts) == 1 && parts[0] == "workspaces":
+		return Route{Kind: RouteWorkspaces, Method: "GET"}, true
 	case len(parts) == 2 && parts[0] == "chats" && parts[1] == "events":
 		return Route{Kind: RouteChatsEvents, Method: "GET"}, true
 	// A chat literally addressed "events" would read as the list stream
@@ -107,6 +118,8 @@ func ParseRoute(path string) (r Route, api bool) {
 			return Route{Kind: RouteResume, Target: target, Method: "POST"}, true
 		case "close":
 			return Route{Kind: RouteClose, Target: target, Method: "POST"}, true
+		case "pane":
+			return Route{Kind: RoutePane, Target: target, Method: "GET"}, true
 		}
 	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "new":
 		return Route{Kind: RouteNew, Target: parts[1], Method: "POST"}, true

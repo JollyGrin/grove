@@ -112,3 +112,28 @@ func TestLabelMissingFileFallsBack(t *testing.T) {
 		t.Errorf("Label = %q, want hi", got)
 	}
 }
+
+// grove-334: Claude Code's interrupt notice is the harness, not the
+// operator — every variant is a meta `interrupt` chip, and prose that only
+// quotes one stays prose.
+func TestClassifyInterrupt(t *testing.T) {
+	cases := []struct {
+		in, tool, text string
+		meta           bool
+	}{
+		{"[Request interrupted by user]", MetaInterrupt, "Request interrupted by user", true},
+		{"[Request interrupted by user for tool use]", MetaInterrupt, "Request interrupted by user for tool use", true},
+		{"  [Request interrupted by user for tool use]\n", MetaInterrupt, "Request interrupted by user for tool use", true},
+		{"why did you print [Request interrupted by user]?", "", "why did you print [Request interrupted by user]?", false},
+		{"[Request interrupted by user]\nnow do X instead", "", "[Request interrupted by user]\nnow do X instead", false},
+	}
+	for _, c := range cases {
+		tool, text, meta := classify(c.in)
+		if tool != c.tool || text != c.text || meta != c.meta {
+			t.Errorf("classify(%q) = %q, %q, %v; want %q, %q, %v", c.in, tool, text, meta, c.tool, c.text, c.meta)
+		}
+	}
+	if l := CleanLabel("[Request interrupted by user]"); l != "" {
+		t.Errorf("an interrupt must never title a chat, got %q", l)
+	}
+}

@@ -90,6 +90,10 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 .badge.chat { color: var(--green); border-color: var(--green-deep); }
 .badge.cockpit { color: var(--amber); }
 .badge.history { color: var(--dimmer); }
+/* grove-334: the row badge is the turn, not the process. */
+.badge.chat.idle, .badge.chat.live { color: var(--dim); border-color: var(--border-bright); }
+.badge.chat.stopped { color: var(--dimmer); border-color: var(--border-bright); }
+.badge.chat.errored { color: var(--red); border-color: var(--red); }
 /* grove-302: "needs you" — a live chat blocked on a picker. Amber, the
    picker strip's own color, on the badge and the row's edge. */
 .badge.waiting { color: var(--amber); border-color: var(--amber); }
@@ -204,6 +208,8 @@ body.picker #keys { display: flex; }
 #keys button { border: 1px solid var(--amber); color: var(--amber); border-radius: 8px; padding: 6px 14px; min-width: 44px; }
 #keys button.opt { flex-basis: 100%; text-align: left; overflow-wrap: anywhere; }
 #keys button.on { background: var(--amber); color: var(--surface-alt); }
+/* grove-334: the Submit page's picks, above its menu — whole, never cut. */
+#keys .review { font-size: 12px; color: var(--text); flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .compose { display: flex; gap: 8px; align-items: flex-end; }
 #text {
   flex: 1; resize: none; font: inherit; font-family: var(--mono); color: var(--text); background: var(--surface);
@@ -258,6 +264,8 @@ body.picker #keys { display: flex; }
 #end { border: 1px solid var(--red); color: var(--red); border-radius: 8px; padding: 3px 10px; font-size: 11.5px; }
 #sheet-panel .sheet-body { font-size: 13px; color: var(--text); padding: 0 2px 12px; line-height: 1.45; }
 #sheet-panel .row.danger .title { color: var(--red); }
+/* grove-334: "show pane" — the capture as the terminal draws it. */
+#sheet-panel pre.pane { font-family: var(--mono); font-size: 10.5px; line-height: 1.3; white-space: pre; overflow: auto; max-height: 60vh; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 0 0 10px; }
 </style>
 </head>
 <body>
