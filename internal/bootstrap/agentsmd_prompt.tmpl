@@ -3,7 +3,7 @@ this repository and write {{.Target}} in the repo root — the portable
 AGENTS.md format (agents.md): plain markdown consumed by any coding agent.
 
 Ground truths already detected deterministically (trust these; correct
-them ONLY if the code clearly contradicts them):
+one only if the code clearly contradicts it):
 - stack: {{.Stack}}{{if .Shape}} · repo shape: {{.Shape}}{{end}}
 {{- if .Setup}}
 - setup: {{.Setup}}{{end}}
@@ -36,7 +36,8 @@ Anything that would surprise a competent newcomer (generated files,
 implicit ordering, env vars needed, slow tests). Omit the section if you
 found none.
 
-Rules: at most ~150 lines total; every claim must be verifiable from the
-repo contents; terse and factual — no marketing language, no
-recommendations, no TODO lists. When done, end your final message with
+Rules: short enough to read in one sitting — every coding agent in this
+repo loads it into every session, so each line is paid on every turn;
+every claim must be verifiable from the repo contents; terse and
+factual — no marketing language, no recommendations, no TODO lists. When done, end your final message with
 one line: WROTE {{.Target}}

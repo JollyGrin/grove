@@ -23,24 +23,19 @@ the copyable plugin-authoring skill; changing any `--json` field or
 events.jsonl record is a contract change (additive-only, `e2e/plugin.sh`
 is the tripwire).
 
-## Running the binary (P0.0 done — safe, with two cautions)
+## Running the binary
 
-**Resolved 2026-07-04 (Phase 0):** the P0.0 namespace rename is done —
-config `~/.config/grove/`, state `~/.local/state/grove/` (env override
-`GROVE_STATE_DIR`; since 2026-07-05 a repo/parent with a `.grove/` marker
-is a WORKSPACE — its own `.grove/{config.yaml,state,orchestrator}`,
-cockpit `grove-<label>`, ambient walk-up; the global paths are the
-legacy/defaults layer), `gv hook` commands, `grove`/`grove-mobile` cockpit
-sessions. The binary is safe to run and no longer touches overstory
-state (`e2e/dummy.sh` asserts it). One live-coexistence caution remains:
-`gv hooks install` writes the **shared** `~/.cc-work/settings.json`
-(tested to preserve ovs entries — but treat it with respect).
-
-Since grove-29 (P2) a workspace's cockpit **and** its workers share one
-`grove-<label>` session (window 0 = cockpit, 1+ = workers); the old
-`pr-<repo>` worker sessions and their vestigial `dashboard` shell are
-retired, so the ovs `pr-<repo>` coexistence constraint is gone — the
-operator now runs grove exclusively.
+Config lives in `~/.config/grove/` and state in `~/.local/state/grove/`
+(env override `GROVE_STATE_DIR`). A repo or parent with a `.grove/`
+marker is a WORKSPACE: its own `.grove/{config.yaml,state,orchestrator}`,
+cockpit session `grove-<label>`, found by walking up from the cwd; the
+global paths are the defaults layer. A workspace's cockpit and its
+workers share that one `grove-<label>` session (window 0 = cockpit, 1+ =
+workers). The binary never touches overstory state (`e2e/dummy.sh`
+asserts it). One caution: `gv hooks install` writes the **shared**
+`~/.cc-work/settings.json`, which other Claude Code sessions (ovs
+included) also read — it is tested to preserve their entries, but treat
+it with respect.
 
 ## Build / test
 
@@ -48,10 +43,9 @@ operator now runs grove exclusively.
   `gofmt -l .` empty.
 - **`gv update --yes` is the ONLY way to refresh the operator's
   `~/go/bin/gv`. Never `go install ./cmd/gv` for that.** A push to main
-  auto-cuts a GitHub release within ~a minute (main pushed 15:20:39Z →
-  v0.1.30 published 15:21:41Z, 2026-08-31), so after a merge you wait,
-  then update. `go install` stamps the binary `dev`, which is exactly
-  what `gv update` refuses (`ErrDevBuild`, internal/update/update.go) —
+  auto-cuts a GitHub release within about a minute, so after a merge
+  you wait, then update. `go install` stamps the binary `dev`, which is
+  exactly what `gv update` refuses (`ErrDevBuild`, internal/update/update.go) —
   so each `go install` guarantees the next one refuses too. To escape a
   binary already stamped `dev`: `gv update --yes --force` once. Hooks
   reference the absolute path, so no re-install of hooks either way.
@@ -61,10 +55,10 @@ operator now runs grove exclusively.
   untouched.
 - `e2e/dummy.sh` runs the full grab/ls/hook/untrack/done loop against
   scratch everything (the dummy-data pattern) — run it before merging
-  anything that touches the task lifecycle. `e2e/all.sh` runs all ten
-  suites; no CI covers them, so run it before merging anything that
-  touches the TUI as well (grove-79: three TUI PRs merged while
-  cockpit.sh + workspace.sh were red).
+  anything that touches the task lifecycle. `e2e/all.sh` runs every
+  suite; no CI covers them, so run it before merging anything that
+  touches the TUI as well — a green `go test` has let TUI PRs merge
+  with red e2e suites.
 
 ## Hard rules (inherited from ovs, provider-neutral)
 
