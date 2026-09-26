@@ -100,8 +100,8 @@ grove worker) silently targets the **real server** unless it clears
   through `$SHELL -c` — single-quote it: `-t '=grove-chat-x-1'`. zsh
   (macOS's default) equals-expands a word that starts with `=` and aborts
   the line before the command runs; bash does not, so this
-  never shows up on Linux. `remote.Quote` handles it, but only since it
-  stopped treating a leading `=`/`~` as safe — do not hand-roll the check.
+  never shows up on Linux. `remote.Quote` force-quotes any word with a
+  leading `=`/`~` — use it, never a hand-rolled check.
 
 - **`kill-window` kills the foreground process group, not the tree**:
   daemonizing children (jest-worker et al.) survive,

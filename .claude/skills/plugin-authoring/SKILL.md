@@ -42,9 +42,9 @@ streams the workspace's transitions, one event per flushed stdout line —
 grove does the tailing, the offset bookkeeping and the torn-line handling.
 Default is FROM NOW (`--replay` / `--since` for history), so a baseline can
 never be sampled after the fact, and `--until <sentinel or event type>`
-exits 0 exactly when that transition lands — a sentinel as before, or
-(grove-252) a bare event type: `--until pr_merged`, `--until
-worker_waiting`. The default type set covers every terminal state —
+exits 0 exactly when that transition lands — a sentinel (`question`,
+`blocked`, `done`, `none`) or a bare event type (`--until pr_merged`,
+`--until worker_waiting`). The default type set covers every terminal state —
 including an idle stop with no STATUS line and `session_ended`, plus all
 eleven delivery/liveness types below — so a crashed worker is never
 silent. **Never derive completion from a tmux pane**: the kickoff prompt

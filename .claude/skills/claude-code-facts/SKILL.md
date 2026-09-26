@@ -135,7 +135,8 @@ changes the behavior.
 - **Running vs idle from one capture (2.1.283):** the spinner
   glyph cycles `· ✢ ✳ ✶ ✻ ✽`, so match the line's SHAPE — glyph, verb
   with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
-  the finished form. `esc to interrupt` is gone; the input caret is
+  the finished form. There is no `esc to interrupt` footer to key on; the
+  input caret is
   followed by U+00A0. No hook fires when a pane dies, and an API-error end
   fires `StopFailure` (not installed by grove) — not `Stop`.
 
@@ -176,8 +177,8 @@ height, and the box itself).
   prompt is `❯` + U+00A0 (NBSP), not a plain space.
 - **The submitted prompt echoes as `❯ <text>` in the transcript** above
   the box (no rules around it) — that echo is the relay's uptake evidence.
-  `esc to interrupt` was NOT visible in the footer on v2.1.283 during a
-  running turn (auto mode showed its own hint), so the echo carries it.
+  The running footer carries no submit marker (auto mode shows its own
+  hint there), so the echo carries it.
 - **A message relayed MID-TURN is queued, and drawn ABOVE the rules**
   (v2.1.283, verified through the real `PasteText` path): transcript-style
   `❯ <text>` (multi-line pastes expanded, not chipped) plus
