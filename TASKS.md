@@ -9,6 +9,21 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: UI fixes from the live test (grove-334,
+      2026-09-26, `chat-ux` train). Home renders a block per registered
+      workspace (new read `GET /api/workspaces`), so an empty workspace
+      keeps `+ new chat` and the version footer. A turn `waiting` with no
+      readable picker shows `the chat is showing a prompt the phone can't
+      read` + **show pane** (new read `GET /api/chats/<s>/pane`, bottom 30
+      lines) and disables send. `[Request interrupted…]` is a `meta`
+      `interrupt` chip (⏹) that ends the turn; a stop that landed does
+      too, so idle after it is no longer "no reply". Rows gain additive
+      `turn` (ClassifyTurn off the `waiting` capture): badges
+      working/idle/needs you/stopped, order needs you → working → recent;
+      End chat reads the turn, not the stale heuristic. Picker gains
+      additive `review` (Submit page's picks); multi-select `Chat about
+      this` loses its checkbox; the chat header retitles once the label
+      lands. Each item browser-verified against a sandboxed haiku chat.
 - [x] `gv chat`: pick a Claude model for a new chat (grove-293,
       2026-09-26, `chat-ux` train). `gv orchestrator new --model <tier>`
       (cockpit pane, `--workspace`, and relayed over `--host` at a fixed

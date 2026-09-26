@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/workspace"
@@ -610,5 +611,13 @@ func TestMarkWaiting(t *testing.T) {
 	}
 	if len(captured) != 3 {
 		t.Errorf("captured %v; only live busy chat panes may be read", captured)
+	}
+	// grove-334: `turn` rides the same capture; a shell pane is stopped
+	// without one, and nothing read is "".
+	wantTurn := []string{chatweb.TurnWaiting, chatweb.TurnIdle, "", chatweb.TurnStopped, "", ""}
+	for i, w := range wantTurn {
+		if recs[i].Row.Turn != w {
+			t.Errorf("row %d turn = %q, want %q", i, recs[i].Row.Turn, w)
+		}
 	}
 }

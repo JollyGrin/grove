@@ -50,6 +50,9 @@ type Picker struct {
 	// row: the menu is now a text input, and the composer's verified send
 	// (paste + Enter) is what answers it.
 	Typing bool `json:"typing,omitempty"`
+	// Review is AskUserQuestion's Submit page's picks, one "question →
+	// answer" per line (grove-334, review.go). Additive.
+	Review []string `json:"review,omitempty"`
 }
 
 // Option is one numbered row of a menu.

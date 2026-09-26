@@ -29,6 +29,12 @@ const (
 	MetaBash             = "bash"              // a `!` shell escape's command line
 	MetaBashOutput       = "bash-output"       // that escape's stdout/stderr
 	MetaLocalStdout      = "local-stdout"      // a local command's output
+	// MetaInterrupt (grove-334) is Claude Code's own notice that the
+	// operator stopped the turn — `[Request interrupted by user]`, `… for
+	// tool use]`. It is written as a user line, but it is the harness
+	// speaking, and it ENDS the turn: a client reads it as "stopped", never
+	// as the operator's message or as a turn still going.
+	MetaInterrupt = "interrupt"
 )
 
 var (
@@ -98,12 +104,22 @@ func classify(s string) (tool, text string, meta bool) {
 		out, _ := tagText(s, "bash-stdout")
 		errText, _ := tagText(s, "bash-stderr")
 		return MetaBashOutput, strings.TrimSpace(out + "\n" + errText), true
+	case isInterrupt(s):
+		return MetaInterrupt, strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), true
 	case strings.HasPrefix(s, "<local-command-stdout>"), strings.HasPrefix(s, "<local-command-stderr>"):
 		out, _ := tagText(s, "local-command-stdout")
 		errText, _ := tagText(s, "local-command-stderr")
 		return MetaLocalStdout, strings.TrimSpace(out + "\n" + errText), true
 	}
 	return "", s, false
+}
+
+// isInterrupt is Claude Code's interrupt notice in any of its variants —
+// `[Request interrupted by user]`, `[Request interrupted by user for tool
+// use]` — and only when it is the whole text, so prose that merely quotes
+// one stays the operator's.
+func isInterrupt(s string) bool {
+	return strings.HasPrefix(s, "[Request interrupted") && strings.HasSuffix(s, "]") && !strings.Contains(s, "\n")
 }
 
 // labelMax matches transcript.FirstPrompt's 80-rune list label.

@@ -175,7 +175,7 @@ func (chatBackend) Picker(target string) chatweb.Picker {
 	if err != nil {
 		return chatweb.Picker{}
 	}
-	return chatweb.DetectPicker(capture)
+	return chatweb.WithReview(chatweb.DetectPicker(capture), capture)
 }
 
 // Turn is the pane read behind the phone's "working…" strip (grove-300).
@@ -323,6 +323,38 @@ func (chatBackend) Resume(target string) (string, error) {
 		return "", fmt.Errorf("%s is already live — open it instead of reviving it", rec.Row.Session)
 	}
 	return spawnAndName(rec.Row.Workspace, chatSpawnReq{Label: rec.Row.Workspace, Resume: *rec.Row.SessionID})
+}
+
+// Workspaces is every workspace `gv chat ls` would enumerate (grove-334):
+// the same chatWorkspaces filter, so home never offers `+ new chat` in a
+// workspace whose chats the list could not show.
+func (chatBackend) Workspaces() ([]string, error) {
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	targets, err := chatWorkspaces(list, "")
+	if err != nil {
+		return nil, err
+	}
+	labels := make([]string, 0, len(targets))
+	for _, ws := range targets {
+		labels = append(labels, ws.Label)
+	}
+	return labels, nil
+}
+
+// Pane is "show pane" (grove-334): one fresh capture of a live chat's pane,
+// read-only rows included — the same reach as Turn. The page trims it.
+func (chatBackend) Pane(target string) (string, error) {
+	rec, err := paneRead.find(target)
+	if err != nil {
+		return "", err
+	}
+	if rec.Pane == "" {
+		return "", fmt.Errorf("%s has no live pane — nothing to show", chatName(rec.Row))
+	}
+	return tmux.CapturePane(rec.Pane)
 }
 
 // Close is `gv chat close` for the phone's End chat (grove-294).

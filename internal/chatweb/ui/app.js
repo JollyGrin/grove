@@ -21,8 +21,13 @@ var el = function (id) { return document.getElementById(id); };
  * they exist. `turn` is the server's pane read (grove-300's `turn` event)
  * and `turnHold` the moment until which it is too old to trust. `day` is
  * the local calendar day of the last prose entry that carried a time
- * (grove-303) — what decides whether the next one needs a separator. */
-var view = { chats: [], profiles: [], version: '', staleSeen: '', loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '', hist: {} };
+ * (grove-303) — what decides whether the next one needs a separator.
+ * grove-334: `workspaces` is every registered workspace, so home keeps a
+ * block (and its `+ new chat`) for one with no chats; `picker` is the open
+ * chat's last picker event; `stopped` is "the operator ended this turn" —
+ * a stop that landed, or the transcript's interrupt notice — so an idle
+ * pane after it reads as stopped, not as "no reply". */
+var view = { chats: [], workspaces: [], picker: null, stopped: false, profiles: [], version: '', staleSeen: '', loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '', hist: {} };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -83,6 +88,14 @@ function loadChats() {
     noteRows();
     return view.chats;
   });
+}
+
+/* The registered workspaces (grove-334). Garnish like profiles: a failed
+ * read keeps what home already had, and the chat rows still name theirs. */
+function loadWorkspaces() {
+  return api('/api/workspaces').then(function (j) {
+    view.workspaces = j.workspaces || [];
+  }, function () { /* keep the last list */ });
 }
 
 /* The host's model profiles (grove-225). Garnish, like the picker scrape:
@@ -236,9 +249,35 @@ var HISTORY_EXPLAIN = 'history = conversations with no running Claude process; t
  * (chat.Less: workspace, kind, recency, number) is what ties fall back to,
  * because the sort is stable. */
 function liveOrder(a, b) {
-  if (!!a.waiting !== !!b.waiting) return a.waiting ? -1 : 1;
-  if (!!a.busy !== !!b.busy) return a.busy ? -1 : 1;
+  var ra = rank(a), rb = rank(b);
+  if (ra !== rb) return ra - rb;
   return new Date(activeAt(b)).getTime() - new Date(activeAt(a)).getTime();
+}
+
+/* rank: needs you (0) → working (1) → the rest (2). `turn` (grove-334) is
+ * the row's pane read; a server that predates it sends none, and `busy`
+ * (a live process) stands in for working as it always did. */
+function rank(c) {
+  if (needsYou(c)) return 0;
+  return turnWord(c) === 'working' ? 1 : 2;
+}
+
+function needsYou(c) { return !!c.waiting || c.turn === 'waiting'; }
+
+/* turnWord is what a live chat row is doing, in the page's words: a turn
+ * that is running is `working`, a claude at its prompt `idle`, no claude
+ * in the pane `stopped`. `busy` only ever meant "a process is alive", so
+ * it is the fallback for an unread turn, never the answer. */
+function turnWord(c) {
+  switch (c.turn) {
+    case 'running': return 'working';
+    case 'idle': return 'idle';
+    case 'stopped': return 'stopped';
+    case 'errored': return 'errored';
+    case 'waiting': return 'needs you';
+  }
+  if (c.turn === undefined) return c.busy ? 'working' : 'stopped';
+  return c.busy ? 'live' : 'stopped';
 }
 
 /* The kind as the operator reads it — the badge and the chat subtitle. */
@@ -249,7 +288,7 @@ function kindWord(c) { return c.kind === 'archived' ? 'history' : c.kind; }
  * not idle, it is waiting on the operator. Same rounding as ago(), so the
  * list signature (which folds ago) moves whenever this label does. */
 function idleFor(c) {
-  if (c.kind !== 'chat' || c.waiting) return '';
+  if (c.kind !== 'chat' || needsYou(c)) return '';
   var s = (Date.now() - new Date(activeAt(c)).getTime()) / 1000;
   if (!(s > IDLE_HINT_S)) return '';
   return 'idle ' + (s < 172800 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd') + ' · end?';
@@ -257,21 +296,22 @@ function idleFor(c) {
 
 function stateBadge(c) {
   if (c.kind === 'archived') return h('span', 'badge history', 'history');
-  if (c.waiting) return h('span', 'badge waiting', 'needs you');
+  if (needsYou(c)) return h('span', 'badge waiting', 'needs you');
   if (c.kind === 'cockpit') return h('span', 'badge cockpit', 'cockpit');
-  return h('span', 'badge chat', c.busy ? 'running' : 'not running');
+  var w = turnWord(c);
+  return h('span', 'badge chat ' + w, w);
 }
 
 /* chatRow is one tappable chat, on every list. showWs tags it with its
  * workspace — on the home screen, where rows from different workspaces sit
  * together; not where the workspace is already the heading. */
 function chatRow(c, showWs) {
-  var b = h('button', 'row' + (c.waiting ? ' waiting' : ''));
+  var b = h('button', 'row' + (needsYou(c) ? ' waiting' : ''));
   b.append(h('div', 'title', chatTitle(c)));
   var meta = h('div', 'meta');
   if (showWs) meta.append(h('span', 'ws', c.workspace));
   meta.append(stateBadge(c));
-  if (c.busy) meta.append(h('span', 'dot'));
+  if (c.kind === 'cockpit' ? c.busy : turnWord(c) === 'working') meta.append(h('span', 'dot'));
   var idle = idleFor(c);
   if (!idle) meta.append(h('span', '', ago(activeAt(c))));
   if (c.kind === 'cockpit') meta.append(h('span', '', 'read-only'));
@@ -343,6 +383,9 @@ function workspaceBlock(label, rows, forceOpen) {
 
 function byWorkspace() {
   var labels = [], by = {};
+  view.workspaces.forEach(function (l) {
+    if (!by[l]) { by[l] = []; labels.push(l); }
+  });
   view.chats.forEach(function (c) {
     if (!by[c.workspace]) { by[c.workspace] = []; labels.push(c.workspace); }
     by[c.workspace].push(c);
@@ -359,8 +402,9 @@ function screenHome() {
   var g = byWorkspace();
   if (!g.labels.length) {
     main.append(h('div', 'empty', view.loaded
-      ? 'no orchestrator chats on this machine yet'
+      ? 'no registered workspaces on this machine — run gv init in a repo to add one'
       : 'loading…'));
+    if (view.version) main.append(h('div', 'ver', 'gv ' + view.version));
     return;
   }
   var live = view.chats.filter(function (c) { return c.kind !== 'archived'; }).sort(liveOrder);
@@ -488,7 +532,11 @@ function openEndSheet(c) {
   panel.append(h('div', 'sheet-body',
     'Ends the Claude process running this chat (frees its memory and stops any work in progress). ' +
     'The conversation is kept in history, and you can revive it later.'));
-  if (view.working && view.addr === addr(c)) {
+  /* The turn state, not the stream heuristic (grove-334): `working` can be
+   * a stale guess on a chat whose pane has long since died. The open
+   * chat's own pane read is freshest; the row's is the fallback. */
+  var t = view.addr === addr(c) && view.turn ? view.turn.state : c.turn;
+  if (t === 'running') {
     panel.append(h('div', 'sheet-body', 'It is working right now; ending stops that turn.'));
   }
   var go = h('button', 'row danger');
@@ -548,6 +596,7 @@ function screenChat(a) {
   view.group = null;
   view.day = '';
   view.turn = null;
+  view.stopped = false;
   setWorking(false);
   el('jump').hidden = true;
   if (!c) {
@@ -587,6 +636,7 @@ function screenChat(a) {
      * relabel so the restore reads the same as a fresh replay would. */
     kept.node.querySelectorAll('.day').forEach(function (d) { d.textContent = dayLabel(d.dataset.day); });
     view.turnHold = kept.turnHold;
+    view.stopped = kept.stopped;
     setWorking(kept.working);
     main.scrollTop = kept.top;
     el('jump').hidden = kept.jump;
@@ -609,7 +659,7 @@ function keepChat() {
   var entry = {
     addr: view.addr, sid: (chatByAddr(view.addr) || {}).session_id,
     maxSeq: view.maxSeq, group: view.group, day: view.day, working: view.working,
-    pending: view.pending, turnHold: view.turnHold,
+    pending: view.pending, turnHold: view.turnHold, stopped: view.stopped,
     top: main.scrollTop, jump: el('jump').hidden, node: document.createDocumentFragment(),
   };
   /* Moving the nodes (not cloning them) keeps `group` and the pending
@@ -654,6 +704,7 @@ function openStream(a, since) {
   es.addEventListener('picker', function (ev) {
     var p;
     try { p = JSON.parse(ev.data); } catch (_) { return; }
+    view.picker = p;
     renderKeys(p);
     notePicker(a, p);
   });
@@ -662,6 +713,8 @@ function openStream(a, since) {
     try { t = JSON.parse(ev.data); } catch (_) { return; }
     view.turn = t;
     renderWorking();
+    /* A modal the picker cannot read shows only here (grove-334). */
+    renderKeys(view.picker);
   });
   es.addEventListener('fault', function (ev) {
     var msg = '';
@@ -683,6 +736,8 @@ function closeStream() {
   syncBadge();
   document.body.classList.remove('picker');
   el('keys').textContent = '';
+  view.picker = null;
+  syncSend();
 }
 
 /* appendEntry renders one `gv chat tail` line — the same JSON a piped CLI
@@ -704,6 +759,9 @@ function appendEntry(e) {
      * background task's notice. Not prose, so it neither closes the turn's
      * group nor says anything about whether the agent is working. */
     (view.group ? view.group.body : main).append(metaChip(e));
+    /* grove-334: an interrupt is the one wrapper that says something about
+     * the turn — it ENDED it. Idle after it is stopped, not "no reply". */
+    if (e.tool === 'interrupt') { view.stopped = true; setWorking(false); }
     if (stick) main.scrollTop = main.scrollHeight;
     else el('jump').hidden = false;
     return;
@@ -726,6 +784,9 @@ function appendEntry(e) {
       if (!window.marked) node.textContent = e.text || '';
     } else {
       settlePending(e.text);
+      /* The operator spoke again: a new turn, no longer a stopped one. */
+      view.stopped = false;
+      wantLabel();
       node = h('div', 'msg user', e.text || '');
     }
     var at = clock(e.ts);
@@ -847,7 +908,7 @@ function stepRow(e) {
 
 /* metaChip is a meta entry's row: a small dim chip naming the wrapper,
  * expandable to its text. */
-var META_GLYPH = { command: '⌘', 'task-notification': '⚙', bash: '$', 'bash-output': '◂', 'local-stdout': '◂' };
+var META_GLYPH = { interrupt: '⏹', command: '⌘', 'task-notification': '⚙', bash: '$', 'bash-output': '◂', 'local-stdout': '◂' };
 function metaChip(e) {
   var node = h('details', 'tool meta');
   var head = oneLine(e.text) || (e.tool === 'task-notification' ? 'background task finished' : e.tool);
@@ -962,6 +1023,9 @@ function renderWorking() {
   var on = view.working, note = '';
   if (state === 'running') on = true;
   else if (state === 'waiting') on = false;
+  /* A stopped turn is over (grove-334): whatever the heuristic re-armed on
+   * after the Esc, an idle pane now is the stop working, not a lie. */
+  else if (view.stopped) on = false;
   else if (on && state === 'errored') note = 'turn errored' + (t.line ? ' — ' + t.line : '');
   else if (on && state === 'idle') note = 'no reply — the pane may have stopped';
   else if (on && state === 'stopped') note = 'no reply — the pane has stopped';
@@ -979,7 +1043,7 @@ function renderWorking() {
  * pane has had time to show the new turn (or its absence). */
 function holdTurn() {
   view.turnHold = Date.now() + TURN_HOLD;
-  setTimeout(renderWorking, TURN_HOLD + 50);
+  setTimeout(function () { renderWorking(); renderKeys(view.picker); }, TURN_HOLD + 50);
 }
 
 function oneLine(s) {
@@ -1035,9 +1099,10 @@ function composer(c) {
 
   text.disabled = send.disabled = false;
   text.placeholder = 'message this chat…';
+  syncSend();
   var submit = function () {
     var body = text.value.trim();
-    if (!body) return;
+    if (!body || blocked()) return;
     /* The composer is free the moment the bubble shows: the pending
      * bubble, not a disabled box, is what says a send is in flight. */
     text.value = '';
@@ -1101,13 +1166,14 @@ function sendPending(c, body) {
        * waiting for the agent's first thinking block to land. The
        * stream takes the indicator over from here. */
       if (view.es && view.addr === a) {
+        view.stopped = false;
         holdTurn();
         setWorking(true);
       } else {
         /* The reader left before the relay answered: mark the kept copy,
          * so re-opening it does not claim nothing is running. */
         var kept = chatCache.filter(function (k) { return k.addr === a; })[0];
-        if (kept) { kept.working = true; kept.turnHold = Date.now() + TURN_HOLD; }
+        if (kept) { kept.working = true; kept.stopped = false; kept.turnHold = Date.now() + TURN_HOLD; }
       }
       /* A transcript that never echoes it back is not an error — the
        * relay already proved the submit. After a minute the bubble just
@@ -1225,16 +1291,27 @@ var wasTyping = false;
 function renderKeys(p) {
   var box = el('keys');
   box.textContent = '';
-  if (!p || !p.detected) { wasTyping = false; document.body.classList.remove('picker'); return; }
+  syncSend();
+  if (!p || !p.detected) {
+    wasTyping = false;
+    if (blocked()) { renderBlocked(box); return; }
+    document.body.classList.remove('picker');
+    return;
+  }
   document.body.classList.add('picker');
   var label = p.prompt || 'the chat is asking something — answer with a key';
   if (p.typing) label = 'type your answer below and send — ' + label;
   box.append(h('div', 'label', label));
+  /* AskUserQuestion's Submit page (grove-334): the picks it is about to
+   * submit, from the pane's own review text, above `Submit answers`. */
+  (p.review || []).forEach(function (r) { box.append(h('div', 'review', r)); });
   var labelled = {};
   (p.options || []).forEach(function (o) {
     labelled[o.key] = true;
     var text = o.label;
-    if (p.kind === 'multi') text = (o.checked ? '☑ ' : '☐ ') + text;
+    /* "Chat about this" leaves the question rather than picking an answer,
+     * so it gets no checkbox even on a multi-select. */
+    if (p.kind === 'multi' && !o.free && !/^chat about this/i.test(o.label)) text = (o.checked ? '☑ ' : '☐ ') + text;
     else if (o.free) text = '✎ ' + text;
     var b = keyButton(box, o.key, o.key + ' · ' + text);
     b.classList.add('opt');
@@ -1245,6 +1322,61 @@ function renderKeys(p) {
   });
   if (p.typing && !wasTyping) el('text').focus();
   wasTyping = !!p.typing;
+}
+
+/* blocked (grove-334): the pane read says a modal holds the turn, but the
+ * picker scrape found nothing it can offer keys for. Before this the page
+ * showed nothing at all and the composer invited a message the server
+ * would refuse — a blocked chat that looked ready. */
+function blocked() {
+  var t = view.turn && Date.now() >= view.turnHold ? view.turn : null;
+  return !!(view.es && t && t.state === 'waiting' && !(view.picker && view.picker.detected));
+}
+
+/* renderBlocked is the universal escape hatch for a prompt the phone does
+ * not understand: say so, and offer the pane itself to read. */
+function renderBlocked(box) {
+  document.body.classList.add('picker');
+  box.append(h('div', 'label', 'the chat is showing a prompt the phone can’t read'));
+  var b = h('button', '', 'show pane');
+  b.onclick = function () { openPaneSheet(view.addr); };
+  box.append(b);
+}
+
+/* syncSend gates the send button on blocked(): the server refuses a send
+ * into a modal anyway (409), and a live-looking button is the lie. Only a
+ * writable chat's button is touched — read-only rows stay disabled. */
+function syncSend() {
+  var c = chatByAddr(view.addr);
+  if (!c || !c.writable) return;
+  el('send').disabled = blocked();
+}
+
+/* openPaneSheet is "show pane": the bottom of the chat's pane as the
+ * server captured it, monospace, read-only, with a refresh. */
+function openPaneSheet(a) {
+  var panel = el('sheet-panel');
+  panel.textContent = '';
+  panel.append(h('div', 'sheet-title', 'the pane, as it is now — read-only'));
+  var pre = h('pre', 'pane', 'reading…');
+  panel.append(pre);
+  var load = function () {
+    api('/api/chats/' + encodeURIComponent(a) + '/pane').then(function (j) {
+      pre.textContent = j.pane || '(empty)';
+      pre.scrollTop = pre.scrollHeight;
+    }, function (e) { pre.textContent = String(e && e.message ? e.message : e); });
+  };
+  var again = h('button', 'row', '');
+  again.append(h('div', 'title', 'refresh'));
+  again.onclick = load;
+  panel.append(again);
+  var cancel = h('button', 'cancel', 'close');
+  cancel.onclick = closeSheet;
+  panel.append(cancel);
+  var sheet = el('sheet');
+  sheet.onclick = function (ev) { if (ev.target === sheet) closeSheet(); };
+  sheet.hidden = false;
+  load();
 }
 
 function keyButton(box, k, text) {
@@ -1380,6 +1512,7 @@ function notify(a, body) {
  * app is not news. Only the false→true edge alerts, and never for the open
  * chat: its own stream's picker event (notePicker) already does that. */
 function noteRows() {
+  syncChatHeader();
   var now = {};
   view.chats.forEach(function (c) { if (c.waiting) now[addr(c)] = true; });
   var base = alerts.rows;
@@ -1390,6 +1523,31 @@ function noteRows() {
     if (base[a] || (view.es && a === view.addr)) return;
     notify(a, 'needs you — it is waiting on a question');
   });
+}
+
+/* wantLabel re-reads the list once when the open chat is still untitled
+ * and something was just said in it (grove-334): the list is not polled
+ * while a chat is open, so a fresh chat's label would otherwise only show
+ * up after leaving it. One fetch per LABEL_MS at most; replay of a chat
+ * that already has a label costs nothing. */
+var LABEL_MS = 3000;
+var labelTimer = null;
+function wantLabel() {
+  var c = chatByAddr(view.addr);
+  if (!c || c.label || labelTimer) return;
+  labelTimer = setTimeout(function () {
+    labelTimer = null;
+    loadChats().catch(function () { /* garnish: the session name stays */ });
+  }, LABEL_MS);
+}
+
+/* syncChatHeader retitles the open chat when its row changes under it
+ * (grove-334): a fresh chat has no label until its first prompt lands, so
+ * the header showed the session name for as long as the chat was open. */
+function syncChatHeader() {
+  if (!view.es || !view.addr) return;
+  var c = chatByAddr(view.addr);
+  if (c && el('title').textContent !== chatTitle(c)) el('title').textContent = chatTitle(c);
 }
 
 /* The app badge counts chats sitting on a picker: the list's `waiting`
@@ -1443,10 +1601,10 @@ function isListScreen() {
 function listSig() {
   if (!isListScreen()) return null;
   var open = Object.keys(view.hist).filter(function (k) { return view.hist[k]; }).sort().join(',');
-  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0, open, view.version];
+  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0, open, view.version, view.workspaces.join(',')];
   view.chats.forEach(function (c) {
     parts.push(c.workspace, c.kind, c.session || '', c.session_id || '',
-      chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, c.waiting ? 1 : 0, ago(activeAt(c)));
+      chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, c.waiting ? 1 : 0, c.turn || '', ago(activeAt(c)));
   });
   return parts.join('\u0000');
 }
@@ -1571,7 +1729,7 @@ function refresh() {
   /* Profiles ride along with the chat list and never block it: the picker
    * is garnish, the chats are the app. */
   loadVersion();
-  return loadProfiles().then(loadChats).then(render, function (e) { render(); showError(e); });
+  return Promise.all([loadProfiles(), loadWorkspaces()]).then(loadChats).then(render, function (e) { render(); showError(e); });
 }
 
 window.addEventListener('hashchange', function () {
@@ -1621,7 +1779,7 @@ el('stop').onclick = function () {
   api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: 'esc' })
     /* Optimistic: the stream corrects this back to "working…" if the turn
      * is in fact still going (an Esc during a tool call, say). */
-    .then(function () { holdTurn(); setWorking(false); })
+    .then(function () { view.stopped = true; holdTurn(); setWorking(false); })
     .catch(showError)
     .then(function () {
       setTimeout(function () {

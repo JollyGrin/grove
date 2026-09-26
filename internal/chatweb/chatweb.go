@@ -90,6 +90,13 @@ type Backend interface {
 	Profiles() ([]string, error)
 	// Resume revives an archived chat and returns the session it landed in.
 	Resume(target string) (string, error)
+	// Workspaces is the registered workspace labels, sorted (grove-334) —
+	// every one home offers `+ new chat` for, chats or not.
+	Workspaces() ([]string, error)
+	// Pane is one raw capture of a live chat's pane (grove-334): the
+	// "show pane" snapshot. A chat with no pane is an error the phone
+	// shows verbatim.
+	Pane(target string) (string, error)
 	// Close ends a live chat (`gv chat close`, grove-294): kills its
 	// session, keeps its transcript. A non-chat row is the CLI's refusal.
 	Close(target string) error
@@ -189,6 +196,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSpawn(w, route.Target, s.backend.Resume)
 	case RouteClose:
 		s.handleClose(w, route.Target)
+	case RouteWorkspaces:
+		s.handleWorkspaces(w)
+	case RoutePane:
+		s.handlePane(w, route.Target)
 	}
 }
 
@@ -279,6 +290,40 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 		names = []string{}
 	}
 	writeJSON(w, http.StatusOK, schema.Envelope("profiles", names))
+}
+
+// handleWorkspaces lists the registered workspaces (grove-334). Home is
+// built from chat rows, so a workspace with none — fresh, or after its last
+// chat ended — used to vanish along with its `+ new chat`. An empty list
+// is [] and a 200.
+func (s *Server) handleWorkspaces(w http.ResponseWriter) {
+	labels, err := s.backend.Workspaces()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if labels == nil {
+		labels = []string{}
+	}
+	writeJSON(w, http.StatusOK, schema.Envelope("workspaces", labels))
+}
+
+// PaneLines is how much of the pane "show pane" returns: its bottom, where
+// a modal and the input box sit.
+const PaneLines = 30
+
+// handlePane is "show pane" (grove-334): the bottom PaneLines of one fresh
+// capture, as text, read-only. It is the escape hatch for a prompt the
+// picker scrape cannot read — the operator sees what the pane shows, and
+// the chat's own keys (stop/esc) or a terminal answer it. A chat with no
+// pane is a 404 carrying the backend's words.
+func (s *Server) handlePane(w http.ResponseWriter, target string) {
+	capture, err := s.backend.Pane(target)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, schema.Envelope("pane", bottomLines(capture, PaneLines)))
 }
 
 // NewChatOption is one row of the new-chat sheet (grove-293): the

@@ -81,6 +81,13 @@ type Row struct {
 	// default". "" when grove did not tag it (an archived row, a cockpit's
 	// first pane, a chat spawned before the tag). Additive to the contract.
 	Model string `json:"model"`
+	// Turn is the live chat's current turn off the SAME capture Waiting
+	// reads (grove-334): chatweb.ClassifyTurn's state — running, idle,
+	// waiting, errored, unknown — or "stopped" for a live chat whose pane
+	// runs no claude. "" wherever nothing was read: a cockpit, an archived
+	// row, a failed capture. `busy` only ever meant "a process is alive";
+	// this is what says whether it is doing anything. Additive.
+	Turn string `json:"turn"`
 }
 
 // Activity is the row's recency: last_active, falling back to created when
