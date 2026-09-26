@@ -36,9 +36,9 @@ gofmt -l .                                        # must be empty
 Anything touching the task lifecycle (grab/ls/hooks/untrack/done) must
 pass `e2e/dummy.sh` before merge. It runs the full loop against scratch
 everything: scratch `HOME` (config), `GROVE_STATE_DIR` override (state),
-and the repo's `claude:` command set to `echo` (worker). Other suites:
-`wizard.sh`, `workspace.sh`, `github.sh` (stub `gh`), `cockpit.sh`,
-`plugin.sh`. **`e2e/all.sh` runs all six** — no CI covers them, so run it
+and the repo's `claude:` command set to `echo` (worker). **`e2e/all.sh`
+runs every `e2e/*.sh` suite**, then reruns the scripted-tmux ones under a
+hostile tmux config — no CI covers them, so run it
 before merging anything that touches the TUI or the task lifecycle
 (grove-79: three TUI PRs merged while `cockpit.sh` + `workspace.sh` were
 red, because nothing ran them; the panic had shipped in a fourth a day

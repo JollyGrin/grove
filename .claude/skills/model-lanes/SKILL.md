@@ -90,8 +90,8 @@ curl -s -H "Authorization: Bearer $ZAI_API_KEY" \
 ```
 
 **Where `ZAI_API_KEY` comes from.** The *name* is not special to grove: it
-is whatever the profile's `auth_token_env` says, and the shipped `zai-glm`
-profile says `ZAI_API_KEY` (`auth_token_env` holds the env VAR NAME, never
+is whatever the flat-plan profile's (`zai-plan-*`) `auth_token_env` says —
+conventionally `ZAI_API_KEY` (`auth_token_env` holds the env VAR NAME, never
 the key — see `config.example.yaml`). The *value* lives in
 `~/.config/grove/.env`, the same file `gv` sources when it wraps a worker,
 as `export ZAI_API_KEY=<key from z.ai's API-key page>`. That file is
@@ -254,12 +254,12 @@ windowed ceiling. Three rules:
 3. **Never raise `CLAUDE_CODE_AUTO_COMPACT_WINDOW` on the credit meter**
    — not to `"1000000"`, even though z.ai's own Claude Code docs recommend
    it. Credits ∝ resident context × turns, so on a credit meter aggressive
-   compaction is *cheaper* — the opposite of the Claude sub. The shipped
-   `zai-glm` profile correctly sets no such var.
-   **Exception — profiles whose backend requires it.** The shipped `kimi`
-   profile does set `CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"`
-   (README.md, `config.example.yaml`, and the grove-103 `env:` passthrough
-   it exists for): Kimi Code's 1M window needs it to function, and kimi is
+   compaction is *cheaper* — the opposite of the Claude sub. A
+   `zai-plan-*` profile sets no such var.
+   **Exception — profiles whose backend requires it.** The `kimi` example
+   profile in `config.example.yaml` sets
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"` through the profile `env:`
+   passthrough: Kimi Code's 1M window needs it to function, and kimi is
    a pay-per-token lane where the trade is a dollar cost, not a hard
    window that strands work. The rule is about the **flat-rate credit
    meter**, not about the variable in general — never strip it from a

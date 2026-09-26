@@ -55,7 +55,7 @@ changes the behavior.
   `json.Unmarshal` stdout directly (grove-288).
 - Transcripts key on the **encoded cwd**:
   `<CLAUDE_CONFIG_DIR>/projects/<encoded-path>/` where
-  `session.EncodePath` replaces `/` and `.` with `-`. Reuse the same
+  `transcript.EncodePath` replaces `/` and `.` with `-`. Reuse the same
   worktree path to preserve resumability; re-creating a worktree at a new
   path orphans the transcript → pickup-prompt fallback.
 - The `.` rule is the one people drop. In shell the encoding is **two**

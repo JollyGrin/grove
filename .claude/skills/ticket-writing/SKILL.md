@@ -42,9 +42,10 @@ green on its own?**
 
 ## The rote test: routing to cheaper models
 
-A ticket may carry the `rote` label — dispatched via
-`gv grab grove-N --repo X --model claude-sonnet-5` (later: cheap
-`--profile` lanes) — only if **all three** hold at writing time:
+A ticket may carry the `rote` label — dispatched to a cheaper lane via
+`gv grab grove-N --repo X --model claude-sonnet-5` or a `--profile` lane
+(the model-lanes skill routes those) — only if **all three** hold at
+writing time:
 
 1. **Executable acceptance criteria** — the done-check is a command or
    test, not a judgment call.
@@ -63,5 +64,5 @@ worker (grove-90) added its row unprompted.
 Feedback loop: two or more steers on a rote-labeled ticket means the
 label was wrong — fix the test or the ticket, not the model.
 `gv cost --analyze` (steers + $/merged-PR on rote tickets) is the
-scoreboard; rote tickets that clear cleanly become the eval set for
-trying cheaper OpenRouter lanes later.
+scoreboard; rote tickets that clear cleanly become the probe set for
+cheaper lanes (model-lanes' probe protocol).

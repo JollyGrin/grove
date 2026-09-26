@@ -120,8 +120,8 @@ grove worker) silently targets the **real server** unless it clears
   (`set-option -p @grove_…`) rendered via a conditional
   `pane-border-format` — foreground programs can't touch those.
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
-  and chrome layout have both changed under us — activity checks scan the
-  full ~30-line capture, never a bottom window.
+  and chrome layout have both changed under us — activity checks scan
+  every line of the ~30-line capture, never just its last few rows.
 - **Never derive a task's COMPLETION from pane text — use `gv watch`**
   (grove-205). Every kickoff template ends with the three `STATUS:
   QUESTION|BLOCKED|DONE — …` placeholder lines, so all three sentinels are
