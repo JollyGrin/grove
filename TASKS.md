@@ -9,6 +9,18 @@
 
 ## Now (2026-07-12)
 
+- [x] hooks: status/doctor/update detect hooks pointing at a different gv
+      binary (grove-348, 2026-09-26). Hook commands pin an absolute path at
+      install time, so a stale copy (observed: v0.1.3 running the hooks
+      while `gv update` refreshed ~/go/bin/gv) reads ✓ on every row. New
+      `hooks.Mismatches` (reuses `isGvEntry`, also flags a nonexistent
+      binary); `gv hooks status` prints the mismatched events + the fix
+      line and gains `--json` (`hooks` key, `mismatches` additive);
+      `gv doctor` gains a per-profile warn row (`hooks-binary:<path>`);
+      `gv update` prints the warning + fix after a real replace. Unit +
+      connections tests; dummy-data e2e section asserts status, --json and
+      doctor flag `/nonexistent/gv`.
+
 - [x] `gv chat ls`: bash-escape-only chats get a title (grove-341,
       2026-09-26). `labelFrom` fell back to the first slash command but
       not the first `!` shell escape, so 8 of 397 real chats labelled ""

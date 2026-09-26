@@ -437,9 +437,17 @@ func installed(path string) (map[string]bool, error) {
 // live ovs entries in the shared settings file, which must survive
 // byte-identical through every `gv hooks install` (dual-hook contract).
 func isGvEntry(e any) bool {
+	_, ok := gvEntryBinary(e)
+	return ok
+}
+
+// gvEntryBinary extracts the binary path from a gv hook entry ("gv" or
+// "grove"-named, per isGvEntry's basename rule); ok=false for anything
+// that is not one of OURS.
+func gvEntryBinary(e any) (string, bool) {
 	m, ok := e.(map[string]any)
 	if !ok {
-		return false
+		return "", false
 	}
 	inner, _ := m["hooks"].([]any)
 	for _, h := range inner {
@@ -452,10 +460,79 @@ func isGvEntry(e any) bool {
 		if !found {
 			continue
 		}
-		base := filepath.Base(strings.TrimSpace(bin))
+		bin = strings.TrimSpace(bin)
+		base := filepath.Base(bin)
 		if base == "gv" || strings.Contains(base, "grove") {
-			return true
+			return bin, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// Mismatch is one gv hook entry whose command binary is not the running
+// gv (grove-348) or whose binary path does not exist — either way the
+// hook-side fix never ships.
+type Mismatch struct {
+	Event   string `json:"event"`
+	Binary  string `json:"binary"`
+	Missing bool   `json:"missing"` // the binary path does not exist on disk
+}
+
+// Mismatches reports, per settings path, the gv hook entries whose
+// command binary differs from exe — the shared "do the hooks run THIS
+// binary?" check (grove-348). exe is resolved through symlinks exactly as
+// Install resolves the path it writes. Entries that are not gv's
+// (isGvEntry) are ignored; a missing settings file yields no mismatches
+// (Installed already reports that as nothing-wired).
+func Mismatches(paths []string, exe string) map[string][]Mismatch {
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	out := map[string][]Mismatch{}
+	for _, path := range paths {
+		ms, err := mismatches(path, exe)
+		if err != nil || len(ms) == 0 {
+			continue
+		}
+		out[path] = ms
+	}
+	return out
+}
+
+func mismatches(path, exe string) ([]Mismatch, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var settings struct {
+		Hooks map[string][]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return nil, err
+	}
+	var out []Mismatch
+	for _, event := range eventNames() {
+		for _, e := range settings.Hooks[event] {
+			bin, ok := gvEntryBinary(e)
+			if !ok || bin == exe {
+				continue
+			}
+			m := Mismatch{Event: event, Binary: bin, Missing: true}
+			if _, err := os.Stat(bin); err == nil {
+				m.Missing = false
+			}
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// eventNames lists the managed events in a deterministic order.
+func eventNames() []string {
+	out := make([]string, 0, len(hookEvents))
+	for ev := range hookEvents {
+		out = append(out, ev)
+	}
+	sort.Strings(out)
+	return out
 }

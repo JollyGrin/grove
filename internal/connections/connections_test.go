@@ -267,6 +267,51 @@ func TestCheckHooks(t *testing.T) {
 	}
 }
 
+func TestCheckHooksBinary(t *testing.T) {
+	exe := "/this/bin/gv"
+	e := Env{
+		SelfExe: exe,
+		HookMismatches: func(paths []string, self string) map[string][]hooks.Mismatch {
+			return map[string][]hooks.Mismatch{}
+		},
+	}
+	if st := checkHooksBinaryAt("/p/settings.json")(e); st.State != StateOK {
+		t.Errorf("clean entries: got %v, want ok", st.State)
+	}
+	e.HookMismatches = func(paths []string, self string) map[string][]hooks.Mismatch {
+		if self != exe {
+			t.Errorf("check passed self=%q, want %q", self, exe)
+		}
+		return map[string][]hooks.Mismatch{
+			"/p/settings.json": {{Event: "Stop", Binary: "/Users/x/.local/bin/gv"}},
+		}
+	}
+	st := checkHooksBinaryAt("/p/settings.json")(e)
+	if st.State != StateWarn {
+		t.Fatalf("got %v, want warn", st.State)
+	}
+	for _, want := range []string{"Stop", "/Users/x/.local/bin/gv", "not this binary: /this/bin/gv"} {
+		if !strings.Contains(st.Info, want) {
+			t.Errorf("info %q missing %q", st.Info, want)
+		}
+	}
+}
+
+func TestCheckHooksBinaryMissingBinary(t *testing.T) {
+	e := Env{
+		SelfExe: "/this/bin/gv",
+		HookMismatches: func(paths []string, self string) map[string][]hooks.Mismatch {
+			return map[string][]hooks.Mismatch{
+				"/p/settings.json": {{Event: "Stop", Binary: "/nonexistent/gv", Missing: true}},
+			}
+		},
+	}
+	st := checkHooksBinaryAt("/p/settings.json")(e)
+	if st.State != StateWarn || !strings.Contains(st.Info, "no such binary") {
+		t.Errorf("got %v %q, want warn mentioning no such binary", st.State, st.Info)
+	}
+}
+
 // SettingsPaths maps worker commands to their profiles' settings files —
 // the fix for hooks landing only in the Grid's ~/.cc-work while personal
 // plain-claude workers went uncaptured.

@@ -620,6 +620,13 @@ func cmdUpdate(args []string) error {
 	// report hung off a finished update, not part of it.
 	if applied {
 		reportBrainSweepAfterUpdate(opts.Target)
+		// grove-348: a fresh binary somewhere the hooks don't point at is
+		// the stale-hooks trap — say so (read-only; fixing is the
+		// operator's `gv hooks install`).
+		if paths := hookSettingsPaths(); len(hooks.Mismatches(paths, selfExe())) > 0 {
+			fmt.Println("! installed hooks point at a different gv binary — every hook-side fix is silently not running")
+			fmt.Println("  fix: gv hooks install")
+		}
 	}
 	return nil
 }
@@ -3939,11 +3946,20 @@ func initHookWorkerCommands(doc *bootstrap.Doc, root, name, scope string) []stri
 }
 
 func cmdHooks(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: gv hooks install|status")
+	jsonOut := false
+	var pos []string
+	for _, a := range args {
+		if a == "--json" {
+			jsonOut = true
+			continue
+		}
+		pos = append(pos, a)
+	}
+	if len(pos) != 1 {
+		return fmt.Errorf("usage: gv hooks install|status [--json]")
 	}
 	paths := hookSettingsPaths()
-	switch args[0] {
+	switch pos[0] {
 	case "install":
 		done, err := hooks.Install(paths)
 		for _, p := range done {
@@ -3952,6 +3968,21 @@ func cmdHooks(args []string) error {
 		return err
 	case "status":
 		byPath := hooks.Installed(paths)
+		mis := hooks.Mismatches(paths, selfExe())
+		if jsonOut {
+			out := make([]hooksStatusRow, 0, len(paths))
+			for _, path := range paths {
+				out = append(out, hooksStatusRow{
+					Path:       path,
+					Events:     byPath[path],
+					Mismatches: mis[path],
+				})
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(schema.Envelope("hooks", out))
+		}
+		drifted := false
 		for _, path := range paths {
 			fmt.Println(path)
 			for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
@@ -3961,10 +3992,43 @@ func cmdHooks(args []string) error {
 				}
 				fmt.Printf("  %s %s\n", mark, ev)
 			}
+			for _, m := range mis[path] {
+				drifted = true
+				if m.Missing {
+					fmt.Printf("  ✗ %s → %s (no such binary)\n", m.Event, m.Binary)
+				} else {
+					fmt.Printf("  ✗ %s → %s (not this binary: %s)\n", m.Event, m.Binary, selfExe())
+				}
+			}
+		}
+		if drifted {
+			fmt.Println("! hooks point at a different gv — run: gv hooks install")
 		}
 		return nil
 	}
-	return fmt.Errorf("usage: gv hooks install|status")
+	return fmt.Errorf("usage: gv hooks install|status [--json]")
+}
+
+// hooksStatusRow is one settings.json in `gv hooks status --json` — the
+// installed-events map plus the grove-348 binary-mismatch list (additive
+// contract field).
+type hooksStatusRow struct {
+	Path       string           `json:"path"`
+	Events     map[string]bool  `json:"events"`
+	Mismatches []hooks.Mismatch `json:"mismatches,omitempty"`
+}
+
+// selfExe is THIS binary's symlink-resolved path — what `gv hooks install`
+// writes into the hook commands, and what Mismatches compares against.
+func selfExe() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		return r
+	}
+	return exe
 }
 
 // --- helpers ---

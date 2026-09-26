@@ -132,6 +132,21 @@ func Core(env Env) []Connection {
 			Fix:         "gv hooks install",
 			Check:       checkHooksAt(path),
 		})
+		if env.SelfExe != "" {
+			// grove-348: installed is not enough — the entries pin an
+			// absolute binary path, so the hooks can run a STALE gv while
+			// every event reads ✓ above.
+			conns = append(conns, Connection{
+				ID:          "hooks-binary:" + path,
+				Step:        "hooks",
+				Kind:        KindHooks,
+				Severity:    SeverityWarn,
+				RequiredFor: []string{"ls", "ui"},
+				Title:       "gv hooks in " + path + " run this binary",
+				Fix:         "gv hooks install",
+				Check:       checkHooksBinaryAt(path),
+			})
+		}
 	}
 
 	return conns
