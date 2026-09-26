@@ -298,7 +298,7 @@ Workspace-scoped (empty `ticket`): `workspace_parked`,
 chat ended from outside by `gv chat close` / the phone's End chat carries
 `reason: "ended"` plus `{session, workspace, session_id?}`, logged in the
 chat's own workspace before the kill), `orchestrator_spawned` (grove-198, additive: data
-`{workspace, session, profile?, model?, op_id?, resume?, brief?}` — a detached
+`{workspace, session, session_id?, profile?, model?, op_id?, resume?, brief?}` — a detached
 orchestrator chat started for a workspace by `gv orchestrator new
 --workspace <label>`, the receiving half of `--host`; `session` is its
 `grove-chat-<label>-<n>` tmux session and `op_id` the relayed hop's
@@ -311,7 +311,10 @@ chat under the same `session_id` it had while `kind: archived`. `brief`
 seeded with — `<orchDir>/briefs/<session-id>.md`, the text handed to the
 agent as its first message; absent when the spawn carried none. `model`
 (grove-293, additive) is the tier the spawn was pinned to with `--model`;
-absent for the host default). New types will appear
+absent for the host default). `session_id` (grove-337, additive) is the
+Claude session id the chat runs on — minted for a fresh chat, the revived
+id for a `resume` — which is how a later revival finds the `model` to
+re-apply. New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove

@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat`: reviving a chat keeps its model (grove-337,
+      2026-09-26, `chat-ux` train). `gv orchestrator new --resume <id>`
+      with no `--model` re-pins the tier the chat last ran on: the
+      `model` of the latest `orchestrator_spawned` event naming the id
+      (new additive `session_id` field, or `resume`), else the
+      transcript's last assistant `message.model` when it names exactly
+      one configured tier (host Claude only — a profile's slugs are not
+      tiers), else the host default. An explicit `--model` wins; the
+      phone's revive still sends none. Unit tests + `e2e/chat.sh` (haiku
+      spawn → close → phone revive runs `--model 'haiku'`, row `model:
+      haiku`; `--resume … --model sonnet` → sonnet).
 - [x] `gv chat serve`: UI fixes from the live test (grove-334,
       2026-09-26, `chat-ux` train). Home renders a block per registered
       workspace (new read `GET /api/workspaces`), so an empty workspace

@@ -95,3 +95,27 @@ func TestRunsModel(t *testing.T) {
 		t.Fatalf("WrapProfile disagrees with RunsModel: %s", w)
 	}
 }
+
+// TestTierForModel (grove-337): a transcript's concrete model id maps back
+// to a tier only when it names exactly one.
+func TestTierForModel(t *testing.T) {
+	var c Config
+	cases := map[string]string{
+		"claude-haiku-4-5-20251001": "haiku",
+		"claude-Opus-4-1":           "opus",
+		"sonnet":                    "sonnet",
+		"":                          "",
+		"<synthetic>":               "",
+		"z-ai/glm-4.5-air":          "",
+		"opus-vs-sonnet":            "", // ambiguous
+	}
+	for id, want := range cases {
+		if got := c.TierForModel(id); got != want {
+			t.Errorf("TierForModel(%q) = %q, want %q", id, got, want)
+		}
+	}
+	c.Orchestrator.Models = []string{"opus"}
+	if got := c.TierForModel("claude-haiku-4-5"); got != "" {
+		t.Errorf("unconfigured tier mapped to %q", got)
+	}
+}

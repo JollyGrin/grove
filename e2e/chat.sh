@@ -1336,6 +1336,43 @@ sed 's/\\"/"/g' "$SCRATCH/badmodel.out" > "$SCRATCH/badmodel.txt"
 remote_tmux kill-session -t "=$OPUS_S" 2>/dev/null || true
 remote_tmux kill-session -t "=$GH_S" 2>/dev/null || true
 
+say "grove-337: reviving a chat keeps the model it ran on (a haiku chat does not revive on the default)"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"model":"haiku"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-haiku.json" \
+  || { cat "$SERVE_LOG"; fail "a haiku POST new failed"; }
+HK_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-haiku.json")"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-haiku.json"
+HK_ID="$(api_field "$SCRATCH/chats-haiku.json" "$HK_S" session_id)"
+[ -n "$HK_ID" ] || { cat "$SCRATCH/chats-haiku.json"; fail "the haiku chat must carry its minted id"; }
+grep -q "\"session_id\":\"$HK_ID\"" "$SERVEWS/.grove/state/events.jsonl" \
+  || { cat "$SERVEWS/.grove/state/events.jsonl"; fail "the spawn event must record the Claude session id it ran on"; }
+HK_T="$(proj_dir "$SERVEWS/.grove/orchestrator")/$HK_ID.jsonl"
+for _ in $(seq 1 30); do [ -s "$HK_T" ] && break; sleep 0.1; done
+[ -s "$HK_T" ] || fail "the haiku chat never wrote its transcript"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_S/close" > /dev/null || { cat "$SERVE_LOG"; fail "closing the haiku chat failed"; }
+# The phone's revive sends no model — the server-side rule decides.
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_ID/resume" > "$SCRATCH/resume-haiku.json" \
+  || { cat "$SCRATCH/resume-haiku.json" "$SERVE_LOG"; fail "reviving the haiku chat failed"; }
+HK_R="$(sed 's/.*"session":"\([^"]*\)".*/\1/' "$SCRATCH/resume-haiku.json")"
+pane_cmd "$HK_R" | grep -q -- "--model 'haiku'" || { pane_cmd "$HK_R"; fail "the revived chat's argv must carry --model 'haiku'"; }
+pane_cmd "$HK_R" | grep -q -- "--resume $HK_ID" || { pane_cmd "$HK_R"; fail "the revived chat must resume $HK_ID"; }
+[ "$(remote_tmux show-options -p -v -t "=$HK_R:chat" @grove_model)" = "haiku" ] || fail "the revived pane must be tagged @grove_model=haiku"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-revived.json"
+[ "$(api_field "$SCRATCH/chats-revived.json" "$HK_R" model)" = "haiku" ] \
+  || { cat "$SCRATCH/chats-revived.json"; fail "the revived row must report model haiku, not the host default"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_R/close" > /dev/null || fail "closing the revived chat failed"
+say "grove-337: an explicit --model on the revive overrides the chat's own"
+( cd "$SERVEWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace servews --resume "$HK_ID" --model sonnet ) \
+  > "$SCRATCH/resume-sonnet.out" 2>&1 || { cat "$SCRATCH/resume-sonnet.out"; fail "the re-pinned revival failed"; }
+grep -q ', model sonnet$' "$SCRATCH/resume-sonnet.out" || { cat "$SCRATCH/resume-sonnet.out"; fail "the re-pinned revival must run sonnet"; }
+HK_R2="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/resume-sonnet.out" | head -1)"
+pane_cmd "$HK_R2" | grep -q -- "--model 'sonnet'" || { pane_cmd "$HK_R2"; fail "--resume --model sonnet must launch sonnet"; }
+[ "$(remote_tmux show-options -p -v -t "=$HK_R2:chat" @grove_model)" = "sonnet" ] || fail "the re-pinned pane must be tagged sonnet"
+remote_tmux kill-session -t "=$HK_R2" 2>/dev/null || true
+
 remote_tmux kill-session -t '=grove-chat-servews-2' 2>/dev/null || true
 remote_tmux kill-session -t '=grove-chat-servews-3' 2>/dev/null || true
 

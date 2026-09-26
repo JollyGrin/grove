@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -793,5 +794,67 @@ func TestChatNewOptions(t *testing.T) {
 	cfg.ModelProfiles = nil
 	if got := chatNewOptions(cfg, "/w", ""); len(got) != 2 {
 		t.Errorf("no profiles = %+v, want default + one tier", got)
+	}
+}
+
+// TestRevivedModel (grove-337): reviving a chat keeps the model it ran on —
+// its spawn event's tier first, else its transcript's last assistant model
+// mapped to a tier, else the host default. An explicit --model never
+// reaches here (spawnWorkspaceChat only asks when the revive named none).
+func TestRevivedModel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aaaa1111.jsonl")
+	writeAssistant := func(models ...string) {
+		t.Helper()
+		var b strings.Builder
+		for _, m := range models {
+			fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-09-26T10:00:00Z","message":{"model":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`+"\n", m)
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawn := func(data map[string]string) []state.Event {
+		return []state.Event{{Type: state.EvOrchestratorSpawned, Data: data}}
+	}
+	writeAssistant("claude-opus-4-5", "claude-sonnet-4-5")
+
+	// The spawn event wins over the transcript.
+	if got := revivedModel(cfg, spawn(map[string]string{"session_id": "aaaa1111", "model": "haiku"}), "aaaa1111", "", path); got != "haiku" {
+		t.Fatalf("event model = %q, want haiku", got)
+	}
+	// No event: the transcript's LAST assistant model, as a tier.
+	if got := revivedModel(cfg, nil, "aaaa1111", "", path); got != "sonnet" {
+		t.Fatalf("transcript fallback = %q, want sonnet", got)
+	}
+	// A tier the config no longer offers is dropped, not a failed revive.
+	cfg.Orchestrator.Models = []string{"opus", "sonnet"}
+	if got := revivedModel(cfg, spawn(map[string]string{"session_id": "aaaa1111", "model": "haiku"}), "aaaa1111", "", path); got != "sonnet" {
+		t.Fatalf("unconfigured event tier = %q, want the transcript's sonnet", got)
+	}
+	cfg.Orchestrator.Models = nil
+	// A profile's transcript names backend slugs, not Claude tiers.
+	if got := revivedModel(cfg, nil, "aaaa1111", "openrouter-glm", path); got != "" {
+		t.Fatalf("profiled transcript fallback = %q, want none", got)
+	}
+	// Ambiguous or unreadable: the host default.
+	writeAssistant("opus-distilled-sonnet")
+	if got := revivedModel(cfg, nil, "aaaa1111", "", path); got != "" {
+		t.Fatalf("ambiguous = %q", got)
+	}
+	if got := revivedModel(cfg, nil, "aaaa1111", "", filepath.Join(dir, "missing.jsonl")); got != "" {
+		t.Fatalf("missing transcript = %q", got)
+	}
+
+	// The re-applied tier reaches the argv exactly like an explicit pin.
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+	plan, err := chatSpawnPlan(cfg, ws, "", "haiku", "aaaa1111", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.Cmd, "--model 'haiku'") || !strings.Contains(plan.Cmd, "--resume aaaa1111") || plan.Runs != "haiku" {
+		t.Fatalf("revived plan = cmd %q runs %q", plan.Cmd, plan.Runs)
 	}
 }
