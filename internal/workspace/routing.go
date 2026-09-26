@@ -74,3 +74,29 @@ func FindTicket(list []Workspace, ref string, includeDone bool) []Workspace {
 	}
 	return owners
 }
+
+// ActiveWorktrees returns the worktree paths every alive workspace in list
+// tracks as a non-done task (grove-350: a sibling workspace's live worker
+// is foreign, not orphaned, on a host where every workspace inherits the
+// same repo table). Read via state.Peek, same as FindTicket — fresh, and
+// it never rewrites tasks.json. A workspace whose state dir is missing or
+// unreadable is skipped, not fatal: routing is a fallback, never a gate,
+// and the same holds for this read-only cross-workspace scan.
+func ActiveWorktrees(list []Workspace) []string {
+	var out []string
+	for _, ws := range list {
+		if !Alive(ws) {
+			continue
+		}
+		tasks, err := state.Peek(stateDir(ws.Root))
+		if err != nil {
+			continue
+		}
+		for _, t := range tasks {
+			if t != nil && !t.Done {
+				out = append(out, t.Worktree)
+			}
+		}
+	}
+	return out
+}
