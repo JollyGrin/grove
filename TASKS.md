@@ -179,6 +179,13 @@
       in one call, answer in the transcript); Android Chrome pass is the
       operator's.
 
+- [x] tmux relay: verified submit reads Claude Code v2.1.282+'s unboxed
+      input box (grove-317, 2026-09-26). `inputBoxRange` now finds the
+      bottom-most `─` rule pair whose body opens with `❯` (boxed chrome
+      kept as fallback); `inputBoxContent` strips the prompt glyph,
+      `outsideInputBox` excludes the box + its top rule. Real captures in
+      `internal/tmux/testdata/`; `e2e/relay.sh` leg 3 swallows in v2
+      chrome.
 - [x] `gv sub` 1/2: read-only micro-task on a `model_profiles` lane —
       raw `/v1/messages` or agentic `claude -p --bare`, prints only the
       answer (grove-288, 2026-09-07). New `internal/sub/` package
