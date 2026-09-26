@@ -38,6 +38,9 @@ func TestClassifyTurn(t *testing.T) {
 		{"idle, unsubmitted text in the box", capture(t, "cc2.1.283-idle-typed.txt"), true, chatweb.TurnIdle},
 		// Case 2: the turn died on an API error.
 		{"errored", capture(t, "cc2.1.283-errored.txt"), true, chatweb.TurnErrored},
+		// grove-342: the turn died on an expired Claude login — the pane
+		// otherwise reads as quiet idle, and the phone must say errored.
+		{"login expired", capture(t, "cc2.1.283-login-expired.txt"), true, chatweb.TurnErrored},
 		{"a modal is up", capture(t, "cc2.1.282-perm.txt"), true, chatweb.TurnWaiting},
 		// Case 1's other half: the pane or its claude is gone.
 		{"no claude in the pane", capture(t, "cc2.1.283-running.txt"), false, chatweb.TurnStopped},
@@ -53,6 +56,12 @@ func TestClassifyTurn(t *testing.T) {
 	got := chatweb.ClassifyTurn(capture(t, "cc2.1.283-errored.txt"), true)
 	if got.Reason != "api_error" || !strings.Contains(got.Line, "API Error: 529") {
 		t.Errorf("errored must say what happened: %+v", got)
+	}
+
+	// grove-342: an expired login passes its own line through verbatim.
+	auth := chatweb.ClassifyTurn(capture(t, "cc2.1.283-login-expired.txt"), true)
+	if auth.Reason != "auth" || !strings.Contains(auth.Line, "Login expired · Please run /login") {
+		t.Errorf("an expired login must be errored/auth with its line: %+v", auth)
 	}
 }
 
@@ -70,6 +79,17 @@ func TestClassifyTurnSpinnerOutranksAnOldError(t *testing.T) {
 // moved past, not the current one.
 func TestClassifyTurnIgnoresAnErrorInScrollback(t *testing.T) {
 	c := "  ⎿  API Error: 500\n" + strings.Repeat("prose\n", 20) + capture(t, "cc2.1.283-idle.txt")
+	if got := chatweb.ClassifyTurn(c, true); got.State != chatweb.TurnIdle {
+		t.Errorf("state %q, want idle", got.State)
+	}
+}
+
+// Same for the auth markers (grove-342): a transcript merely quoting
+// /login, or an expired-login line from a turn long since past, is not the
+// current turn — the bottom-N trim keeps it out, as for the other markers.
+func TestClassifyTurnIgnoresAuthQuotingInScrollback(t *testing.T) {
+	c := "  ⎿ the fix is to run /login again — Login expired was the old message\n" +
+		strings.Repeat("prose\n", 20) + capture(t, "cc2.1.283-idle.txt")
 	if got := chatweb.ClassifyTurn(c, true); got.State != chatweb.TurnIdle {
 		t.Errorf("state %q, want idle", got.State)
 	}

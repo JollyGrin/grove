@@ -16,12 +16,14 @@ func Classify(output string) (status AgentStatus, hasClaude bool) {
 }
 
 // ErrorMarker scans a pane capture for the markers that mean the turn
-// already died silently — usage limit, a sleep-cut, an API error — checked
-// line by line so the reported line is the specific matched one, not the
-// whole capture. Moved here from internal/supervise (grove-300) so the
-// chat server reads the same list the supervisor alerts on.
+// already died silently — usage limit, a sleep-cut, an API error, an
+// expired login — checked line by line so the reported line is the
+// specific matched one, not the whole capture. Moved here from
+// internal/supervise (grove-300) so the chat server reads the same list
+// the supervisor alerts on.
 func ErrorMarker(pane string) (reason, line string, ok bool) {
 	for l := range strings.SplitSeq(pane, "\n") {
+		low := strings.ToLower(l)
 		switch {
 		case strings.Contains(l, "Usage limit reached"), strings.Contains(l, "Request rejected (429)"):
 			return "usage_limit", truncateRunes(l), true
@@ -29,6 +31,13 @@ func ErrorMarker(pane string) (reason, line string, ok bool) {
 			return "sleep", truncateRunes(l), true
 		case strings.Contains(l, "API Error:"):
 			return "api_error", truncateRunes(l), true
+		// grove-342: an expired Claude login prints one of these (live on
+		// groveremote, 2.1.283) and the pane otherwise reads as quiet idle.
+		// Case-insensitive: the auth wording is not stable across versions.
+		case strings.Contains(low, "login expired"),
+			strings.Contains(low, "please run /login"),
+			strings.Contains(low, "oauth session expired"):
+			return "auth", truncateRunes(l), true
 		}
 	}
 	return "", "", false
