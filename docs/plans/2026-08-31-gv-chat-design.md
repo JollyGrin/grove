@@ -187,10 +187,27 @@ GET  /                       embedded index.html
 GET  /api/chats              → gv chat ls --json
 GET  /api/chats/<s>/events   SSE, from gv chat tail --follow
 POST /api/chats/<s>/send     → gv chat send
-POST /api/chats/<s>/keys     raw keys (pickers)
+POST /api/chats/<s>/keys     raw keys (pickers; `tab` only into a menu a fresh capture shows, grove-308)
+                             or {"option": N} — pick the on-screen picker's option N (grove-333)
 POST /api/workspaces/<l>/new → gv orchestrator new --workspace
 POST /api/chats/<s>/resume   → orchestrator new --resume
 ```
+
+grove-333 (additive): `/send` refuses with **409** (`the chat is showing
+a prompt — answer it first`) when a fresh capture shows a modal
+(`chatweb.Waiting`: a detected picker or modal chrome), except
+AskUserQuestion's free-text row, which a send answers — an Enter into a
+modal picks its highlighted row, and the folder-trust dialog's is `No,
+exit`. A successful `/send` is `{"sent": true}`, plus `"warning": "<the
+relay's line>"` when the relay saw no consumption evidence (the phone
+shows ⚠, not `sent ✓`). The picker gains `kind: "select"` for unnumbered
+`❯` menus — options labelled `1..n` by position, `caret` naming the row
+the ❯ is on, keys `up`/`down`/`enter`/`esc`, each accepted only while a
+fresh capture's picker offers it. `{"option": N}` is the phone's way to
+answer any picker: its digit on a numbered menu; on a select, the server
+walks the caret from where a FRESH capture has it and presses Enter —
+server-side because the walk depends on the caret's current row, which a
+phone's last picker event may have wrong, and the walk ends in Enter.
 
 UI: one embedded `index.html` (~400 lines, hand-written, in the spirit of
 `site/`) plus a vendored `marked.min.js`. Three screens — projects →

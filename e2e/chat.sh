@@ -240,10 +240,16 @@ say "grove-198: an ssh-255 retry spawns exactly once (op-id receipt)"
 # unknown to the sender. The sender must re-run the SAME argv once; the
 # twin's receipt makes that a no-op. Want: 2 hops, ONE new session, the
 # retry printing "already applied" with the SAME session name.
+# grove-293: the retried hop carries --model, which must be relayed at its
+# fixed place so the retry stays byte-equal to the hop it repeats.
 touch "$SCRATCH/ssh-fail-first"
-( cd "$WS" && "$GV" orchestrator new --host pc ) > "$SCRATCH/retry.out" 2> "$SCRATCH/retry.err"
+( cd "$WS" && "$GV" orchestrator new --host pc --model opus ) > "$SCRATCH/retry.out" 2> "$SCRATCH/retry.err"
 cat "$SCRATCH/retry.out" "$SCRATCH/retry.err"
 rm -f "$SCRATCH/ssh-fail-first"
+[ "$(grep -c -- '--workspace chatws --model opus$' "$SCRATCH/retry.err")" -eq 2 ] \
+  || fail "grove-293: both hops must relay --model opus at the same place"
+[ "$(grep '\[fake ssh\]' "$SCRATCH/retry.err" | sort -u | wc -l | tr -d ' ')" -eq 1 ] \
+  || fail "grove-293: the retried hop must be byte-equal to the first"
 grep -q 'retrying once with the same op id' "$SCRATCH/retry.err" || fail "ssh 255 did not trigger the same-op-id retry"
 grep -q 'already applied' "$SCRATCH/retry.out" || fail "the retry did not hit the op-id receipt"
 grep -q 'already applied (op .*) — orchestrator chat grove-chat-chatws-3' "$SCRATCH/retry.out" \
@@ -391,6 +397,10 @@ BIRTH="$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 created)"
   || { cat "$SCRATCH/active.json"; fail "a live chat with a transcript must report its mtime as last_active"; }
 [ "$ACT" != "$BIRTH" ] \
   || { cat "$SCRATCH/active.json"; fail "last_active must be the transcript's mtime, not the pane's birth ($BIRTH)"; }
+# grove-302: `waiting` is on every row (additive), and false on a pane that
+# shows no picker — the scratch chat's pane is sitting at a shell.
+[ "$(row_field "$SCRATCH/active.json" grove-chat-chatws-1 waiting)" = "false" ] \
+  || { cat "$SCRATCH/active.json"; fail "a live chat with no picker on screen must report waiting: false"; }
 rm -f "$(proj_dir "$ORCH")/$ID1.jsonl"
 
 say "grove-222: the decoy transcripts are NOT handed to a live pane"
@@ -1046,6 +1056,12 @@ grep -q 'setWorking' "$SCRATCH/app.js" \
 # It is an indicator, never a gate: the composer must not be disabled by it.
 grep -q 'setWorking(true);' "$SCRATCH/app.js" \
   || fail "sending must light the indicator before the first entry lands (grove-261)"
+# Re-opening a chat re-attaches what was rendered and resumes the stream
+# past it, rather than replaying from seq 0 (grove-297).
+grep -q 'function keepChat' "$SCRATCH/app.js" \
+  || fail "leaving a chat must keep its rendered transcript (grove-297)"
+grep -q "'?since=' + since" "$SCRATCH/app.js" \
+  || fail "a re-opened chat must open its stream with ?since= (grove-297)"
 curl -fsS "http://127.0.0.1:$PORT/marked.min.js" > "$SCRATCH/marked.js" || fail "marked.min.js is not served"
 grep -q 'marked v12.0.2' "$SCRATCH/marked.js" || fail "the vendored marked must stay pinned at v12.0.2"
 curl -fsS "http://127.0.0.1:$PORT/sw.js" > /dev/null || fail "the service worker is not served"
@@ -1057,6 +1073,15 @@ grep -q '"chats"' "$SCRATCH/api-chats.json" || fail "the API must key its payloa
 grep -q '"session":"grove-chat-chatws-1"' "$SCRATCH/api-chats.json" \
   || { cat "$SCRATCH/api-chats.json"; fail "the API must report the live chats the CLI reports"; }
 grep -q '"kind":"archived"' "$SCRATCH/api-chats.json" || fail "the API must report archived transcripts too"
+
+say "grove-307: GET /api/chats/events pushes the same envelope over SSE"
+curl -sN --max-time 3 "http://127.0.0.1:$PORT/api/chats/events" > "$SCRATCH/list-sse.txt" 2>/dev/null || true
+grep -q '^event: chats$' "$SCRATCH/list-sse.txt" || { cat "$SCRATCH/list-sse.txt"; fail "the list stream sent no chats event"; }
+[ "$(grep -c '^event: chats$' "$SCRATCH/list-sse.txt")" = "1" ] \
+  || { cat "$SCRATCH/list-sse.txt"; fail "an unchanged list must be sent once, not per tick"; }
+grep -q '"session":"grove-chat-chatws-1"' "$SCRATCH/list-sse.txt" || fail "the list stream must carry the live chats"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/chats/events/events")"
+[ "$code" = "404" ] || fail "a chat addressed 'events' must be refused, got $code"
 
 say "the scope boundary is a 404, not a comment: no route reaches done/untrack"
 for path in /api/done /api/tasks /api/chats/grove-chat-chatws-1/done /api/chats/grove-chat-chatws-1/kill; do
@@ -1259,21 +1284,254 @@ code="$(curl -s -o "$SCRATCH/typo.out" -w '%{http_code}' -X POST \
 [ "$code" = "400" ] || { cat "$SCRATCH/typo.out"; fail "an unknown body field answered $code, want 400"; }
 [ "$(chat_sessions servews)" = "$BEFORE_TYPO" ] || fail "a refused body must create no session"
 
+say "grove-293: the new-chat sheet names the model every row will run"
+curl -fsS "http://127.0.0.1:$PORT/api/workspaces/servews/models" > "$SCRATCH/models.json" || { cat "$SERVE_LOG"; fail "GET models failed"; }
+cat "$SCRATCH/models.json"
+grep -q '"schema_version"' "$SCRATCH/models.json" || fail "the models route must carry the contract envelope"
+grep -q '"models":\[{"profile":"","model":"","runs":"account default"}' "$SCRATCH/models.json" \
+  || fail "first row must be the host default, honestly 'account default' when nothing names a model"
+grep -q '{"profile":"","model":"opus","runs":"opus"},{"profile":"","model":"sonnet","runs":"sonnet"},{"profile":"","model":"haiku","runs":"haiku"}' "$SCRATCH/models.json" \
+  || fail "the built-in tiers must be offered with no config edit"
+grep -q '{"profile":"e2e-glm","model":"","runs":"z-ai/glm-5.2"}' "$SCRATCH/models.json" \
+  || fail "a profile row must name its default-tier slug"
+grep -q 'ZETA_API_KEY\|openrouter.ai' "$SCRATCH/models.json" \
+  && fail "the models route must not serve base_url / auth env" || true
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/workspaces/nope/models")"
+[ "$code" = "404" ] || fail "models for an unknown workspace answered $code, want 404"
+grep -q "/models'" "$SCRATCH/app.js" || fail "the embedded page never asks for the model list"
+
+say "grove-293: POST new with a tier pins the chat, and chat ls reports the model"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"model":"opus"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-opus.json" \
+  || { cat "$SERVE_LOG"; fail "a pinned POST new failed"; }
+OPUS_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-opus.json")"
+[ -n "$OPUS_S" ] || { cat "$SCRATCH/new-opus.json"; fail "the pinned spawn must name its session"; }
+pane_cmd "$OPUS_S" | grep -q -- "--model 'opus'" || { pane_cmd "$OPUS_S"; fail "the pinned chat's argv must carry --model 'opus'"; }
+[ "$(remote_tmux show-options -p -v -t "=$OPUS_S:chat" @grove_model)" = "opus" ] || fail "the pinned pane must be tagged @grove_model=opus"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-model.json"
+grep -q "\"session\":\"$OPUS_S\"[^}]*\"model\":\"opus\"" "$SCRATCH/chats-model.json" \
+  || { cat "$SCRATCH/chats-model.json"; fail "the chat row must report model opus (the phone's subtitle)"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"profile":"e2e-glm","model":"haiku"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-glm-haiku.json" \
+  || { cat "$SERVE_LOG"; fail "a pinned profiled POST new failed"; }
+GH_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-glm-haiku.json")"
+pane_cmd "$GH_S" | grep -q "ANTHROPIC_MODEL='z-ai/glm-4.5-air'" || { pane_cmd "$GH_S"; fail "--model haiku on a profile must run its haiku slug"; }
+[ "$(remote_tmux show-options -p -v -t "=$GH_S:chat" @grove_model)" = "z-ai/glm-4.5-air" ] || fail "profiled pinned pane tag wrong"
+
+say "grove-293: an unknown tier is the CLI's own refusal, and spawns nothing"
+BEFORE_BADM="$(chat_sessions servews)"
+code="$(curl -s -o "$SCRATCH/badmodel.out" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -d '{"model":"opsu"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new")"
+[ "$code" = "409" ] || { cat "$SCRATCH/badmodel.out"; fail "an unknown model answered $code, want 409"; }
+[ "$(chat_sessions servews)" = "$BEFORE_BADM" ] || fail "a refused model must create no session"
+rc=0
+( cd "$SERVEWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace servews --model opsu ) \
+  > "$SCRATCH/badmodel-cli.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "the CLI must refuse an unknown model too"
+CLI_MREF="$(grep -o 'unknown model "opsu".*' "$SCRATCH/badmodel-cli.out" | head -1)"
+sed 's/\\"/"/g' "$SCRATCH/badmodel.out" > "$SCRATCH/badmodel.txt"
+[ -n "$CLI_MREF" ] && grep -qF "$CLI_MREF" "$SCRATCH/badmodel.txt" \
+  || { cat "$SCRATCH/badmodel.txt" "$SCRATCH/badmodel-cli.out"; fail "the HTTP refusal must be the CLI's text verbatim"; }
+remote_tmux kill-session -t "=$OPUS_S" 2>/dev/null || true
+remote_tmux kill-session -t "=$GH_S" 2>/dev/null || true
+
+say "grove-337: reviving a chat keeps the model it ran on (a haiku chat does not revive on the default)"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"model":"haiku"}' \
+  "http://127.0.0.1:$PORT/api/workspaces/servews/new" > "$SCRATCH/new-haiku.json" \
+  || { cat "$SERVE_LOG"; fail "a haiku POST new failed"; }
+HK_S="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/new-haiku.json")"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-haiku.json"
+HK_ID="$(api_field "$SCRATCH/chats-haiku.json" "$HK_S" session_id)"
+[ -n "$HK_ID" ] || { cat "$SCRATCH/chats-haiku.json"; fail "the haiku chat must carry its minted id"; }
+grep -q "\"session_id\":\"$HK_ID\"" "$SERVEWS/.grove/state/events.jsonl" \
+  || { cat "$SERVEWS/.grove/state/events.jsonl"; fail "the spawn event must record the Claude session id it ran on"; }
+HK_T="$(proj_dir "$SERVEWS/.grove/orchestrator")/$HK_ID.jsonl"
+for _ in $(seq 1 30); do [ -s "$HK_T" ] && break; sleep 0.1; done
+[ -s "$HK_T" ] || fail "the haiku chat never wrote its transcript"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_S/close" > /dev/null || { cat "$SERVE_LOG"; fail "closing the haiku chat failed"; }
+# The phone's revive sends no model — the server-side rule decides.
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_ID/resume" > "$SCRATCH/resume-haiku.json" \
+  || { cat "$SCRATCH/resume-haiku.json" "$SERVE_LOG"; fail "reviving the haiku chat failed"; }
+HK_R="$(sed 's/.*"session":"\([^"]*\)".*/\1/' "$SCRATCH/resume-haiku.json")"
+pane_cmd "$HK_R" | grep -q -- "--model 'haiku'" || { pane_cmd "$HK_R"; fail "the revived chat's argv must carry --model 'haiku'"; }
+pane_cmd "$HK_R" | grep -q -- "--resume $HK_ID" || { pane_cmd "$HK_R"; fail "the revived chat must resume $HK_ID"; }
+[ "$(remote_tmux show-options -p -v -t "=$HK_R:chat" @grove_model)" = "haiku" ] || fail "the revived pane must be tagged @grove_model=haiku"
+curl -fsS "http://127.0.0.1:$PORT/api/chats" > "$SCRATCH/chats-revived.json"
+[ "$(api_field "$SCRATCH/chats-revived.json" "$HK_R" model)" = "haiku" ] \
+  || { cat "$SCRATCH/chats-revived.json"; fail "the revived row must report model haiku, not the host default"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$HK_R/close" > /dev/null || fail "closing the revived chat failed"
+say "grove-337: an explicit --model on the revive overrides the chat's own"
+( cd "$SERVEWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" orchestrator new --workspace servews --resume "$HK_ID" --model sonnet ) \
+  > "$SCRATCH/resume-sonnet.out" 2>&1 || { cat "$SCRATCH/resume-sonnet.out"; fail "the re-pinned revival failed"; }
+grep -q ', model sonnet$' "$SCRATCH/resume-sonnet.out" || { cat "$SCRATCH/resume-sonnet.out"; fail "the re-pinned revival must run sonnet"; }
+HK_R2="$(grep -o 'grove-chat-servews-[0-9]*' "$SCRATCH/resume-sonnet.out" | head -1)"
+pane_cmd "$HK_R2" | grep -q -- "--model 'sonnet'" || { pane_cmd "$HK_R2"; fail "--resume --model sonnet must launch sonnet"; }
+[ "$(remote_tmux show-options -p -v -t "=$HK_R2:chat" @grove_model)" = "sonnet" ] || fail "the re-pinned pane must be tagged sonnet"
+remote_tmux kill-session -t "=$HK_R2" 2>/dev/null || true
+
 remote_tmux kill-session -t '=grove-chat-servews-2' 2>/dev/null || true
 remote_tmux kill-session -t '=grove-chat-servews-3' 2>/dev/null || true
 
 say "raw keys: only a picker key, never free text"
-curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
-  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys" > /dev/null || fail "a picker key must be accepted"
+# grove-318: every picker key but esc is judged against a FRESH capture of
+# the pane, and a bare chat input box offers none — a digit there would sit
+# in the agent's prompt as typed text. So the bare pane refuses it (409)
+# and stays exactly as it was.
+remote_tmux capture-pane -p -t '=grove-chat-servews-1:chat' > "$SCRATCH/servekeys-before.txt"
+code="$(curl -s -o "$SCRATCH/servekeys.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys")"
+[ "$code" = "409" ] || { cat "$SCRATCH/servekeys.out"; fail "a digit into a bare chat pane answered $code, want 409 (no picker offers it)"; }
+grep -q 'only goes into a picker' "$SCRATCH/servekeys.out" || { cat "$SCRATCH/servekeys.out"; fail "the 409 must say why"; }
 sleep 0.5
 remote_tmux capture-pane -p -t '=grove-chat-servews-1:chat' > "$SCRATCH/servekeys.txt"
-LASTLINE="$(grep -v '^[[:space:]]*$' "$SCRATCH/servekeys.txt" | tail -1)"
-[ "$LASTLINE" = "7" ] || { cat "$SCRATCH/servekeys.txt"; fail "the raw key must sit UNSUBMITTED on the input line, got '$LASTLINE'"; }
+cmp -s "$SCRATCH/servekeys-before.txt" "$SCRATCH/servekeys.txt" \
+  || { diff "$SCRATCH/servekeys-before.txt" "$SCRATCH/servekeys.txt"; fail "a refused key must leave the pane untouched"; }
+# Esc alone is ungated: the stop button (grove-299) sends it mid-turn, when
+# no picker is on screen, on purpose.
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"esc"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys" > /dev/null || fail "esc must be accepted on a bare pane (the stop button)"
 for bad in '{"key":"gv done"}' '{"key":"\n"}' '{"key":"Enter"}'; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$bad" \
     "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/keys")"
   [ "$code" = "400" ] || fail "keys $bad answered $code — a raw-key endpoint must not take free text"
 done
+
+say "grove-318: a digit the pane's picker offers IS sent, and one it doesn't is refused"
+# A fake claude that draws a v2.1.282-style single-select (the shape of
+# internal/chatweb/testdata/cc2.1.282-single.txt: ❯ caret, numbered run,
+# "Esc to cancel" footer as the last line), then reads ONE raw key and
+# says what it got. Short lines, so no pane width can wrap the chrome.
+MENUWS="$SCRATCH/menuws"
+mkrepo "$MENUWS"
+( cd "$MENUWS" && "$GV" init --yes --label menuws > /dev/null )
+cat > "$SCRATCH/bin/menuclaude" <<'EOF'
+#!/usr/bin/env bash
+clear
+printf ' ☐ Fruit\n\nWhich fruit?\n\n❯ 1. Apple\n  2. Banana\n  3. Type something.\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n'
+IFS= read -rsn1 k
+clear
+printf 'picked: %s\n' "$k"
+exec sleep 3600
+EOF
+chmod +x "$SCRATCH/bin/menuclaude"
+cat >> "$MENUWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/menuclaude
+EOF
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/workspaces/menuws/new" > "$SCRATCH/new-menu.json" || { cat "$SERVE_LOG"; fail "POST new (menuws) failed"; }
+grep -q '"session":"grove-chat-menuws-1"' "$SCRATCH/new-menu.json" || { cat "$SCRATCH/new-menu.json"; fail "the menu chat did not spawn"; }
+for _ in $(seq 1 50); do
+  remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' 2>/dev/null | grep -q 'Esc to cancel' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' > "$SCRATCH/menu.pane"
+grep -q 'Esc to cancel' "$SCRATCH/menu.pane" || { cat "$SCRATCH/menu.pane"; fail "precondition: the fake menu never drew"; }
+code="$(curl -s -o "$SCRATCH/menu7.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"7"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys")"
+[ "$code" = "409" ] || { cat "$SCRATCH/menu7.out"; fail "a digit the menu does not offer answered $code, want 409"; }
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"key":"2"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys" > "$SCRATCH/menu2.out" \
+  || { cat "$SCRATCH/menu2.out"; remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat'; fail "a digit the menu offers must be sent"; }
+for _ in $(seq 1 30); do
+  remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' | grep -q 'picked: 2' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-menuws-1:chat' > "$SCRATCH/menu-after.pane"
+grep -q 'picked: 2' "$SCRATCH/menu-after.pane" || { cat "$SCRATCH/menu-after.pane"; fail "the menu never received the digit"; }
+# The menu has closed: the same digit is now refused — the fresh-capture
+# gate, not the phone's stale picker event, decides.
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"2"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-menuws-1/keys")"
+[ "$code" = "409" ] || fail "a digit after the menu closed answered $code, want 409"
+remote_tmux kill-session -t '=grove-chat-menuws-1' 2>/dev/null || true
+
+say "grove-333: a send into an unnumbered ❯ menu is refused; an option walks the caret"
+# The folder-trust dialog's shape (internal/chatweb/testdata/cc2.1.283-
+# trust.txt): no digits, a ❯ caret, "Enter to confirm · Esc to cancel" as
+# the last line — and a default that ends the chat. The fake reads arrow
+# keys until Enter and says which row the caret was on.
+SELWS="$SCRATCH/selws"
+mkrepo "$SELWS"
+( cd "$SELWS" && "$GV" init --yes --label selws > /dev/null )
+cat > "$SCRATCH/bin/selectclaude" <<'EOF'
+#!/usr/bin/env bash
+opts=("No, exit" "Yes, I trust this folder")
+c=0
+draw() {
+  clear
+  printf ' Is this a project you trust?\n\n'
+  for i in 0 1; do
+    if [ "$i" -eq "$c" ]; then printf ' ❯ %s\n' "${opts[$i]}"; else printf '   %s\n' "${opts[$i]}"; fi
+  done
+  printf '\n Enter to confirm · Esc to cancel\n'
+}
+draw
+while IFS= read -rsn1 k; do
+  if [ "$k" = $'\x1b' ]; then
+    read -rsn2 -t 1 rest
+    case "$rest" in
+      '[A') c=0 ;;
+      '[B') c=1 ;;
+    esac
+    draw
+  elif [ -z "$k" ] || [ "$k" = $'\r' ]; then
+    clear
+    printf 'picked: %s\n' "${opts[$c]}"
+    exec sleep 3600
+  else
+    printf 'TYPED: %s\n' "$k"
+  fi
+done
+EOF
+chmod +x "$SCRATCH/bin/selectclaude"
+cat >> "$SELWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/selectclaude
+EOF
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/workspaces/selws/new" > "$SCRATCH/new-sel.json" || { cat "$SERVE_LOG"; fail "POST new (selws) failed"; }
+grep -q '"session":"grove-chat-selws-1"' "$SCRATCH/new-sel.json" || { cat "$SCRATCH/new-sel.json"; fail "the select chat did not spawn"; }
+for _ in $(seq 1 50); do
+  remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' 2>/dev/null | grep -q 'Enter to confirm' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-before.pane"
+grep -q 'Enter to confirm' "$SCRATCH/sel-before.pane" || { cat "$SCRATCH/sel-before.pane"; fail "precondition: the fake select menu never drew"; }
+code="$(curl -s -o "$SCRATCH/sel-send.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"text":"hello"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/send")"
+[ "$code" = "409" ] || { cat "$SCRATCH/sel-send.out"; fail "a send into a modal answered $code, want 409"; }
+grep -q 'answer it first' "$SCRATCH/sel-send.out" || { cat "$SCRATCH/sel-send.out"; fail "the 409 must say a prompt is showing"; }
+rc=0
+( cd "$SELWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send grove-chat-selws-1 "hello" ) > "$SCRATCH/sel-cli.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -q 'answer it first' "$SCRATCH/sel-cli.out" \
+  || { cat "$SCRATCH/sel-cli.out"; fail "gv chat send into a modal must refuse too, non-zero"; }
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-after-send.pane"
+cmp -s "$SCRATCH/sel-before.pane" "$SCRATCH/sel-after-send.pane" \
+  || { diff "$SCRATCH/sel-before.pane" "$SCRATCH/sel-after-send.pane"; fail "a refused send must leave the modal untouched (no paste, no Enter)"; }
+# (The list row's `waiting` agreeing is TestMarkWaiting's: the list only
+# reads panes running a claude process, and this fake is bash.)
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"1"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "409" ] || fail "a digit into an unnumbered menu answered $code, want 409 (it offers none)"
+code="$(curl -s -o "$SCRATCH/sel-opt.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"option":2}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "200" ] || { cat "$SCRATCH/sel-opt.out"; remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat'; fail "option 2 answered $code, want 200"; }
+grep -q '"keys":\["down","enter"\]' "$SCRATCH/sel-opt.out" || { cat "$SCRATCH/sel-opt.out"; fail "option 2 from a caret on 1 is down, enter"; }
+for _ in $(seq 1 30); do
+  remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' | grep -q 'picked:' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-after.pane"
+grep -q 'picked: Yes, I trust this folder' "$SCRATCH/sel-after.pane" || { cat "$SCRATCH/sel-after.pane"; fail "the option never reached the menu"; }
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"enter"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "409" ] || fail "enter after the menu closed answered $code, want 409"
+remote_tmux kill-session -t '=grove-chat-selws-1' 2>/dev/null || true
 
 say "POST /api/chats/<s>/resume revives an archived chat (grove-217 through HTTP)"
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
@@ -1286,7 +1544,45 @@ REVIVED="$(sed 's/.*"session":"\([^"]*\)".*/\1/' "$SCRATCH/resume-http.json")"
 remote_tmux capture-pane -p -S - -t "=$REVIVED:chat" | tr -d '\n' > "$SCRATCH/revived.pane"
 grep -q -- "--resume $ARCHIVED_ID" "$SCRATCH/revived.pane" || { cat "$SCRATCH/revived.pane"; fail "the revived pane's launch must carry --resume"; }
 
+say "grove-294: POST /api/chats/<s>/close ends a live chat; its transcript falls back to archived"
+CLOSED_BEFORE="$(grep -c '"reason":"ended"' "$EVENTS" || true)"
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$REVIVED/close" > "$SCRATCH/close-http.json" \
+  || { cat "$SCRATCH/close-http.json" "$SERVE_LOG"; fail "POST close failed"; }
+grep -q '"closed":true' "$SCRATCH/close-http.json" || { cat "$SCRATCH/close-http.json"; fail "close must answer closed:true"; }
+if remote_tmux has-session -t "=$REVIVED" 2>/dev/null; then fail "$REVIVED survived End chat"; fi
+grep '"reason":"ended"' "$EVENTS" | grep -q "\"session\":\"$REVIVED\"" \
+  || { cat "$EVENTS"; fail "End chat left no orchestrator_closed event naming $REVIVED in the chat's workspace log"; }
+[ "$(grep -c '"reason":"ended"' "$EVENTS")" -eq $((CLOSED_BEFORE + 1)) ] || fail "want exactly one ended event per close"
+( cd "$SCRATCH" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat ls --json ) > "$SCRATCH/ls-closed.json"
+grep -B2 -A12 "\"session_id\": \"$ARCHIVED_ID\"" "$SCRATCH/ls-closed.json" | grep -q '"kind": "archived"' \
+  || { cat "$SCRATCH/ls-closed.json"; fail "a closed chat's conversation must come back as kind archived (revivable)"; }
+
+say "grove-294: closing an archived row is refused with the CLI's words; a form post is 415"
+code="$(curl -s -o "$SCRATCH/close-arch.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/$ARCHIVED_ID/close")"
+[ "$code" = "409" ] || { cat "$SCRATCH/close-arch.out"; fail "closing an archived chat answered $code, want 409"; }
+grep -q 'already ended' "$SCRATCH/close-arch.out" || { cat "$SCRATCH/close-arch.out"; fail "wrong archived-close refusal"; }
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: text/plain' -d '{}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-servews-1/close")"
+[ "$code" = "415" ] || fail "a text/plain close answered $code, want 415 (the /send write gate)"
+remote_tmux has-session -t '=grove-chat-servews-1' 2>/dev/null || fail "a refused close must not kill anything"
+
 serve_stop
+
+say "grove-294: gv chat close --host pc ends a chat on the host"
+( cd "$WS" && "$GV" chat close --host pc grove-chat-servews-1 ) > "$SCRATCH/close-host.out" 2> "$SCRATCH/close-host.err" \
+  || { cat "$SCRATCH/close-host.out" "$SCRATCH/close-host.err"; fail "gv chat close --host failed"; }
+grep -q 'fake ssh\] .* chat close grove-chat-servews-1' "$SCRATCH/close-host.err" \
+  || { cat "$SCRATCH/close-host.err"; fail "the close must relay over ssh as 'chat close <session>'"; }
+grep -q '✓ ended grove-chat-servews-1' "$SCRATCH/close-host.out" || { cat "$SCRATCH/close-host.out"; fail "missing the host's ✓ line"; }
+if remote_tmux has-session -t '=grove-chat-servews-1' 2>/dev/null; then fail "grove-chat-servews-1 survived gv chat close --host"; fi
+grep -q '"session":"grove-chat-servews-1"' "$SERVEWS/.grove/state/events.jsonl" \
+  || fail "the close must log into the CHAT's workspace (servews), not the caller's"
+rc=0
+( cd "$WS" && "$GV" chat send --host pc grove-chat-chatws-2 "hi" ) > "$SCRATCH/send-host.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -q 'not supported' "$SCRATCH/send-host.out" \
+  || { cat "$SCRATCH/send-host.out"; fail "only chat CLOSE relays; send --host keeps the friendly unsupported error"; }
 
 say "a non-loopback bind requires the flag AND warns about what it exposes"
 PORT2="$(pick_port)"

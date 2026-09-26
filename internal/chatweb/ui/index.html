@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>" />
+<link rel="manifest" href="manifest.json" />
 <!--
   gv chat — the phone client for grove's orchestrator chats (grove-218).
 
@@ -31,13 +32,18 @@
   --text: #d6e2d6; --dim: #8fa392; --dimmer: #5c6f5e;
   --green: #7fbf7f; --green-bright: #a8e6a3; --green-deep: #4a7c59; --amber: #e0b458; --red: #d98b7c;
   --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  /* Prose is sans (grove-306): mono on a ~390px screen fits ~40 characters
+     a line. System stack only — CSP is font-src 'self' and no font files
+     ship. Mono stays where columns mean something: code, tool rows, keys,
+     the composer, a session name. */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --pad: env(safe-area-inset-bottom, 0px);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; }
 body {
-  background: var(--bg); color: var(--text); font-family: var(--mono);
-  font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+  background: var(--bg); color: var(--text); font-family: var(--sans);
+  font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
@@ -54,6 +60,15 @@ header .back { font-size: 20px; line-height: 1; padding: 4px 8px; color: var(--d
 header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 header .sub { font-size: 11px; color: var(--dimmer); }
 header .grow { flex: 1; min-width: 0; }
+/* The header carries up to four controls beside the title (back, notify,
+   end, refresh — grove-302 owns its layout). None may shrink or wrap: the
+   title is the one thing that gives, by ellipsis. At phone widths the gaps
+   and paddings tighten so all four stay reachable at 360px. */
+header > button { flex: none; }
+@media (max-width: 400px) {
+  header { gap: 6px; padding-left: 8px; padding-right: 8px; }
+  header .back { padding: 4px 6px; }
+}
 #offline { display: none; flex: none; background: #3a2418; color: var(--amber); font-size: 12px; padding: 6px 12px; text-align: center; }
 body.offline #offline { display: block; }
 /* overflow-x: hidden is the promise that the PAGE never scrolls sideways
@@ -62,7 +77,7 @@ body.offline #offline { display: block; }
    out from under the reader's thumb. */
 main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 12px; padding-bottom: calc(12px + var(--pad)); }
 
-/* ---- lists (screens 1 + 2) ---- */
+/* ---- lists (home + #/w/<label>) ---- */
 .row {
   display: block; width: 100%; text-align: left;
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -70,21 +85,58 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
 }
 .row:active { border-color: var(--border-bright); }
 .row .title { font-weight: 600; color: var(--green-bright); overflow-wrap: anywhere; }
-.row .meta { font-size: 11.5px; color: var(--dimmer); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row .meta { font-family: var(--mono); font-size: 11.5px; color: var(--dimmer); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .badge { border: 1px solid var(--border-bright); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; color: var(--dim); }
 .badge.chat { color: var(--green); border-color: var(--green-deep); }
 .badge.cockpit { color: var(--amber); }
-.badge.archived { color: var(--dimmer); }
+.badge.history { color: var(--dimmer); }
+/* grove-334: the row badge is the turn, not the process. */
+.badge.chat.idle, .badge.chat.live { color: var(--dim); border-color: var(--border-bright); }
+.badge.chat.stopped { color: var(--dimmer); border-color: var(--border-bright); }
+.badge.chat.errored { color: var(--red); border-color: var(--red); }
+/* grove-302: "needs you" — a live chat blocked on a picker. Amber, the
+   picker strip's own color, on the badge and the row's edge. */
+.badge.waiting { color: var(--amber); border-color: var(--amber); }
+.row.waiting { border-color: var(--amber); }
+.ws { color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.row .idle { margin-left: auto; border: 1px dashed var(--border-bright); color: var(--dim); border-radius: 8px; padding: 1px 9px; }
+.ws-block { margin-top: 18px; }
+.ws-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.ws-name { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-new { flex: none; color: var(--green); border: 1px dashed var(--border-bright); border-radius: 8px; padding: 7px 12px; font-size: 13px; }
+.ver { font-family: var(--mono); font-size: 10.5px; color: var(--dimmer); text-align: center; padding: 18px 0 6px; }
+.disclosure { display: block; width: 100%; text-align: left; color: var(--dim); font-size: 13px; padding: 8px 2px; }
+.disclosure:disabled { cursor: default; }
+.explain { color: var(--dimmer); font-size: 12px; margin: 0 2px 10px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
-.new { color: var(--green); border: 1px dashed var(--border-bright); }
 .empty { color: var(--dimmer); text-align: center; padding: 32px 12px; font-size: 13px; }
-.err { color: var(--red); border: 1px solid #4a2a26; background: #1a100e; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; overflow-wrap: anywhere; }
+/* A sibling of #main, not a child of it: every screen wholesale-replaces
+   main's content on render (screenProjects/screenWorkspace/screenChat all
+   do `main.textContent = ''`), so a toast living inside main would vanish
+   on the next repaint before its 6s were up. Sitting between main and
+   footer in the flex column puts it just above the composer on the chat
+   screen and, since footer is hidden on list screens, at the same bottom
+   edge there too — visible without scrolling either way (grove-298). */
+#toast { color: var(--red); border: 1px solid #4a2a26; background: #1a100e; border-radius: 8px; padding: 10px 12px; margin: 0 12px 10px; font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
+#toast[hidden] { display: none; }
 
 /* ---- transcript (screen 3) ---- */
 .msg { margin-bottom: 14px; overflow-wrap: anywhere; }
 .msg.user { background: var(--surface); border-left: 2px solid var(--green-deep); border-radius: 0 8px 8px 0; padding: 8px 12px; white-space: pre-wrap; }
+.msg.user .status { font-size: 11px; color: var(--dimmer); margin-top: 4px; white-space: normal; }
+.msg.user.pending { opacity: .55; }
+.msg.user.failed { border-left-color: var(--red); cursor: pointer; }
+.msg.user.failed .status { color: var(--red); }
+/* Entry times (grove-303): a dim separator where the calendar day turns
+   over between prose entries, and a small clock on each prose entry. */
+.day { text-align: center; font-size: 11px; color: var(--dimmer); letter-spacing: .04em; margin: 4px 0 12px; }
+.msg .at { font-size: 10.5px; color: var(--dimmer); text-align: right; margin-top: 2px; white-space: normal; }
 .msg.assistant :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 .7em; }
 .msg.assistant :is(h1, h2, h3, h4) { font-size: 1em; margin: .9em 0 .35em; color: var(--green-bright); }
+/* In mono, bold alone set a heading apart; sans needs a little size too. */
+.msg.assistant h1 { font-size: 1.15em; }
+.msg.assistant h2 { font-size: 1.07em; }
+.msg.assistant :is(code, pre) { font-family: var(--mono); }
 .msg.assistant code { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: .9em; }
 .msg.assistant pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
 .msg.assistant pre code { background: none; border: none; padding: 0; }
@@ -118,28 +170,49 @@ main { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling
    every entry one tap away rather than hidden. */
 details.steps { margin-bottom: 8px; }
 details.steps > summary {
-  list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim);
+  font-family: var(--mono); list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim);
   background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 details.steps > summary::-webkit-details-marker { display: none; }
 details.steps[open] > summary { color: var(--green); border-radius: 8px 8px 0 0; border-bottom-color: transparent; }
 details.steps > .steps-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px 8px 0; }
-details.tool { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+details.tool { font-family: var(--mono); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
 details.tool > summary { list-style: none; cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.tool > summary::-webkit-details-marker { display: none; }
 details.tool > pre { padding: 0 10px 10px; font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; }
 details.think > summary { font-style: italic; color: var(--dimmer); }
+details.meta { display: inline-block; max-width: 100%; background: none; border-style: dashed; }
+details.meta[open] { display: block; }
+details.meta > summary { padding: 3px 9px; font-size: 12px; color: var(--dimmer); }
 
 /* ---- composer ---- */
-footer { flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
-#keys { display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
+footer { position: relative; flex: none; border-top: 1px solid var(--border); background: var(--surface-alt); padding: 8px 10px calc(8px + var(--pad)); }
+/* The jump-to-latest pill (grove-304): `appendEntry` shows it whenever an
+   entry lands while the reader has scrolled away from the bottom (`stick`
+   false, grove-261). It floats just above the composer regardless of the
+   composer's own height (working strip, keys, autosized textarea) because
+   it is anchored to footer's top edge, not to a fixed pixel offset. */
+#jump {
+  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+  margin-bottom: 10px; z-index: 5;
+  background: var(--green-deep); color: var(--bg);
+  border: 1px solid var(--green-bright); border-radius: 999px;
+  padding: 8px 18px; font-size: 13px; font-weight: 600;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+#jump[hidden] { display: none; }
+#keys { font-family: var(--mono); display: none; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; align-items: center; }
 body.picker #keys { display: flex; }
 #keys .label { font-size: 11px; color: var(--amber); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #keys button { border: 1px solid var(--amber); color: var(--amber); border-radius: 8px; padding: 6px 14px; min-width: 44px; }
+#keys button.opt { flex-basis: 100%; text-align: left; overflow-wrap: anywhere; }
+#keys button.on { background: var(--amber); color: var(--surface-alt); }
+/* grove-334: the Submit page's picks, above its menu — whole, never cut. */
+#keys .review { font-size: 12px; color: var(--text); flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .compose { display: flex; gap: 8px; align-items: flex-end; }
 #text {
-  flex: 1; resize: none; font: inherit; color: var(--text); background: var(--surface);
+  flex: 1; resize: none; font: inherit; font-family: var(--mono); color: var(--text); background: var(--surface);
   border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; max-height: 40vh;
 }
 #text:focus { outline: none; border-color: var(--border-bright); }
@@ -154,6 +227,19 @@ body.picker #keys { display: flex; }
 #working .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 1.3s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { #working .pulse { animation: none; opacity: .8; } }
+/* grove-300: the pane says nobody is answering (or the turn errored), so
+   the strip stops pulsing and says what happened instead. Stop has nothing
+   left to stop. The composer is untouched either way. */
+#working.fault { color: var(--amber); }
+#working.fault .pulse { animation: none; background: var(--amber); opacity: 1; }
+#working.fault #stop { display: none; }
+#wtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* `stop` sends a single Esc (grove-299) — the same key the picker strip
+   already sends via /keys, just reachable while a turn is running rather
+   than only when the pane scrape sees a modal. Hidden on read-only rows;
+   `.busy` (shared with #keys) is its debounce, not a loading spinner. */
+#stop { margin-left: auto; border: 1px solid var(--red); color: var(--red); border-radius: 8px; padding: 3px 11px; font-size: 11.5px; }
+#stop[hidden] { display: none; }
 #why { font-size: 12px; color: var(--dimmer); padding: 4px 2px; overflow-wrap: anywhere; }
 #resume { width: 100%; border: 1px solid var(--green-deep); color: var(--green-bright); border-radius: 10px; padding: 11px; margin-top: 6px; }
 .busy { opacity: .5; pointer-events: none; }
@@ -173,6 +259,13 @@ body.picker #keys { display: flex; }
 #sheet-panel .sheet-title { font-size: 12px; color: var(--dim); padding: 0 2px 10px; }
 #sheet-panel .row { margin-bottom: 8px; }
 #sheet-panel .cancel { width: 100%; color: var(--dimmer); padding: 10px; }
+/* grove-294: End chat — the one destructive action on the page, so it is
+   red, small, and always answered through the sheet, never on one tap. */
+#end { border: 1px solid var(--red); color: var(--red); border-radius: 8px; padding: 3px 10px; font-size: 11.5px; }
+#sheet-panel .sheet-body { font-size: 13px; color: var(--text); padding: 0 2px 12px; line-height: 1.45; }
+#sheet-panel .row.danger .title { color: var(--red); }
+/* grove-334: "show pane" — the capture as the terminal draws it. */
+#sheet-panel pre.pane { font-family: var(--mono); font-size: 10.5px; line-height: 1.3; white-space: pre; overflow: auto; max-height: 60vh; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 0 0 10px; }
 </style>
 </head>
 <body>
@@ -183,13 +276,17 @@ body.picker #keys { display: flex; }
       <h1 id="title">gv chat</h1>
       <div class="sub" id="subtitle">orchestrator chats</div>
     </div>
+    <button class="back" id="notify" hidden aria-label="notifications off" aria-pressed="false">🔕</button>
+    <button id="end" hidden aria-label="end this chat">end</button>
     <button class="back" id="refresh" aria-label="refresh">⟳</button>
   </header>
   <div id="offline">not connected — showing what was last loaded</div>
   <main id="main"></main>
+  <div id="toast" hidden></div>
   <footer id="footer" hidden>
+    <button id="jump" hidden>↓ new</button>
     <div id="keys"></div>
-    <div id="working" hidden><span class="pulse"></span>working…</div>
+    <div id="working" hidden><span class="pulse"></span><span id="wtext">working…</span><button id="stop" hidden>stop</button></div>
     <div id="why"></div>
     <div class="compose">
       <textarea id="text" rows="1" placeholder="message this chat…" enterkeyhint="send"></textarea>

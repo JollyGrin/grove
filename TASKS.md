@@ -9,6 +9,272 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat`: reviving a chat keeps its model (grove-337,
+      2026-09-26, `chat-ux` train). `gv orchestrator new --resume <id>`
+      with no `--model` re-pins the tier the chat last ran on: the
+      `model` of the latest `orchestrator_spawned` event naming the id
+      (new additive `session_id` field, or `resume`), else the
+      transcript's last assistant `message.model` when it names exactly
+      one configured tier (host Claude only — a profile's slugs are not
+      tiers), else the host default. An explicit `--model` wins; the
+      phone's revive still sends none. Unit tests + `e2e/chat.sh` (haiku
+      spawn → close → phone revive runs `--model 'haiku'`, row `model:
+      haiku`; `--resume … --model sonnet` → sonnet).
+- [x] `gv chat serve`: UI fixes from the live test (grove-334,
+      2026-09-26, `chat-ux` train). Home renders a block per registered
+      workspace (new read `GET /api/workspaces`), so an empty workspace
+      keeps `+ new chat` and the version footer. A turn `waiting` with no
+      readable picker shows `the chat is showing a prompt the phone can't
+      read` + **show pane** (new read `GET /api/chats/<s>/pane`, bottom 30
+      lines) and disables send. `[Request interrupted…]` is a `meta`
+      `interrupt` chip (⏹) that ends the turn; a stop that landed does
+      too, so idle after it is no longer "no reply". Rows gain additive
+      `turn` (ClassifyTurn off the `waiting` capture): badges
+      working/idle/needs you/stopped, order needs you → working → recent;
+      End chat reads the turn, not the stale heuristic. Picker gains
+      additive `review` (Submit page's picks); multi-select `Chat about
+      this` loses its checkbox; the chat header retitles once the label
+      lands. Each item browser-verified against a sandboxed haiku chat.
+- [x] `gv chat`: pick a Claude model for a new chat (grove-293,
+      2026-09-26, `chat-ux` train). `gv orchestrator new --model <tier>`
+      (cockpit pane, `--workspace`, and relayed over `--host` at a fixed
+      argv place) pins the BARE launch before any profile wrap, so on a
+      profile it runs that tier's slug. Tiers: `orchestrator.models`, else
+      built-in opus/sonnet/haiku; an unknown one is refused like an
+      unknown profile. `config.RunsModel` names what a spawn will ACTUALLY
+      run (flag → settings.json → literal `account default`; on a profile,
+      the tier's slug); the pane is tagged `@grove_model` and `gv chat ls`
+      rows carry it as `model` (the phone's chat subtitle). Phone: ONE
+      sheet from `GET /api/workspaces/<l>/models` — host default, Claude
+      tiers, profiles — every row saying `runs <model>`; POST `.../new`
+      takes an optional `model`. Verified: unit + e2e/chat.sh (sheet rows,
+      pinned argv + tag + row, unknown-tier 409 = CLI text, byte-equal
+      op-id retry), e2e/all.sh green.
+- [x] `gv chat serve`: running build on the phone (grove-286, 2026-09-26,
+      `chat-ux` train). `GET /api/version` → `{"version": "<stamp>"}` in
+      the contract envelope (`dev` unstamped, never blank), threaded from
+      `main.version` via `Server.WithVersion`. Home shows it dim at the
+      foot (`gv v0.1.46`). The list stream opens with a `version` event on
+      every connect, and the page re-reads /api/version on refocus: a
+      version that disagrees with the one the page loaded toasts "server
+      updated — reload". Verified headless: footer, kill + restart the
+      server on a new stamp → stream reconnects, toast shows.
+- [x] `gv chat serve`: list screens over SSE (grove-307, 2026-09-26,
+      `chat-ux` train). `GET /api/chats/events` pushes the `/api/chats`
+      envelope byte for byte — once on connect, then only when it changed
+      — plus a `:` keep-alive every 25s. ONE server-side enumeration per
+      5s (`listFeed`) is shared by every open stream, starts with the first
+      subscriber and stops with the last. The page opens it wherever the
+      list is wanted (visible list screen, or anywhere with notifications
+      on) and drops its 5s/15s fetch interval while it is healthy
+      (`poll.timer` null); an error hands back to the poll, and the
+      `visibilitychange` refetch stays. A chat literally addressed
+      `events` is refused (404) rather than read as the list stream.
+      Verified: two headless tabs, `+ new chat` in one showed in the
+      other in 3.5s with no client interval.
+- [x] `gv chat serve`: live-chats home (grove-302, 2026-09-26, `chat-ux`
+      train). Screen 1 is every live row (kind chat, plus cockpit
+      read-only) across all workspaces, ordered needs you → running → most
+      recently active (`liveOrder`, the page's one order rule), each tagged
+      with its workspace; one tap to the composer. Per workspace: `+ new
+      chat` and an inline `history (N)` disclosure with the explainer
+      "history = conversations with no running Claude process; tap one to
+      revive it." "archived" is "history" in all UI copy; the contract's
+      `kind: "archived"` is unchanged. A live chat idle > 3h shows
+      `idle 5h · end?` → grove-294's End sheet. `#/w/<label>` stays a deep
+      link (history open); a chat's back is always home. Contract
+      (additive): `gv chat ls` rows carry `waiting` — one pane capture per
+      live busy kind-chat row through `DetectPicker` (`markWaiting`,
+      shared by `ls` and serve). The page sorts/marks waiting rows, badges
+      the count (union with the open chat's stream) and notifies on a
+      row's false→true edge (never the first load, never the open chat);
+      with notifications on the list is watched every 15s while hidden or
+      in a chat. `chat.Less`: recency now beats chat number within a kind.
+- [x] `gv chat serve`: page-side notifications + app badge (grove-305,
+      2026-09-26, `chat-ux` train; no server push). A 🔕/🔔 header toggle
+      requests `Notification` permission; off by default, persisted per
+      device in `localStorage` (`gv-chat:notify`). With it on and the page
+      not visible, a turn end (the SHOWN working → idle edge in
+      `renderWorking`, i.e. heuristic + `turn` event reconciled, via
+      `onTurnEnd()`; capped at one per transcript seq so the send hold's
+      flicker cannot double it) and the edge into a `detected` picker
+      post a notification tagged by address; the picker also vibrates. The
+      service worker's `showNotification` is the Android path and its
+      `notificationclick` focuses the app on `#/c/<addr>`. The app badge
+      counts chats waiting on a picker. Replay alerts nothing: the stream
+      only goes live 1.5 s after open with no entry, which also covers a
+      cache restore's `?since=` catch-up (grove-297) and the first
+      turn/picker reads.
+- [x] `gv chat serve`: prose in a system sans (grove-306, 2026-09-26,
+      `chat-ux` train). `body` moves to `--sans` (system stack, no font
+      files — CSP `font-src 'self'`) at line-height 1.5; `--mono` stays on
+      `code`/`pre`, tool and steps rows, `#keys`, the composer and
+      `.row .meta`. Assistant h1/h2 get a touch of size since sans bold
+      alone reads weaker. grove-260's wide-content rules untouched.
+- [x] `gv chat serve`: entry timestamps (grove-303, 2026-09-26,
+      `chat-ux` train). Client-only, off the `ts` the stream already
+      carries: a `— today —` / `— yesterday —` / `— 21 Sep —` separator
+      when the local calendar day changes between prose entries (steps
+      get none), and a dim `HH:MM` on each user message and assistant
+      text block. Null `ts` renders no time and leaves the day run alone.
+      `view.day` rides the grove-297 chat cache, and a restore relabels
+      its separators, so replay, live append and restore render alike.
+- [x] `gv chat serve`: re-opening a chat no longer replays it from seq 0
+      (grove-297, 2026-09-26, `chat-ux` train). Client-only: leaving a
+      chat moves its rendered nodes into a 3-deep cache with maxSeq,
+      group, working, pending bubbles, turnHold, scroll offset and pill
+      state; re-opening re-attaches them and opens the stream with
+      `?since=<maxSeq>`. `turn` is dropped (the new stream re-sends a
+      fresh read). Invalidated on revive, on spawn, and when the
+      address's session_id changed. `sw.js` untouched.
+- [x] `gv chat serve`: honest working indicator (grove-300, 2026-09-26,
+      `chat-ux` train). New additive SSE event `turn`
+      (`{"state","reason"?,"line"?}` — running | idle | waiting | errored |
+      stopped | unknown) from the pane read the stream already does each
+      poll (`chatweb.ClassifyTurn`); quiet states only after 3 identical
+      polls. The phone keeps its transcript heuristic but lets `turn`
+      overrule it: a message nobody answers ends as `no reply — the pane
+      may have stopped` / `…has stopped`, a dead turn as `turn errored —
+      <the pane's error line>`; composer untouched. Signal chosen over the
+      Stop hook: no hook fires for a dead pane, the API-error hook
+      (StopFailure) isn't installed, and chats aren't tracked tasks.
+      `detect.Spinning` + `detect.ErrorMarker` (moved from supervise); the
+      two garnish reads share one ≤900ms `chatReport`.
+- [x] `gv chat serve`: harden picker detection + gate every picker key
+      (grove-318, 2026-09-26, `chat-ux` train; follow-up to PR #314). The
+      unboxed rule's "Esc to cancel" now counts only in the capture's last
+      3 non-blank lines, and a `●` line or a `─` rule after the option run
+      closes it (the transcript went on, or the run is in the idle box);
+      unboxed `>` is no longer a caret. The three probes that fired —
+      echoed `❯ 1.` prompt with a reply mentioning the footer, a `> 1.`
+      list, digits typed into the idle box — are negative fixtures.
+      `/keys` now needs a fresh capture offering the key for digits, y, n
+      and tab (409 otherwise); esc stays ungated for the stop button
+      (grove-299). The composer focuses only on the edge into `typing`.
+      Follow-up: `e2e/chat.sh` moved to the new contract — a digit into a
+      bare chat pane is 409 and leaves the pane untouched, esc still goes
+      through, and a fake claude drawing a v2.1.282-style menu takes an
+      offered digit, refuses an unoffered one, and refuses again once the
+      menu has closed.
+- [x] `gv chat serve`: never send into a modal + unnumbered menus + relay
+      warnings (grove-333, 2026-09-26, `chat-ux` train). A phone send into
+      Claude Code's folder-trust dialog pressed Enter on its default (`No,
+      exit`) and killed the chat. `/send` and `gv chat send` now take a
+      fresh capture and refuse (409 / non-zero) while `chatweb.Waiting`
+      says a modal is up — AskUserQuestion's free-text row excepted.
+      `DetectPicker` reads the unnumbered `❯` run with an `Enter to
+      confirm|select … Esc to cancel` last line as `kind: "select"`
+      (options + `caret`, keys up/down/enter/esc — all fresh-capture
+      gated); `/keys {"option": N}` walks the caret server-side and
+      presses Enter (a digit on numbered menus). The list row's `waiting`
+      reads the same `chatweb.Waiting`. `/send` adds `warning` when the
+      relay saw no uptake; the phone shows ⚠ instead of `sent ✓`. Also:
+      the serve's 900ms report cache re-reads once on a miss, so a chat
+      born inside the TTL is not invisible to the picker.
+- [x] `gv chat serve`: optimistic pending bubble + per-chat drafts
+      (grove-316, 2026-09-26, `chat-ux` train). A send shows at once as a
+      dimmed `sending…`/`sent ✓` bubble and the composer stays free; the
+      transcript's own `user` entry replaces it (whitespace-normalized
+      match), so it never shows twice. A failed send becomes
+      `failed — tap to retry` plus a toast. Drafts live in `localStorage`
+      under `gv-chat-draft:<addr>`, restored only for that address
+      (grove-116 holds by construction), cleared on a successful send,
+      pruned after 7 days. Client-only.
+- [x] `gv chat`: clean labels + collapse harness wrappers (grove-315,
+      2026-09-26, `chat-ux` train). Claude Code writes a slash command's
+      echo, its stdout, `!` escapes and background-task notices as plain
+      `user` lines, so ~half of `gv chat ls` was titled
+      `<local-command-caveat>…` and the phone showed raw-tag "user"
+      bubbles. `internal/chat/meta.go` classifies them: `chat.Label` reads
+      the transcript head for the first prompt that is the operator's own
+      words (fallback: the first slash command), and the Projector emits
+      them as the additive `kind: "meta"` (`tool` = `command` ·
+      `task-notification` · `bash` · `bash-output` · `local-stdout`).
+      The phone renders `meta` as a dim `⌘ /model` / `⚙ …` / `$ ls` chip
+      that neither closes a step group nor flips `working…`. Kept out of
+      `internal/transcript` (ovs byte-comparable). Mac: 197 → 0 labels
+      starting with `<`.
+- [x] `gv chat serve` composer: Enter inserts a newline on touch keyboards,
+      only the send button sends (grove-301, 2026-09-25, `chat-ux` train).
+      Gboard's Enter on a `<textarea>` is a plain Enter — there is no Shift
+      on a phone keyboard — so Enter-sends made multi-line messages
+      untypeable. `internal/chatweb/ui/app.js`'s `composer()` now checks
+      `matchMedia('(pointer: coarse)')`: coarse gets `enterkeyhint="enter"`
+      and no `onkeydown` handler (Enter is a plain newline, only `send`
+      submits), fine keeps the existing Enter-sends/Shift+Enter-newline
+      with `enterkeyhint="send"`. `autosize()` and the `flex-end`-aligned
+      compose row were already correct for a tall textarea.
+- [x] `gv chat serve`: a `stop` button in the "working…" strip
+      (grove-299, 2026-09-25). No server change — `ValidKey` already allows
+      `esc` and `POST /api/chats/<addr>/keys` already delivers it
+      (grove-225's route), but the page only ever offered keys inside the
+      picker strip, which appears only when the pane scrape detects a
+      modal — nothing mid-turn, which is exactly when a stop is wanted.
+      `#working` (grove-261) gains a `#stop` button, hidden by
+      `composer()`'s own `c.writable` gate (the same input the composer
+      uses, never a separate read of `kind`), so a read-only row never
+      offers it even while "working…" shows. Tapping it POSTs
+      `{key:"esc"}` and clears `working` optimistically on success — the
+      stream corrects it back if the turn is in fact still going — and
+      routes a failure through the page's existing error surface. A
+      `stopBusy` flag plus the shared `.busy` styling block re-taps for
+      1.2s after the request settles: exactly one Esc per tap, since a
+      second one opens Claude Code's rewind picker, which a phone would
+      then need to dismiss.
+- [x] chat-ux: dismissable error toast, replacing the prepended `.err` box
+      that landed off-screen above a scrolled-down transcript or stacked
+      up on a list screen (grove-298, 2026-09-25). `#toast` is a sibling of
+      `#main`, not a child of it, so the wholesale re-renders every screen
+      does (`main.textContent = ''`) can't wipe it before its 6s timeout;
+      sitting between `#main` and `#footer` in the flex column puts it
+      above the composer on the chat screen and, since `#footer` is hidden
+      on list screens, at the same bottom slot there too — visible without
+      scrolling either way. One at a time (newest replaces), a tap
+      dismisses, holding it down pauses the auto-dismiss so it can't vanish
+      mid-read. Both the `fault` SSE event and every `api()` failure route
+      through it, server text verbatim.
+- [x] `gv chat serve`: jump-to-latest pill (grove-304, 2026-09-25):
+      `appendEntry` only followed the bottom while the reader was within
+      120px of it (`stick`, grove-261) — scroll up mid-turn and new entries
+      landed silently below with no way back but a long flick. A `#jump`
+      pill (`↓ new`) now sits above the composer, anchored to `footer`'s
+      top edge so it floats correctly regardless of the composer's own
+      height (working strip, keys row, autosized textarea); `appendEntry`
+      shows it on the same `!stick` branch that already skipped the
+      auto-scroll, a tap or scrolling back within the threshold hides it,
+      and the scroll respects `prefers-reduced-motion` (instant, not
+      smooth). Plain arrow, no count — grouped steps don't map to a
+      per-entry count without complicating grove-261's group logic.
+
+- [x] `gv chat serve` is installable as a PWA on Android Chrome (grove-296,
+      2026-09-25): `internal/chatweb/ui/manifest.json` (`name`/`short_name`
+      "gv chat", `start_url`/`scope` `"./"`, `display: standalone`,
+      background/theme color `#0a0f0b`) + three generated PNG icons — a
+      tree on the app's dark ground, 192, 512 and a 512 `maskable` —
+      referenced by `<link rel="manifest">` in `index.html` and cached by
+      `sw.js`'s `SHELL` for offline install. Two server-side gotchas:
+      `ContentSecurityPolicy` (guard.go) gains `manifest-src 'self'` (Chrome
+      refuses to fetch a manifest `default-src 'none'` blocks) and
+      `chatweb.go`'s asset handler sets `Content-Type: application/json`
+      explicitly on `/manifest.json` rather than trust the host's mime
+      table for `.json`. `go test ./internal/chatweb/` gains
+      `TestServesManifest`.
+- [x] `gv chat serve`: AskUserQuestion menus answerable from the phone
+      (grove-308, 2026-09-25). Step 0 captured the real v2.1.282 chrome
+      (`internal/chatweb/testdata/cc2.1.282-*.txt`): modals are no longer
+      boxed, so `DetectPicker` missed every one. It now also reads the
+      unboxed shape (caret on an option + `Esc to cancel` footer or the
+      AskUserQuestion tab bar), and the `picker` SSE event gains additive
+      `kind` (`menu|multi|yesno`), `options` (key/label/checked/free) and
+      `typing`. New menu-only key `tab` (walks to the Submit page), sent
+      by `POST /keys` only when a FRESH capture's picker offers it (409
+      otherwise); Enter/Space stay refused — the captures show a digit
+      answers/toggles. Phone renders labelled option buttons, ☐/☑ toggles,
+      `next ⇥`, and hands the free-text row to the composer. Live-verified
+      through the detector + gate against a scratch Claude (multi + single
+      in one call, answer in the transcript); Android Chrome pass is the
+      operator's.
+
 - [x] tmux relay: verified submit reads Claude Code v2.1.282+'s unboxed
       input box (grove-317, 2026-09-26). `inputBoxRange` now finds the
       bottom-most `─` rule pair whose body opens with `❯` (boxed chrome

@@ -15,6 +15,26 @@ package chatweb
 // of always taking the host's default. It reaches nothing the spawn route
 // could not already reach.
 //
+// grove-294 added End chat — POST /api/chats/<s>/close — within the same
+// boundary: it ends a live chat's claude PROCESS and nothing else. The
+// transcript stays (the row turns archived and revivable), and the gate is
+// the CLI's own (chat.CloseRefusal): only a kind-chat row, never the
+// cockpit's pane.
+//
+// grove-293 added one more READ: /api/workspaces/<l>/models, the rows of
+// the new-chat sheet — each spawn choice with the model it will actually
+// run, resolved against THAT workspace's config.
+//
+// grove-307 added one more READ: /api/chats/events is /api/chats pushed
+// over SSE, for the list screens. grove-286 another: /api/version, the
+// running build's stamp.
+//
+// grove-334 added two more READS: /api/workspaces, the registered
+// workspaces (so home offers `+ new chat` where no chat exists yet), and
+// /api/chats/<s>/pane, the bottom of a chat's pane as text — the "show
+// pane" escape hatch for a modal the picker scrape cannot read. Neither
+// writes anything; the pane is already read every second for the picker.
+//
 // Parsing lives away from net/http so the whole table — including every
 // path that must 404 — is testable without a listener.
 
@@ -28,8 +48,18 @@ const (
 	RouteKeys   = "keys"   // POST /api/chats/<s>/keys
 	RouteNew    = "new"    // POST /api/workspaces/<l>/new
 	RouteResume = "resume" // POST /api/chats/<s>/resume
+	RouteClose  = "close"  // POST /api/chats/<s>/close   (grove-294: End chat)
 	// grove-225: the profile picker's list. Read-only, no target.
 	RouteProfiles = "profiles" // GET  /api/profiles
+	// grove-307: the list screens' live feed — /api/chats, pushed.
+	RouteChatsEvents = "chats-events" // GET  /api/chats/events   (SSE)
+	// grove-286: the running build's version. Read-only, no target.
+	RouteVersion = "version" // GET  /api/version
+	// grove-293: the new-chat sheet's rows for one workspace. Read-only.
+	RouteModels = "models" // GET  /api/workspaces/<l>/models
+	// grove-334: the registered workspaces, and a chat's pane snapshot.
+	RouteWorkspaces = "workspaces" // GET  /api/workspaces
+	RoutePane       = "pane"       // GET  /api/chats/<s>/pane
 )
 
 // Route is a parsed API request. Target is the chat address for the chat
@@ -67,7 +97,15 @@ func ParseRoute(path string) (r Route, api bool) {
 		return Route{Kind: RouteChats, Method: "GET"}, true
 	case len(parts) == 1 && parts[0] == "profiles":
 		return Route{Kind: RouteProfiles, Method: "GET"}, true
-	case len(parts) == 3 && parts[0] == "chats" && parts[1] != "":
+	case len(parts) == 1 && parts[0] == "version":
+		return Route{Kind: RouteVersion, Method: "GET"}, true
+	case len(parts) == 1 && parts[0] == "workspaces":
+		return Route{Kind: RouteWorkspaces, Method: "GET"}, true
+	case len(parts) == 2 && parts[0] == "chats" && parts[1] == "events":
+		return Route{Kind: RouteChatsEvents, Method: "GET"}, true
+	// A chat literally addressed "events" would read as the list stream
+	// one segment up; refuse the address rather than make the parser guess.
+	case len(parts) == 3 && parts[0] == "chats" && parts[1] != "" && parts[1] != "events":
 		target := parts[1]
 		switch parts[2] {
 		case "events":
@@ -78,9 +116,15 @@ func ParseRoute(path string) (r Route, api bool) {
 			return Route{Kind: RouteKeys, Target: target, Method: "POST"}, true
 		case "resume":
 			return Route{Kind: RouteResume, Target: target, Method: "POST"}, true
+		case "close":
+			return Route{Kind: RouteClose, Target: target, Method: "POST"}, true
+		case "pane":
+			return Route{Kind: RoutePane, Target: target, Method: "GET"}, true
 		}
 	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "new":
 		return Route{Kind: RouteNew, Target: parts[1], Method: "POST"}, true
+	case len(parts) == 3 && parts[0] == "workspaces" && parts[1] != "" && parts[2] == "models":
+		return Route{Kind: RouteModels, Target: parts[1], Method: "GET"}, true
 	}
 	return Route{}, true
 }

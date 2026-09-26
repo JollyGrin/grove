@@ -34,6 +34,9 @@ import (
 	"syscall"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatweb"
+	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/workspace"
@@ -53,6 +56,11 @@ func findChat(target string) (chatRecord, error) {
 	if err != nil {
 		return chatRecord{}, err
 	}
+	return matchChat(recs, target)
+}
+
+// matchChat is findChat's second half: chat.Match over a report's rows.
+func matchChat(recs []chatRecord, target string) (chatRecord, error) {
 	rows := make([]chat.Row, len(recs))
 	for i, r := range recs {
 		rows[i] = r.Row
@@ -170,17 +178,9 @@ func cmdChatSend(args []string) error {
 	if text == "" {
 		return fmt.Errorf("empty message — nothing sent")
 	}
-	pane, row, err := writableChat(args[0])
+	warn, row, err := relayChat(args[0], text)
 	if err != nil {
 		return err
-	}
-	// PasteText is the whole grove-144 sequence: bracketed paste, settle,
-	// separate Enter, verify, one retry Enter, then a loud error. An error
-	// here means the agent never got the text — which is why nothing is
-	// printed or recorded on this path.
-	warn, err := tmux.PasteText(pane, text)
-	if err != nil {
-		return fmt.Errorf("gv chat send to %s: %w", row.Session, err)
 	}
 	// A verified submit with no sign of uptake still succeeded — but the
 	// operator hears about it, on stderr so ✓ and any --json stay clean.
@@ -189,6 +189,33 @@ func cmdChatSend(args []string) error {
 	}
 	fmt.Printf("✓ sent to %s\n", row.Session)
 	return nil
+}
+
+// relayChat is the send path the CLI and the phone share: the writable
+// gate, then the modal gate on a FRESH capture (grove-333), then
+// PasteText — the whole grove-144 sequence: bracketed paste, settle,
+// separate Enter, verify, one retry Enter, then a loud error. An error
+// here means the agent never got the text.
+//
+// The modal gate exists because that Enter is not aimed: into a modal it
+// picks whatever the caret is on, and the folder-trust dialog's caret
+// starts on "No, exit". An unreadable pane is not a modal — the relay's
+// own checks still stand behind it.
+func relayChat(target, text string) (warn string, row chat.Row, err error) {
+	pane, row, err := writableChat(target)
+	if err != nil {
+		return "", row, err
+	}
+	if capture, cerr := tmux.CapturePane(pane); cerr == nil {
+		if err := chatweb.SendRefusal(capture); err != nil {
+			return "", row, fmt.Errorf("%s: %w", row.Session, err)
+		}
+	}
+	warn, err = tmux.PasteText(pane, text)
+	if err != nil {
+		return "", row, fmt.Errorf("gv chat send to %s: %w", row.Session, err)
+	}
+	return warn, row, nil
 }
 
 // --- gv chat keys ---
@@ -239,6 +266,60 @@ func writableChat(target string) (pane string, row chat.Row, err error) {
 		return "", chat.Row{}, fmt.Errorf("%s has no live pane to write to", chatName(rec.Row))
 	}
 	return rec.Pane, rec.Row, nil
+}
+
+// --- gv chat close (grove-294) ---
+
+// cmdChatClose ends a live detached chat from the OUTSIDE — the twin of
+// `gv orchestrator close`, which only ever closes its own pane. The claude
+// process dies with the session; the transcript does not, so the row comes
+// back as `kind: archived`, revivable with `gv orchestrator new --resume`.
+//
+// No mid-turn guard, deliberately (decided on #294): the row's `busy` is
+// true whenever the claude process is alive, idle or not, so it cannot
+// tell a turn in flight from a prompt waiting. The phone asks first on its
+// confirm sheet; at the desk, the worst case is one lost turn of a chat
+// that can be revived.
+func cmdChatClose(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: gv chat close <session>   (end a live chat; its transcript stays, revivable with gv orchestrator new --resume)")
+	}
+	row, err := closeChat(args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✓ ended %s — its conversation is kept in history (gv chat ls)\n", row.Session)
+	return nil
+}
+
+// closeChat is the one implementation behind the CLI verb and the phone's
+// End chat: resolve, gate (chat.CloseRefusal), log, kill.
+//
+// The event lands BEFORE the kill, as in cmdOrchestratorClose and
+// closeWorkspace: run from inside the chat being ended, kill-session takes
+// this very process down and a post-kill append would never land. It goes
+// to the CHAT's workspace log, not the ambient one — a phone ending
+// grove-chat-unbrewed-2 is not acting on whatever workspace the server
+// happened to start in.
+func closeChat(target string) (chat.Row, error) {
+	rec, err := findChat(target)
+	if err != nil {
+		return chat.Row{}, err
+	}
+	if refusal := chat.CloseRefusal(rec.Row); refusal != "" {
+		return chat.Row{}, fmt.Errorf("%s", refusal)
+	}
+	data := map[string]string{"reason": "ended", "session": rec.Row.Session, "workspace": rec.Row.Workspace}
+	if rec.Row.SessionID != nil && *rec.Row.SessionID != "" {
+		data["session_id"] = *rec.Row.SessionID
+	}
+	if err := state.Append(config.StateDirAt(rec.Root), state.Event{Type: state.EvOrchestratorClosed, Data: data}); err != nil {
+		return chat.Row{}, err
+	}
+	if err := tmux.KillSession(rec.Row.Session); err != nil {
+		return chat.Row{}, fmt.Errorf("could not end %s: %w", rec.Row.Session, err)
+	}
+	return rec.Row, nil
 }
 
 // --- gv chat restamp (grove-222) ---

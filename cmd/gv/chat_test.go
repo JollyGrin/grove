@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -83,7 +85,7 @@ func TestChatSpawnPlan(t *testing.T) {
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("default plan: %v", err)
 	}
@@ -100,7 +102,7 @@ func TestChatSpawnPlan(t *testing.T) {
 		t.Errorf("cmd must --add-dir the twin's root, got %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", []string{"grove-chat-unbrewed-1"})
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", []string{"grove-chat-unbrewed-1"})
 	if err != nil {
 		t.Fatalf("profiled plan: %v", err)
 	}
@@ -119,7 +121,7 @@ func TestChatSpawnPlan(t *testing.T) {
 
 	// A profile the HOST doesn't have is a hard error — decided before any
 	// dir or session exists.
-	if _, err := chatSpawnPlan(cfg, ws, "nope", "", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
+	if _, err := chatSpawnPlan(cfg, ws, "nope", "", "", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
 		t.Fatalf("unknown profile = %v, want an unknown-model-profile error", err)
 	}
 }
@@ -139,7 +141,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 	}
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "aaaa1111", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "aaaa1111", "", nil)
 	if err != nil {
 		t.Fatalf("resume plan: %v", err)
 	}
@@ -150,7 +152,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 		t.Errorf("a revival resumes one NAMED conversation, never --continue: %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "bbbb2222", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "bbbb2222", "", nil)
 	if err != nil {
 		t.Fatalf("profiled resume plan: %v", err)
 	}
@@ -163,7 +165,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 
 	// The id reaches a shell command line, so a malformed one never gets
 	// past the plan — belt to internal/chat's braces.
-	if _, err := chatSpawnPlan(cfg, ws, "", "a; rm -rf /", "", nil); err == nil {
+	if _, err := chatSpawnPlan(cfg, ws, "", "", "a; rm -rf /", "", nil); err == nil {
 		t.Error("a shell-hostile --resume id must be refused before anything is created")
 	}
 }
@@ -635,7 +637,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 	brief := "watch grove-1 and grove-2\n"
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", brief, nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", brief, nil)
 	if err != nil {
 		t.Fatalf("briefed plan: %v", err)
 	}
@@ -656,7 +658,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 
 	// Profiled: the prompt argv sits inside the wrap, ahead of its closing
 	// paren — outside it, the shell would swallow the prompt.
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", brief, nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", brief, nil)
 	if err != nil {
 		t.Fatalf("profiled briefed plan: %v", err)
 	}
@@ -669,7 +671,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 	}
 
 	// No brief, no argv, no path.
-	plan, err = chatSpawnPlan(cfg, ws, "", "", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unbriefed plan: %v", err)
 	}
@@ -692,5 +694,167 @@ func TestWriteChatBrief(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Errorf("brief round-trip = %q, want %q", got, body)
+	}
+}
+
+// TestChatSpawnPlanModel (grove-293): --model pins the BARE launch, so on
+// the host's own Claude the argv carries `--model 'opus'`, and on a profile
+// the wrap exports that profile's opus slug. An unknown tier fails before
+// anything exists; the pane tag (Runs) names what will actually run.
+func TestChatSpawnPlanModel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"openrouter-glm": {
+			BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+			Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-4.6", Haiku: "z-ai/glm-4.5-air",
+		},
+	}
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+
+	plan, err := chatSpawnPlan(cfg, ws, "", "opus", "", "", nil)
+	if err != nil {
+		t.Fatalf("pinned plan: %v", err)
+	}
+	if !strings.HasPrefix(plan.Cmd, "claude --model 'opus' ") || plan.Model != "opus" || plan.Runs != "opus" {
+		t.Errorf("pinned plan = cmd %q model %q runs %q", plan.Cmd, plan.Model, plan.Runs)
+	}
+
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "opus", "", "", nil)
+	if err != nil {
+		t.Fatalf("pinned profiled plan: %v", err)
+	}
+	if !strings.Contains(plan.Cmd, "ANTHROPIC_MODEL='z-ai/glm-5.2'") || plan.Runs != "z-ai/glm-5.2" {
+		t.Errorf("profiled opus plan = cmd %q runs %q", plan.Cmd, plan.Runs)
+	}
+	if strings.Index(plan.Cmd, "--model 'opus'") < strings.LastIndex(plan.Cmd, "exec ") {
+		t.Errorf("--model must sit inside the wrap's exec: %q", plan.Cmd)
+	}
+
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Runs != "z-ai/glm-4.6" {
+		t.Errorf("unpinned profile runs %q, want its sonnet slug", plan.Runs)
+	}
+
+	if _, err := chatSpawnPlan(cfg, ws, "", "opsu", "", "", nil); err == nil || !strings.Contains(err.Error(), `unknown model "opsu"`) {
+		t.Fatalf("unknown tier = %v", err)
+	}
+}
+
+// TestChatHopArgsModel: --model rides after --profile, before --resume and
+// the brief, at a fixed place — so an op-id retry is byte-equal.
+func TestChatHopArgsModel(t *testing.T) {
+	req := chatSpawnReq{Label: "unbrewed", OpID: "deadbeef", Host: "groveremote", Profile: "glm", Model: "opus", Brief: "hi"}
+	got := chatHopArgs(req)
+	if !reflect.DeepEqual(chatHopArgs(req), got) {
+		t.Fatal("hop args not deterministic")
+	}
+	j := strings.Join(got, " ")
+	if !strings.Contains(j, "--profile glm --model opus") || strings.Index(j, "--model") > strings.Index(j, "--brief") {
+		t.Fatalf("chatHopArgs = %v", got)
+	}
+	if m := chatManualRetry(req); !strings.Contains(m, "--profile glm --model opus") {
+		t.Fatalf("chatManualRetry = %q", m)
+	}
+}
+
+// TestChatNewOptions (grove-293): every sheet row names the model it will
+// actually run — the host default from orchestrator.claude's --model, else
+// settings.json, else the literal "account default"; the tiers; and each
+// profile's slug for the launch's default tier.
+func TestChatNewOptions(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"zai-plan-glm": {BaseURL: "https://api.z.ai/api/anthropic", AuthTokenEnv: "Z", Opus: "glm-5", Sonnet: "glm-4.6", Haiku: "glm-air"},
+	}
+	got := chatNewOptions(cfg, "/w", "")
+	want := []chatweb.NewChatOption{
+		{Runs: config.AccountDefault},
+		{Model: "opus", Runs: "opus"}, {Model: "sonnet", Runs: "sonnet"}, {Model: "haiku", Runs: "haiku"},
+		{Profile: "zai-plan-glm", Runs: "glm-4.6"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %+v\nwant %+v", got, want)
+	}
+	if got := chatNewOptions(cfg, "/w", "claude-sonnet-5"); got[0].Runs != "claude-sonnet-5" {
+		t.Errorf("settings.json model not named: %q", got[0].Runs)
+	}
+	cfg.Orchestrator.Claude = "claude --model opus"
+	cfg.Orchestrator.Models = []string{"claude-haiku-4-5"}
+	// A hand-written --model opus beats the wrap's ANTHROPIC_MODEL and
+	// resolves through its DEFAULT_OPUS slug, so the profile row says glm-5.
+	got = chatNewOptions(cfg, "/w", "claude-sonnet-5")
+	if got[0].Runs != "opus" || len(got) != 3 || got[1].Model != "claude-haiku-4-5" || got[2].Runs != "glm-5" {
+		t.Errorf("flag/override options = %+v", got)
+	}
+	cfg.ModelProfiles = nil
+	if got := chatNewOptions(cfg, "/w", ""); len(got) != 2 {
+		t.Errorf("no profiles = %+v, want default + one tier", got)
+	}
+}
+
+// TestRevivedModel (grove-337): reviving a chat keeps the model it ran on —
+// its spawn event's tier first, else its transcript's last assistant model
+// mapped to a tier, else the host default. An explicit --model never
+// reaches here (spawnWorkspaceChat only asks when the revive named none).
+func TestRevivedModel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aaaa1111.jsonl")
+	writeAssistant := func(models ...string) {
+		t.Helper()
+		var b strings.Builder
+		for _, m := range models {
+			fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-09-26T10:00:00Z","message":{"model":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`+"\n", m)
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawn := func(data map[string]string) []state.Event {
+		return []state.Event{{Type: state.EvOrchestratorSpawned, Data: data}}
+	}
+	writeAssistant("claude-opus-4-5", "claude-sonnet-4-5")
+
+	// The spawn event wins over the transcript.
+	if got := revivedModel(cfg, spawn(map[string]string{"session_id": "aaaa1111", "model": "haiku"}), "aaaa1111", "", path); got != "haiku" {
+		t.Fatalf("event model = %q, want haiku", got)
+	}
+	// No event: the transcript's LAST assistant model, as a tier.
+	if got := revivedModel(cfg, nil, "aaaa1111", "", path); got != "sonnet" {
+		t.Fatalf("transcript fallback = %q, want sonnet", got)
+	}
+	// A tier the config no longer offers is dropped, not a failed revive.
+	cfg.Orchestrator.Models = []string{"opus", "sonnet"}
+	if got := revivedModel(cfg, spawn(map[string]string{"session_id": "aaaa1111", "model": "haiku"}), "aaaa1111", "", path); got != "sonnet" {
+		t.Fatalf("unconfigured event tier = %q, want the transcript's sonnet", got)
+	}
+	cfg.Orchestrator.Models = nil
+	// A profile's transcript names backend slugs, not Claude tiers.
+	if got := revivedModel(cfg, nil, "aaaa1111", "openrouter-glm", path); got != "" {
+		t.Fatalf("profiled transcript fallback = %q, want none", got)
+	}
+	// Ambiguous or unreadable: the host default.
+	writeAssistant("opus-distilled-sonnet")
+	if got := revivedModel(cfg, nil, "aaaa1111", "", path); got != "" {
+		t.Fatalf("ambiguous = %q", got)
+	}
+	if got := revivedModel(cfg, nil, "aaaa1111", "", filepath.Join(dir, "missing.jsonl")); got != "" {
+		t.Fatalf("missing transcript = %q", got)
+	}
+
+	// The re-applied tier reaches the argv exactly like an explicit pin.
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+	plan, err := chatSpawnPlan(cfg, ws, "", "haiku", "aaaa1111", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.Cmd, "--model 'haiku'") || !strings.Contains(plan.Cmd, "--resume aaaa1111") || plan.Runs != "haiku" {
+		t.Fatalf("revived plan = cmd %q runs %q", plan.Cmd, plan.Runs)
 	}
 }

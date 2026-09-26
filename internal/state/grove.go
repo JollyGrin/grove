@@ -154,3 +154,24 @@ func ReadEvents(stateDir string, limit int) ([]Event, error) {
 	}
 	return events, sc.Err()
 }
+
+// SpawnModel is the tier the most recent orchestrator_spawned event for a
+// Claude session id was pinned to (grove-337) — the event whose
+// session_id or resume names it — so a revival can re-apply the model the
+// chat ran on. "" when no event names the id or the last one carried no
+// model (the host default, or a spawn older than the field).
+func SpawnModel(events []Event, sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		ev := events[i]
+		if ev.Type != EvOrchestratorSpawned {
+			continue
+		}
+		if ev.Data["session_id"] == sessionID || ev.Data["resume"] == sessionID {
+			return ev.Data["model"]
+		}
+	}
+	return ""
+}

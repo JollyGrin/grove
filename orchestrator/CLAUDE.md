@@ -27,7 +27,8 @@ gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
 gv grab DEV-X --manual    # set up for the operator to drive by hand
 gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   (hosts: in config). grab/ls/adopt/handoff/answer/
-                           #   nudge/diff/pause/untrack (and `orchestrator new`)
+                           #   nudge/diff/pause/untrack (and `orchestrator new`,
+                           #   `chat close`)
                            #   all take --host; it is NOT in any verb's own `-h`
                            #   output (intercepted before the flagset) — trust
                            #   this list, not --help. for answer/nudge the flag
@@ -68,6 +69,10 @@ gv diff DEV-X [--stat]    # branch diff vs base — review without attach
 gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
      --ticket DEV-X         #   see "Dispatch-and-dismiss" below; never run it
                            #   unless the operator pre-authorized it this message)
+gv chat close <s>         # end ANOTHER live chat (grove-chat-<label>-<n>) —
+                           #   kills its claude process, keeps its transcript
+                           #   (revive: `orchestrator new --resume`). Operator's
+                           #   call only: never end a chat you were not asked to
 gv cost --json            # per-ticket token/cost ESTIMATES + done rollup (pure read)
 gv cost --analyze --json  # outcome-priced ledger: cost joined to PR outcome,
                            #   steering counts, flags (stuck / steering / outlier)

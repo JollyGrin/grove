@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
@@ -34,7 +35,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
 	}
 	switch args[0] {
 	case "ls":
@@ -45,12 +46,14 @@ func cmdChat(args []string) error {
 		return cmdChatSend(args[1:])
 	case "keys":
 		return cmdChatKeys(args[1:])
+	case "close":
+		return cmdChatClose(args[1:])
 	case "restamp":
 		return cmdChatRestamp(args[1:])
 	case "serve":
 		return cmdChatServe(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, restamp, serve)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, restamp, serve)", args[0])
 	}
 }
 
@@ -79,7 +82,12 @@ func cmdChatLs(args []string) error {
 	if err != nil {
 		return err
 	}
-	rows := chatRows(targets, liveChatLookup(isCockpit))
+	recs := chatRecords(targets, liveChatLookup(isCockpit))
+	markWaiting(recs, tmux.CapturePane)
+	rows := make([]chat.Row, 0, len(recs))
+	for _, r := range recs {
+		rows = append(rows, r.Row)
+	}
 	if *asJSON {
 		return emitJSON("chats", rows)
 	}
@@ -134,6 +142,9 @@ type chatRecord struct {
 	// than re-derived (grove-227). "" is the ambient default, which is every
 	// workspace but one.
 	ConfigDir string
+	// Root is the workspace root the chat belongs to — where its state dir
+	// (and so its activity log) lives, for `gv chat close` (grove-294).
+	Root string
 }
 
 // workspaceClaudeConfigDir resolves a workspace's claude_config_dir: the
@@ -200,6 +211,47 @@ func scanProcs() []chat.Proc {
 	return chat.ParseProcs(string(out))
 }
 
+// chatLabel titles a chat by its transcript (grove-315). FirstPrompt is
+// used as-is when it is plain prose; only a prompt carrying a wrapper (a
+// caveat, a slash command, a paste) or none at all costs a second read of
+// the file's head, to find the first line that is the operator's own words.
+func chatLabel(configDir, dir string, s transcript.Session) string {
+	if s.FirstPrompt != "" && !strings.Contains(s.FirstPrompt, "<") {
+		return s.FirstPrompt
+	}
+	return chat.Label(filepath.Join(transcript.ProjectDirIn(configDir, dir), s.ID+".jsonl"), s.FirstPrompt)
+}
+
+// markWaiting fills each row's `waiting` (grove-302): one pane capture per
+// live kind-chat row that is running claude, read through chatweb.Waiting
+// — the same detector as the phone's picker strip, its turn strip and the
+// send gate (grove-333), so "needs you" on the list and the chat can never
+// disagree. The cap is the cost bound — a cockpit pane, an archived
+// transcript or a pane sitting at a shell is never captured. A failed capture is false, never an error: a
+// scrape that cannot read must not look like a question to answer.
+//
+// grove-334: the same capture fills `turn` (ClassifyTurn), so a list row
+// can say working / idle / needs you instead of "running" for any live
+// process; a chat pane at a shell is "stopped" without a capture.
+func markWaiting(recs []chatRecord, capture func(pane string) (string, error)) {
+	for i := range recs {
+		r := &recs[i]
+		if r.Row.Kind != chat.KindChat || r.Pane == "" {
+			continue
+		}
+		if !r.Row.Busy {
+			r.Row.Turn = chatweb.TurnStopped
+			continue
+		}
+		out, err := capture(r.Pane)
+		if err != nil {
+			continue
+		}
+		r.Row.Waiting = chatweb.Waiting(out)
+		r.Row.Turn = chatweb.ClassifyTurn(out, true).State
+	}
+}
+
 // chatRows is the `ls` projection: records without their handles.
 func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
 	recs := chatRecords(targets, look)
@@ -238,7 +290,7 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		for _, c := range tmux.ChatSessionsIn(look.panes, ws.Label, look.isCockpit) {
 			pending = append(pending, livePane{ws: ws, configDir: cfgDir, kind: chat.KindChat, n: c.N, pane: tmux.LivePane{
 				Session: c.Session, PID: c.PID, Command: c.Command, Attached: c.Attached,
-				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID,
+				Created: c.Created, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID, Model: c.Model,
 			}})
 		}
 		cockpit := cockpitSessionForLabel(ws.Label)
@@ -338,13 +390,13 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		var label string
 		var lastActive time.Time
 		if s, ok := transcriptFor(sessions, id); ok {
-			label, lastActive = s.FirstPrompt, s.ModTime
+			label, lastActive = chatLabel(lp.configDir, lp.pane.Dir, s), s.ModTime
 		}
 		recs = append(recs, chatRecord{Row: chat.Live{
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
-			SessionID: id, Label: label, LastActive: lastActive,
-		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir})
+			SessionID: id, Label: label, LastActive: lastActive, Model: lp.pane.Model,
+		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
 	}
 	for _, ws := range targets {
 		cfgDir := configDirOf(ws)
@@ -354,7 +406,9 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 					continue
 				}
 				claimed[s.ID] = true
-				recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir, ConfigDir: cfgDir})
+				row := chat.ArchivedRow(ws.Label, s)
+				row.Label = chatLabel(cfgDir, dir, s)
+				recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir, Root: ws.Root})
 			}
 		}
 	}

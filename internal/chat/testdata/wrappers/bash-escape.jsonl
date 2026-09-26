@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-09-20T10:00:00Z","message":{"role":"user","content":"<bash-input>tmux ls</bash-input>"}}
+{"type":"user","timestamp":"2026-09-20T10:00:01Z","message":{"role":"user","content":"<bash-stdout>grove: 3 windows</bash-stdout><bash-stderr></bash-stderr>"}}
+{"type":"user","timestamp":"2026-09-20T10:00:04Z","message":{"role":"user","content":"why are there 3 windows?"}}

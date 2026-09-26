@@ -19,9 +19,24 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/grove-chat-unbrewed-1/send", true, chatweb.RouteSend, "grove-chat-unbrewed-1", "POST"},
 		{"/api/chats/grove-chat-unbrewed-1/keys", true, chatweb.RouteKeys, "grove-chat-unbrewed-1", "POST"},
 		{"/api/chats/eeeb1234/resume", true, chatweb.RouteResume, "eeeb1234", "POST"},
+		{"/api/chats/grove-chat-unbrewed-1/close", true, chatweb.RouteClose, "grove-chat-unbrewed-1", "POST"},
 		{"/api/workspaces/unbrewed/new", true, chatweb.RouteNew, "unbrewed", "POST"},
+		{"/api/workspaces/unbrewed/models", true, chatweb.RouteModels, "unbrewed", "GET"},
 		// grove-225: the one route added to the closed table, and a READ.
 		{"/api/profiles", true, chatweb.RouteProfiles, "", "GET"},
+		// grove-307: the list screens' stream — and a chat addressed
+		// "events" is refused rather than read as it.
+		{"/api/chats/events", true, chatweb.RouteChatsEvents, "", "GET"},
+		// grove-286: the build stamp.
+		{"/api/version", true, chatweb.RouteVersion, "", "GET"},
+		{"/api/version/", true, "", "", ""},
+		// grove-334: two reads — the workspace list, a pane snapshot.
+		{"/api/workspaces", true, chatweb.RouteWorkspaces, "", "GET"},
+		{"/api/chats/grove-chat-unbrewed-1/pane", true, chatweb.RoutePane, "grove-chat-unbrewed-1", "GET"},
+		{"/api/workspaces/", true, "", "", ""},
+		{"/api/chats/events/events", true, "", "", ""},
+		{"/api/chats/events/send", true, "", "", ""},
+		{"/api/chats/events/", true, "", "", ""},
 
 		// Not the API: the embedded UI's files.
 		{"/", false, "", "", ""},
@@ -35,6 +50,7 @@ func TestParseRoute(t *testing.T) {
 		{"/api/chats/x", true, "", "", ""},
 		{"/api/chats/x/y/z", true, "", "", ""},
 		{"/api/workspaces/unbrewed", true, "", "", ""},
+		{"/api/workspaces//models", true, "", "", ""},
 		{"/api/workspaces//new", true, "", "", ""},
 		{"/api/profiles/", true, "", "", ""},
 		{"/api/profiles/openrouter-glm", true, "", "", ""},

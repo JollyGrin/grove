@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-09-20T10:00:00Z","message":{"role":"user","content":"<pasted_content id=a1b2c3>ship the release notes for v0.1.40</pasted_content>"}}
+{"type":"user","timestamp":"2026-09-20T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"<\\pasted_content id=d4e5>and the changelog<\\/pasted_content>"},{"type":"text","text":"<system-reminder>Injected context.</system-reminder>"}]}}

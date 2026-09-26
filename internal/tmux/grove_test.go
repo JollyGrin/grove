@@ -364,6 +364,27 @@ func TestParsePanes(t *testing.T) {
 	}
 }
 
+// grove-293: @grove_model is APPENDED after the chat-session stamp, so a
+// model-tagged pane with no session stamp yet keeps the empty field between
+// them (only a TRAILING empty is trimmed) and each reads back in its place.
+func TestParsePanesModelTag(t *testing.T) {
+	out := strings.Join([]string{
+		strings.Join([]string{"grove-chat-g-1", "201", "claude", "0", "1700000100", "%7", "1", "/ws/o", "", "opus"}, "\t"),
+		strings.Join([]string{"grove-chat-g-2", "202", "claude", "0", "1700000100", "%8", "1", "/ws/o/glm", "eeee", "glm-4.6"}, "\t"),
+	}, "\n")
+	panes := ParsePanes(out)
+	if panes[0].ChatSession != "" || panes[0].Model != "opus" {
+		t.Errorf("unstamped tagged pane = %+v", panes[0])
+	}
+	if panes[1].ChatSession != "eeee" || panes[1].Model != "glm-4.6" {
+		t.Errorf("stamped tagged pane = %+v", panes[1])
+	}
+	chats := ChatSessionsIn(panes, "g", CockpitCheck(func(string) bool { return false }))
+	if len(chats) != 2 || chats[0].Model != "opus" || chats[1].Model != "glm-4.6" {
+		t.Errorf("ChatSessionsIn dropped the model: %+v", chats)
+	}
+}
+
 // The identity fields ride out on ChatSession too (grove-215) — `gv chat
 // ls` resolves ids per PANE and stamps the pane id it is handed here.
 func TestChatSessionsInCarriesIdentity(t *testing.T) {

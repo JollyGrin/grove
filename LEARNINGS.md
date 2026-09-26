@@ -26,6 +26,47 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-26 · A one-shot pane capture reads a RUNNING Claude Code
+  2.1.283 turn as idle on about half its frames** (grove-300). The
+  spinner glyph cycles `· ✢ ✳ ✶ ✻ ✽` frame by frame, and the stats'
+  `thinking/thought` suffix comes and goes, so `classifyPaneOutput`'s ✢/✽
+  + stats checks miss e.g. `✶ Crunching… (2m 41s · ↓ 14.1k tokens)` and
+  fall through to idle on the prompt + hints below (the `Detector` hides
+  this behind its hash-change upgrade; a stateless read can't). The
+  stable marker is the SHAPE: glyph, a verb with `…`, then `(<digit>` —
+  `detect.Spinning`. The finished form is `✻ Baked for 55s · done 12:13
+  AM` (no ellipsis, no parens). `esc to interrupt` no longer shows at
+  all, so it now matches only as text the operator TYPED into the box —
+  and the input caret is followed by U+00A0, not a space. Also: Claude
+  Code 2.1.283 has a `StopFailure` hook event (turn ended by an API
+  error); grove doesn't install it — the upgrade path if the pane read
+  ever proves too weak for `turn errored`.
+
+- **2026-09-25 · Claude Code v2.1.282 draws its modals with NO │ box —
+  so grove-218's picker detector had silently stopped firing on
+  everything** (grove-308). Captured live in a scratch tmux server
+  (`internal/chatweb/testdata/cc2.1.282-*.txt`): the permission prompt,
+  the AskUserQuestion menu and the idle input box are all bare lines
+  between two `─` rules. `DetectPicker` required a `│` left edge, so the
+  phone never got a key row — the operator's "blocked by AskUserQuestion"
+  was detection, not the key set. The ticket's premise was also wrong in
+  the other direction: a **digit ANSWERS a single-select outright** (no
+  Enter), a **digit TOGGLES a multi-select row** (Space/Enter also toggle
+  the caret row; neither submits), and a multi-select (or any
+  multi-question call) is submitted by **Tab** to its `✔ Submit` page —
+  itself a numbered menu (`1. Submit answers / 2. Cancel`) with no
+  "Esc to cancel" footer. The single-select `Type something.` row's digit
+  moves the caret into an inline text input (paste + Enter answers it,
+  verified); the multi-select one is a checkbox with no input behind it.
+  So the phone needed `tab`, not Enter/Space. The unboxed rule anchors on
+  what the transcript never carries: the `❯` caret ON an option, plus the
+  modal's chrome (`Esc to cancel` below, or the `← … ✔ Submit →` tab bar
+  above). **Knock-on, not fixed here:** `internal/tmux`'s verified-submit
+  (`inputBoxContent`/`pasteLanded`) also keys on `│` sides, so on this
+  chrome it finds no box and calls every relay landed — the grove-144
+  "delivered is not submitted" guard is a no-op until it learns the ─-rule
+  input box.
+
 - **2026-09-06 · GLM 5.3 Flash via the Anthropic protocol returns zero
   text unless `thinking` is disabled** (grove-288, `gv sub` bake-off
   against api.z.ai). A `/v1/messages` call with no `thinking` field (or
@@ -409,6 +450,22 @@
   (a stub drawing the v2 chrome — verified it fails on the old finder).
   Lesson: a permissive fallback needs a tripwire per chrome generation,
   or it silently becomes the main path.
+
+- **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
+  folder-trust dialog's default is `No, exit`** (grove-333). The relay is
+  paste + Enter; a modal eats the paste and takes the Enter as "confirm
+  the highlighted row". A phone-spawned chat in a new directory opens on
+  the trust dialog (2.1.283: unnumbered `❯ No, exit` / `Yes, I trust this
+  folder`, footer `Enter to confirm · Esc to cancel`), so the first thing
+  typed into it killed claude. Two lessons: (1) every Enter the binary
+  presses must be aimed — gate it on a fresh capture that shows no modal;
+  (2) detectors that answer the same question must be one function
+  (`DetectPicker` needed digits and said "not waiting" while
+  `ClassifyTurn` said "waiting"; `chatweb.Waiting` is now the one answer).
+  Verified on the live dialog (isolated tmux, scratch cwd): digits do
+  nothing there, `send-keys -l $'\x1b[B'` moves the caret, and Esc
+  ("Esc to cancel") exits claude exactly like `No, exit` — so esc is not
+  a safe dismiss for it either (the phone draws no esc on a select menu).
 - **2026-07-29 · `paste-buffer` then `send-keys Enter` back-to-back loses
   the Enter — and "delivered" is not "submitted"** (grove-144, hit 3+
   times in one fresh-install session): the relay pasted with

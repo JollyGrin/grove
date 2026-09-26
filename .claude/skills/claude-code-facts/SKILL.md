@@ -70,6 +70,14 @@ changes the behavior.
   context, not something anyone said. A `thinking` block can arrive with a
   signature and NO text (redacted) — an empty-text block is chrome.
   `internal/chat` (grove-216) is the worked implementation.
+- **Harness wrappers are plain user lines.** Only the
+  `<local-command-caveat>` is `isMeta`; a slash command's
+  `<command-name>`/`<command-args>` echo, its `<local-command-stdout>`, a
+  `!` escape's `<bash-input>`/`<bash-stdout>`, and a background task's
+  `<task-notification>` are ordinary `type: user` lines, so "first user
+  prompt" titles any chat that began with `/model` by its caveat
+  (grove-315, 2026-09-26). Classify them before treating a user line as
+  something the operator said — `internal/chat/meta.go`.
 - **Following a transcript is a byte offset, not a diff** — it is
   append-only. Consume COMPLETE lines only (a terminatorless trailing line
   is the writer mid-append), with `bufio.Reader`; `bufio.Scanner` silently
@@ -98,6 +106,26 @@ changes the behavior.
 - `--continue` chains key on **cwd** — per-profile subdirs
   (`.grove/orchestrator/<profile>/`) give each backend its own chain, and
   CLAUDE.md still applies (memory loads recurse up ancestor dirs).
+
+## Modals in the pane (v2.1.282, grove-308)
+
+- Permission prompts, AskUserQuestion and the input box are **unboxed**:
+  bare lines between `─` rules, no `│`. Any scrape keyed on box sides
+  (picker detection, verified-submit) finds nothing.
+- AskUserQuestion: a digit **answers** a single-select; a digit
+  **toggles** a multi-select row; **Tab** walks the `← ☐ A ☐ B ✔ Submit →`
+  pages, and the Submit page is a numbered menu (`1. Submit answers`)
+  with no footer. Enter/Space are never needed from a remote surface.
+- `Type something.` (single-select) moves the caret into an inline text
+  input — a bracketed paste + Enter answers it. In a multi-select it is a
+  checkbox with no input.
+- Captures: `internal/chatweb/testdata/cc2.1.282-*.txt`.
+- **Running vs idle from one capture (2.1.283, grove-300):** the spinner
+  glyph cycles `· ✢ ✳ ✶ ✻ ✽`, so match the line's SHAPE — glyph, verb
+  with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
+  the finished form. `esc to interrupt` is gone; the input caret is
+  followed by U+00A0. No hook fires when a pane dies, and an API-error end
+  fires `StopFailure` (not installed by grove) — not `Stop`.
 
 ## Profiles and config dirs
 

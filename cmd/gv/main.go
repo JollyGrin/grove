@@ -121,6 +121,8 @@ const usage = `gv — grove
   gv                                          cockpit: dashboard left, orchestrator chats right
   gv orchestrator new [--profile p]           add an orchestrator chat pane (O in the TUI; ) for a profiled one);
                                               --profile opens it on a model profile instead of Claude
+  gv orchestrator new --model m               pin the chat to a tier (opus|sonnet|haiku, or orchestrator.models);
+                                              with --profile it runs that profile's slug for the tier
   gv orchestrator new --resume <id>           revive an archived chat by Claude session id, detached in its
                                               own grove-chat-<label>-<n> (it opens idle, awaiting input)
   gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
@@ -136,6 +138,8 @@ const usage = `gv — grove
                                               --follow streams appends, --since N resumes after entry N
   gv chat send <s> "<text>"                   relay text into a live chat and verify it SUBMITTED
   gv chat keys <s> <chars>                    raw keystroke, no Enter (option pickers / permission prompts)
+  gv chat close <s> [--host H]                end a live chat (kills its claude process); the transcript
+                                              stays in history, revivable with gv orchestrator new --resume
   gv chat serve [--port 3000] [--bind ADDR]   phone UI for those chats on http://127.0.0.1:3000 — loopback by
                                               default and no auth of its own, so put it behind
                                               "tailscale serve --bg 3000". Off unless invoked; ^C stops it
@@ -368,7 +372,10 @@ func main() {
 	// "--host pc" (`gv nudge grove-7 try gv ls --host pc`), and
 	// string-scanning the whole argv would hijack it. Every other
 	// supported verb takes flags only, so whole-argv scanning is safe.
-	if remote.Supported[cmd] {
+	// `chat` relays only its `close` verb (grove-294): send's free text may
+	// legitimately contain "--host pc", so the other chat verbs keep the
+	// unsupported-verb path below rather than a whole-argv scan.
+	if remote.Supported[cmd] && (cmd != "chat" || (len(args) > 0 && args[0] == "close")) {
 		var host string
 		var rest []string
 		if cmd == "answer" || cmd == "nudge" {
@@ -1068,6 +1075,7 @@ func cmdOrchestratorNew(args []string) error {
 	briefFileFlag := fs.String("brief-file", "", "read the standing brief from this file (its text is what travels)")
 	opFlag := fs.String("op-id", "", "idempotency receipt for a relayed spawn — the same id twice spawns once")
 	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
+	modelFlag := fs.String("model", "", "pin the chat to one of orchestrator.models' tiers (default opus|sonnet|haiku); on a --profile it picks that tier's slug")
 	_ = fs.Parse(args)
 
 	if err := chatResumeConflict(*profileFlag, *resumeFlag); err != nil {
@@ -1094,7 +1102,7 @@ func cmdOrchestratorNew(args []string) error {
 	// registered workspace twin, not a pane in this machine's cockpit.
 	if label != "" {
 		return spawnWorkspaceChat(chatSpawnReq{
-			Label: label, Profile: *profileFlag, Resume: *resumeFlag,
+			Label: label, Profile: *profileFlag, Model: *modelFlag, Resume: *resumeFlag,
 			Brief: brief, OpID: *opFlag, Host: *asFlag,
 		})
 	}
@@ -1103,7 +1111,7 @@ func cmdOrchestratorNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, brief)
+	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, brief, *modelFlag)
 	if err != nil {
 		return err
 	}
@@ -1118,13 +1126,18 @@ func cmdOrchestratorNew(args []string) error {
 // Ambient-scoped (cockpit design §4.6 happy path): the pane joins the
 // invoking workspace's cockpit and its gv calls hit that fleet.
 func spawnOrchestrator(cfg *config.Config) (string, error) {
-	return spawnOrchestratorBrief(cfg, "")
+	return spawnOrchestratorBrief(cfg, "", "")
 }
 
 // spawnOrchestratorBrief is spawnOrchestrator with grove-271's standing
 // brief. The TUI's O keybind has no place to type one, so the injected
 // hook keeps its two-argument shape and only the CLI reaches this.
-func spawnOrchestratorBrief(cfg *config.Config, brief string) (string, error) {
+// model (grove-293) pins a tier ("" = the host default); like a brief, a
+// pin needs a pane of its own, never the cockpit's `--continue` first pane.
+func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, error) {
+	if err := cfg.CheckOrchestratorModel(model); err != nil {
+		return "", err
+	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
 	dir := orchestratorDirFor(ws, cfg)
@@ -1140,7 +1153,7 @@ func spawnOrchestratorBrief(cfg *config.Config, brief string) (string, error) {
 		// place in it. An unbriefed spawn is done here — it built the
 		// pane that was asked for — and a briefed one falls through to a
 		// pane of its own, exactly as the profiled twin does.
-		if brief == "" {
+		if brief == "" && model == "" {
 			return "cockpit built — gv attaches", nil
 		}
 	}
@@ -1157,7 +1170,8 @@ func spawnOrchestratorBrief(cfg *config.Config, brief string) (string, error) {
 		})
 	}
 
-	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), dir, brief, nil)
+	bare := config.PinModel(orchestratorLaunch(cfg, root), model)
+	launch, id, err := mintedOrchestratorLaunch(bare, dir, brief, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1166,7 +1180,9 @@ func spawnOrchestratorBrief(cfg *config.Config, brief string) (string, error) {
 		return "", err
 	}
 	stampOrchestratorPane(paneID, id)
-	return "✓ new orchestrator chat pane", nil
+	runs := chatRunsModel(cfg, bare, nil)
+	tagOrchestratorPaneModel(paneID, runs)
+	return "✓ new orchestrator chat pane" + chatModelSuffix(runs), nil
 }
 
 // mintedOrchestratorLaunch is grove-222 applied to a cockpit pane: mint the
@@ -1224,18 +1240,21 @@ func stampOrchestratorPane(pane, id string) {
 // pane's fresh launch runs wrapped in the profile's backend
 // (orchestratorLaunchProfile), never the operator's own Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
-	return spawnOrchestratorProfileBrief(cfg, profileName, "")
+	return spawnOrchestratorProfileBrief(cfg, profileName, "", "")
 }
 
 // spawnOrchestratorProfileBrief is that twin carrying grove-271's standing
 // brief — the CLI's entry point; the TUI hook above stays brief-less.
-func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief string) (string, error) {
+func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief, model string) (string, error) {
 	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
 		return "", err
 	}
 	if p == nil {
-		return spawnOrchestratorBrief(cfg, brief)
+		return spawnOrchestratorBrief(cfg, brief, model)
+	}
+	if err := cfg.CheckOrchestratorModel(model); err != nil {
+		return "", err
 	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
@@ -1275,7 +1294,10 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief string
 	}
 	// The brief lives under the BRAIN dir, not the per-profile cwd: one
 	// briefs/ per workspace, keyed by session id, whichever backend ran it.
-	launch, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, root), baseDir, brief, p)
+	// grove-293: the pin goes on the BARE launch, before the wrap, so
+	// WrapProfile reads it and exports that tier's slug.
+	bare := config.PinModel(orchestratorLaunch(cfg, root), model)
+	launch, id, err := mintedOrchestratorLaunch(bare, baseDir, brief, p)
 	if err != nil {
 		return "", err
 	}
@@ -1284,6 +1306,7 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief string
 		return "", err
 	}
 	stampOrchestratorPane(paneID, id)
+	tagOrchestratorPaneModel(paneID, chatRunsModel(cfg, bare, p))
 	// Best-effort visual tag: label the new pane with its profile and turn on
 	// the cockpit window's pane borders so a profiled orchestrator is
 	// distinguishable from the default Anthropic pane it shares the window

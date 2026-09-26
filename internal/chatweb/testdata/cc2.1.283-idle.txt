@@ -1,0 +1,59 @@
+      147 +                                e.Kind, e.Tool = EntryMeta, tool
+      148 +                        }
+      149 +                }
+      150                  if e.Kind != EntryToolUse && strings.TrimSpace(e.Text) == "" {
+      151                          // An empty text/thinking block is chrome (a redacted thinking
+      152                          // block carries a signature and no text); a tool_use with no
+  ⎿  … 9 more files changed
+
+  Searched for 1 pattern, ran 1 shell command
+
+⏺ Bash(python3 - <<'EOF'
+      import re…)
+  ⎿  18:                        label, lastActive = chatLabel(lp.configDir, lp.pane.Dir, s), s.ModTime
+     24:                }.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
+     35:                                row.Label = chatLabel(cfgDir, dir, s)
+     … +3 lines
+  ⎿  Updated cmd/gv/chat_ls.go (+1 -5)
+      370                                          continue
+      371                                  }
+      372                                  claimed[s.ID] = true
+      373 -<<<<<<< HEAD
+      373                                  row := chat.ArchivedRow(ws.Label, s)
+      374                                  row.Label = chatLabel(cfgDir, dir, s)
+      376 -                                recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir})
+      377 -=======
+      378 -                                recs = append(recs, chatRecord{Row: chat.ArchivedRow(ws.Label, s), Dir: dir, ConfigDi
+          -r: cfgDir, Root: ws.Root})
+      379 ->>>>>>> a6abd3e (grove-294: gv chat close + phone "End chat" — end a live chat from outside)
+      375 +                                recs = append(recs, chatRecord{Row: row, Dir: dir, ConfigDir: cfgDir, Root: ws.Root})
+      376                          }
+      377                  }
+      378          }
+  ⎿  1 skill available
+
+⏺ Conflict resolved: both the live and archived rows keep chatLabel(...) and Root. TASKS.md isn't touched by my branch, so chat-ux's
+  copy carries through as-is. Running the gate and e2e now.
+
+  Ran 3 shell commands
+
+⏺ PR #321 is rebased on the current origin/chat-ux, force-pushed (head 1c47723), and GitHub now reports it as mergeable.
+
+  - cmd/gv/chat_ls.go: the archived row keeps #320's label (row := chat.ArchivedRow(ws.Label, s); row.Label = chatLabel(cfgDir, dir,
+    s)) and now also carries Root: ws.Root. The live row keeps both chatLabel(...) and Root: lp.ws.Root.
+  - TASKS.md: my branch never touched it, so chat-ux's rows carry through unchanged. There was nothing to merge.
+
+  go build, go vet and go test ./... pass and gofmt -l . is empty. e2e/chat.sh and e2e/plugin.sh pass on isolated tmux servers, and the
+  real-server canary is unchanged. I made no other changes.
+
+  STATUS: DONE — Rebased PR #321 onto origin/chat-ux and resolved the cmd/gv/chat_ls.go conflict: both the archived and live rows keep
+  #320's chatLabel(...) label and my Root field, and TASKS.md stays as chat-ux has it. build/vet/test, gofmt, e2e/chat.sh and
+  e2e/plugin.sh all pass; force-pushed to 1c47723, and GitHub reports the PR as mergeable.
+
+✻ Baked for 55s · done 12:13 AM
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL ~/git/.worktrees/grove/grove-294-gv-chat-close-end-an-arbitrary (grove-294-gv-chat-close-end-an-arbitrary) Opus 5.5 ctx:1…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #321 · ← for agents

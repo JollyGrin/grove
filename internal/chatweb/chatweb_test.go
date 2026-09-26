@@ -8,10 +8,14 @@ package chatweb_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,16 +28,23 @@ import (
 
 // fakeBackend records what it was asked and answers what it was told to.
 type fakeBackend struct {
-	mu       sync.Mutex
-	rows     []chat.Row
-	chatsErr error
+	mu         sync.Mutex
+	rows       []chat.Row
+	chatsErr   error
+	chatsCalls int
 
 	lines    []string // JSONL the tail emits, one per element
 	tailErr  error
 	tailHold bool // keep --follow open until the request context ends
 
 	sendErr, keysErr, spawnErr error
+	sendWarn                   string
+	keySeq                     []string // every literal Keys was sent, in order
+	closeErr                   error
+	closed                     string
 	picker                     chatweb.Picker
+	turns                      []chatweb.Turn // one per Turn call; the last repeats
+	turnCalls                  int
 	newSession                 string
 	profiles                   []string
 	profilesErr                error
@@ -42,12 +53,40 @@ type fakeBackend struct {
 	keyTo, keyLit    string
 	spawned, resumed string
 	spawnProfile     string
+	spawnModel       string
+	options          []chatweb.NewChatOption
+	optionsErr       error
+	optionsFor       string
 	tailTarget       string
 	tailSince        int
 	tailFollow       bool
+	workspaces       []string
+	workspacesErr    error
+	pane             string
+	paneErr          error
+	paneFor          string
 }
 
-func (f *fakeBackend) Chats() ([]chat.Row, error) { return f.rows, f.chatsErr }
+func (f *fakeBackend) Workspaces() ([]string, error) { return f.workspaces, f.workspacesErr }
+
+func (f *fakeBackend) Pane(target string) (string, error) {
+	f.paneFor = target
+	return f.pane, f.paneErr
+}
+
+func (f *fakeBackend) Chats() ([]chat.Row, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatsCalls++
+	return f.rows, f.chatsErr
+}
+
+// setRows swaps the list under a running feed.
+func (f *fakeBackend) setRows(rows []chat.Row) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows = rows
+}
 
 func (f *fakeBackend) Tail(ctx context.Context, target string, since int, follow bool, w io.Writer) error {
 	f.mu.Lock()
@@ -77,21 +116,38 @@ func (f *fakeBackend) Tail(ctx context.Context, target string, since int, follow
 	return nil
 }
 
-func (f *fakeBackend) Send(target, text string) error {
+func (f *fakeBackend) Send(target, text string) (string, error) {
 	f.sentTo, f.sentText = target, text
-	return f.sendErr
+	return f.sendWarn, f.sendErr
 }
 
 func (f *fakeBackend) Keys(target, literal string) error {
 	f.keyTo, f.keyLit = target, literal
+	f.keySeq = append(f.keySeq, literal)
 	return f.keysErr
 }
 
 func (f *fakeBackend) Picker(string) chatweb.Picker { return f.picker }
 
-func (f *fakeBackend) NewChat(label, profile string) (string, error) {
-	f.spawned, f.spawnProfile = label, profile
+func (f *fakeBackend) Turn(string) chatweb.Turn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.turns) == 0 {
+		return chatweb.Turn{State: chatweb.TurnUnknown}
+	}
+	i := min(f.turnCalls, len(f.turns)-1)
+	f.turnCalls++
+	return f.turns[i]
+}
+
+func (f *fakeBackend) NewChat(label, profile, model string) (string, error) {
+	f.spawned, f.spawnProfile, f.spawnModel = label, profile, model
 	return f.newSession, f.spawnErr
+}
+
+func (f *fakeBackend) NewChatOptions(label string) ([]chatweb.NewChatOption, error) {
+	f.optionsFor = label
+	return f.options, f.optionsErr
 }
 
 func (f *fakeBackend) Profiles() ([]string, error) { return f.profiles, f.profilesErr }
@@ -99,6 +155,11 @@ func (f *fakeBackend) Profiles() ([]string, error) { return f.profiles, f.profil
 func (f *fakeBackend) Resume(target string) (string, error) {
 	f.resumed = target
 	return f.newSession, f.spawnErr
+}
+
+func (f *fakeBackend) Close(target string) error {
+	f.closed = target
+	return f.closeErr
 }
 
 func id(s string) *string { return &s }
@@ -162,6 +223,26 @@ func TestServesEmbeddedUI(t *testing.T) {
 	// client would then try to parse as JSON.
 	if w := get(t, h, "/nope"); w.Code != 404 {
 		t.Errorf("GET /nope = %d, want 404", w.Code)
+	}
+}
+
+// grove-296: the manifest must be servable at all (Chrome refuses to
+// install a page whose manifest fetch fails), with a JSON content type
+// (Go's mime table has no .webmanifest, and a host with no /etc/mime.types
+// entry for .json would otherwise serve application/octet-stream, which
+// Chrome also refuses) and the CSP that allows Chrome to fetch it in the
+// first place.
+func TestServesManifest(t *testing.T) {
+	h := chatweb.NewServer(&fakeBackend{})
+	w := get(t, h, "/manifest.json")
+	if w.Code != 200 {
+		t.Fatalf("GET /manifest.json = %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("GET /manifest.json Content-Type = %q, want application/json", ct)
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "manifest-src 'self'") {
+		t.Errorf("GET /manifest.json CSP = %q, want it to carry manifest-src 'self'", csp)
 	}
 }
 
@@ -338,7 +419,7 @@ func TestSendRejectsEmptyAndGarbage(t *testing.T) {
 // --- keys ---
 
 func TestKeys(t *testing.T) {
-	b := &fakeBackend{}
+	b := &fakeBackend{picker: chatweb.Picker{Detected: true, Keys: []string{"1", "2", "esc"}}}
 	w := post(t, chatweb.NewServer(b), "/api/chats/grove-chat-unbrewed-1/keys", `{"key":"2"}`)
 	if w.Code != 200 || b.keyLit != "2" {
 		t.Fatalf("status %d, literal %q: %s", w.Code, b.keyLit, w.Body)
@@ -363,6 +444,82 @@ func TestKeysRefusesAnythingButAPickerKey(t *testing.T) {
 	}
 	if b.keyTo != "" {
 		t.Errorf("a refused key still reached the pane: %q/%q", b.keyTo, b.keyLit)
+	}
+}
+
+// grove-308: a menu-only key is gated on a FRESH capture, not on the key
+// alone. The backend's pane here is a real capture run through the real
+// detector, so the test fails if detection and the gate ever disagree.
+func TestKeysMenuKeyNeedsAMenuOnThePane(t *testing.T) {
+	bare := "────\n❯ \n────\n  ? for shortcuts"
+	b := &fakeBackend{picker: chatweb.DetectPicker(bare)}
+	h := chatweb.NewServer(b)
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != http.StatusConflict {
+		t.Errorf("tab into a bare prompt = %d, want 409: %s", w.Code, w.Body)
+	}
+	// Space is never a raw key; Enter is a menu key (grove-333) and a
+	// bare prompt offers none, so it is refused without reaching the pane.
+	for _, k := range []string{"space", " ", "\r"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
+			t.Errorf("%q into a bare prompt = %d, want 400", k, w.Code)
+		}
+	}
+	for _, k := range []string{"enter", "up", "down"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%q into a bare prompt = %d, want 409", k, w.Code)
+		}
+	}
+	if b.keyTo != "" {
+		t.Fatalf("a refused key still reached the pane: %q", b.keyLit)
+	}
+
+	twoq, err := os.ReadFile("testdata/cc2.1.282-twoq.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.picker = chatweb.DetectPicker(string(twoq))
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != 200 || b.keyLit != "\t" {
+		t.Errorf("tab into a tabbed menu = %d, literal %q: %s", w.Code, b.keyLit, w.Body)
+	}
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"space"}`); w.Code != 400 {
+		t.Errorf("space into a menu = %d, want 400", w.Code)
+	}
+	// A numbered menu does not offer Enter (a digit answers it).
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"enter"}`); w.Code != http.StatusConflict {
+		t.Errorf("enter into a numbered menu = %d, want 409", w.Code)
+	}
+}
+
+// grove-318: a digit is gated like tab. Into the idle input box it would
+// type itself there; into a menu it answers. Esc stays ungated — the stop
+// button sends it mid-turn, with no picker on the pane.
+func TestKeysDigitNeedsAPickerOnThePane(t *testing.T) {
+	idle := "────\n❯ \n────\n  ? for shortcuts"
+	b := &fakeBackend{picker: chatweb.DetectPicker(idle)}
+	h := chatweb.NewServer(b)
+	for _, k := range []string{"1", "y", "n"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%q into the idle box = %d, want 409: %s", k, w.Code, w.Body)
+		}
+	}
+	if b.keyTo != "" {
+		t.Fatalf("a refused key still reached the pane: %q", b.keyLit)
+	}
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"esc"}`); w.Code != 200 || b.keyLit != "\x1b" {
+		t.Errorf("esc into the idle box = %d, literal %q: esc is never gated", w.Code, b.keyLit)
+	}
+
+	single, err := os.ReadFile("testdata/cc2.1.282-single.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.picker = chatweb.DetectPicker(string(single))
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"2"}`); w.Code != 200 || b.keyLit != "2" {
+		t.Errorf("2 into a menu = %d, literal %q: %s", w.Code, b.keyLit, w.Body)
+	}
+	// A digit the menu does not offer is refused too.
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"7"}`); w.Code != http.StatusConflict {
+		t.Errorf("7 into a four-option menu = %d, want 409", w.Code)
 	}
 }
 
@@ -676,4 +833,261 @@ func lastEventID(t *testing.T, body string) int {
 		}
 	}
 	return last
+}
+
+// grove-294: End chat. A POST with no meaningful body; a refusal comes back
+// as the CLI's own words with a 409, and a cross-origin form post (no JSON
+// content type) never reaches the backend — the same gate as /send.
+func TestCloseRoute(t *testing.T) {
+	b := &fakeBackend{}
+	h := chatweb.NewServer(b)
+	w := post(t, h, "/api/chats/grove-chat-unbrewed-1/close", `{}`)
+	if w.Code != 200 || b.closed != "grove-chat-unbrewed-1" {
+		t.Fatalf("close: %d %s (closed %q)", w.Code, w.Body, b.closed)
+	}
+
+	b = &fakeBackend{closeErr: fmt.Errorf("grove-unbrewed is the cockpit's own orchestrator pane (kind cockpit)")}
+	w = post(t, chatweb.NewServer(b), "/api/chats/grove-unbrewed/close", `{}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "kind cockpit") {
+		t.Fatalf("refused close: %d %s", w.Code, w.Body)
+	}
+
+	b = &fakeBackend{}
+	r := httptest.NewRequest("POST", "/api/chats/grove-chat-unbrewed-1/close", strings.NewReader(""))
+	r.Header.Set("Content-Type", "text/plain")
+	rw := httptest.NewRecorder()
+	chatweb.NewServer(b).ServeHTTP(rw, r)
+	if rw.Code != 415 || b.closed != "" {
+		t.Fatalf("form-type close: %d, closed %q — want 415 and no backend call", rw.Code, b.closed)
+	}
+
+	if w := get(t, chatweb.NewServer(b), "/api/chats/grove-chat-unbrewed-1/close"); w.Code != 405 || b.closed != "" {
+		t.Fatalf("GET close: %d, closed %q — want 405 and no backend call", w.Code, b.closed)
+	}
+}
+
+// grove-293: the tier a phone picked reaches the spawn unchanged, and every
+// "no choice" spelling — absent body, {}, an empty model — is the host
+// default, byte-compatible with a pre-293 client.
+func TestNewChatCarriesTheModel(t *testing.T) {
+	cases := []struct{ name, body, model, profile string }{
+		{"no body", "", "", ""},
+		{"empty object", `{}`, "", ""},
+		{"explicit default", `{"model":""}`, "", ""},
+		{"a tier", `{"model":"opus"}`, "opus", ""},
+		{"a tier on a profile", `{"profile":"glm","model":"haiku"}`, "haiku", "glm"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := &fakeBackend{newSession: "grove-chat-unbrewed-2"}
+			w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", c.body)
+			if w.Code != 200 || b.spawnModel != c.model || b.spawnProfile != c.profile {
+				t.Fatalf("status %d, spawned %q/%q, want %q/%q", w.Code, b.spawnProfile, b.spawnModel, c.profile, c.model)
+			}
+		})
+	}
+	// An unknown tier is the CLI's own words with a 409, like a profile.
+	b := &fakeBackend{spawnErr: errors.New(`unknown model "opsu" (configured: opus, sonnet, haiku — add it to orchestrator.models to allow it)`)}
+	w := post(t, chatweb.NewServer(b), "/api/workspaces/unbrewed/new", `{"model":"opsu"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `unknown model \"opsu\"`) {
+		t.Fatalf("unknown tier = %d %s", w.Code, w.Body)
+	}
+}
+
+// grove-293: the sheet's rows ride the contract envelope; none is [] and a
+// 200; an unknown workspace is a 404; it is a READ (POST is 405).
+func TestModelsRoute(t *testing.T) {
+	b := &fakeBackend{options: []chatweb.NewChatOption{
+		{Runs: "account default"}, {Model: "opus", Runs: "opus"}, {Profile: "glm", Runs: "glm-4.6"},
+	}}
+	h := chatweb.NewServer(b)
+	w := get(t, h, "/api/workspaces/unbrewed/models")
+	if w.Code != 200 || b.optionsFor != "unbrewed" {
+		t.Fatalf("GET models = %d for %q", w.Code, b.optionsFor)
+	}
+	var env struct {
+		SchemaVersion int                     `json:"schema_version"`
+		Models        []chatweb.NewChatOption `json:"models"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.SchemaVersion == 0 || len(env.Models) != 3 || env.Models[2].Runs != "glm-4.6" {
+		t.Fatalf("envelope = %s (%v)", w.Body, err)
+	}
+	if !strings.Contains(w.Body.String(), `{"profile":"","model":"","runs":"account default"}`) {
+		t.Fatalf("every field must be present on every row: %s", w.Body)
+	}
+
+	w = get(t, chatweb.NewServer(&fakeBackend{}), "/api/workspaces/unbrewed/models")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"models":[]`) {
+		t.Fatalf("none = %d %s, want 200 and []", w.Code, w.Body)
+	}
+	w = get(t, chatweb.NewServer(&fakeBackend{optionsErr: errors.New(`no registered workspace "x"`)}), "/api/workspaces/x/models")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown workspace = %d", w.Code)
+	}
+	if w := post(t, h, "/api/workspaces/unbrewed/models", `{}`); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST models = %d, want 405", w.Code)
+	}
+}
+
+// grove-334: home lists every registered workspace, chats or not.
+func TestWorkspacesRoute(t *testing.T) {
+	h := chatweb.NewServer(&fakeBackend{workspaces: []string{"grove", "sb"}})
+	w := get(t, h, "/api/workspaces")
+	if w.Code != 200 {
+		t.Fatalf("GET /api/workspaces = %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Workspaces []string `json:"workspaces"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !reflect.DeepEqual(got.Workspaces, []string{"grove", "sb"}) {
+		t.Fatalf("body %s (%v)", w.Body, err)
+	}
+	// None registered is [] — never null, never an error.
+	w = get(t, chatweb.NewServer(&fakeBackend{}), "/api/workspaces")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"workspaces":[]`) {
+		t.Fatalf("empty registry = %d %s", w.Code, w.Body)
+	}
+	if w := post(t, h, "/api/workspaces", "{}"); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/workspaces = %d, want 405", w.Code)
+	}
+}
+
+// grove-334: "show pane" is the bottom PaneLines of one capture, read-only.
+func TestPaneRoute(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 50; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	f := &fakeBackend{pane: strings.Join(lines, "\n") + "\n\n\n"}
+	h := chatweb.NewServer(f)
+	w := get(t, h, "/api/chats/grove-chat-sb-1/pane")
+	if w.Code != 200 {
+		t.Fatalf("GET pane = %d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Pane string `json:"pane"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if f.paneFor != "grove-chat-sb-1" {
+		t.Errorf("read pane of %q", f.paneFor)
+	}
+	want := strings.Join(lines[50-chatweb.PaneLines:], "\n")
+	if got.Pane != want {
+		t.Errorf("pane = %q, want the bottom %d lines", got.Pane, chatweb.PaneLines)
+	}
+	f.paneErr = fmt.Errorf("grove-chat-sb-1 has no live pane")
+	if w := get(t, h, "/api/chats/grove-chat-sb-1/pane"); w.Code != 404 || !strings.Contains(w.Body.String(), "no live pane") {
+		t.Errorf("paneless chat = %d %s", w.Code, w.Body)
+	}
+	if w := post(t, h, "/api/chats/grove-chat-sb-1/pane", "{}"); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST pane = %d, want 405", w.Code)
+	}
+}
+
+// --- grove-333: never send into a modal ---
+
+// sendFixture is a backend whose pane is a real capture, read through the
+// real detectors — so the gate and the detectors cannot drift apart.
+func sendFixture(t *testing.T, name string) *fakeBackend {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := string(raw)
+	return &fakeBackend{picker: chatweb.DetectPicker(c), turns: []chatweb.Turn{chatweb.ClassifyTurn(c, true)}}
+}
+
+func TestSendRefusesAModal(t *testing.T) {
+	// The folder-trust dialog: an Enter here picks "No, exit" and the chat
+	// is gone. And the numbered permission prompt, for the older shape.
+	for _, name := range []string{"cc2.1.283-trust.txt", "cc2.1.282-perm.txt", "cc2.1.282-single.txt"} {
+		b := sendFixture(t, name)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hello"}`)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "answer it first") {
+			t.Errorf("%s: send = %d %s, want 409 naming the prompt", name, w.Code, w.Body)
+		}
+		if b.sentTo != "" || len(b.keySeq) != 0 {
+			t.Errorf("%s: a refused send still reached the pane: %q %q", name, b.sentText, b.keySeq)
+		}
+	}
+}
+
+func TestSendIntoAnIdleOrTypingPane(t *testing.T) {
+	// Idle is the ordinary case; AskUserQuestion's free-text row is the
+	// one modal a send answers.
+	for _, name := range []string{"cc2.1.283-idle.txt", "cc2.1.283-idle-typed.txt", "cc2.1.282-typesomething.txt"} {
+		b := sendFixture(t, name)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hello"}`)
+		if w.Code != 200 || b.sentText != "hello" {
+			t.Errorf("%s: send = %d %s", name, w.Code, w.Body)
+		}
+	}
+}
+
+func TestSendSurfacesARelayWarning(t *testing.T) {
+	b := &fakeBackend{sendWarn: "⚠ sent, but no consumption evidence within 15s — check the pane"}
+	w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hi"}`)
+	var got map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != 200 || got["sent"] != true || got["warning"] != b.sendWarn {
+		t.Fatalf("send = %d %v, want sent + the relay's warning", w.Code, got)
+	}
+	clean := &fakeBackend{}
+	w = post(t, chatweb.NewServer(clean), "/api/chats/c/send", `{"text":"hi"}`)
+	if strings.Contains(w.Body.String(), "warning") {
+		t.Errorf("a clean send carries a warning: %s", w.Body)
+	}
+}
+
+func TestEnterOnlyIntoASelectMenu(t *testing.T) {
+	trust := sendFixture(t, "cc2.1.283-trust.txt")
+	if w := post(t, chatweb.NewServer(trust), "/api/chats/c/keys", `{"key":"enter"}`); w.Code != 200 || trust.keyLit != "\r" {
+		t.Errorf("enter into the trust dialog = %d, literal %q", w.Code, trust.keyLit)
+	}
+	if w := post(t, chatweb.NewServer(trust), "/api/chats/c/keys", `{"key":"down"}`); w.Code != 200 || trust.keyLit != "\x1b[B" {
+		t.Errorf("down into the trust dialog = %d, literal %q", w.Code, trust.keyLit)
+	}
+	idle := sendFixture(t, "cc2.1.283-idle.txt")
+	for _, k := range []string{"enter", "up", "down"} {
+		if w := post(t, chatweb.NewServer(idle), "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%s into an idle box = %d, want 409", k, w.Code)
+		}
+	}
+	if len(idle.keySeq) != 0 {
+		t.Errorf("a refused key reached the idle pane: %q", idle.keySeq)
+	}
+}
+
+func TestOptionWalksTheCaret(t *testing.T) {
+	cases := []struct {
+		fixture, body string
+		want          []string
+	}{
+		// Caret on option 1: option 2 is one down, then Enter.
+		{"cc2.1.283-trust.txt", `{"option":2}`, []string{"\x1b[B", "\r"}},
+		{"cc2.1.283-trust.txt", `{"option":1}`, []string{"\r"}},
+		// Caret already moved to 2: option 1 is one up.
+		{"cc2.1.283-trust-down.txt", `{"option":1}`, []string{"\x1b[A", "\r"}},
+		// A numbered menu's option is its digit, no Enter.
+		{"cc2.1.282-single.txt", `{"option":2}`, []string{"2"}},
+	}
+	for _, c := range cases {
+		b := sendFixture(t, c.fixture)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/keys", c.body)
+		if w.Code != 200 || !slices.Equal(b.keySeq, c.want) {
+			t.Errorf("%s %s = %d %s, keys %q, want %q", c.fixture, c.body, w.Code, w.Body, b.keySeq, c.want)
+		}
+	}
+	for _, c := range []struct{ fixture, body string }{
+		{"cc2.1.283-trust.txt", `{"option":3}`},
+		{"cc2.1.283-idle.txt", `{"option":1}`},
+	} {
+		b := sendFixture(t, c.fixture)
+		if w := post(t, chatweb.NewServer(b), "/api/chats/c/keys", c.body); w.Code != http.StatusConflict || len(b.keySeq) != 0 {
+			t.Errorf("%s %s = %d, keys %q, want 409 and nothing sent", c.fixture, c.body, w.Code, b.keySeq)
+		}
+	}
 }
