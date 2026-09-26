@@ -15,14 +15,40 @@ func Classify(output string) (status AgentStatus, hasClaude bool) {
 	return classifyPaneOutput(output)
 }
 
-// ErrorMarker scans a pane capture for the markers that mean the turn
-// already died silently — usage limit, a sleep-cut, an API error, an
-// expired login — checked line by line so the reported line is the
-// specific matched one, not the whole capture. Moved here from
-// internal/supervise (grove-300) so the chat server reads the same list
-// the supervisor alerts on.
+// errorTail is how far up from the bottom a death marker still counts —
+// Claude Code prints its own error chrome just above the input box; a
+// marker further up is either scrollback from a turn already moved past,
+// or (grove-347) a worker's own view of source/diff content that happens
+// to quote one of these strings. Both callers window to this same depth,
+// so a full 30-line supervisor capture and chatweb's trimmed capture agree.
+const errorTail = 15
+
+// codeGutterRe matches a source or diff viewer's line-number gutter
+// (Claude Code's Read tool and diff view both prefix real content with
+// one: "    24  func...", "   363 -   case..."). grove-347: a worker
+// merely viewing internal/detect/grove.go — which quotes every marker
+// string in this file's own switch statement — flapped worker_errored/
+// worker_recovered because the old matcher counted a marker anywhere in
+// the pane. A gutter line is never Claude Code's own error chrome, which
+// prints flush left with no line-number prefix.
+var codeGutterRe = regexp.MustCompile(`^\d+\s*[-+]?\s`)
+
+// ErrorMarker scans the bottom of a pane capture for the markers that
+// mean the turn already died silently — usage limit, a sleep-cut, an API
+// error, an expired login — checked line by line, skipping any
+// source/diff line-number gutter, so the reported line is Claude Code's
+// own error chrome, never a quote of it in tool output, a file view or a
+// diff. Moved here from internal/supervise (grove-300) so the chat server
+// and the supervisor read the same list, windowed the same way (grove-347).
 func ErrorMarker(pane string) (reason, line string, ok bool) {
-	for l := range strings.SplitSeq(pane, "\n") {
+	lines := strings.Split(strings.TrimRight(pane, "\n \t"), "\n")
+	if len(lines) > errorTail {
+		lines = lines[len(lines)-errorTail:]
+	}
+	for _, l := range lines {
+		if codeGutterRe.MatchString(strings.TrimLeft(l, " \t")) {
+			continue
+		}
 		low := strings.ToLower(l)
 		switch {
 		case strings.Contains(l, "Usage limit reached"), strings.Contains(l, "Request rejected (429)"):
