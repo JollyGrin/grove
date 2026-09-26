@@ -1413,6 +1413,89 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: applica
 [ "$code" = "409" ] || fail "a digit after the menu closed answered $code, want 409"
 remote_tmux kill-session -t '=grove-chat-menuws-1' 2>/dev/null || true
 
+say "grove-333: a send into an unnumbered ❯ menu is refused; an option walks the caret"
+# The folder-trust dialog's shape (internal/chatweb/testdata/cc2.1.283-
+# trust.txt): no digits, a ❯ caret, "Enter to confirm · Esc to cancel" as
+# the last line — and a default that ends the chat. The fake reads arrow
+# keys until Enter and says which row the caret was on.
+SELWS="$SCRATCH/selws"
+mkrepo "$SELWS"
+( cd "$SELWS" && "$GV" init --yes --label selws > /dev/null )
+cat > "$SCRATCH/bin/selectclaude" <<'EOF'
+#!/usr/bin/env bash
+opts=("No, exit" "Yes, I trust this folder")
+c=0
+draw() {
+  clear
+  printf ' Is this a project you trust?\n\n'
+  for i in 0 1; do
+    if [ "$i" -eq "$c" ]; then printf ' ❯ %s\n' "${opts[$i]}"; else printf '   %s\n' "${opts[$i]}"; fi
+  done
+  printf '\n Enter to confirm · Esc to cancel\n'
+}
+draw
+while IFS= read -rsn1 k; do
+  if [ "$k" = $'\x1b' ]; then
+    read -rsn2 -t 1 rest
+    case "$rest" in
+      '[A') c=0 ;;
+      '[B') c=1 ;;
+    esac
+    draw
+  elif [ -z "$k" ] || [ "$k" = $'\r' ]; then
+    clear
+    printf 'picked: %s\n' "${opts[$c]}"
+    exec sleep 3600
+  else
+    printf 'TYPED: %s\n' "$k"
+  fi
+done
+EOF
+chmod +x "$SCRATCH/bin/selectclaude"
+cat >> "$SELWS/.grove/config.yaml" <<EOF
+orchestrator:
+  claude: $SCRATCH/bin/selectclaude
+EOF
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
+  "http://127.0.0.1:$PORT/api/workspaces/selws/new" > "$SCRATCH/new-sel.json" || { cat "$SERVE_LOG"; fail "POST new (selws) failed"; }
+grep -q '"session":"grove-chat-selws-1"' "$SCRATCH/new-sel.json" || { cat "$SCRATCH/new-sel.json"; fail "the select chat did not spawn"; }
+for _ in $(seq 1 50); do
+  remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' 2>/dev/null | grep -q 'Enter to confirm' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-before.pane"
+grep -q 'Enter to confirm' "$SCRATCH/sel-before.pane" || { cat "$SCRATCH/sel-before.pane"; fail "precondition: the fake select menu never drew"; }
+code="$(curl -s -o "$SCRATCH/sel-send.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"text":"hello"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/send")"
+[ "$code" = "409" ] || { cat "$SCRATCH/sel-send.out"; fail "a send into a modal answered $code, want 409"; }
+grep -q 'answer it first' "$SCRATCH/sel-send.out" || { cat "$SCRATCH/sel-send.out"; fail "the 409 must say a prompt is showing"; }
+rc=0
+( cd "$SELWS" && env TMUX_TMPDIR="$REMOTE_TMUX" "$GV" chat send grove-chat-selws-1 "hello" ) > "$SCRATCH/sel-cli.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -q 'answer it first' "$SCRATCH/sel-cli.out" \
+  || { cat "$SCRATCH/sel-cli.out"; fail "gv chat send into a modal must refuse too, non-zero"; }
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-after-send.pane"
+cmp -s "$SCRATCH/sel-before.pane" "$SCRATCH/sel-after-send.pane" \
+  || { diff "$SCRATCH/sel-before.pane" "$SCRATCH/sel-after-send.pane"; fail "a refused send must leave the modal untouched (no paste, no Enter)"; }
+# (The list row's `waiting` agreeing is TestMarkWaiting's: the list only
+# reads panes running a claude process, and this fake is bash.)
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"1"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "409" ] || fail "a digit into an unnumbered menu answered $code, want 409 (it offers none)"
+code="$(curl -s -o "$SCRATCH/sel-opt.out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"option":2}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "200" ] || { cat "$SCRATCH/sel-opt.out"; remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat'; fail "option 2 answered $code, want 200"; }
+grep -q '"keys":\["down","enter"\]' "$SCRATCH/sel-opt.out" || { cat "$SCRATCH/sel-opt.out"; fail "option 2 from a caret on 1 is down, enter"; }
+for _ in $(seq 1 30); do
+  remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' | grep -q 'picked:' && break
+  sleep 0.1
+done
+remote_tmux capture-pane -p -t '=grove-chat-selws-1:chat' > "$SCRATCH/sel-after.pane"
+grep -q 'picked: Yes, I trust this folder' "$SCRATCH/sel-after.pane" || { cat "$SCRATCH/sel-after.pane"; fail "the option never reached the menu"; }
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"key":"enter"}' \
+  "http://127.0.0.1:$PORT/api/chats/grove-chat-selws-1/keys")"
+[ "$code" = "409" ] || fail "enter after the menu closed answered $code, want 409"
+remote_tmux kill-session -t '=grove-chat-selws-1' 2>/dev/null || true
+
 say "POST /api/chats/<s>/resume revives an archived chat (grove-217 through HTTP)"
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' \
   "http://127.0.0.1:$PORT/api/chats/$ARCHIVED_ID/resume" > "$SCRATCH/resume-http.json" \

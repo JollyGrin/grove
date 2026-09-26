@@ -145,6 +145,21 @@
       through, and a fake claude drawing a v2.1.282-style menu takes an
       offered digit, refuses an unoffered one, and refuses again once the
       menu has closed.
+- [x] `gv chat serve`: never send into a modal + unnumbered menus + relay
+      warnings (grove-333, 2026-09-26, `chat-ux` train). A phone send into
+      Claude Code's folder-trust dialog pressed Enter on its default (`No,
+      exit`) and killed the chat. `/send` and `gv chat send` now take a
+      fresh capture and refuse (409 / non-zero) while `chatweb.Waiting`
+      says a modal is up — AskUserQuestion's free-text row excepted.
+      `DetectPicker` reads the unnumbered `❯` run with an `Enter to
+      confirm|select … Esc to cancel` last line as `kind: "select"`
+      (options + `caret`, keys up/down/enter/esc — all fresh-capture
+      gated); `/keys {"option": N}` walks the caret server-side and
+      presses Enter (a digit on numbered menus). The list row's `waiting`
+      reads the same `chatweb.Waiting`. `/send` adds `warning` when the
+      relay saw no uptake; the phone shows ⚠ instead of `sent ✓`. Also:
+      the serve's 900ms report cache re-reads once on a miss, so a chat
+      born inside the TTL is not invisible to the picker.
 - [x] `gv chat serve`: optimistic pending bubble + per-chat drafts
       (grove-316, 2026-09-26, `chat-ux` train). A send shows at once as a
       dimmed `sending…`/`sent ✓` bubble and the composer stays free; the

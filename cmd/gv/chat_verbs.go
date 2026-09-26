@@ -34,6 +34,7 @@ import (
 	"syscall"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -177,17 +178,9 @@ func cmdChatSend(args []string) error {
 	if text == "" {
 		return fmt.Errorf("empty message — nothing sent")
 	}
-	pane, row, err := writableChat(args[0])
+	warn, row, err := relayChat(args[0], text)
 	if err != nil {
 		return err
-	}
-	// PasteText is the whole grove-144 sequence: bracketed paste, settle,
-	// separate Enter, verify, one retry Enter, then a loud error. An error
-	// here means the agent never got the text — which is why nothing is
-	// printed or recorded on this path.
-	warn, err := tmux.PasteText(pane, text)
-	if err != nil {
-		return fmt.Errorf("gv chat send to %s: %w", row.Session, err)
 	}
 	// A verified submit with no sign of uptake still succeeded — but the
 	// operator hears about it, on stderr so ✓ and any --json stay clean.
@@ -196,6 +189,33 @@ func cmdChatSend(args []string) error {
 	}
 	fmt.Printf("✓ sent to %s\n", row.Session)
 	return nil
+}
+
+// relayChat is the send path the CLI and the phone share: the writable
+// gate, then the modal gate on a FRESH capture (grove-333), then
+// PasteText — the whole grove-144 sequence: bracketed paste, settle,
+// separate Enter, verify, one retry Enter, then a loud error. An error
+// here means the agent never got the text.
+//
+// The modal gate exists because that Enter is not aimed: into a modal it
+// picks whatever the caret is on, and the folder-trust dialog's caret
+// starts on "No, exit". An unreadable pane is not a modal — the relay's
+// own checks still stand behind it.
+func relayChat(target, text string) (warn string, row chat.Row, err error) {
+	pane, row, err := writableChat(target)
+	if err != nil {
+		return "", row, err
+	}
+	if capture, cerr := tmux.CapturePane(pane); cerr == nil {
+		if err := chatweb.SendRefusal(capture); err != nil {
+			return "", row, fmt.Errorf("%s: %w", row.Session, err)
+		}
+	}
+	warn, err = tmux.PasteText(pane, text)
+	if err != nil {
+		return "", row, fmt.Errorf("gv chat send to %s: %w", row.Session, err)
+	}
+	return warn, row, nil
 }
 
 // --- gv chat keys ---

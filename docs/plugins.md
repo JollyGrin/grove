@@ -358,7 +358,11 @@ tmux pane, do bracketed-paste injection, and append the event for you:
   chat. Refuses any row whose `writable` is false (`kind: cockpit` or
   `archived`) with a reason and the verb to use instead, and exits non-zero
   if the text was delivered but never SUBMITTED — delivered is not
-  submitted (grove-144/216). `<session>` is a tmux session name, a Claude
+  submitted (grove-144/216). Also refuses, non-zero and with nothing
+  sent, while the chat's pane shows a modal (a permission prompt, a
+  menu, the folder-trust dialog) — its Enter would pick the modal's
+  highlighted option (grove-333); answer the prompt with `gv chat keys`
+  first. `<session>` is a tmux session name, a Claude
   session id, or 4+ characters of one; an ambiguous prefix is refused, never
   picked.
 - `gv chat keys <session> <chars>` — one raw keystroke, no Enter, for the
