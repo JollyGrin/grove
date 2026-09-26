@@ -95,8 +95,12 @@ type Env struct {
 	Output            func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
 	HooksInstalled    func(paths []string) map[string]map[string]bool
 	HookSettingsPaths func(workers []string) []string
-	GOOS              string
-	Home              string
+	HookMismatches    func(paths []string, exe string) map[string][]hooks.Mismatch
+	// SelfExe is THIS binary's resolved path; "" (unknown) drops the
+	// hooks-binary rows entirely (grove-348).
+	SelfExe string
+	GOOS    string
+	Home    string
 
 	// OrchestratorDir is the workspace brain dir the seed-drift row
 	// checks; "" drops the row (nothing to compare). OrchestratorSeed is
@@ -109,6 +113,10 @@ type Env struct {
 // NewEnv builds the real-machine Env.
 func NewEnv(cfg *config.Config, cfgErr error) Env {
 	home, _ := os.UserHomeDir()
+	selfExe, _ := os.Executable()
+	if r, err := filepath.EvalSymlinks(selfExe); err == nil {
+		selfExe = r
+	}
 	return Env{
 		Cfg:               cfg,
 		CfgErr:            cfgErr,
@@ -120,6 +128,8 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Output:            output,
 		HooksInstalled:    hooks.Installed,
 		HookSettingsPaths: hooks.SettingsPaths,
+		HookMismatches:    hooks.Mismatches,
+		SelfExe:           selfExe,
 		GOOS:              runtime.GOOS,
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
@@ -314,5 +324,25 @@ func checkHooksAt(path string) func(Env) Status {
 			return Status{State: StateOK}
 		}
 		return Status{State: StateMissing, Info: fmt.Sprintf("%d/4 events wired", wired)}
+	}
+}
+
+// checkHooksBinaryAt is the grove-348 warn row: do the gv entries in path
+// run THIS binary (or exist at all)?
+func checkHooksBinaryAt(path string) func(Env) Status {
+	return func(e Env) Status {
+		ms := e.HookMismatches([]string{path}, e.SelfExe)[path]
+		if len(ms) == 0 {
+			return Status{State: StateOK}
+		}
+		parts := make([]string, 0, len(ms))
+		for _, m := range ms {
+			if m.Missing {
+				parts = append(parts, fmt.Sprintf("%s → %s (no such binary)", m.Event, m.Binary))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s → %s (not this binary: %s)", m.Event, m.Binary, e.SelfExe))
+			}
+		}
+		return Status{State: StateWarn, Info: strings.Join(parts, "; ")}
 	}
 }

@@ -354,6 +354,79 @@ func TestInstalledSeesOnlyGvEntries(t *testing.T) {
 	}
 }
 
+// --- grove-348: do the hooks run THIS binary? ---
+
+func TestMismatches(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "gv")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleDir := filepath.Join(dir, "stale-bin")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(staleDir, "gv")
+	if err := os.WriteFile(stale, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	write := func(t *testing.T, path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("matching binary is clean", func(t *testing.T) {
+		path := filepath.Join(dir, "match.json")
+		write(t, path, fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":%q}]}]}}`, exe+" hook stop"))
+		got := Mismatches([]string{path}, exe)
+		if len(got) != 0 {
+			t.Errorf("matching entries reported as mismatches: %v", got)
+		}
+	})
+
+	t.Run("another path is a mismatch", func(t *testing.T) {
+		path := filepath.Join(dir, "stale.json")
+		write(t, path, fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":%q}]}],"SessionStart":[{"hooks":[{"type":"command","command":%q}]}]}}`, stale+" hook stop", exe+" hook session-start"))
+		got := Mismatches([]string{path}, exe)
+		if len(got[path]) != 1 {
+			t.Fatalf("got %v, want exactly one mismatch", got)
+		}
+		m := got[path][0]
+		if m.Event != "Stop" || m.Binary != stale || m.Missing {
+			t.Errorf("mismatch = %+v, want Stop → %s, existing binary", m, stale)
+		}
+	})
+
+	t.Run("a nonexistent binary is flagged missing", func(t *testing.T) {
+		path := filepath.Join(dir, "gone.json")
+		gone := filepath.Join(dir, "nonexistent", "gv")
+		write(t, path, fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":%q}]}]}}`, gone+" hook stop"))
+		got := Mismatches([]string{path}, exe)
+		if len(got[path]) != 1 || !got[path][0].Missing {
+			t.Errorf("got %v, want one missing-binary mismatch", got)
+		}
+	})
+
+	t.Run("ovs entries are ignored", func(t *testing.T) {
+		path := filepath.Join(dir, "ovs.json")
+		write(t, path, fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/Users/x/go/bin/ovs hook stop"}]},{"hooks":[{"type":"command","command":%q}]}]}}`, stale+" hook stop"))
+		got := Mismatches([]string{path}, exe)
+		if len(got[path]) != 1 || got[path][0].Binary != stale {
+			t.Errorf("got %v, want only the gv entry flagged", got)
+		}
+	})
+
+	t.Run("missing settings file yields nothing", func(t *testing.T) {
+		got := Mismatches([]string{filepath.Join(dir, "absent.json")}, exe)
+		if len(got) != 0 {
+			t.Errorf("got %v, want none", got)
+		}
+	})
+}
+
 // --- ntfy push ---
 
 // seedTask registers a tracked task whose worktree is a real temp dir and

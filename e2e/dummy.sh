@@ -405,6 +405,37 @@ grep -q "pid $ZOMBIE_PID terminated" "$SCRATCH/sweep-zombie.out" || fail "sweep 
 kill -0 "$ZOMBIE_PID" 2>/dev/null && fail "worktree process survived confirmed sweep" || true
 export PATH="$REAL_PATH"
 
+# --- hooks binary mismatch (grove-348) ---
+
+say "hooks status flags entries pointing at another (nonexistent) gv binary"
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/settings.json" <<'EOF'
+{"hooks": {
+  "SessionStart": [{"hooks": [{"type": "command", "command": "/nonexistent/gv hook session-start"}]}],
+  "Notification": [{"hooks": [{"type": "command", "command": "/nonexistent/gv hook notification"}]}],
+  "Stop": [{"hooks": [{"type": "command", "command": "/nonexistent/gv hook stop"}]}],
+  "SessionEnd": [{"hooks": [{"type": "command", "command": "/nonexistent/gv hook session-end"}]}]
+}}
+EOF
+"$GV" hooks status > "$SCRATCH/hooks-status.out"
+grep -q '✗ Stop → /nonexistent/gv (no such binary)' "$SCRATCH/hooks-status.out" \
+  || fail "hooks status did not flag the stale/missing hook binary"
+grep -q 'run: gv hooks install' "$SCRATCH/hooks-status.out" \
+  || fail "hooks status did not print the fix line"
+"$GV" hooks status --json > "$SCRATCH/hooks-status.json"
+grep -q '"binary": *"/nonexistent/gv"' "$SCRATCH/hooks-status.json" \
+  || fail "hooks status --json missing the mismatch entry"
+grep -q '"schema_version"' "$SCRATCH/hooks-status.json" \
+  || fail "hooks status --json missing the contract envelope"
+
+say "doctor warns about the mismatched hook binary"
+("$GV" doctor --json > "$SCRATCH/doctor-hooks.json") || true # scratch board has error rows (gh-auth) — exit code is not under test
+grep -q '"hooks-binary:' "$SCRATCH/doctor-hooks.json" \
+  || fail "doctor --json missing the hooks-binary row"
+("$GV" doctor > "$SCRATCH/doctor.out") || true
+grep -q 'no such binary' "$SCRATCH/doctor.out" \
+  || fail "doctor did not flag the mismatched hook binary"
+
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null
 
