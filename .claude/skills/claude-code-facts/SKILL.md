@@ -30,7 +30,7 @@ changes the behavior.
 - **A nested `claude` (e.g. `claude -p` from a worker's Bash tool) fires
   the full hook set from the worktree**: SessionStart (`source:
   "startup"`), Stop and SessionEnd, each carrying the NESTED session's own
-  non-empty `session_id` (2.1.283, grove-339). So a tracked cwd plus a new
+  non-empty `session_id` (2.1.283). So a tracked cwd plus a new
   id at SessionStart is not proof of a restart. Only a non-live row
   (setup/dead/paused) or `source: "clear"` may re-register a task. The hook
   env has no reliable nesting marker (`CLAUDE_CODE_CHILD_SESSION=1` also
@@ -46,13 +46,13 @@ changes the behavior.
 - `claude -p --bare` skips hooks, CLAUDE.md, skills, and MCP — no
   project context loads, and it needs no OAuth session — so it works with
   `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` pointed at any
-  Anthropic-protocol endpoint (verified 2026-09-06 against api.z.ai,
-  grove-288's `gv sub --agentic`).
+  Anthropic-protocol endpoint (verified against api.z.ai; `gv sub
+  --agentic` relies on it).
 - `claude -p --output-format json` may print one or more
   `[claude-code:…]` warning lines (e.g.
   `[claude-code:unrecognized_model]`) before the JSON payload on a
   third-party lane — a consumer must skip to the first `{` rather than
-  `json.Unmarshal` stdout directly (grove-288).
+  `json.Unmarshal` stdout directly.
 - Transcripts key on the **encoded cwd**:
   `<CLAUDE_CONFIG_DIR>/projects/<encoded-path>/` where
   `transcript.EncodePath` replaces `/` and `.` with `-`. Reuse the same
@@ -64,7 +64,7 @@ changes the behavior.
   `-home-dean-git-grove--grove-orchestrator`, never
   `…-grove-.grove-orchestrator`. A one-rule sed points at a directory that
   does not exist, and every consumer then reports "no transcript" rather
-  than an error (grove-202).
+  than an error.
 - Transcript **filenames are session UUIDs**, so a directory listing has no
   chronological meaning. Pick the current transcript by mtime
   (`max(files, key=os.path.getmtime)`); `sorted(glob(...))[-1]` returns a
@@ -82,14 +82,14 @@ changes the behavior.
   conversation (skip it in a chat view); `isMeta: true` is injected
   context, not something anyone said. A `thinking` block can arrive with a
   signature and NO text (redacted) — an empty-text block is chrome.
-  `internal/chat` (grove-216) is the worked implementation.
+  `internal/chat` is the worked implementation.
 - **Harness wrappers are plain user lines.** Only the
   `<local-command-caveat>` is `isMeta`; a slash command's
   `<command-name>`/`<command-args>` echo, its `<local-command-stdout>`, a
   `!` escape's `<bash-input>`/`<bash-stdout>`, and a background task's
   `<task-notification>` are ordinary `type: user` lines, so "first user
-  prompt" titles any chat that began with `/model` by its caveat
-  (grove-315, 2026-09-26). Classify them before treating a user line as
+  prompt" titles any chat that began with `/model` by its caveat.
+  Classify them before treating a user line as
   something the operator said — `internal/chat/meta.go`.
 - **Following a transcript is a byte offset, not a diff** — it is
   append-only. Consume COMPLETE lines only (a terminatorless trailing line
@@ -104,10 +104,9 @@ changes the behavior.
   a session should DECIDE the id and record it, not work out afterwards
   which transcript belongs to which pane. Inference by transcript recency
   is wrong on its face: an mtime is LAST WRITE, so an older session still
-  working outranks a younger one gone idle (grove-222 shipped that bug —
-  two live chats stamped with each other's ids, stably).
-- **A claude keeps NO fd open on its transcript** (verified 2026-08-31
-  across four live sessions): it opens, appends and closes, so
+  working outranks a younger one gone idle — two live chats end up
+  stamped with each other's ids, stably.
+- **A claude keeps NO fd open on its transcript**: it opens, appends and closes, so
   `/proc/<pid>/fd` correlates nothing. The id a running session is on is
   readable from its ARGV instead (`--session-id`/`--resume`) — and a tmux
   pane's pid is the SHELL the launch was typed into, so look at
@@ -120,7 +119,7 @@ changes the behavior.
   (`.grove/orchestrator/<profile>/`) give each backend its own chain, and
   CLAUDE.md still applies (memory loads recurse up ancestor dirs).
 
-## Modals in the pane (v2.1.282, grove-308)
+## Modals in the pane (v2.1.282)
 
 - Permission prompts, AskUserQuestion and the input box are **unboxed**:
   bare lines between `─` rules, no `│`. Any scrape keyed on box sides
@@ -133,7 +132,7 @@ changes the behavior.
   input — a bracketed paste + Enter answers it. In a multi-select it is a
   checkbox with no input.
 - Captures: `internal/chatweb/testdata/cc2.1.282-*.txt`.
-- **Running vs idle from one capture (2.1.283, grove-300):** the spinner
+- **Running vs idle from one capture (2.1.283):** the spinner
   glyph cycles `· ✢ ✳ ✶ ✻ ✽`, so match the line's SHAPE — glyph, verb
   with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
   the finished form. `esc to interrupt` is gone; the input caret is
@@ -155,11 +154,11 @@ changes the behavior.
 ## TUI chrome (what pane scrapers see)
 
 Scraping is garnish, hooks are truth — but the relay's verified submit
-(grove-144) and uptake warning (grove-186) do read the input box, and the
+and uptake warning do read the input box, and the
 chrome has changed under us three times (spinner glyph, bottom-chrome
 height, and the box itself).
 
-- **v2.1.282+ is unboxed** (grove-317): the input box is bare lines between
+- **v2.1.282+ is unboxed**: the input box is bare lines between
   two full-width `─` rules; the first body line starts with `❯ `,
   continuation lines are indented two spaces; 2+ footer lines sit below
   (cwd/branch, mode hint). No `│` sides, no `╭`/`╰` corners.
@@ -176,7 +175,7 @@ height, and the box itself).
   on a ghost-only box does nothing (the ghost is not submitted). The
   prompt is `❯` + U+00A0 (NBSP), not a plain space.
 - **The submitted prompt echoes as `❯ <text>` in the transcript** above
-  the box (no rules around it) — that echo is grove-186's uptake evidence.
+  the box (no rules around it) — that echo is the relay's uptake evidence.
   `esc to interrupt` was NOT visible in the footer on v2.1.283 during a
   running turn (auto mode showed its own hint), so the echo carries it.
 - **A message relayed MID-TURN is queued, and drawn ABOVE the rules**

@@ -16,8 +16,7 @@ gofmt -l .                                        # must be empty
 ```
 
 - **Never pipe the gate.** `go test ./... | tail` reports the PIPE's exit
-  status, not the tests' — two red runs merged to main that way in one
-  evening. Run bare and check `$?`; filter a saved log afterwards, never
+  status, not the tests', so a red run reads green. Run bare and check `$?`; filter a saved log afterwards, never
   inline.
 - The same trap in reverse: `cmd | grep -q` flakes under
   `set -o pipefail` (grep exits at first match, the producer SIGPIPEs).
@@ -27,9 +26,8 @@ gofmt -l .                                        # must be empty
   `-t YYYYMMDDhhmm.SS`), and resolve the scratch root with
   `SCRATCH="$(cd "$(mktemp -d /tmp/…)" && pwd -P)"` — on macOS `/tmp` is a
   symlink, so a tmux pane reports its cwd as `/private/tmp/…` and any
-  assertion against a bare `$SCRATCH` path fails on that alone. Both bit
-  `e2e/chat.sh`, which read green on Linux while its whole `chat ls` half
-  had never executed on the Mac (grove-228).
+  assertion against a bare `$SCRATCH` path fails on that alone — a suite
+  can read green on Linux while half of it never executes on the Mac.
 
 ## E2E: the dummy-data pattern
 
@@ -39,10 +37,8 @@ everything: scratch `HOME` (config), `GROVE_STATE_DIR` override (state),
 and the repo's `claude:` command set to `echo` (worker). **`e2e/all.sh`
 runs every `e2e/*.sh` suite**, then reruns the scripted-tmux ones under a
 hostile tmux config — no CI covers them, so run it
-before merging anything that touches the TUI or the task lifecycle
-(grove-79: three TUI PRs merged while `cockpit.sh` + `workspace.sh` were
-red, because nothing ran them; the panic had shipped in a fourth a day
-earlier). Details: docs/seed-manifest.md §Dummy-data E2E. Scripted-tmux
+before merging anything that touches the TUI or the task lifecycle.
+Details: docs/seed-manifest.md §Dummy-data E2E. Scripted-tmux
 suites must also follow the
 [tmux-discipline](../tmux-discipline/SKILL.md) isolation rules —
 including capturing panes with `-S` so a panic keeps its reason line.
@@ -50,7 +46,7 @@ including capturing panes with `-S` so a panic keeps its reason line.
 TUI render code: the first frame always renders with ZERO events (they
 load async), so any `[:budget]` slice must clamp to `len(data)`, and
 render tests sweep small heights with empty models, not just narrow
-widths — grove-79's panic lived only at heights the tests never visited.
+widths — a render panic can live only at heights the tests never visit.
 
 ## Handing a change to the operator
 

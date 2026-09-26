@@ -30,7 +30,7 @@ repo wins.
 | `gv chat ls [--workspace L] --json` | `chats` | orchestrator chats across every workspace: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, last_active, writable, waiting, model, turn}` — order/age on `last_active`, gate input on `writable`, badge on `turn` |
 | `gv chat tail <s> [--follow] [--since N]` | *(a stream)* | JSONL transcript entries `{seq, role, kind, text, tool, ts}`; `kind` `meta` is harness chrome, not operator prose; `--since N` resumes on `seq` |
 | `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
-| `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
+| `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
 
@@ -49,7 +49,7 @@ including an idle stop with no STATUS line and `session_ended`, plus all
 eleven delivery/liveness types below — so a crashed worker is never
 silent. **Never derive completion from a tmux pane**: the kickoff prompt
 ends with all three `STATUS:` sentinel lines verbatim, so a pane grep
-fires on every task from second zero (grove-205). A poll-only consumer
+fires on every task from second zero. A poll-only consumer
 edge-detects on the `sentinel_at` row field (when the current sentinel
 landed) instead of keeping its own baseline. The delivery/liveness types
 are produced by `gv supervise [--once] [--json]` (one emitter per
@@ -63,7 +63,7 @@ v1. Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (a task moved to another grove host — its `gv ls --json`
-row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
+row then carries `handed_off_to`; live rows carry `host`); and
 `pr_opened`, `pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`,
 `pr_merged`, `pr_closed`, `worker_waiting`, `worker_vanished`,
 `worker_errored`, `worker_recovered` — the transition engine's delivery
@@ -74,7 +74,7 @@ full per-type data table. Workspace-scoped (empty ticket):
 `workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
 that fail to parse (the last line may be torn mid-write).
 
-`<workspace-root>/.grove/state/sub.jsonl` (grove-288) is `gv sub`'s own
+`<workspace-root>/.grove/state/sub.jsonl` is `gv sub`'s own
 append-only log, one `Record` per call: `{time, v, workspace, ticket,
 lane, model, mode, input_chars, input_tokens, output_tokens,
 cached_tokens, turns, ms, exit, prompt_head}`. The answer text and the
