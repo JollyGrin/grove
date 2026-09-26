@@ -22,7 +22,7 @@ var el = function (id) { return document.getElementById(id); };
  * and `turnHold` the moment until which it is too old to trust. `day` is
  * the local calendar day of the last prose entry that carried a time
  * (grove-303) — what decides whether the next one needs a separator. */
-var view = { chats: [], profiles: [], loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '', hist: {} };
+var view = { chats: [], profiles: [], version: '', staleSeen: '', loaded: false, es: null, maxSeq: 0, addr: null, group: null, working: false, pending: [], turn: null, turnHold: 0, day: '', hist: {} };
 /* Everything the live-list loop needs: the interval handle (null means the
  * loop is deliberately stopped), a one-flight guard so a poll and a
  * refocus cannot stack fetches, and the signature of what is currently
@@ -96,6 +96,29 @@ function loadProfiles() {
   }, function () {
     view.profiles = [];
   });
+}
+
+/* The server's build (grove-286), learned once — from /api/version or the
+ * list stream's first event, whichever lands first — and shown dim at the
+ * foot of home. A running server keeps serving the binary it loaded, so
+ * after a `gv update` without a service restart the phone is the one place
+ * the staleness shows; and once the service IS restarted, a later read
+ * that disagrees is a page talking to a newer server than it was built
+ * against. Garnish: a failed read shows nothing. */
+function loadVersion() {
+  return api('/api/version').then(function (j) { noteVersion(j.version); }, function () { /* garnish */ });
+}
+
+function noteVersion(v) {
+  if (typeof v !== 'string' || !v) return;
+  if (!view.version) {
+    view.version = v;
+    repaintIdle();
+    return;
+  }
+  if (v === view.version || v === view.staleSeen) return;
+  view.staleSeen = v;
+  showToast('server updated — reload');
 }
 
 /* addr is how a chat is ADDRESSED on the wire: its tmux session name
@@ -334,6 +357,7 @@ function screenHome() {
   if (live.length) live.forEach(function (c) { main.append(chatRow(c, true)); });
   else main.append(h('div', 'empty', 'no live chats — start one below, or revive one from history'));
   g.labels.forEach(function (label) { main.append(workspaceBlock(label, g.by[label], false)); });
+  if (view.version) main.append(h('div', 'ver', 'gv ' + view.version));
 }
 
 /* ---------------- #/w/<label>: one workspace ---------------- */
@@ -1373,7 +1397,7 @@ function isListScreen() {
 function listSig() {
   if (!isListScreen()) return null;
   var open = Object.keys(view.hist).filter(function (k) { return view.hist[k]; }).sort().join(',');
-  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0, open];
+  var parts = [location.hash || '#/', view.profiles.length, view.loaded ? 1 : 0, open, view.version];
   view.chats.forEach(function (c) {
     parts.push(c.workspace, c.kind, c.session || '', c.session_id || '',
       chatTitle(c), c.busy ? 1 : 0, c.writable ? 1 : 0, c.waiting ? 1 : 0, ago(activeAt(c)));
@@ -1473,6 +1497,10 @@ function syncFeed(want) {
 
 function openFeed() {
   var es = feed.es = new EventSource('/api/chats/events');
+  /* First on every connect — so a reconnect to a restarted server says so. */
+  es.addEventListener('version', function (ev) {
+    try { noteVersion(JSON.parse(ev.data)); } catch (_) { /* garnish */ }
+  });
   es.addEventListener('chats', function (ev) {
     var j;
     try { j = JSON.parse(ev.data); } catch (_) { return; }
@@ -1496,6 +1524,7 @@ function openFeed() {
 function refresh() {
   /* Profiles ride along with the chat list and never block it: the picker
    * is garnish, the chats are the app. */
+  loadVersion();
   return loadProfiles().then(loadChats).then(render, function (e) { render(); showError(e); });
 }
 
@@ -1512,6 +1541,8 @@ window.addEventListener('hashchange', function () {
 document.addEventListener('visibilitychange', function () {
   syncPolling();
   refreshList();
+  /* A resumed phone also asks which server it is talking to (grove-286). */
+  if (!document.hidden) loadVersion();
 });
 /* Regaining the network refreshes the LISTS. A chat screen is deliberately
  * left alone: re-rendering it would tear down a stream that is already

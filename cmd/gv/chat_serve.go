@@ -61,7 +61,7 @@ func cmdChatServe(args []string) error {
 		return fmt.Errorf("cannot listen on %s: %w", addr, err)
 	}
 	srv := &http.Server{
-		Handler: chatweb.NewServer(chatBackend{}),
+		Handler: chatweb.NewServer(chatBackend{}).WithVersion(version),
 		// No WriteTimeout: an SSE stream is meant to stay open for hours.
 		// ReadHeaderTimeout still bounds a client that connects and stalls.
 		ReadHeaderTimeout: 10 * time.Second,

@@ -82,6 +82,9 @@ func TestListStreamEmitsOnConnectThenOnlyOnChange(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	evs := openList(t, srv)
+	if v, ok := next(t, evs, 2*time.Second); !ok || v.name != "version" || v.data != `"dev"` {
+		t.Fatalf("first event = %+v, want the version", v)
+	}
 	first, ok := next(t, evs, 2*time.Second)
 	if !ok || first.name != "chats" {
 		t.Fatalf("first event = %+v, want chats", first)
@@ -117,8 +120,10 @@ func TestListStreamSharesOneEnumeration(t *testing.T) {
 	var streams []<-chan sseEvent
 	for range 4 {
 		evs := openList(t, srv)
-		if _, ok := next(t, evs, 2*time.Second); !ok {
-			t.Fatal("no initial payload")
+		for range 2 { // version, then the list
+			if _, ok := next(t, evs, 2*time.Second); !ok {
+				t.Fatal("no initial payload")
+			}
 		}
 		streams = append(streams, evs)
 	}
@@ -210,4 +215,21 @@ func schemaVersion(t *testing.T, h http.Handler) string {
 	i := strings.Index(body, `"schema_version":`)
 	j := strings.LastIndex(body, "}")
 	return body[i+len(`"schema_version":`) : j]
+}
+
+func TestVersionRoute(t *testing.T) {
+	cases := []struct{ stamp, want string }{
+		{"v0.1.46", `"v0.1.46"`},
+		{"", `"dev"`}, // unstamped never renders blank
+	}
+	for _, c := range cases {
+		h := chatweb.NewServer(&fakeBackend{}).WithVersion(c.stamp)
+		w := get(t, h, "/api/version")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"version":`+c.want) || !strings.Contains(w.Body.String(), `"schema_version"`) {
+			t.Fatalf("stamp %q: %d %s", c.stamp, w.Code, w.Body.String())
+		}
+	}
+	if w := get(t, chatweb.NewServer(&fakeBackend{}), "/api/version"); !strings.Contains(w.Body.String(), `"version":"dev"`) {
+		t.Fatalf("default server version: %s", w.Body.String())
+	}
 }

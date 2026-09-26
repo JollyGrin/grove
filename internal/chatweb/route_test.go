@@ -26,6 +26,9 @@ func TestParseRoute(t *testing.T) {
 		// grove-307: the list screens' stream — and a chat addressed
 		// "events" is refused rather than read as it.
 		{"/api/chats/events", true, chatweb.RouteChatsEvents, "", "GET"},
+		// grove-286: the build stamp.
+		{"/api/version", true, chatweb.RouteVersion, "", "GET"},
+		{"/api/version/", true, "", "", ""},
 		{"/api/chats/events/events", true, "", "", ""},
 		{"/api/chats/events/send", true, "", "", ""},
 		{"/api/chats/events/", true, "", "", ""},

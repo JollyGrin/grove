@@ -9,6 +9,15 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat serve`: running build on the phone (grove-286, 2026-09-26,
+      `chat-ux` train). `GET /api/version` → `{"version": "<stamp>"}` in
+      the contract envelope (`dev` unstamped, never blank), threaded from
+      `main.version` via `Server.WithVersion`. Home shows it dim at the
+      foot (`gv v0.1.46`). The list stream opens with a `version` event on
+      every connect, and the page re-reads /api/version on refocus: a
+      version that disagrees with the one the page loaded toasts "server
+      updated — reload". Verified headless: footer, kill + restart the
+      server on a new stamp → stream reconnects, toast shows.
 - [x] `gv chat serve`: list screens over SSE (grove-307, 2026-09-26,
       `chat-ux` train). `GET /api/chats/events` pushes the `/api/chats`
       envelope byte for byte — once on connect, then only when it changed

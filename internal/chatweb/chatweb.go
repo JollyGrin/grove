@@ -101,6 +101,8 @@ type Server struct {
 	// streams' keep-alive. Both injected for tests.
 	list      *listFeed
 	heartbeat time.Duration
+	// version is the running build's stamp (grove-286), "dev" unstamped.
+	version string
 }
 
 // StreamPoll is the modal-detection and keep-alive cadence on an SSE
@@ -115,8 +117,17 @@ func NewServer(b Backend) *Server {
 		// Impossible: the directory is embedded at compile time.
 		panic("chatweb: embedded ui missing: " + err.Error())
 	}
-	s := &Server{backend: b, ui: sub, assets: http.FileServer(http.FS(sub)), poll: StreamPoll, heartbeat: ListHeartbeat}
+	s := &Server{backend: b, ui: sub, assets: http.FileServer(http.FS(sub)), poll: StreamPoll, heartbeat: ListHeartbeat, version: "dev"}
 	s.list = &listFeed{load: s.chatsPayload, every: ListPoll}
+	return s
+}
+
+// WithVersion stamps the build version the page shows (grove-286). An
+// empty stamp stays "dev", so the page never renders a blank.
+func (s *Server) WithVersion(v string) *Server {
+	if v != "" {
+		s.version = v
+	}
 	return s
 }
 
@@ -151,6 +162,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChatsEvents(w, r)
 	case RouteProfiles:
 		s.handleProfiles(w)
+	case RouteVersion:
+		// grove-286: which build is answering. A running process keeps
+		// serving the binary it loaded, so after a `gv update` without a
+		// service restart this is the only way a phone can tell.
+		writeJSON(w, http.StatusOK, schema.Envelope("version", s.version))
 	case RouteEvents:
 		s.handleEvents(w, r, route.Target)
 	case RouteSend:
@@ -257,9 +273,12 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 
 // --- SSE ---
 
-// handleChatsEvents is the list screens' stream (grove-307): one event and
-// a keep-alive.
+// handleChatsEvents is the list screens' stream (grove-307). Two events and
+// a keep-alive:
 //
+//	version — first, once: the build this server runs (grove-286), so a
+//	          page whose stream reconnects to a restarted server learns it
+//	          is now talking to a different binary.
 //	chats   — the full GET /api/chats envelope, byte for byte (minus the
 //	          trailing newline): once on connect, then only when it changed.
 //
@@ -277,6 +296,7 @@ func (s *Server) handleChatsEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	sse(w, "version", []byte(jsonString(s.version)))
 	flusher.Flush()
 
 	feed, leave := s.list.subscribe()
