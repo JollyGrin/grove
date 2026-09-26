@@ -1068,6 +1068,15 @@ grep -q '"session":"grove-chat-chatws-1"' "$SCRATCH/api-chats.json" \
   || { cat "$SCRATCH/api-chats.json"; fail "the API must report the live chats the CLI reports"; }
 grep -q '"kind":"archived"' "$SCRATCH/api-chats.json" || fail "the API must report archived transcripts too"
 
+say "grove-307: GET /api/chats/events pushes the same envelope over SSE"
+curl -sN --max-time 3 "http://127.0.0.1:$PORT/api/chats/events" > "$SCRATCH/list-sse.txt" 2>/dev/null || true
+grep -q '^event: chats$' "$SCRATCH/list-sse.txt" || { cat "$SCRATCH/list-sse.txt"; fail "the list stream sent no chats event"; }
+[ "$(grep -c '^event: chats$' "$SCRATCH/list-sse.txt")" = "1" ] \
+  || { cat "$SCRATCH/list-sse.txt"; fail "an unchanged list must be sent once, not per tick"; }
+grep -q '"session":"grove-chat-chatws-1"' "$SCRATCH/list-sse.txt" || fail "the list stream must carry the live chats"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/chats/events/events")"
+[ "$code" = "404" ] || fail "a chat addressed 'events' must be refused, got $code"
+
 say "the scope boundary is a 404, not a comment: no route reaches done/untrack"
 for path in /api/done /api/tasks /api/chats/grove-chat-chatws-1/done /api/chats/grove-chat-chatws-1/kill; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$path")"

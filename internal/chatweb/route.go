@@ -21,6 +21,10 @@ package chatweb
 // the CLI's own (chat.CloseRefusal): only a kind-chat row, never the
 // cockpit's pane.
 //
+// grove-307 added one more READ: /api/chats/events is /api/chats pushed
+// over SSE, for the list screens. grove-286 another: /api/version, the
+// running build's stamp.
+//
 // Parsing lives away from net/http so the whole table — including every
 // path that must 404 — is testable without a listener.
 
@@ -37,6 +41,10 @@ const (
 	RouteClose  = "close"  // POST /api/chats/<s>/close   (grove-294: End chat)
 	// grove-225: the profile picker's list. Read-only, no target.
 	RouteProfiles = "profiles" // GET  /api/profiles
+	// grove-307: the list screens' live feed — /api/chats, pushed.
+	RouteChatsEvents = "chats-events" // GET  /api/chats/events   (SSE)
+	// grove-286: the running build's version. Read-only, no target.
+	RouteVersion = "version" // GET  /api/version
 )
 
 // Route is a parsed API request. Target is the chat address for the chat
@@ -74,7 +82,13 @@ func ParseRoute(path string) (r Route, api bool) {
 		return Route{Kind: RouteChats, Method: "GET"}, true
 	case len(parts) == 1 && parts[0] == "profiles":
 		return Route{Kind: RouteProfiles, Method: "GET"}, true
-	case len(parts) == 3 && parts[0] == "chats" && parts[1] != "":
+	case len(parts) == 1 && parts[0] == "version":
+		return Route{Kind: RouteVersion, Method: "GET"}, true
+	case len(parts) == 2 && parts[0] == "chats" && parts[1] == "events":
+		return Route{Kind: RouteChatsEvents, Method: "GET"}, true
+	// A chat literally addressed "events" would read as the list stream
+	// one segment up; refuse the address rather than make the parser guess.
+	case len(parts) == 3 && parts[0] == "chats" && parts[1] != "" && parts[1] != "events":
 		target := parts[1]
 		switch parts[2] {
 		case "events":

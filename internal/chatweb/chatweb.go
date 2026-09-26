@@ -97,6 +97,12 @@ type Server struct {
 	// poll is how often a live stream re-reads the pane for a modal and
 	// emits its keep-alive. Injected for tests.
 	poll time.Duration
+	// list is the list screens' shared feed (grove-307), and heartbeat its
+	// streams' keep-alive. Both injected for tests.
+	list      *listFeed
+	heartbeat time.Duration
+	// version is the running build's stamp (grove-286), "dev" unstamped.
+	version string
 }
 
 // StreamPoll is the modal-detection and keep-alive cadence on an SSE
@@ -111,7 +117,18 @@ func NewServer(b Backend) *Server {
 		// Impossible: the directory is embedded at compile time.
 		panic("chatweb: embedded ui missing: " + err.Error())
 	}
-	return &Server{backend: b, ui: sub, assets: http.FileServer(http.FS(sub)), poll: StreamPoll}
+	s := &Server{backend: b, ui: sub, assets: http.FileServer(http.FS(sub)), poll: StreamPoll, heartbeat: ListHeartbeat, version: "dev"}
+	s.list = &listFeed{load: s.chatsPayload, every: ListPoll}
+	return s
+}
+
+// WithVersion stamps the build version the page shows (grove-286). An
+// empty stamp stays "dev", so the page never renders a blank.
+func (s *Server) WithVersion(v string) *Server {
+	if v != "" {
+		s.version = v
+	}
+	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -141,8 +158,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch route.Kind {
 	case RouteChats:
 		s.handleChats(w)
+	case RouteChatsEvents:
+		s.handleChatsEvents(w, r)
 	case RouteProfiles:
 		s.handleProfiles(w)
+	case RouteVersion:
+		// grove-286: which build is answering. A running process keeps
+		// serving the binary it loaded, so after a `gv update` without a
+		// service restart this is the only way a phone can tell.
+		writeJSON(w, http.StatusOK, schema.Envelope("version", s.version))
 	case RouteEvents:
 		s.handleEvents(w, r, route.Target)
 	case RouteSend:
@@ -202,15 +226,27 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 // contract envelope. A client that can read this can read the CLI's output
 // and vice versa — that equality is the reason the phone is not a fork.
 func (s *Server) handleChats(w http.ResponseWriter) {
-	rows, err := s.backend.Chats()
+	payload, err := s.chatsPayload()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(payload, '\n'))
+}
+
+// chatsPayload is the one encoding of the chat list, shared by GET
+// /api/chats and the list stream so the two can never drift apart.
+func (s *Server) chatsPayload() ([]byte, error) {
+	rows, err := s.backend.Chats()
+	if err != nil {
+		return nil, err
+	}
 	if rows == nil {
 		rows = []chat.Row{}
 	}
-	writeJSON(w, http.StatusOK, schema.Envelope("chats", rows))
+	return json.Marshal(schema.Envelope("chats", rows))
 }
 
 // handleProfiles lists the model profiles a new chat can be spawned on
@@ -236,6 +272,50 @@ func (s *Server) handleProfiles(w http.ResponseWriter) {
 }
 
 // --- SSE ---
+
+// handleChatsEvents is the list screens' stream (grove-307). Two events and
+// a keep-alive:
+//
+//	version — first, once: the build this server runs (grove-286), so a
+//	          page whose stream reconnects to a restarted server learns it
+//	          is now talking to a different binary.
+//	chats   — the full GET /api/chats envelope, byte for byte (minus the
+//	          trailing newline): once on connect, then only when it changed.
+//
+// Every stream reads the SAME shared feed, so N phones cost one
+// enumeration per ListPoll, not N. No ids and no resume: every payload is
+// the whole list, so a reconnect's first event is already a full catch-up.
+func (s *Server) handleChatsEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("this server cannot stream"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	sse(w, "version", []byte(jsonString(s.version)))
+	flusher.Flush()
+
+	feed, leave := s.list.subscribe()
+	defer leave()
+	hb := time.NewTicker(s.heartbeat)
+	defer hb.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case payload := <-feed:
+			sse(w, "chats", payload)
+			flusher.Flush()
+		case <-hb.C:
+			fmt.Fprint(w, ":\n\n")
+			flusher.Flush()
+		}
+	}
+}
 
 // handleEvents streams a chat over Server-Sent Events. Three named events
 // (plus `fault`/`eof` when the tail ends):

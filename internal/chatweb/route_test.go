@@ -23,6 +23,15 @@ func TestParseRoute(t *testing.T) {
 		{"/api/workspaces/unbrewed/new", true, chatweb.RouteNew, "unbrewed", "POST"},
 		// grove-225: the one route added to the closed table, and a READ.
 		{"/api/profiles", true, chatweb.RouteProfiles, "", "GET"},
+		// grove-307: the list screens' stream — and a chat addressed
+		// "events" is refused rather than read as it.
+		{"/api/chats/events", true, chatweb.RouteChatsEvents, "", "GET"},
+		// grove-286: the build stamp.
+		{"/api/version", true, chatweb.RouteVersion, "", "GET"},
+		{"/api/version/", true, "", "", ""},
+		{"/api/chats/events/events", true, "", "", ""},
+		{"/api/chats/events/send", true, "", "", ""},
+		{"/api/chats/events/", true, "", "", ""},
 
 		// Not the API: the embedded UI's files.
 		{"/", false, "", "", ""},
