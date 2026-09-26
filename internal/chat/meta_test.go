@@ -2,9 +2,11 @@ package chat
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +64,16 @@ func TestWrapperFixtures(t *testing.T) {
 				{EntryText, "", "why are there 3 windows?"},
 			},
 		},
+		{
+			// grove-341: a chat whose only user content is a `!` shell escape
+			// still gets a title — the command, not "".
+			file:  "bash-only.jsonl",
+			label: "$ tmux kill-pane",
+			entries: []ent{
+				{EntryMeta, MetaBash, "tmux kill-pane"},
+				{EntryMeta, MetaBashOutput, "killed pane 3"},
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -111,6 +123,29 @@ func TestLabelMissingFileFallsBack(t *testing.T) {
 	if got := Label(filepath.Join(t.TempDir(), "nope.jsonl"), "<pasted_content id=1>hi</pasted_content>"); got != "hi" {
 		t.Errorf("Label = %q, want hi", got)
 	}
+}
+
+// grove-341: precedence — prose, then slash command, then `!` escape — and
+// the escape title truncates like any other label.
+func TestLabelFallbackPrecedence(t *testing.T) {
+	line := func(content string) string {
+		b, _ := json.Marshal(content)
+		return `{"type":"user","message":{"role":"user","content":` + string(b) + `}}` + "\n"
+	}
+	t.Run("command beats bash", func(t *testing.T) {
+		r := strings.NewReader(line("<bash-input>tmux ls</bash-input>") + line("<command-name>/model</command-name>"))
+		if got, ok := labelFrom(r); !ok || got != "/model" {
+			t.Errorf("labelFrom = %q, %v; want /model, true", got, ok)
+		}
+	})
+	t.Run("long bash command truncates at 80 runes", func(t *testing.T) {
+		long := strings.Repeat("x", 120)
+		r := strings.NewReader(line("<bash-input>" + long + "</bash-input>"))
+		got, ok := labelFrom(r)
+		if !ok || !strings.HasPrefix(got, "$ ") || !strings.HasSuffix(got, "...") || len([]rune(got)) != labelMax {
+			t.Errorf("labelFrom = %q, %v; want an 80-rune truncated $-prefixed label", got, ok)
+		}
+	})
 }
 
 // grove-334: Claude Code's interrupt notice is the harness, not the

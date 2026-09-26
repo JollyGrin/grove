@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-09-26T10:00:00Z","message":{"role":"user","content":"<bash-input>tmux kill-pane</bash-input>"}}
+{"type":"user","timestamp":"2026-09-26T10:00:01Z","message":{"role":"user","content":"<bash-stdout>killed pane 3</bash-stdout><bash-stderr></bash-stderr>"}}

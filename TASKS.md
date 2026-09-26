@@ -9,6 +9,13 @@
 
 ## Now (2026-07-12)
 
+- [x] `gv chat ls`: bash-escape-only chats get a title (grove-341,
+      2026-09-26). `labelFrom` fell back to the first slash command but
+      not the first `!` shell escape, so 8 of 397 real chats labelled ""
+      and the phone showed the raw session id; a chat of pure chrome now
+      falls back to `$ <command>` (prose → slash command → bash escape).
+      Fixture + precedence/truncation tests; empty-label count on the
+      Mac is 0.
 - [x] detect: an expired Claude login is visible (grove-342,
       2026-09-26). `ErrorMarker` gains reason `auth` for the lines an
       expired login prints ("Login expired · Please run /login", "OAuth
