@@ -128,28 +128,25 @@ func (chatBackend) Tail(ctx context.Context, target string, since int, follow bo
 // proving it SUBMITTED. Never a shortcut around it, and the refusal a
 // non-writable chat earns is chat.WriteRefusal's own words (via
 // writableChat), so the phone and the CLI cannot disagree.
-func (chatBackend) Send(target, text string) error {
+func (chatBackend) Send(target, text string) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return fmt.Errorf("empty message — nothing sent")
+		return "", fmt.Errorf("empty message — nothing sent")
 	}
-	pane, row, err := writableChat(target)
+	warn, row, err := relayChat(target, text)
 	if err != nil {
-		return err
-	}
-	warn, err := tmux.PasteText(pane, text)
-	if err != nil {
-		return fmt.Errorf("send to %s: %w", row.Session, err)
+		return "", err
 	}
 	if warn != "" {
-		fmt.Fprintln(os.Stderr, warn)
+		fmt.Fprintf(os.Stderr, "%s: %s\n", row.Session, warn)
 	}
-	return nil
+	return warn, nil
 }
 
 // Keys is the relay rule's one exception — a raw character with no Enter,
 // for a picker that acts on the keypress itself. literal is already gated
-// by chatweb.ValidKey, so nothing free-form reaches send-keys here.
+// by chatweb.ValidKey/MenuKey and mapped by chatweb.KeyLiteral, so
+// nothing free-form reaches send-keys here.
 func (chatBackend) Keys(target, literal string) error {
 	pane, row, err := writableChat(target)
 	if err != nil {
@@ -217,17 +214,30 @@ type reportCache struct {
 }
 
 func (c *reportCache) find(target string) (chatRecord, error) {
+	rec, fresh, err := c.lookup(target, false)
+	if err != nil && !fresh {
+		// A miss on a cached report may be a chat born since (grove-333:
+		// the phone spawns one and answers its trust dialog within the
+		// TTL). Misses are rare, so one re-read costs nothing.
+		rec, _, err = c.lookup(target, true)
+	}
+	return rec, err
+}
+
+func (c *reportCache) lookup(target string, force bool) (chatRecord, bool, error) {
 	c.mu.Lock()
-	if time.Since(c.at) > c.ttl {
+	fresh := force || time.Since(c.at) > c.ttl
+	if fresh {
 		c.recs, c.err = chatReport()
 		c.at = time.Now()
 	}
 	recs, err := c.recs, c.err
 	c.mu.Unlock()
 	if err != nil {
-		return chatRecord{}, err
+		return chatRecord{}, fresh, err
 	}
-	return matchChat(recs, target)
+	rec, err := matchChat(recs, target)
+	return rec, fresh, err
 }
 
 // NewChat is `+ New chat` on the phone. profile is a model-profile name

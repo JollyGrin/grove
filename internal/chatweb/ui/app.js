@@ -1158,8 +1158,10 @@ function sendPending(c, body) {
   main.scrollTop = main.scrollHeight;
   var a = addr(c);
   api('/api/chats/' + encodeURIComponent(a) + '/send', { text: body })
-    .then(function () {
-      status.textContent = 'sent ✓';
+    .then(function (j) {
+      /* grove-333: a submit with no sign of uptake is not a clean ✓ —
+       * the relay said so, and the phone repeats it. */
+      status.textContent = j && j.warning ? '⚠ sent — no sign it landed yet, check the chat' : 'sent ✓';
       /* Only the draft that WAS this message goes; one typed since stays. */
       if (loadDraft(a).trim() === body) saveDraft(a, '');
       /* Delivered, so the turn is running — say so now rather than
@@ -1282,7 +1284,7 @@ function autosize() {
  * pages to its Submit page, itself a numbered menu. The free-text row
  * ("Type something.") moves the menu's caret into a text input — once the
  * scrape sees it there (typing), the composer's ordinary send answers it. */
-var keyNames = { esc: 'esc', tab: 'next ⇥' };
+var keyNames = { esc: 'esc', tab: 'next ⇥', up: '↑', down: '↓', enter: 'enter ⏎' };
 
 /* wasTyping: focus only on the edge into typing (grove-318) — re-focusing
  * on every picker event re-pops the Android keyboard after each toggle. */
@@ -1313,11 +1315,20 @@ function renderKeys(p) {
      * so it gets no checkbox even on a multi-select. */
     if (p.kind === 'multi' && !o.free && !/^chat about this/i.test(o.label)) text = (o.checked ? '☑ ' : '☐ ') + text;
     else if (o.free) text = '✎ ' + text;
-    var b = keyButton(box, o.key, o.key + ' · ' + text);
+    /* grove-333: an unnumbered "select" menu (the folder-trust dialog)
+     * has no digit to press — the option is sent by number and the
+     * server walks the caret to it against a fresh capture. */
+    var b = p.kind === 'select'
+      ? keyButton(box, { option: Number(o.key) }, (p.caret === o.key ? '❯ ' : '') + text)
+      : keyButton(box, o.key, o.key + ' · ' + text);
     b.classList.add('opt');
     if (o.checked) b.classList.add('on');
   });
   (p.keys || []).forEach(function (k) {
+    /* A select's option buttons already carry the whole answer — and
+     * no esc: on the folder-trust dialog "Esc to cancel" exits claude
+     * exactly like "No, exit" does (verified, grove-333). */
+    if (p.kind === 'select') return;
     if (!labelled[k]) keyButton(box, k, keyNames[k] || k);
   });
   if (p.typing && !wasTyping) el('text').focus();
@@ -1383,7 +1394,7 @@ function keyButton(box, k, text) {
   var b = h('button', '', text);
   b.onclick = function () {
     box.classList.add('busy');
-    api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', { key: k })
+    api('/api/chats/' + encodeURIComponent(view.addr) + '/keys', typeof k === 'string' ? { key: k } : k)
       .catch(showError)
       .then(function () { box.classList.remove('busy'); });
   };

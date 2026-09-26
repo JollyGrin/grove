@@ -223,11 +223,11 @@ func chatLabel(configDir, dir string, s transcript.Session) string {
 }
 
 // markWaiting fills each row's `waiting` (grove-302): one pane capture per
-// live kind-chat row that is running claude, read through the same
-// DetectPicker the phone's picker strip uses, so "needs you" on the list
-// and the keys row in the chat can never disagree. The cap is the cost
-// bound — a cockpit pane, an archived transcript or a pane sitting at a
-// shell is never captured. A failed capture is false, never an error: a
+// live kind-chat row that is running claude, read through chatweb.Waiting
+// — the same detector as the phone's picker strip, its turn strip and the
+// send gate (grove-333), so "needs you" on the list and the chat can never
+// disagree. The cap is the cost bound — a cockpit pane, an archived
+// transcript or a pane sitting at a shell is never captured. A failed capture is false, never an error: a
 // scrape that cannot read must not look like a question to answer.
 //
 // grove-334: the same capture fills `turn` (ClassifyTurn), so a list row
@@ -247,7 +247,7 @@ func markWaiting(recs []chatRecord, capture func(pane string) (string, error)) {
 		if err != nil {
 			continue
 		}
-		r.Row.Waiting = chatweb.DetectPicker(out).Detected
+		r.Row.Waiting = chatweb.Waiting(out)
 		r.Row.Turn = chatweb.ClassifyTurn(out, true).State
 	}
 }

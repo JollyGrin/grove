@@ -40,8 +40,9 @@ type Picker struct {
 	// Prompt is the modal's question, for the row's label. Best-effort.
 	Prompt string `json:"prompt"`
 	// Kind is "menu" (numbered, a digit answers), "multi" (checkboxes, a
-	// digit toggles — AskUserQuestion multiSelect) or "yesno". Additive
-	// (grove-308): a client that ignores it still has Keys.
+	// digit toggles — AskUserQuestion multiSelect), "select" (unnumbered:
+	// ↑/↓ walk the caret, Enter confirms — grove-333) or "yesno".
+	// Additive (grove-308): a client that ignores it still has Keys.
 	Kind string `json:"kind,omitempty"`
 	// Options are the numbered rows with their labels, so the phone can
 	// show "Banana" instead of a bare "2". Each Key is also in Keys.
@@ -53,6 +54,10 @@ type Picker struct {
 	// Review is AskUserQuestion's Submit page's picks, one "question →
 	// answer" per line (grove-334, review.go). Additive.
 	Review []string `json:"review,omitempty"`
+	// Caret is the Key of the option the ❯ sits on, "" when none is drawn
+	// (grove-333, additive). A "select" menu is answered by walking the
+	// caret, so the server needs to know where it starts.
+	Caret string `json:"caret,omitempty"`
 }
 
 // Option is one numbered row of a menu.
@@ -186,7 +191,7 @@ func DetectPicker(capture string) Picker {
 	}
 	closeRun()
 	if last == nil || !last.boxed && !modalChrome(lines, last) {
-		return Picker{}
+		return detectSelect(lines)
 	}
 	return last.picker(lines)
 }
@@ -262,8 +267,106 @@ func (r *run) picker(lines []string) Picker {
 	if tabBar(lines[:r.start]) {
 		p.Keys = append(p.Keys, "tab")
 	}
+	p.Caret = r.caret
 	p.Keys = append(p.Keys, "esc")
 	return p
+}
+
+// selectFooterRe is an unnumbered menu's footer (grove-333): the
+// folder-trust dialog draws "Enter to confirm · Esc to cancel", and the
+// shared Select component "Enter to select … Esc to cancel".
+var selectFooterRe = regexp.MustCompile(`(?i)enter to (confirm|select).*esc to cancel`)
+
+// selectPromptLookback is how far above an unnumbered menu its question
+// may sit — the trust dialog puts two paragraphs and a link between them.
+const selectPromptLookback = 12
+
+// detectSelect is the unnumbered menu (grove-333) — Claude Code's
+// folder-trust dialog, which fires on the FIRST chat in every new
+// directory, i.e. exactly a phone-spawned chat:
+//
+//	❯ No, exit
+//	  Yes, I trust this folder
+//
+//	Enter to confirm · Esc to cancel
+//
+// No digits to anchor on, so the rule is all chrome, and narrower than the
+// numbered one: the capture's LAST non-blank line is the footer (nothing
+// below it, so no transcript and no idle input box); directly above it,
+// past blanks, a run of ≥ 2 lines with exactly ONE ❯ caret; and every
+// other row's text starts in the caret row's label column. A transcript
+// never ends on that footer, and an echoed "❯ prompt" has no aligned run.
+func detectSelect(lines []string) Picker {
+	i := len(lines) - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+	if i < 0 || !selectFooterRe.MatchString(lines[i]) {
+		return Picker{}
+	}
+	i--
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+	end := i
+	for i >= 0 && strings.TrimSpace(lines[i]) != "" {
+		i--
+	}
+	block := lines[i+1 : end+1]
+	col, caret := -1, -1
+	for j, l := range block {
+		t := strings.TrimLeft(l, " ")
+		if rest, ok := strings.CutPrefix(t, "❯"); ok {
+			if caret >= 0 {
+				return Picker{}
+			}
+			caret = j
+			body := strings.TrimLeft(rest, " \u00a0")
+			col = len([]rune(l)) - len([]rune(body))
+		}
+	}
+	if caret < 0 || len(block) < 2 {
+		return Picker{}
+	}
+	p := Picker{Detected: true, Kind: "select", Keys: []string{"up", "down", "enter", "esc"}}
+	for j, l := range block {
+		label := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "❯"))
+		if j != caret && indent(l) != col || label == "" || optionRe.MatchString(l) {
+			// Misaligned, or numbered (the numbered rule's job): not
+			// this shape — refuse rather than guess.
+			return Picker{}
+		}
+		key := string(rune('1' + len(p.Options)))
+		if len(p.Options) == 9 {
+			return Picker{}
+		}
+		p.Options = append(p.Options, Option{Key: key, Label: strings.TrimLeft(label, "\u00a0 ")})
+		if j == caret {
+			p.Caret = key
+		}
+	}
+	p.Prompt = selectPrompt(lines[max(0, i-selectPromptLookback) : i+1])
+	return p
+}
+
+// selectPrompt is the question above an unnumbered menu: the nearest
+// sentence ending in "?" (cut there — the trust dialog's wraps on into a
+// parenthetical), else the nearest non-blank line.
+func selectPrompt(above []string) string {
+	nearest := ""
+	for j := len(above) - 1; j >= 0; j-- {
+		t := strings.TrimSpace(above[j])
+		if t == "" {
+			continue
+		}
+		if nearest == "" {
+			nearest = t
+		}
+		if q := strings.Index(t, "?"); q >= 0 {
+			return t[:q+1]
+		}
+	}
+	return nearest
 }
 
 func option(key, label string) Option {
@@ -332,11 +435,24 @@ func ValidKey(key string) bool {
 // walks AskUserQuestion's pages; in the bare input box it would do
 // something else entirely.
 //
-// Enter and Space are deliberately absent. The v2.1.282 captures show a
-// digit already answers a single-select and toggles a multi-select, and
-// the Submit page is itself a numbered menu — so neither is needed, and
-// Enter is exactly the key that submits whatever sits in an input box.
-func MenuKey(key string) bool { return key == "tab" }
+// Space is deliberately absent. The v2.1.282 captures show a digit
+// already answers a single-select and toggles a multi-select, and the
+// Submit page is itself a numbered menu — so it is not needed. Enter is
+// exactly the key that submits whatever sits in an input box, which is
+// why a numbered menu never offers it.
+//
+// grove-333: up, down and enter join it, for the unnumbered "select" menu
+// (the folder-trust dialog), where digits do nothing and the caret is the
+// only way to choose. Still gated the same way: only a fresh capture whose
+// picker OFFERS them lets them through, so Enter can never reach an idle
+// input box.
+func MenuKey(key string) bool {
+	switch key {
+	case "tab", "up", "down", "enter":
+		return true
+	}
+	return false
+}
 
 // KeyLiteral maps a UI key onto the characters tmux send-keys -l delivers.
 // Esc and Tab need translating; a digit is itself.
@@ -346,6 +462,12 @@ func KeyLiteral(key string) string {
 		return "\x1b"
 	case "tab":
 		return "\t"
+	case "up":
+		return "\x1b[A"
+	case "down":
+		return "\x1b[B"
+	case "enter":
+		return "\r"
 	}
 	return key
 }

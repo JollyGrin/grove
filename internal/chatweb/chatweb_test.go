@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ type fakeBackend struct {
 	tailHold bool // keep --follow open until the request context ends
 
 	sendErr, keysErr, spawnErr error
+	sendWarn                   string
+	keySeq                     []string // every literal Keys was sent, in order
 	closeErr                   error
 	closed                     string
 	picker                     chatweb.Picker
@@ -113,13 +116,14 @@ func (f *fakeBackend) Tail(ctx context.Context, target string, since int, follow
 	return nil
 }
 
-func (f *fakeBackend) Send(target, text string) error {
+func (f *fakeBackend) Send(target, text string) (string, error) {
 	f.sentTo, f.sentText = target, text
-	return f.sendErr
+	return f.sendWarn, f.sendErr
 }
 
 func (f *fakeBackend) Keys(target, literal string) error {
 	f.keyTo, f.keyLit = target, literal
+	f.keySeq = append(f.keySeq, literal)
 	return f.keysErr
 }
 
@@ -453,10 +457,16 @@ func TestKeysMenuKeyNeedsAMenuOnThePane(t *testing.T) {
 	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != http.StatusConflict {
 		t.Errorf("tab into a bare prompt = %d, want 409: %s", w.Code, w.Body)
 	}
-	// Enter and Space are never raw keys, menu or not.
-	for _, k := range []string{"enter", "space", " ", "\r"} {
+	// Space is never a raw key; Enter is a menu key (grove-333) and a
+	// bare prompt offers none, so it is refused without reaching the pane.
+	for _, k := range []string{"space", " ", "\r"} {
 		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
 			t.Errorf("%q into a bare prompt = %d, want 400", k, w.Code)
+		}
+	}
+	for _, k := range []string{"enter", "up", "down"} {
+		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%q into a bare prompt = %d, want 409", k, w.Code)
 		}
 	}
 	if b.keyTo != "" {
@@ -471,10 +481,12 @@ func TestKeysMenuKeyNeedsAMenuOnThePane(t *testing.T) {
 	if w := post(t, h, "/api/chats/c/keys", `{"key":"tab"}`); w.Code != 200 || b.keyLit != "\t" {
 		t.Errorf("tab into a tabbed menu = %d, literal %q: %s", w.Code, b.keyLit, w.Body)
 	}
-	for _, k := range []string{"enter", "space"} {
-		if w := post(t, h, "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != 400 {
-			t.Errorf("%q into a menu = %d, want 400 (a digit answers; Enter submits input boxes)", k, w.Code)
-		}
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"space"}`); w.Code != 400 {
+		t.Errorf("space into a menu = %d, want 400", w.Code)
+	}
+	// A numbered menu does not offer Enter (a digit answers it).
+	if w := post(t, h, "/api/chats/c/keys", `{"key":"enter"}`); w.Code != http.StatusConflict {
+		t.Errorf("enter into a numbered menu = %d, want 409", w.Code)
 	}
 }
 
@@ -971,5 +983,111 @@ func TestPaneRoute(t *testing.T) {
 	}
 	if w := post(t, h, "/api/chats/grove-chat-sb-1/pane", "{}"); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST pane = %d, want 405", w.Code)
+	}
+}
+
+// --- grove-333: never send into a modal ---
+
+// sendFixture is a backend whose pane is a real capture, read through the
+// real detectors — so the gate and the detectors cannot drift apart.
+func sendFixture(t *testing.T, name string) *fakeBackend {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := string(raw)
+	return &fakeBackend{picker: chatweb.DetectPicker(c), turns: []chatweb.Turn{chatweb.ClassifyTurn(c, true)}}
+}
+
+func TestSendRefusesAModal(t *testing.T) {
+	// The folder-trust dialog: an Enter here picks "No, exit" and the chat
+	// is gone. And the numbered permission prompt, for the older shape.
+	for _, name := range []string{"cc2.1.283-trust.txt", "cc2.1.282-perm.txt", "cc2.1.282-single.txt"} {
+		b := sendFixture(t, name)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hello"}`)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "answer it first") {
+			t.Errorf("%s: send = %d %s, want 409 naming the prompt", name, w.Code, w.Body)
+		}
+		if b.sentTo != "" || len(b.keySeq) != 0 {
+			t.Errorf("%s: a refused send still reached the pane: %q %q", name, b.sentText, b.keySeq)
+		}
+	}
+}
+
+func TestSendIntoAnIdleOrTypingPane(t *testing.T) {
+	// Idle is the ordinary case; AskUserQuestion's free-text row is the
+	// one modal a send answers.
+	for _, name := range []string{"cc2.1.283-idle.txt", "cc2.1.283-idle-typed.txt", "cc2.1.282-typesomething.txt"} {
+		b := sendFixture(t, name)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hello"}`)
+		if w.Code != 200 || b.sentText != "hello" {
+			t.Errorf("%s: send = %d %s", name, w.Code, w.Body)
+		}
+	}
+}
+
+func TestSendSurfacesARelayWarning(t *testing.T) {
+	b := &fakeBackend{sendWarn: "⚠ sent, but no consumption evidence within 15s — check the pane"}
+	w := post(t, chatweb.NewServer(b), "/api/chats/c/send", `{"text":"hi"}`)
+	var got map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != 200 || got["sent"] != true || got["warning"] != b.sendWarn {
+		t.Fatalf("send = %d %v, want sent + the relay's warning", w.Code, got)
+	}
+	clean := &fakeBackend{}
+	w = post(t, chatweb.NewServer(clean), "/api/chats/c/send", `{"text":"hi"}`)
+	if strings.Contains(w.Body.String(), "warning") {
+		t.Errorf("a clean send carries a warning: %s", w.Body)
+	}
+}
+
+func TestEnterOnlyIntoASelectMenu(t *testing.T) {
+	trust := sendFixture(t, "cc2.1.283-trust.txt")
+	if w := post(t, chatweb.NewServer(trust), "/api/chats/c/keys", `{"key":"enter"}`); w.Code != 200 || trust.keyLit != "\r" {
+		t.Errorf("enter into the trust dialog = %d, literal %q", w.Code, trust.keyLit)
+	}
+	if w := post(t, chatweb.NewServer(trust), "/api/chats/c/keys", `{"key":"down"}`); w.Code != 200 || trust.keyLit != "\x1b[B" {
+		t.Errorf("down into the trust dialog = %d, literal %q", w.Code, trust.keyLit)
+	}
+	idle := sendFixture(t, "cc2.1.283-idle.txt")
+	for _, k := range []string{"enter", "up", "down"} {
+		if w := post(t, chatweb.NewServer(idle), "/api/chats/c/keys", `{"key":"`+k+`"}`); w.Code != http.StatusConflict {
+			t.Errorf("%s into an idle box = %d, want 409", k, w.Code)
+		}
+	}
+	if len(idle.keySeq) != 0 {
+		t.Errorf("a refused key reached the idle pane: %q", idle.keySeq)
+	}
+}
+
+func TestOptionWalksTheCaret(t *testing.T) {
+	cases := []struct {
+		fixture, body string
+		want          []string
+	}{
+		// Caret on option 1: option 2 is one down, then Enter.
+		{"cc2.1.283-trust.txt", `{"option":2}`, []string{"\x1b[B", "\r"}},
+		{"cc2.1.283-trust.txt", `{"option":1}`, []string{"\r"}},
+		// Caret already moved to 2: option 1 is one up.
+		{"cc2.1.283-trust-down.txt", `{"option":1}`, []string{"\x1b[A", "\r"}},
+		// A numbered menu's option is its digit, no Enter.
+		{"cc2.1.282-single.txt", `{"option":2}`, []string{"2"}},
+	}
+	for _, c := range cases {
+		b := sendFixture(t, c.fixture)
+		w := post(t, chatweb.NewServer(b), "/api/chats/c/keys", c.body)
+		if w.Code != 200 || !slices.Equal(b.keySeq, c.want) {
+			t.Errorf("%s %s = %d %s, keys %q, want %q", c.fixture, c.body, w.Code, w.Body, b.keySeq, c.want)
+		}
+	}
+	for _, c := range []struct{ fixture, body string }{
+		{"cc2.1.283-trust.txt", `{"option":3}`},
+		{"cc2.1.283-idle.txt", `{"option":1}`},
+	} {
+		b := sendFixture(t, c.fixture)
+		if w := post(t, chatweb.NewServer(b), "/api/chats/c/keys", c.body); w.Code != http.StatusConflict || len(b.keySeq) != 0 {
+			t.Errorf("%s %s = %d, keys %q, want 409 and nothing sent", c.fixture, c.body, w.Code, b.keySeq)
+		}
 	}
 }

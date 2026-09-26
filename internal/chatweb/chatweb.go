@@ -57,8 +57,11 @@ type Backend interface {
 	// line — byte-identical to `gv chat tail`, because the SSE stream
 	// forwards those lines verbatim rather than reshaping them.
 	Tail(ctx context.Context, target string, since int, follow bool, w io.Writer) error
-	// Send relays prose and verifies it SUBMITTED (`gv chat send`).
-	Send(target, text string) error
+	// Send relays prose and verifies it SUBMITTED (`gv chat send`). warn
+	// is the relay's own "sent, but no consumption evidence" line, "" when
+	// the pane showed uptake (grove-333) — a success, but not a clean one.
+	// It refuses with ErrModal when a fresh capture shows a modal.
+	Send(target, text string) (warn string, err error)
 	// Keys delivers literal characters with no Enter (`gv chat keys`).
 	// literal is already validated and mapped by the server.
 	Keys(target, literal string) error
@@ -579,19 +582,38 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, target strin
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("empty message — nothing sent"))
 		return
 	}
+	// grove-333: never send into a modal. A send ends in Enter, and Enter
+	// picks whatever the modal's caret is on — a phone send into the
+	// folder-trust dialog chose "No, exit" and killed the chat. Judged on
+	// a FRESH read, never the phone's last picker event. The backend's
+	// Send gates again on its own capture (the CLI has no server in
+	// front); this one keeps the rule in the handler, where it is tested.
+	if p := s.backend.Picker(target); !p.Typing && (p.Detected || s.backend.Turn(target).State == TurnWaiting) {
+		writeErr(w, http.StatusConflict, ErrModal)
+		return
+	}
 	// The refusal a non-writable chat earns is the CLI's own words
 	// (chat.WriteRefusal), routed straight through: the phone must never
 	// invent its own reason for why a chat will not take input.
-	if err := s.backend.Send(target, body.Text); err != nil {
+	warn, err := s.backend.Send(target, body.Text)
+	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sent": true})
+	resp := map[string]any{"sent": true}
+	if warn != "" {
+		// Submitted, but the relay saw no uptake: the phone must not
+		// say "sent ✓" over a line the CLI printed as a ⚠ (grove-333).
+		resp["warning"] = warn
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// keysBody is `POST /keys`'s payload: ONE key, named, from a closed set.
+// keysBody is `POST /keys`'s payload: ONE key, named, from a closed set —
+// or (grove-333) one option of the picker on screen, by its Key's number.
 type keysBody struct {
-	Key string `json:"key"`
+	Key    string `json:"key"`
+	Option int    `json:"option"`
 }
 
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target string) {
@@ -600,12 +622,16 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	if body.Option != 0 {
+		s.handleOption(w, target, body)
+		return
+	}
 	// ValidKey, not "anything without a newline": a raw-key endpoint that
 	// takes free text is a way to type into somebody's agent while skipping
 	// the relay's verified submit. A picker needs 1–9, y/n, Tab and Esc;
 	// that is the whole list, and everything else is `send`'s job.
 	if !ValidKey(body.Key) && !MenuKey(body.Key) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("%q is not a picker key — one of 1-9, y, n, esc, or tab into a menu (prose goes through /send, which verifies the submit)", body.Key))
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%q is not a picker key — one of 1-9, y, n, esc, or tab/up/down/enter into a menu that offers it (prose goes through /send, which verifies the submit)", body.Key))
 		return
 	}
 	// grove-308/318: every picker key is judged against a FRESH capture,
@@ -621,6 +647,65 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request, target strin
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"key": body.Key})
+}
+
+// handleOption answers the picker on screen with one of ITS options
+// (grove-333), so the phone says what it means — "Yes, I trust this
+// folder" — and the server works out the keys against a fresh capture.
+//
+// Why the server and not the phone: an unnumbered "select" menu is
+// answered by walking the ❯ caret and pressing Enter, and how far to walk
+// depends on where the caret is NOW — which only a fresh read knows. A
+// phone sending up/down/enter itself would act on its last picker event,
+// one tap stale, and the last key of that sequence is an Enter. A numbered
+// menu's option is just its digit, so the one verb covers both.
+func (s *Server) handleOption(w http.ResponseWriter, target string, body keysBody) {
+	if body.Key != "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("send a key or an option, not both"))
+		return
+	}
+	p := s.backend.Picker(target)
+	keys, err := optionKeys(p, body.Option)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	for _, k := range keys {
+		if err := s.backend.Keys(target, KeyLiteral(k)); err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"option": body.Option, "keys": keys})
+}
+
+// optionKeys is the key sequence that picks option n of p: its digit on a
+// numbered menu, or the caret walk plus Enter on a "select" one.
+func optionKeys(p Picker, n int) ([]string, error) {
+	want := strconv.Itoa(n)
+	idx := slices.IndexFunc(p.Options, func(o Option) bool { return o.Key == want })
+	if !p.Detected || idx < 0 {
+		return nil, fmt.Errorf("option %d is not on the chat's pane now — the prompt may have closed", n)
+	}
+	if p.Kind != "select" {
+		if !slices.Contains(p.Keys, want) {
+			return nil, fmt.Errorf("option %d is not on the chat's pane now — the prompt may have closed", n)
+		}
+		return []string{want}, nil
+	}
+	from := slices.IndexFunc(p.Options, func(o Option) bool { return o.Key == p.Caret })
+	if from < 0 {
+		return nil, fmt.Errorf("cannot see where the menu's caret is — nothing sent")
+	}
+	step := "down"
+	if idx < from {
+		step = "up"
+	}
+	var keys []string
+	for range max(idx-from, from-idx) {
+		keys = append(keys, step)
+	}
+	return append(keys, "enter"), nil
 }
 
 // newBody is `POST /workspaces/<l>/new`'s payload, and every field of it

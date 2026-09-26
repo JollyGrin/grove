@@ -22,6 +22,7 @@ package chatweb
 // the composer never looks at it.
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 
@@ -109,3 +110,30 @@ func (t Turn) settled(polls int) bool {
 
 // turnSettle is how many consecutive identical polls a quiet state needs.
 const turnSettle = 3
+
+// Waiting is "the pane is showing a modal" — the one answer the list row's
+// `waiting`, the chat stream and the send gate all read (grove-333), so
+// they cannot disagree: a picker the phone can drive, OR modal chrome the
+// turn classifier sees (a prompt the picker rules do not know yet).
+func Waiting(capture string) bool {
+	return DetectPicker(capture).Detected || ClassifyTurn(capture, true).State == TurnWaiting
+}
+
+// ErrModal is the send gate's refusal (grove-333). A send is a paste and
+// an Enter, and an Enter into a modal picks whatever the modal's caret is
+// on: into the folder-trust dialog that was "No, exit", and the chat died.
+var ErrModal = errors.New("the chat is showing a prompt — answer it first (nothing was sent)")
+
+// SendRefusal is the send gate over one fresh capture: ErrModal when a
+// modal is up, nil when prose may go in. AskUserQuestion's free-text row
+// is the one modal a send answers (the composer's verified send is how the
+// phone fills it), so a picker in its typing state passes.
+func SendRefusal(capture string) error {
+	if p := DetectPicker(capture); p.Typing {
+		return nil
+	}
+	if Waiting(capture) {
+		return ErrModal
+	}
+	return nil
+}

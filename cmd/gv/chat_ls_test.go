@@ -585,7 +585,13 @@ func TestMarkWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	panes := map[string]string{"%1": string(perm), "%2": string(idle), "%3": string(perm), "%4": string(perm)}
+	// grove-333: the unnumbered folder-trust dialog is waiting too — the
+	// list and the chat stream read one detector (chatweb.Waiting).
+	trust, err := os.ReadFile(filepath.Join("..", "..", "internal", "chatweb", "testdata", "cc2.1.283-trust.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	panes := map[string]string{"%1": string(perm), "%2": string(idle), "%3": string(perm), "%4": string(perm), "%6": string(trust)}
 	var captured []string
 	capture := func(p string) (string, error) {
 		captured = append(captured, p)
@@ -601,15 +607,16 @@ func TestMarkWaiting(t *testing.T) {
 		{Row: chat.Row{Kind: chat.KindChat, Busy: false}, Pane: "%4"},   // shell: never read
 		{Row: chat.Row{Kind: chat.KindChat, Busy: true}, Pane: "%5"},    // capture fails
 		{Row: chat.Row{Kind: chat.KindArchived}},                        // no pane
+		{Row: chat.Row{Kind: chat.KindChat, Busy: true}, Pane: "%6"},    // trust dialog
 	}
 	markWaiting(recs, capture)
-	want := []bool{true, false, false, false, false, false}
+	want := []bool{true, false, false, false, false, false, true}
 	for i, w := range want {
 		if recs[i].Row.Waiting != w {
 			t.Errorf("row %d waiting = %v, want %v", i, recs[i].Row.Waiting, w)
 		}
 	}
-	if len(captured) != 3 {
+	if len(captured) != 4 {
 		t.Errorf("captured %v; only live busy chat panes may be read", captured)
 	}
 	// grove-334: `turn` rides the same capture; a shell pane is stopped

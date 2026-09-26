@@ -269,9 +269,60 @@ func TestMenuKey(t *testing.T) {
 	if !chatweb.MenuKey("tab") || chatweb.KeyLiteral("tab") != "\t" {
 		t.Error("tab is a menu key, sent as a literal tab")
 	}
-	for _, k := range []string{"enter", "space", "\r", "\n", " ", "1", "esc"} {
+	for k, lit := range map[string]string{"up": "\x1b[A", "down": "\x1b[B", "enter": "\r"} {
+		if !chatweb.MenuKey(k) || chatweb.KeyLiteral(k) != lit {
+			t.Errorf("%s is a menu key (grove-333), sent as %q", k, lit)
+		}
+	}
+	for _, k := range []string{"space", "\r", "\n", " ", "1", "esc"} {
 		if chatweb.MenuKey(k) {
 			t.Errorf("MenuKey(%q) = true", k)
+		}
+	}
+}
+
+// grove-333: Claude Code's folder-trust dialog (2.1.283, captured on an
+// isolated tmux server) is an UNNUMBERED menu — a ❯ caret, no digits, and
+// an "Enter to confirm · Esc to cancel" footer. Its default is "No, exit".
+func TestDetectPickerTrustDialog(t *testing.T) {
+	for name, caret := range map[string]string{"trust": "1", "trust-down": "2"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "cc2.1.283-"+name+".txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := chatweb.DetectPicker(string(raw))
+		if !p.Detected || p.Kind != "select" || p.Caret != caret {
+			t.Fatalf("%s: %+v, want a select with the caret on %s", name, p, caret)
+		}
+		if len(p.Options) != 2 || p.Options[0].Label != "No, exit" || p.Options[1].Label != "Yes, I trust this folder" {
+			t.Errorf("%s: options %+v", name, p.Options)
+		}
+		if !reflect.DeepEqual(p.Keys, []string{"up", "down", "enter", "esc"}) {
+			t.Errorf("%s: keys %q", name, p.Keys)
+		}
+		if !strings.HasSuffix(p.Prompt, "one you trust?") {
+			t.Errorf("%s: prompt %q", name, p.Prompt)
+		}
+		if !chatweb.Waiting(string(raw)) {
+			t.Errorf("%s: Waiting = false — the list row would say it is ready", name)
+		}
+	}
+}
+
+// The select rule's anti-false-positives: it needs the footer as the LAST
+// line, one caret, and aligned rows.
+func TestDetectSelectDoesNotFire(t *testing.T) {
+	for name, c := range map[string]string{
+		"echoed prompt, idle box": "❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm · Esc to cancel\n● ok\n────\n❯ \n────\n  ? for shortcuts",
+		"footer not last":         " ❯ a\n   b\n\n Enter to confirm · Esc to cancel\n more prose",
+		"two carets":              " ❯ a\n ❯ b\n\n Enter to confirm · Esc to cancel",
+		"no caret":                "   a\n   b\n\n Enter to confirm · Esc to cancel",
+		"misaligned row":          " ❯ a\n b\n\n Enter to confirm · Esc to cancel",
+		"one row":                 " ❯ a\n\n Enter to confirm · Esc to cancel",
+		"no esc":                  " ❯ a\n   b\n\n Enter to confirm",
+	} {
+		if p := chatweb.DetectPicker(c); p.Detected {
+			t.Errorf("%s: detected %+v", name, p)
 		}
 	}
 }
