@@ -29,6 +29,9 @@ type Payload struct {
 	HookEventName        string `json:"hook_event_name"`
 	Message              string `json:"message"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	// Source is SessionStart's origin: startup | resume | clear | compact
+	// (verified on Claude Code 2.1.283, grove-339).
+	Source string `json:"source"`
 }
 
 // Matches "STATUS: QUESTION — text" with any dash flavor (—, –, -).
@@ -69,7 +72,11 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 	if task == nil {
 		return nil // no fleet tracks this cwd (manual session, orchestrator, ovs worktree) — stay silent
 	}
-	if event != "session-start" && foreignSession(task, p.SessionID) {
+	if event == "session-start" {
+		if intruderStart(stateDir, task, p) {
+			return nil // a second session started in a live worker's worktree — not a restart; stay silent (grove-339)
+		}
+	} else if foreignSession(task, p.SessionID) {
 		return nil // another session at the worker's cwd — not the worker; stay silent (grove-250)
 	}
 
@@ -155,10 +162,55 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 // Fallback: a task with no recorded id (pre-capture rows, or a worker
 // whose SessionStart was lost) keeps cwd-only attribution — an unknown
 // id must never make a task unreachable. A payload with no id is treated
-// the same way. `session-start` is exempt by the caller: it is how a
-// worker registers (adopt's fresh pickup session carries a NEW id).
+// the same way. `session-start` takes its own gate, intruderStart: it is
+// how a worker registers (adopt's fresh pickup session carries a NEW id).
 func foreignSession(task *state.Task, sessionID string) bool {
 	return task.SessionID != "" && sessionID != "" && task.SessionID != sessionID
+}
+
+// intruderStart reports whether a SessionStart carrying a NEW id belongs
+// to a second session inside a LIVE worker's worktree rather than to a
+// worker (re)starting (grove-339).
+//
+// A worker that runs a nested `claude` in its own worktree (fixture
+// capture, a `claude -p` probe) fires the full hook set from that cwd, and
+// the nested payloads carry their own session_id — verified on Claude Code
+// 2.1.283: SessionStart (source "startup"), Stop and SessionEnd all carry
+// it. When session-start was exempt from the grove-250 gate, the nested
+// start re-pointed the task's SessionID at itself, so its Stop landed as
+// `idle` and its SessionEnd as `dead` while the worker was mid-turn — and
+// the real worker's later events were then dropped as foreign.
+//
+// Every legitimate id change goes through a non-live row: a fresh grab and
+// `gv adopt` fold the task to setup, a worker that exited folds to dead,
+// a paused task is parked. So a new id is accepted only there, or when the
+// start is a `/clear` (source "clear": only an interactive user in the
+// worker's own pane can issue one). A resume of the recorded id matches
+// and passes. The empty-id fallback of foreignSession stands: a task with
+// no recorded id still registers whoever starts first.
+//
+// The derived tasks.json the scan used can lag the log by a fold (adopt
+// appends task_adopted moments before the pickup session boots), so a
+// mismatch is re-checked against a read-only fold of events.jsonl before
+// anything is dropped. That fold runs only on this rare path, never per
+// turn.
+func intruderStart(stateDir string, task *state.Task, p Payload) bool {
+	if !foreignSession(task, p.SessionID) || p.Source == "clear" {
+		return false
+	}
+	if tasks, err := state.Peek(stateDir); err == nil {
+		if t := tasks[task.Ticket]; t != nil {
+			task = t
+		}
+	}
+	if !foreignSession(task, p.SessionID) {
+		return false
+	}
+	switch {
+	case task.Done, task.Paused, task.Agent == state.AgentSetup, task.Agent == state.AgentDead:
+		return false
+	}
+	return true
 }
 
 // glyphWorker pushes the worker's live status glyph into its tmux window

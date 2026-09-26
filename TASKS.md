@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] Hooks: a nested `claude` in a live worker's worktree can no longer
+      re-register, idle or kill the task (grove-339, 2026-09-26; seen on
+      grove-317). Captured on 2.1.283: a nested `claude -p` fires
+      SessionStart, Stop and SessionEnd, each with its OWN non-empty
+      session id. The grove-250 exemption for SessionStart let it re-point
+      `claude_session_id` at itself. A new id at SessionStart now registers
+      only on a non-live row (setup after grab/adopt, dead, paused) or on
+      `source: "clear"`, re-checked via a read-only `state.Peek` fold,
+      since tasks.json can lag an adopt. Unit tests replay the captured
+      payload shapes. The `e2e/dummy.sh` leg: a nested start/stop/end
+      appends nothing, and the task stays on its worker's id, not
+      idle/dead. Found alongside: the live hooks point at a stale
+      `~/.local/bin/gv` v0.1.3 (see LEARNINGS).
 - [x] `e2e/dummy.sh` runs on its own tmux server (grove-340,
       2026-09-26). It used to create/kill `grove-dummy` on the operator's
       REAL server; now it `unset TMUX TMUX_PANE`, exports a scratch
