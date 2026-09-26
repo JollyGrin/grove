@@ -5,6 +5,7 @@
 # the one command to run before merging anything that touches the TUI or the
 # task lifecycle. Each suite is self-isolating (scratch HOME/state/tmux); this
 # runner adds nothing but sequencing.
+# tmux: never talks to a tmux server itself — each suite isolates its own, so no tmux isolation here.
 set -u
 cd "$(dirname "$0")"
 

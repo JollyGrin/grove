@@ -9,6 +9,7 @@
 # and rejects a request that doesn't disable thinking — the one
 # behavioral requirement raw.go has (GLM 5.3 Flash returns empty text
 # with thinking on, LEARNINGS.md 2026-09-06).
+# tmux: never talks to a tmux server, so no tmux isolation needed.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }

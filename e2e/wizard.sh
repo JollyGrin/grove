@@ -6,6 +6,7 @@
 # agents-md run, --agents-md with a stub worker writes AGENTS.md, the
 # orchestrator brain refresh seeds/stamps/never-overwrites (grove-190),
 # and doctor --json renders the connections board.
+# tmux: never talks to a tmux server (doctor only checks tmux is on PATH), so no tmux isolation needed.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }

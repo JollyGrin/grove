@@ -4,8 +4,10 @@
 # Exercises init → grab (list + start) → hook ownership no-op → ls →
 # untrack --rm → re-grab → done (degraded no-remote path) with ZERO risk to
 # live state: scratch HOME (config), scratch GROVE_STATE_DIR (state), a
-# scratch remote-less git repo, and the worker command stubbed to `echo`.
-# Asserts at the end that live overstory AND grove state were untouched.
+# scratch remote-less git repo, the worker command stubbed to `echo`, and
+# its OWN tmux server (unset TMUX + scratch TMUX_TMPDIR — tmux-discipline
+# rule 1). Asserts at the end that live overstory AND grove state were
+# untouched, and that the REAL tmux server's session list is unchanged.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -41,6 +43,15 @@ snapshot_live() {
   true
 }
 LIVE_BEFORE="$(snapshot_live)"
+real_tmux() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR tmux list-sessions -F '#{session_name}' 2>/dev/null | sort; true; }
+REAL_TMUX_BEFORE="$(real_tmux)"
+
+# $TMUX beats TMUX_TMPDIR in tmux's socket resolution — launched from inside
+# a tmux pane, TMUX_TMPDIR alone is a silent no-op and every tmux call
+# (grab's session, cleanup's kill) hits the REAL server. Unset first.
+unset TMUX TMUX_PANE
+export TMUX_TMPDIR="$SCRATCH/tmux"   # isolated tmux server — never the user's
+mkdir -p "$TMUX_TMPDIR"
 
 DUMMY="$SCRATCH/repos/dummy"
 # grove-29 P2: a workspace's cockpit + workers collapse into one
@@ -48,7 +59,13 @@ DUMMY="$SCRATCH/repos/dummy"
 # own workspace, label = its dir base ("dummy").
 SESSION="grove-dummy"
 cleanup() {
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # Scoped to the isolated server: TMUX is unset and TMUX_TMPDIR is ours.
+  # A bare kill-server once took down every worker on the machine (2026-07-07).
+  env -u TMUX TMUX_TMPDIR="$TMUX_TMPDIR" tmux kill-server 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
+    sleep 0.2
+  done
   kill "${ORPHAN_PID:-}" 2>/dev/null || true   # grove-92 seeded lookalike, if a fail left it running
   # grove-156 seeded worktree-path sleepers, if a fail left them running
   kill "${SLEEPER_PID:-}" "${SLEEPER2_PID:-}" "${ZOMBIE_PID:-}" 2>/dev/null || true
@@ -379,5 +396,6 @@ say "audit is quiet afterwards"
 say "live state untouched"
 LIVE_AFTER="$(snapshot_live)"
 [ "$LIVE_BEFORE" = "$LIVE_AFTER" ] || { printf '%s\n---\n%s\n' "$LIVE_BEFORE" "$LIVE_AFTER"; fail "live overstory/grove state changed"; }
+[ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "the REAL tmux server's session list changed — the suite leaked out of isolation"
 
 say "PASS — full grab/ls/hook/untrack/done loop green on a remote-less repo"
