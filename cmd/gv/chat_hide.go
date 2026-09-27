@@ -86,54 +86,64 @@ func chatMoveEvent(kind, session, pane string, row chat.Row) state.Event {
 }
 
 // cmdChatHide moves a cockpit chat pane into its own detached session.
-//
-// Order: every refusal first (tmux's view of the pane, then the report's),
-// then the event, then the move. The event is appended from inside
-// tmux.HideChatPane — after the session name is reserved, before the pane
-// leaves the cockpit — because this verb is run from inside the pane it
-// moves.
 func cmdChatHide(args []string) error {
 	pane, target, err := hideArg(args, os.Getenv("TMUX_PANE"))
 	if err != nil {
 		return err
 	}
-	isCockpit, err := cockpitSessionCheck()
+	session, err := hideChat(pane, target)
 	if err != nil {
 		return err
+	}
+	fmt.Printf("✓ hidden as %s — still running; `gv chat show %s` brings it back\n", session, session)
+	return nil
+}
+
+// hideChat is the one implementation behind `gv chat hide` and the
+// cockpit's `h` (grove-403): a %pane id, or a target for the chat report.
+//
+// Order: every refusal first (tmux's view of the pane, then the report's),
+// then the event, then the move. The event is appended from inside
+// tmux.HideChatPane — after the session name is reserved, before the pane
+// leaves the cockpit — because the verb is run from inside the pane it
+// moves.
+func hideChat(pane, target string) (string, error) {
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return "", err
 	}
 	// A %pane is asked about directly first: tmux knows a dashboard, a
 	// worker window and a remote attachment from a chat, and says which —
 	// the report would only say "no such row".
 	if pane != "" {
 		if _, err := tmux.PaneHidable(pane, isCockpit); err != nil {
-			return err
+			return "", err
 		}
 	}
 	recs, err := chatReport()
 	if err != nil {
-		return err
+		return "", err
 	}
 	rec, err := hideRecord(recs, pane, target)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if refusal := chat.HideRefusal(rec.Row); refusal != "" {
-		return fmt.Errorf("%s", refusal)
+		return "", fmt.Errorf("%s", refusal)
 	}
 	if rec.Pane == "" {
-		return fmt.Errorf("%s has no live pane to hide", chatName(rec.Row))
+		return "", fmt.Errorf("%s has no live pane to hide", chatName(rec.Row))
 	}
 	session, err := tmux.HideChatPane(rec.Pane, rec.Row.Workspace, isCockpit, func(session string) error {
 		return state.Append(config.StateDirAt(rec.Root), chatMoveEvent(state.EvChatHidden, session, rec.Pane, rec.Row))
 	})
 	if err != nil {
 		if session != "" {
-			return fmt.Errorf("hid the chat as %s, but: %w", session, err)
+			return "", fmt.Errorf("hid the chat as %s, but: %w", session, err)
 		}
-		return err
+		return "", err
 	}
-	fmt.Printf("✓ hidden as %s — still running; `gv chat show %s` brings it back\n", session, session)
-	return nil
+	return session, nil
 }
 
 // cmdChatShow joins a detached chat into its OWN workspace's cockpit window
@@ -143,27 +153,43 @@ func cmdChatShow(args []string) error {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 		return fmt.Errorf("usage: gv chat show <session>   (a grove-chat-<label>-<n> session, or its session id; joins it into its workspace's cockpit)")
 	}
+	pane, row, err := showChat(args[0], true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✓ shown %s — back in the %s cockpit; `gv chat hide %s` moves it off-screen again\n", row.Session, row.Workspace, pane)
+	return nil
+}
+
+// showChat is the one implementation behind `gv chat show` and the
+// cockpit's `h` / `enter` on a hidden row (grove-403). focus=true is the
+// verb's behavior: the shown pane takes the keyboard. focus=false leaves
+// the cockpit window's active pane where it was.
+func showChat(target string, focus bool) (string, chat.Row, error) {
 	isCockpit, err := cockpitSessionCheck()
 	if err != nil {
-		return err
+		return "", chat.Row{}, err
 	}
-	rec, err := findChat(args[0])
+	rec, err := findChat(target)
 	if err != nil {
-		return err
+		return "", chat.Row{}, err
 	}
 	if refusal := chat.ShowRefusal(rec.Row); refusal != "" {
-		return fmt.Errorf("%s", refusal)
+		return "", chat.Row{}, fmt.Errorf("%s", refusal)
 	}
 	session := rec.Row.Session
-	pane, err := tmux.ShowChatPane(session, cockpitSessionForLabel(rec.Row.Workspace), isCockpit, func(pane string) error {
+	show := tmux.ShowChatPaneUnfocused
+	if focus {
+		show = tmux.ShowChatPane
+	}
+	pane, err := show(session, cockpitSessionForLabel(rec.Row.Workspace), isCockpit, func(pane string) error {
 		return state.Append(config.StateDirAt(rec.Root), chatMoveEvent(state.EvChatShown, session, pane, rec.Row))
 	})
 	if err != nil {
 		if pane != "" {
-			return fmt.Errorf("showed %s, but: %w", session, err)
+			return "", chat.Row{}, fmt.Errorf("showed %s, but: %w", session, err)
 		}
-		return err
+		return "", chat.Row{}, err
 	}
-	fmt.Printf("✓ shown %s — back in the %s cockpit; `gv chat hide %s` moves it off-screen again\n", session, rec.Row.Workspace, pane)
-	return nil
+	return pane, rec.Row, nil
 }

@@ -45,6 +45,8 @@ const (
 	modeConfirmLand // the land plan, confirm-gated (grove-378)
 	modeServeReview // grove-381: the run.sh review modal
 	modeServeStop   // grove-381: stop a running serve? (footer confirm)
+	modeChatReply   // grove-403: the inline reply to a hidden chat
+	modeChatClose   // grove-403: close this chat? (footer confirm)
 )
 
 type refreshMsg struct {
@@ -276,6 +278,9 @@ type Model struct {
 	chatTitle string
 	chatNameW int
 	chatSel   int
+	// chatTarget is the chat an open reply/close modal is bound to
+	// (grove-403) — the row as it was when the key was pressed.
+	chatTarget ChatRow
 
 	// The feature lens (grove-378): lensSlug is the lensed feature ("" =
 	// no lens open — modals return to the list), lensSel the car cursor.
@@ -738,6 +743,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.mode == modeChatReply {
+			m.sizeChatInput()
+		}
 		// grove-53 cause (b): a shrink or a SIGWINCH replay on tmux re-attach
 		// leaves stale cells from the old geometry. Force one full repaint per
 		// resize so we always start from a clean slate — no per-frame cost.
@@ -947,7 +955,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Data only (grove-402): never re-arms anything.
 		m.chatRows = mergeChats(m.chatRows, msg.rows, msg.deep)
 		m.assembleChats()
+		m.holdChatTarget()
 		return m, nil
+
+	case chatActedMsg:
+		// grove-403: one key press, one answer, ONE pass of the box — the
+		// row flips now instead of on the next beat. Re-arms nothing.
+		m.flash = msg.flash
+		return m, chatsCmd(m.label, true)
 
 	case featuresMsg:
 		// Data only, like prsMsg: never re-arms anything.
@@ -1082,6 +1097,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeServeStop {
 		return m.handleServeStopKey(k)
 	}
+	if m.mode == modeChatReply {
+		return m.handleChatReplyKey(k)
+	}
+	if m.mode == modeChatClose {
+		return m.handleChatCloseKey(k)
+	}
 
 	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
 	// it intercepts everything — including the remote-row keys below and
@@ -1109,13 +1130,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// grove-402: the same guard for CHATS — selection only in this car, so
-	// every row key is refused rather than landing on the AGENTS cursor.
+	// grove-403: with CHATS focused h / enter / a / x act on the selected
+	// chat; task keys are refused rather than landing on the AGENTS cursor
+	// out of sight (grove-402). Everything else keeps its global meaning.
 	if m.focus == focusChats && len(m.chats) > 0 {
-		switch k.String() {
-		case "enter", "n", "a", "o", "p", "t", "v", "d", "m":
-			m.flash = "CHATS focused — tab to AGENTS for task keys"
-			return m, nil
+		if nm, cmd, handled := m.handleChatsKey(k); handled {
+			return nm, cmd
 		}
 	}
 

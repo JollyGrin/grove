@@ -27,7 +27,8 @@ func orchCloseReason(r string) string {
 // feedItems maps raw events (oldest-first) to curated feed rows,
 // newest-first. Poll noise (plain idle stops, session starts) is excluded;
 // the allowlist is grabbed · adopted · question · blocked · reports done ·
-// answered · needs-input · session died · done · untracked.
+// answered · needs-input · session died · done · untracked · chat hidden ·
+// chat shown.
 func feedItems(events []state.Event) []feedItem {
 	var out []feedItem
 	for _, ev := range events {
@@ -55,6 +56,17 @@ func feedItems(events []state.Event) []feedItem {
 			// into the row so the feed still attributes the dispatch.
 			it = feedItem{Glyph: "⊙", Text: "orchestrator dismissed — " + orchCloseReason(ev.Data["reason"])}
 			it.Time, it.Ticket = ev.Time, ev.Data["ticket"]
+			out = append(out, it)
+			continue
+		case state.EvChatHidden, state.EvChatShown:
+			// grove-403: a chat moved off-screen or back — from the cockpit,
+			// the CLI or `!gv chat hide` inside the chat, all the same event.
+			// Workspace-level: the chat session is the row's subject.
+			it = feedItem{Glyph: "○", Text: "hid " + ev.Data["session"]}
+			if ev.Type == state.EvChatShown {
+				it = feedItem{Glyph: "▣", Text: "showed " + ev.Data["session"]}
+			}
+			it.Time = ev.Time
 			out = append(out, it)
 			continue
 		case state.EvAnswered:

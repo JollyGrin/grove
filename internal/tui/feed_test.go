@@ -40,3 +40,27 @@ func TestOrchCloseReasonDefaults(t *testing.T) {
 		t.Errorf("orchCloseReason(manual) = %q, want manual", got)
 	}
 }
+
+// grove-403: a hide and a show are one feed line each, whoever ran them —
+// the cockpit key, the CLI, or `!gv chat hide` inside the chat all append
+// the same grove-401 event.
+func TestFeedRendersChatHiddenAndShown(t *testing.T) {
+	data := map[string]string{"session": "grove-chat-grove-2", "pane": "%7", "workspace": "grove"}
+	items := feedItems([]state.Event{
+		{Type: state.EvChatHidden, Time: time.Unix(1, 0), Data: data},
+		{Type: state.EvChatShown, Time: time.Unix(2, 0), Data: data},
+	})
+	if len(items) != 2 {
+		t.Fatalf("got %d feed items, want 2", len(items))
+	}
+	// newest-first: the show leads.
+	if got := items[0].Glyph + " " + items[0].Text; got != "▣ showed grove-chat-grove-2" {
+		t.Errorf("show line = %q", got)
+	}
+	if got := items[1].Glyph + " " + items[1].Text; got != "○ hid grove-chat-grove-2" {
+		t.Errorf("hide line = %q", got)
+	}
+	if items[0].Ticket != "" || !items[1].Time.Equal(time.Unix(1, 0)) {
+		t.Errorf("chat lines are ticket-less and carry the event's time: %+v", items)
+	}
+}

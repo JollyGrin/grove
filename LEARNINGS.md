@@ -310,6 +310,13 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
+  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
+  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
+  `gv chat show` and wrong for a cockpit key that must keep the operator
+  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
+  afterwards is needed, and the re-tile does not move focus either.
+  `TestShowChatPaneFocus` pins both behaviors.
 - **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
   not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
   is not an error, so "did the command fail" cannot answer "does this pane
@@ -663,6 +670,13 @@
 
 ## Go / CLI
 
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
 - **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
 - **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
 - **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.

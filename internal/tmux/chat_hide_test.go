@@ -486,3 +486,72 @@ func TestShowChatPaneNeverInCockpit(t *testing.T) {
 		t.Fatal("the emptied chat session still exists")
 	}
 }
+
+// activePane is the active pane of a window.
+func activePane(t *testing.T, target string) string {
+	t.Helper()
+	for _, line := range strings.Split(mustRun(t, "list-panes", "-t", target, "-F", "#{pane_active} #{pane_id}"), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[0] == "1" {
+			return f[1]
+		}
+	}
+	t.Fatalf("no active pane in %s", target)
+	return ""
+}
+
+// grove-403: the cockpit's `h` shows a chat without giving it the keyboard;
+// `enter` focuses it. ShowChatPane itself still focuses (the CLI verb).
+func TestShowChatPaneFocus(t *testing.T) {
+	dash, chatA, chatB := fakeCockpit(t)
+	reg := registry("grove-x")
+	win := Exact("grove-x") + ":cockpit"
+	mustRun(t, "select-pane", "-t", dash)
+
+	session, err := HideChatPane(chatA, "x", reg, nil)
+	if err != nil {
+		t.Fatalf("HideChatPane: %v", err)
+	}
+	if got := activePane(t, win); got != dash {
+		t.Fatalf("active pane after hide = %s, want the dashboard %s", got, dash)
+	}
+	pane, err := ShowChatPaneUnfocused(session, "grove-x", reg, nil)
+	if err != nil {
+		t.Fatalf("ShowChatPaneUnfocused: %v", err)
+	}
+	if pane != chatA {
+		t.Fatalf("shown pane = %s, want %s", pane, chatA)
+	}
+	if got := windowPanes(t, win); len(got) != 3 || got[2] != chatA {
+		t.Fatalf("cockpit panes after show = %v, want %s joined last", got, chatA)
+	}
+	if got := activePane(t, win); got != dash {
+		t.Fatalf("active pane after an unfocused show = %s, want the dashboard %s", got, dash)
+	}
+
+	if err := FocusChatPane(chatA, reg); err != nil {
+		t.Fatalf("FocusChatPane: %v", err)
+	}
+	if got := activePane(t, win); got != chatA {
+		t.Fatalf("active pane after focus = %s, want %s", got, chatA)
+	}
+	// The dashboard is not a chat: focus refuses it and moves nothing.
+	if err := FocusChatPane(dash, reg); err == nil || !strings.Contains(err.Error(), "the dashboard") {
+		t.Fatalf("FocusChatPane(dashboard) = %v, want a refusal", err)
+	}
+	if got := activePane(t, win); got != chatA {
+		t.Fatalf("a refused focus moved the active pane to %s", got)
+	}
+
+	// The CLI's show keeps taking focus.
+	mustRun(t, "select-pane", "-t", dash)
+	session, err = HideChatPane(chatB, "x", reg, nil)
+	if err != nil {
+		t.Fatalf("HideChatPane: %v", err)
+	}
+	if _, err := ShowChatPane(session, "grove-x", reg, nil); err != nil {
+		t.Fatalf("ShowChatPane: %v", err)
+	}
+	if got := activePane(t, win); got != chatB {
+		t.Fatalf("active pane after ShowChatPane = %s, want the shown chat %s", got, chatB)
+	}
+}
