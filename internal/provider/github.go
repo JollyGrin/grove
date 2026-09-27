@@ -163,6 +163,27 @@ func (g *GitHub) List() ([]*Task, error) {
 	return tasks, nil
 }
 
+// ListLabeled returns the open issues carrying label, bodies included,
+// oldest first — the feature-status queued lookup (grove-375), which reads
+// `depends on #N` lines out of the body. One gh call.
+func (g *GitHub) ListLabeled(label string) ([]*Task, error) {
+	out, err := g.run(g.repoPath, "issue", "list", "--state", "open", "--label", label,
+		"--limit", fmt.Sprint(ghListLimit), "--json", "number,title,body,url,labels")
+	if err != nil {
+		return nil, err
+	}
+	var issues []ghIssue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parse gh issue list: %w", err)
+	}
+	tasks := make([]*Task, 0, len(issues))
+	for _, is := range issues {
+		is.State = "open"
+		tasks = append(tasks, g.task(is))
+	}
+	return tasks, nil
+}
+
 // ListCapped reports whether the last List filled the fetch limit.
 func (g *GitHub) ListCapped() bool { return g.capped }
 

@@ -90,3 +90,8 @@ func CreateRemoteBranch(root, sha, branch string) error {
 	_, err := run(root, "push", "--force-with-lease="+ref+":", "origin", sha+":"+ref)
 	return err
 }
+
+// Run runs git in dir and returns trimmed stdout; a non-zero exit wraps
+// *exec.ExitError. The injectable runner for callers that need an exit
+// code (feature status's merge-tree dry run).
+func Run(dir string, args ...string) (string, error) { return run(dir, args...) }

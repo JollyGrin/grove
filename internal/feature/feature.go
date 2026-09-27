@@ -140,7 +140,8 @@ func Close(stateDir, slug, reason string) (*state.Feature, error) {
 }
 
 // Row is one `gv feature ls --json` entry (docs/plugins.md). Additive
-// only: ticket 04 adds status fields here.
+// only. Status (grove-375) is embedded so its fields sit flat on the row;
+// it is nil — every status key absent — on a closed feature.
 type Row struct {
 	Slug      string    `json:"slug"`
 	Repo      string    `json:"repo"`
@@ -149,6 +150,7 @@ type Row struct {
 	Label     string    `json:"label"`
 	CreatedAt time.Time `json:"created_at"`
 	Closed    *Closure  `json:"closed,omitempty"`
+	*Status
 }
 
 // Closure is present on a closed feature's row only.

@@ -30,7 +30,7 @@ repo wins.
 | `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
-| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one |
+| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one. Open rows add status (grove-375): `cars[]` `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}` (state `queued`/`working`/`question`/`ready`/`landed`; order landed → active → queued), `landed`, `total`, `behind_base?`, `mergeable?`, `pr?` `{number, url, state}`, `est_usd`; `--no-pr`/`--no-queued` skip the network lookups |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
