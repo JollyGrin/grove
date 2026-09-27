@@ -1,11 +1,14 @@
 # `gv keys` — encrypted, per-workspace, host-portable secrets
 
-**Status:** DRAFT 2026-09-27, not yet design-reviewed.
+**Status:** DRAFT 2026-09-27, revised the same day after operator review
+(single store with namespaces, `gv keys exec`, masked previews, feature
+train — Decisions 2, 10, 11, 12). Not yet design-reviewed.
 **Goal:** replace the plaintext `~/.config/grove/.env` with an age-encrypted
 store that a worker can *use* without the value ever passing through
-anything an agent reads or writes, that layers global/workspace like the
-rest of grove's config, and that ships to a `hosts:` remote with one
-explicit command over the ssh plumbing that already exists.
+anything an agent reads or writes, that scopes secrets per workspace the
+way the rest of grove's config does — without a single byte of ciphertext
+ever landing in a target repo — and that ships to a `hosts:` remote with
+one explicit command over the ssh plumbing that already exists.
 
 ## The problem
 
@@ -139,23 +142,39 @@ to encrypt something for it. grove owns the layout, not the format.
 ```
 ~/.local/state/grove/age/identity.txt        # THIS host's private key. 0700 dir, 0600 file.
                                              # Never copied, never pushed, never in config.
-~/.config/grove/secrets/                     # global layer (the defaults layer, like config.yaml)
-    recipients.txt                           # who may read this layer: one age1… per line,
+~/.config/grove/secrets/                     # THE store — one physical location, always
+    global/                                  # namespace shared by every workspace
+        recipients.txt                       # who may read this namespace: one age1… per line,
                                              # `# host: <name>` label above each
-    OPENROUTER_API_KEY.age                   # one armored ciphertext per secret
-    KIMI_CODE_API_KEY.age
-<root>/.grove/secrets/                       # workspace layer, identical shape
-    .gitignore                               # "*" — written by grove on first use (§4)
-    recipients.txt
-    MUSE_CONTRIB_KEY.age
+        OPENROUTER_API_KEY.age               # one armored ciphertext per secret
+        OPENROUTER_API_KEY.meta.yaml         # optional sidecar: type label + masked preview (§11)
+        KIMI_CODE_API_KEY.age
+    thegrid/                                 # namespace = a workspace LABEL, identical shape
+        recipients.txt
+        MUSE_CONTRIB_KEY.age
+<root>/.grove/config.yaml                    # a workspace carries NAME REFERENCES only
+                                             # (`auth_token_env: X`, `env: {K: "secret:X"}`)
 ```
+
+**One physical store; workspaces are namespaces inside it.** An earlier
+draft put a second store at `<root>/.grove/secrets/` inside each
+workspace's repo. The operator rejected it, rightly: a target repo must
+never be one `.gitignore` mistake away from carrying ciphertext in its
+history, and ciphertext in history is recoverable forever by anyone who
+later obtains any recipient identity. So the workspace layer is a
+*directory named by the workspace label* under the one store, and the
+thing a workspace's committable `.grove/config.yaml` holds is names.
+Labels are already host-independent identifiers (the cockpit session is
+`grove-<label>`, the registry indexes by label), so `thegrid/` means the
+same namespace on every host that has that workspace. The namespace
+`global` is reserved: `parse` rejects a workspace labeled `global`.
 
 **Identity in the state dir, not the config dir.** This is the decisive
 placement rule of the design. `~/.config/grove/` is what gets copied,
 backed up, and synced — and the ciphertext store *should* travel with it
 (a `scp -r ~/.config/grove` to a fresh box is a legitimate onboarding
-move, and the store arrives unreadable until that box's identity is added
-as a recipient). The identity must never ride along with that copy.
+move, and every namespace arrives unreadable until that box's identity is
+added as a recipient). The identity must never ride along with that copy.
 `~/.local/state/grove/` is per-machine by construction, `--host` and
 `handoff` never sync it (remote.go:2-5: "nothing syncs"), and it already
 has the `GROVE_STATE_DIR` override (config.go:210-218) that e2e uses to
@@ -166,11 +185,12 @@ host, not of a workspace.
 
 **Per-secret files, not one store file.** `gv keys ls` and the ACCOUNT
 tab can list names without decrypting or holding an identity; a push
-can be verified by filename; git diffs and doctor checks are per-name;
-and a `set` rewrites one small file instead of decrypt-modify-reencrypt
-of everything. The cost — every file must be resealed when
-`recipients.txt` changes — is one loop (`gv keys reseal`, §6), and it is
-the same loop push runs anyway.
+can be verified by filename; doctor checks are per-name; and a `set`
+rewrites one small file instead of decrypt-modify-reencrypt of
+everything. The cost — every file in a namespace must be resealed when
+its `recipients.txt` changes — is one loop (`gv keys reseal`, §6), and it
+is the same loop push runs anyway. `recipients.txt` is per namespace so
+a host can be given one workspace's secrets and not another's.
 
 **Armored.** `-----BEGIN AGE ENCRYPTED FILE-----` is self-describing when
 someone finds the file, survives every transport (ssh stdin, a paste,
@@ -183,21 +203,21 @@ value is the plaintext byte-for-byte, with one trailing newline
 stripped on `set` (what `printf x | gv keys set` and an interactive
 prompt both produce).
 
-**Resolution order for a name**, in `secrets.Resolve(name)`:
+**Resolution order for a name**, in `secrets.Resolve(label, name)`:
 
 1. process environment (kept — this is how e2e stubs keys, how an
    operator overrides one for a session, and what `openrouter.Key`
    does today at openrouter.go:56-63; no behavior change)
-2. workspace layer `<root>/.grove/secrets/<NAME>.age`
-3. global layer `~/.config/grove/secrets/<NAME>.age`
+2. this workspace's namespace `~/.config/grove/secrets/<label>/<NAME>.age`
+3. the global namespace `~/.config/grove/secrets/global/<NAME>.age`
 4. legacy `~/.config/grove/.env` — **migration window only** (§7), with a
    doctor warning while any name still resolves from here
 
 Workspace over global, per name, exactly the shape `LoadAt` gives
-config (merge.go:26-64). `Resolve` takes the workspace root the caller
-already has (`gv` resolves it via `workspace.Find`, workspace.go:58-80,
-before loading config); root == "" means global only, the same legacy
-fallback `LoadAt("")` has.
+config (merge.go:26-64). `Resolve` takes the workspace label the caller
+already has (`workspace.Find(cwd).Label`, workspace.go:58-107, resolved
+before config is loaded); label == "" means global only, the same
+legacy fallback `LoadAt("")` has.
 
 ## Decision 3: identity lifecycle
 
@@ -220,10 +240,10 @@ fallback `LoadAt("")` has.
   there is no copy step at all, deliberate or otherwise.
 - **`gv doctor`** gains rows (in `internal/connections`, the same
   `Connection` list the existing sub-lane check sits in, core.go:90-98):
-  `keys:identity` (present, mode 0600, dir 0700), `keys:store-ignored`
-  (workspace `.grove/secrets` passes `git check-ignore`), `keys:legacy-env`
+  `keys:identity` (present, mode 0600, dir 0700), `keys:legacy-env`
   (warn while `.env` still holds names not in the store — with the
-  `gv keys import --rm` fix line). The remote-host probe
+  `gv keys import --rm` fix line), `keys:unresolved` (a configured
+  profile's `auth_token_env` or `secret:NAME` that no namespace holds). The remote-host probe
   (connections.go:249-266) gains a sibling `keys:host:<name>` row that
   runs `<gv> keys ls --json` over the same BatchMode ssh and reports which
   locally-stored names the host lacks.
@@ -313,7 +333,7 @@ change to a function that already exists.
 
 **In-process readers** (`gv sub` — sub/lane.go:126, cmd/gv/sub.go:297-303;
 the ACCOUNT tab — account.go:166, 176, 193; doctor — core.go:181-186)
-call `secrets.Resolve(root, name)` in place of `openrouter.Key(path, name)`.
+call `secrets.Resolve(label, name)` in place of `openrouter.Key(path, name)`.
 Same shape, same env-first precedence, same "" = unset contract. These
 are the only places grove itself needs a value in memory, and each
 already holds it only for one HTTP call.
@@ -335,32 +355,34 @@ gv keys push --host H [--workspace <label>]
    `keys` to `remote.Supported` (remote.go:29-33) with sub-verb gating the
    way `orchestrator` and `chat` are gated — only `recipient` and
    `receive` relay; anything else is the same friendly refusal.
-2. Add the recipient to the layer's `recipients.txt` under `# host: H` if
-   absent, then **reseal**: re-encrypt every `NAME.age` in that layer to
-   the full recipient list. (An operator who wants this host to read
-   only *some* names puts those names in a workspace layer and pushes
-   that; per-name recipient lists are deliberately not a v1 feature.)
-3. Stream the layer to H: `remote.RunWithInput(cfg, "H", "keys",
-   ["receive", "--workspace", label], stdin)` where stdin is one JSON
-   object `{"recipients": "<file>", "secrets": {"NAME": "<armored>"}}` —
-   a one-line exported wrapper over the unexported `run` at
-   remote.go:210, which already takes an `io.Reader`. Ciphertext only;
-   ssh is the transport, not the security.
+2. Add the recipient to the namespace's `recipients.txt` under `# host:
+   H` if absent, then **reseal**: re-encrypt every `NAME.age` in that
+   namespace to the full recipient list. (An operator who wants this
+   host to read only *some* names puts those names in a workspace
+   namespace and pushes that; per-name recipient lists are deliberately
+   not a v1 feature.)
+3. Stream the namespace to H: `remote.RunWithInput(cfg, "H", "keys",
+   ["receive"], stdin)` where stdin is one JSON object
+   `{"namespace": "global", "recipients": "<file>", "secrets": {"NAME":
+   "<armored>"}, "meta": {"NAME": "<sidecar>"}}` — a one-line exported
+   wrapper over the unexported `run` at remote.go:210, which already
+   takes an `io.Reader`. Ciphertext and sidecars only; ssh is the
+   transport, not the security.
 4. H's `gv keys receive` writes the files atomically (temp + rename, 0700
-   dir, 0600 files) into its global layer, or into the workspace whose
-   label matches in H's own `~/.config/grove/registry.yaml` (the
-   `{root, label, scope}` index, DESIGN §6.5.1) — labels are
-   host-independent where roots are not. Prints the count of names
-   written; nothing else. Idempotent: pushing twice is a no-op diff.
+   dir, 0600 files) into `~/.config/grove/secrets/<namespace>/` on H —
+   the same path on every host, no registry lookup, no guessing at
+   repo roots. Prints the count of names written; nothing else.
+   Idempotent: pushing twice is a no-op diff.
 
-Local output: `✓ 3 secrets → H (age1…q7x2, global layer)`.
+Local output: `✓ 3 secrets → H (age1…q7x2, namespace global)`.
 
-**Default layer is global, and that matters on a remote:** the `--host`
-relay has no `cd` (remote.Argv), so H's gv runs at the login dir, finds
-no ambient `.grove/`, and resolves the *global* layer (memory of
-2026-09-09: this is why the contrib lane had to be global on groveremote).
-A workspace-layer push is for a workspace H has registered; the verb
-refuses a label H does not know rather than guessing a path.
+**Default namespace is global, and that matters on a remote:** the
+`--host` relay has no `cd` (remote.Argv), so H's gv runs at the login
+dir, finds no ambient `.grove/`, and resolves the *global* namespace
+(memory of 2026-09-09: this is why the contrib lane had to be global on
+groveremote). A workspace-namespace push lands on H regardless of
+whether H has that workspace registered; it is simply unused until it
+does.
 
 **Push is explicit, never automatic.** `gv keys set` does not fan out.
 It prints a hint when `recipients.txt` names hosts other than this one
@@ -379,14 +401,17 @@ operator's own Claude sub (the exact failure grove-36 T3 killed).
 gv keys init                          # generate this host's identity (idempotent); prints recipient
 gv keys recipient                     # this host's public key, nothing else
 gv keys set NAME                      # value from stdin if piped, else a hidden prompt (x/term.ReadPassword)
-    [--global | --workspace]          #   default: workspace layer when inside one, else global
-gv keys ls [--json]                   # names + layer + recipient count. NEVER values.
-gv keys rm NAME [--global|--workspace]
+    [--global | --workspace [L]]      #   default: this workspace's namespace when inside one, else global
+    [--type "Stripe restricted key"]  #   optional display label (§11)
+    [--reveal N]                      #   opt-in masked preview: first N chars + last 4 (§11)
+gv keys ls [--json]                   # name · namespace · type · preview (or ***) · recipients. NEVER values.
+gv keys rm NAME [--global | --workspace [L]]
+gv keys exec NAME[,NAME2…] -- <cmd…>  # run <cmd> with those secrets in ITS env only; output passes through (§10)
 gv keys push --host H [--workspace L] # §5
-gv keys reseal [--global|--workspace] # re-encrypt a layer to its current recipients.txt
-gv keys import [PATH] [--rm]          # legacy .env → global layer; --rm deletes the file after (§7)
+gv keys reseal [--global | --workspace [L]]   # re-encrypt a namespace to its current recipients.txt
+gv keys import [PATH] [--rm]          # legacy .env → global namespace; --rm deletes the file after (§7)
 gv keys env --profile P               # (internal) the eval'd half of a launch; refuses a TTY
-gv keys receive [--workspace L]       # (internal) the remote half of push; ciphertext on stdin
+gv keys receive                       # (internal) the remote half of push; ciphertext on stdin
 ```
 
 Rules that shape it:
@@ -404,9 +429,10 @@ Rules that shape it:
   events.jsonl" half of the invariant is proven: there is no code path
   from a value to `state.Append`.
 - **The orchestrator brain** lists `gv keys ls --json` as a read-only
-  tool and names `set`, `env`, `push` as operator-only — a chat that
-  needs a key present on a host proposes the push command, it does not
-  run it.
+  tool and names `set`, `env`, `push`, `exec` as operator-confirmed — a
+  chat that needs a key present on a host proposes the push command, a
+  chat that needs to *call* something with a key proposes the exact
+  `gv keys exec` line; neither runs unheard (§10).
 
 ## Decision 7: migration
 
@@ -418,8 +444,10 @@ being *written* on day one and stops being *read* one release later.
    copy at account.go:483-485 ("set OPENROUTER_API_KEY in
    ~/.config/grove/.env") becomes "`gv keys set OPENROUTER_API_KEY`, or p
    to paste". The key rows (`accountKeyRows`, account.go:87-120) gain a
-   dim layer tag (`global` / `ws`) so the operator can see where a name
-   resolves from. From this point no grove code writes `.env`.
+   dim namespace tag (`global` / `<label>`) so the operator can see where
+   a name resolves from, and show the §11 preview (or `set · <type>`)
+   instead of `openrouter.Mask`. From this point no grove code writes
+   `.env`.
 2. **`gv keys import [--rm]`** encrypts every assignment in the legacy
    file into the global layer using the tolerant grammar
    `openrouter.keyFromFile` already implements (openrouter.go:65-91 —
@@ -450,7 +478,7 @@ touch.
 | never deletes worktrees/branches it didn't create | not touched |
 | `events.jsonl` append-only; `tasks.json` derived | not touched; secrets emit no events, and the launch command is not persisted (main.go:1711-1719 stores names) |
 | merge checks via `gh` | not touched |
-| propose, then dispose | `push` is the only outward action; explicit, per-host, never fanned out from `set` |
+| propose, then dispose | `push` (outward) and `exec` (runs a command with a live key) are operator-confirmed in the brain; `set` never fans out |
 | `ovs` frozen | untouched; no backport (ovs never had profiles) |
 | `--json` contract additive-only | one new envelope (`keys ls`), zero changed fields |
 | cockpit RAM rule | the tab reads on open/`r`/after-save as today (account.go:159-160); no cache, no goroutine, no per-frame work |
@@ -462,11 +490,14 @@ touch.
 identities): round trip; a file sealed to two recipients decrypts with
 either identity and fails with `*age.NoIdentityMatchError` on a third
 (mapped to the friendly message); name validation rejects `../x` and
-`FOO-BAR`; layer precedence (env > workspace > global > legacy); reseal
+`FOO-BAR`; namespace precedence (env > `<label>/` > `global/` > legacy); reseal
 after adding a recipient makes the new identity work and the old one
 still work; `receive` is atomic (a payload with one bad name writes
 nothing); `env` output quoting survives a value containing `'`, `$`,
-backtick and a newline; the TTY refusal (isTerminal injected).
+backtick and a newline; the TTY refusal (isTerminal injected);
+`exec` env assembly (only the named secrets are added, the parent env is
+otherwise inherited, a missing name fails before exec); the preview rule
+(§11) refuses short values and never reveals more than the cap.
 
 **Unit, `internal/config`:** `WrapProfile` goldens updated for the
 `eval` source; a `secret:` value renders `K="$NAME"`; a profile with no
@@ -478,7 +509,12 @@ verbatim — scratch `HOME`, scratch `GROVE_STATE_DIR` (so the identity is
 scratch too), isolated tmux server (`unset TMUX`, scratch `TMUX_TMPDIR`),
 the live-state canaries snapshot before and after — plus:
 
-- `gv keys init`; `printf hunter2 | gv keys set DUMMY_KEY`.
+- `gv keys init`; `printf hunter2 | gv keys set DUMMY_KEY` (from inside
+  the scratch workspace, so it lands in the `dummy/` namespace; a second
+  `--global` name proves precedence).
+- `gv keys exec DUMMY_KEY -- sh -c 'printf %s "$DUMMY_KEY" > seen-exec'`
+  → `hunter2`; the same command via `gv ls --json`/state greps below finds
+  nothing.
 - A profile `p` with `auth_token_env: DUMMY_KEY` and
   `env: {DUMMY_EXTRA: "secret:DUMMY_KEY"}`; the repo's `claude:` set to a
   scratch script that writes `"$ANTHROPIC_AUTH_TOKEN|$DUMMY_EXTRA"` to
@@ -499,8 +535,153 @@ the live-state canaries snapshot before and after — plus:
 
 Added to `e2e/all.sh`. No real API key, no real host, no age binary.
 
+## Decision 10: `gv keys exec` — use a key without ever holding it
+
+```
+gv keys exec NAME[,NAME2,…] -- <command> [args…]
+```
+
+Resolves each named secret (same order as §2), sets `NAME=value` in a
+copy of the current environment, and **`syscall.Exec`s the command with
+that environment** — no shell, no quoting, no `eval`, argv passed as a
+slice. stdout/stderr are the child's own file descriptors, untouched.
+The value exists in the grove process for the microseconds between
+decrypt and exec, then only in the child. `gv keys env` (§4) stays as
+the launch-time half because the worker wrap is a shell line that must
+end in `exec <claude> )`; `exec` is the general primitive for
+everything else.
+
+What it is for: an orchestrator chat that wants to check an OpenRouter
+balance, a worker that must call a provider API from a script, an
+operator who wants to run a one-off `curl`. The reference must be
+expanded *inside the child*, never by the caller's shell:
+
+```
+# wrong — the caller's shell expands $OPENROUTER_API_KEY (unset there) to ""
+gv keys exec OPENROUTER_API_KEY -- curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/credits
+
+# right — single quotes hand the reference to the child's sh
+gv keys exec OPENROUTER_API_KEY -- sh -c 'curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/credits'
+```
+
+or a script that reads the variable itself. The verb's help text, and
+its error when the received argv contains an *empty* argument where a
+`$NAME` reference was clearly meant, must say exactly this; that one
+message will save more steering turns than any other line in the
+feature.
+
+Rules:
+
+- **Operator-confirmed in the orchestrator brain, like `set` and
+  `push`.** The value stays hidden, but the *command* is the
+  consequential part — a `curl -X POST` with a live key is an
+  outward-facing action, and propose-then-dispose applies to the action,
+  not to whether the chat can see the key. A chat proposes the exact
+  line; the operator says yes.
+- **Only the named secrets are added.** `NAME,NAME2` is the whole
+  grant; nothing else from the store enters the child. A missing name
+  fails before exec, naming it and the namespace searched.
+- **No TTY refusal** — unlike `env`, this verb never prints a value; its
+  output is the child's. And no `shellQuote` — there is no shell between
+  grove and the child. The lead's brief asked for both disciplines; the
+  *reason* for each is absent here, and adding a quoting layer to a
+  no-shell exec would be the injection surface, not the protection. The
+  discipline it inherits is the invariant itself: the value lives in the
+  child's environment and nowhere grove writes.
+- **Inherent limit, restated:** `gv keys exec K -- printenv K` prints the
+  key. That is the operator's right and the agent's temptation; the
+  brain rule above and the PreToolUse guard (§9 risk 1) are the answer,
+  not a denylist of commands inside `exec` (which any `sh -c` defeats).
+- Not relayed over `--host`: an operator who wants to run something on H
+  with H's key runs `gv keys exec … --host H`? No — that would put the
+  command line through `remote.Argv` quoting and ssh; the composable form
+  is `ssh H -- gv keys exec …` by hand, and `--host` support is a later
+  additive ticket if it earns its keep.
+
+## Decision 11: masked preview and type metadata
+
+Today's ACCOUNT tab already shows a mask — `openrouter.Mask`
+(openrouter.go:121-131) renders 12 head + 3 tail characters of every
+key, unconditionally. The new default is stricter: **nothing is
+revealed unless the operator opts in per secret.**
+
+A per-secret plaintext sidecar `NAME.meta.yaml` next to `NAME.age`:
+
+```yaml
+type: Stripe restricted key       # free text, optional, display only
+preview: rk_live_8723***6AE2      # computed at `set` time; absent = no preview
+reveal: 12                        # the --reveal N that produced it (audit trail)
+set_at: 2026-09-27T14:26:00Z
+```
+
+- **The preview is computed once, at `set`, and stored.** `ls` therefore
+  never decrypts and never needs an identity — it reads sidecars and
+  filenames only, which is what keeps `gv keys ls` safe for an
+  orchestrator chat to run.
+- **`--reveal N`** reveals the first N characters and the last 4. It is
+  refused (the secret is still saved, with no preview, and the refusal
+  says why) when the value has **fewer than 16 hidden characters** —
+  `len(value) − N − 4 < 16` — or when the value is fewer than 24
+  characters at all, or when the value has fewer than 8 distinct bytes
+  (a low-entropy string where a prefix is most of the information). N is
+  capped at 16. There is no `--reveal` that shows the whole value.
+- **No `--reveal` means no preview:** `ls` shows `***` and the type
+  label. `import` (§7) takes an optional `--reveal N` applied to every
+  imported name so an operator who liked today's mask can keep it for
+  the keys they migrate — an explicit choice, not a default.
+- The sidecar holds *nothing derived from the value except the preview*
+  — no length, no hash (a hash of a 40-byte key is a crackable oracle).
+- Sidecars ride along in `push` (§5) so `ls` reads the same on every
+  host, and `rm` deletes both files.
+- The ACCOUNT tab's key rows (account.go:414-418) render the preview when
+  present and `set · <type>` otherwise, replacing `openrouter.Mask` on
+  that path.
+
+The tradeoff is stated in Risks: a preview is a *deliberate small
+disclosure* — the same one the tab makes today, made opt-in and bounded.
+
+## Decision 12: built as an isolated feature train
+
+Every ticket in this feature lands on a long-lived integration branch,
+`feature/gv-keys-secrets` (pushed to origin at the current main tip),
+and **nothing reaches main until the whole feature is validated end to
+end**. A half-migrated secrets path is the case the ticket-writing skill
+reserves feature branches for: ticket 3 changes what every profiled
+launch sources, ticket 6 changes what every in-process reader reads, and
+main with only one of them is a fleet that cannot start a worker.
+
+Mechanics, chosen so that no grove code and no global config changes:
+
+- `repos.grove.base` in config stays `main`. Editing it would redirect
+  every concurrent grab on this host, not just this train's.
+- Each ticket's kickoff (`gv grab … --brief`, main.go:1464 — appended as
+  the prompt's final "Operator brief" section) tells the worker to run,
+  before any work, `git fetch origin feature/gv-keys-secrets && git
+  reset --hard origin/feature/gv-keys-secrets` in its worktree (safe: the
+  freshly-cut branch has zero commits), to open its PR with `gh pr create
+  --base feature/gv-keys-secrets`, and to rebase on that branch, never
+  main. The verbatim text lives in each ticket file under
+  `docs/plans/tickets/`.
+- grove's PR detection is head-branch-based and base-agnostic (`gh pr
+  view` by branch; merge state via `state,mergedAt`), so `gv watch`,
+  `pr_merged`, sweep's merged→done all work unchanged against the feature
+  branch.
+- The taxes the skill names, accepted: the branch drifts from main and
+  the operator eats the rebases (plan one after ticket 5 and one before
+  the final merge); PRs review against a moving target; **`gv diff
+  grove-N` diffs against `repo.Base`, so it will show the whole train's
+  delta, not the ticket's** — review with `gh pr diff` instead.
+- The last ticket **proposes** the `feature/gv-keys-secrets → main`
+  merge after `e2e/all.sh` is green on the branch; it never runs it.
+  The design doc itself must be committed to the feature branch before
+  ticket 1 is grabbed, or the workers cannot read it.
+
 ## Alternatives considered and rejected
 
+- **An in-repo `<root>/.grove/secrets/` workspace layer** (this doc's
+  first draft) — puts ciphertext one `.gitignore` away from a client
+  repo's history, forever. Replaced by label namespaces under the one
+  store. §2.
 - **sops** — external binary, cloud-KMS-shaped, and age underneath. §1.
 - **age CLI via `os/exec`** — new external dependency on every host,
   untestable without it, no capability gain. §1.
@@ -540,7 +721,7 @@ Added to `e2e/all.sh`. No real API key, no real host, no age binary.
 1. **The limit is the limit.** An agent inside a worker that holds the
    key can read it. Say it in the docs, scope exports to the names a
    profile references, and extend the PreToolUse guard to deny
-   `gv keys env`, `identity.txt`, and `.grove/secrets` in every lane, not
+   `gv keys env`, `identity.txt`, and `.config/grove/secrets/` in every lane, not
    only `GROVE_DATA_LANE=contributor` — via `gv hooks install`, which
    already merges into the shared `settings.json` files with respect for
    others' entries.
@@ -551,28 +732,42 @@ Added to `e2e/all.sh`. No real API key, no real host, no age binary.
 3. **Version skew on push.** A remote gv predating this feature answers
    `gv keys recipient` with "unknown command"; push must surface that as
    "H's gv is too old — `gv update --yes` there", not as a parse error.
-4. **`.grove/secrets` committed by accident.** grove writes
-   `.grove/secrets/.gitignore` (`*`) on first use — this repo's own
-   `.grove/.gitignore` ignores `config.yaml` too, so per-repo choices vary
-   and the store cannot rely on the parent's rules — and doctor runs
-   `git check-ignore`. Ciphertext in history would be recoverable forever
-   by anyone who later obtains any recipient identity, and rotating a
-   value does not scrub old ciphertext.
-5. **Two layers, one name.** A workspace `OPENROUTER_API_KEY` silently
-   shadows the global one. That is the intended semantics (it is how
-   `LoadAt` works for every other key), but `gv keys ls` must show both
-   rows with the shadowed one marked, and the ACCOUNT tab's layer tag
-   exists for the same reason.
-6. **Binary and module growth.** Five modules; expect a low-single-digit
+4. **Two namespaces, one name.** A workspace `OPENROUTER_API_KEY`
+   silently shadows the global one. That is the intended semantics (it
+   is how `LoadAt` works for every other key), but `gv keys ls` must show
+   both rows with the shadowed one marked, and the ACCOUNT tab's
+   namespace tag exists for the same reason.
+5. **A preview is a disclosure.** `--reveal 12` on a 40-character key
+   hands anyone who can read `~/.config/grove/secrets/` (or a `gv keys
+   ls` transcript) 16 of its characters. That is what today's tab
+   discloses to anyone who can see the screen, so this is not a
+   regression — but it is now on disk in plaintext and travels with
+   `push`. The bounds in §11 (≥16 hidden, cap 16, no short/low-entropy
+   values) are the whole mitigation; an operator who wants zero
+   disclosure sets no `--reveal`, and that is the default.
+6. **`exec` makes a key usable from a chat.** That is the feature; it is
+   also the first time an orchestrator has a sanctioned way to spend a
+   key. The brain rule (operator-confirmed, always) is enforced by the
+   brain, i.e. by prompt — the same enforcement `grab` and `nudge` have.
+   If a chat runs one unheard it is a brain bug, and the PreToolUse
+   guard extension should deny `gv keys exec` in chat lanes outright if
+   that happens once.
+7. **Feature-branch taxes.** Two rebases the operator eats, `gv diff`
+   showing the train instead of the ticket, and a window where main
+   still writes plaintext while the branch does not. Bounded by keeping
+   the train short (ten small tickets) and by ticket 10's gate.
+8. **Binary and module growth.** Five modules; expect a low-single-digit
    MB increase in the release binary. Measure in the first ticket and
    record it in LEARNINGS.md if it surprises.
-7. **Rotation of an identity** (compromised host): remove its line from
+9. **Rotation of an identity** (compromised host): remove its line from
    `recipients.txt`, `gv keys reseal`, then re-issue every value the host
    could read — because it could have read them. v1 ships the primitives
    (`reseal`, editable `recipients.txt`); a `gv keys revoke --host H` that
    does the first two and prints the third is a follow-up.
-8. **Non-profile secrets.** `LINEAR_API_KEY` (config.go:498-505,
-   `c.APIKey()` reads the process env) and `GH_TOKEN` are not model-profile
-   keys and stay where they are in v1. `Resolve` is general enough to take
-   them later; scoping them in now would widen the first ticket for no
-   worker-facing gain.
+10. **Non-profile secrets.** `LINEAR_API_KEY` (config.go:498-505,
+    `c.APIKey()` reads the process env) and `GH_TOKEN` are not
+    model-profile keys and stay where they are in v1. `Resolve` is
+    general enough to take them later — and `gv keys exec LINEAR_API_KEY
+    -- …` already covers the ad-hoc case — but scoping them into the
+    launch path now would widen the first ticket for no worker-facing
+    gain.
