@@ -118,7 +118,10 @@ const usage = `gv — grove
                                               open a feature train: create + push feature/<slug> at
                                               origin/<base> (--adopt: register an existing origin branch)
   gv feature ls [--all] [--json]              open features (--all: closed too)
-  gv feature close <slug> [--reason merged|abandoned]   close a feature (deletes nothing)
+  gv feature close <slug> [--reason merged|abandoned]   close a feature (deletes nothing but its serve worktree)
+  gv serve <slug> [--timeout 60s]             run the workspace's reviewed .grove/run.sh on the feature tip in
+                                              window "▶ <slug>"; prints its GROVE_READY url or path
+  gv serve stop <slug>                        kill the "▶ <slug>" window
   gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
                                               branch, and uncommitted changes survive; resume: gv adopt
@@ -467,6 +470,8 @@ func main() {
 		err = cmdDiff(args)
 	case "feature":
 		err = cmdFeature(args)
+	case "serve":
+		err = cmdServe(args)
 	case "adopt":
 		err = cmdAdopt(args)
 	case "pause":
@@ -4118,7 +4123,13 @@ func cmdSweep(args []string) error {
 // unique to this task. Best-effort — a ps failure or a survivor never
 // blocks teardown (survivors are reported, never SIGKILLed).
 func killWorktreeProcesses(t *state.Task) {
-	if t.Worktree == "" {
+	killPathProcesses(t.Worktree, t.Ticket)
+}
+
+// killPathProcesses is killWorktreeProcesses for any grove-created path
+// (the serve worktree too, grove-380); label names it in the report.
+func killPathProcesses(path, label string) {
+	if path == "" {
 		return
 	}
 	psOut, err := exec.Command("ps", "-Ao", audit.PSFormat).Output()
@@ -4126,7 +4137,7 @@ func killWorktreeProcesses(t *state.Task) {
 		return
 	}
 	self := os.Getpid()
-	for _, p := range audit.DetectWorktreeProcesses(string(psOut), map[string]string{t.Worktree: t.Ticket}) {
+	for _, p := range audit.DetectWorktreeProcesses(string(psOut), map[string]string{path: label}) {
 		if p.PID == self {
 			continue
 		}

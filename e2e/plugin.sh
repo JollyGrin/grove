@@ -149,6 +149,7 @@ assert set(fs) == {'trains', 'live'}, fs
 t = fs['trains']
 assert (t['repo'], t['branch'], t['base'], t['label']) == ('dummy', 'feature/trains', 'main', 'trains'), t
 assert t['created_at'] and 'closed' not in t, t
+assert t['serve'] == {'state': 'none', 'behind': False}, t  # grove-380: no run.sh yet
 assert fs['live']['branch'] == 'feature/live-train' and fs['live']['label'] == 'live-train', fs
 alld = {f['slug']: f for f in json.load(open('$OUT/features-all.json'))['features']}
 assert alld['gone']['closed']['reason'] == 'abandoned' and alld['gone']['closed']['at'], alld
@@ -162,8 +163,9 @@ assert landed['landed_at'] and landed['number'] == 4 and landed['title'] == 'lan
 assert 'landed_at' not in active and 'after' not in active, active
 assert queued['after'] == [2] and queued['number'] == 5, queued
 assert all(isinstance(c['est_usd'], (int, float)) for c in t['cars']), t['cars']
-assert t['behind_base'] == 0 and t['mergeable'] is True and 'pr' not in t and 'serve' not in t, t
+assert t['behind_base'] == 0 and t['mergeable'] is True and 'pr' not in t, t
 assert isinstance(t['est_usd'], (int, float)), t
+assert 'serve' not in alld['gone'], alld  # serve rides on open rows only
 "
 
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.

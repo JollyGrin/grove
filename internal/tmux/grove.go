@@ -1229,3 +1229,60 @@ func OpenEditor(session, base, workDir, editorCmd string) (EditorAction, error) 
 	}
 	return action, SendKeys(pane, editorCmd+" .")
 }
+
+// WindowIDExact resolves a window by its EXACT live name to its "@N" id —
+// no glyph tolerance, no prefix matching. For windows gv names and never
+// re-glyphs (the serve window "▶ <slug>", grove-380), where "▶ keys" must
+// never resolve to "▶ keys-v2" or "▶ keys 2".
+func WindowIDExact(session, name string) (string, bool) {
+	out, err := run("list-windows", "-t", Exact(session), "-F", "#{window_id}\t#{window_name}")
+	if err != nil {
+		return "", false
+	}
+	return matchWindowIDExact(out, name)
+}
+
+// matchWindowIDExact is WindowIDExact's pure matcher.
+func matchWindowIDExact(out, name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 2)
+		if len(parts) == 2 && parts[1] == name {
+			return strings.TrimSpace(parts[0]), true
+		}
+	}
+	return "", false
+}
+
+// NewWindowExec creates a detached window named name in session, rooted
+// at dir, running argv directly (tmux execs a multi-argument command
+// without the user's shell) with env ("K=V") set for it, and returns the
+// window's "@N" id. Automatic rename and allow-rename are pinned off so
+// the name stays the exact-match key.
+func NewWindowExec(session, name, dir string, env, argv []string) (string, error) {
+	args := []string{"new-window", "-d", "-P", "-F", "#{window_id}", "-t", Exact(session), "-n", name, "-c", dir}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	args = append(args, argv...)
+	id, err := run(args...)
+	if err != nil {
+		return "", err
+	}
+	id = strings.TrimSpace(id)
+	if err := DisableAutoRename(id); err != nil {
+		return id, err
+	}
+	// allow-rename would let the program's own escape sequences retitle
+	// the window under a user conf that turns it on.
+	_, err = run("set-window-option", "-t", id, "allow-rename", "off")
+	return id, err
+}
+
+// KillWindowID kills one window by its "@N" id.
+func KillWindowID(id string) error {
+	_, err := run("kill-window", "-t", id)
+	return err
+}

@@ -96,6 +96,7 @@ func cmdFeatureLs(args []string) error {
 	for i := range rows {
 		rows[i].Status = statuses[rows[i].Slug] // nil on a closed row
 	}
+	serveStatuses(rows)
 	if *asJSON {
 		return emitJSON("features", rows)
 	}
@@ -194,6 +195,9 @@ func cmdFeatureClose(args []string) error {
 	f, err := feature.Close(stateDir(), pos[0], *reason)
 	if err != nil {
 		return err
+	}
+	if cfg, err := loadCfg(); err == nil {
+		teardownServe(cfg, f)
 	}
 	fmt.Printf("✓ feature %s closed (%s) — branch %s left as is\n", f.Slug, *reason, f.Branch)
 	return nil
