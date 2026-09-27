@@ -28,6 +28,7 @@ import (
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/doctor"
+	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/git"
 	"github.com/JollyGrin/grove/internal/github"
@@ -71,6 +72,8 @@ const usage = `gv — grove
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
   gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
+      [--feature slug|none]                   fork from an open feature's branch (default: the one open
+                                              feature a ticket label names, else the repo base)
   gv ls [--json]                              fleet table
   gv watch [--json] [--ticket X]...           follow this workspace's transition stream, one event
       [--type t,…] [--sentinel s,…]           per line, flushed as it lands (pure read). Default is
@@ -406,6 +409,10 @@ func main() {
 					os.Exit(1)
 				}
 				code, err = runRemoteOrchestratorNew(host, rest[1:])
+			case cmd == "grab":
+				if err = refuseHostFeatureGrab(rest); err == nil {
+					code, err = runRemote(host, cmd, rest)
+				}
 			default:
 				code, err = runRemote(host, cmd, rest)
 			}
@@ -511,6 +518,90 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gv:", err)
 		os.Exit(1)
 	}
+}
+
+// grabValueFlags are grab's value-taking flags — the scanner below must
+// skip their values when looking for the ticket positional.
+var grabValueFlags = map[string]bool{"repo": true, "model": true, "profile": true, "brief": true, "feature": true}
+
+// scanGrabArgs pulls --feature, --repo, and the ticket out of a grab argv
+// without a FlagSet (the host hop passes flags through verbatim).
+func scanGrabArgs(args []string) (featureVal string, featureSet bool, repo, ref string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			if i+1 < len(args) && ref == "" {
+				ref = args[i+1]
+			}
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			if ref == "" {
+				ref = a
+			}
+			continue
+		}
+		name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if grabValueFlags[name] && !hasVal && i+1 < len(args) {
+			i++
+			val = args[i]
+		}
+		switch name {
+		case "feature":
+			featureVal, featureSet = val, true
+		case "repo":
+			repo = val
+		}
+	}
+	return
+}
+
+// refuseHostFeatureGrab (grove-373): features live in THIS host's
+// events, so `gv grab --host` cannot ride one in v1 — an explicit
+// --feature <slug> refuses, and so does a ticket whose labels would
+// infer an open local feature. `--feature none` passes. When the ticket
+// cannot be resolved locally (repo only configured on the host), no
+// local feature can be its repo's, so the hop proceeds.
+func refuseHostFeatureGrab(args []string) error {
+	featureVal, featureSet, repoFlag, ref := scanGrabArgs(args)
+	if featureSet && featureVal == feature.None {
+		return nil
+	}
+	if featureSet && featureVal != "" {
+		return fmt.Errorf("--feature is not supported with --host yet: features live in this host's events — grab on this host, or drop --feature")
+	}
+	if ref == "" {
+		return nil
+	}
+	features, err := state.LoadFeatures(stateDir())
+	if err != nil {
+		return err
+	}
+	open := 0
+	for _, f := range features {
+		if !f.Closed {
+			open++
+		}
+	}
+	if open == 0 {
+		return nil
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return nil
+	}
+	repoName, repo, _, task, err := resolveGrab(cfg, repoFlag, ref, false)
+	if err != nil || task == nil {
+		return nil
+	}
+	c, err := feature.ChooseForGrab(features, "", repoName, repo.Base, task.Labels)
+	if err != nil {
+		return fmt.Errorf("--host grab of %s: %w", task.ID, err)
+	}
+	if c.Feature != nil {
+		return fmt.Errorf("%s's labels put it on feature %s (%s), and --host cannot ride a feature yet: features live in this host's events — grab on this host, or pass --feature none", task.ID, c.Feature.Slug, c.Why)
+	}
+	return nil
 }
 
 // runRemote resolves the host from config and passes the verb through.
@@ -1472,9 +1563,10 @@ func cmdGrab(args []string) error {
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	briefFlag := fs.String("brief", "", "ad-hoc operator instructions appended to the kickoff prompt as a final \"## Operator brief\" section")
+	featureFlag := fs.String("feature", "", "fork from this open feature's branch (`gv feature ls`); 'none' opts out of label inference")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name] [--brief text]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name] [--brief text] [--feature slug|none]")
 	}
 
 	cfg, err := loadCfg()
@@ -1487,70 +1579,16 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
-	// Provider/repo resolution order differs per kind: linear infers the
-	// repo from ticket labels (fetch first), markdown roots task files in
-	// the repo (resolve repo first). An explicit --repo resolves first
-	// either way so its per-repo provider override wins.
-	var (
-		repoName string
-		repo     *config.Repo
-		prov     provider.Provider
-		task     *provider.Task
-	)
-	kind := cfg.Provider.Kind
-	if *repoFlag != "" {
-		if repoName, repo, err = cfg.ResolveRepo(*repoFlag, nil); err != nil {
-			return err
-		}
-		kind = cfg.ProviderKindFor(repo)
+	ref := ""
+	if len(positionals) == 1 {
+		ref = positionals[0]
 	}
-	if kind == "linear" {
-		if len(positionals) != 1 {
-			return fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name] [--brief text]")
-		}
-		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
-			return err
-		}
-		fmt.Println("→ fetching ticket from Linear…")
-		id, err := prov.ParseID(positionals[0])
-		if err != nil {
-			return err
-		}
-		if task, err = prov.Get(id); err != nil {
-			return err
-		}
-		if repo == nil {
-			if repoName, repo, err = cfg.ResolveRepo("", task.Labels); err != nil {
-				return err
-			}
-		}
-	} else {
-		if repo == nil {
-			if repoName, repo, err = cfg.ResolveRepo("", nil); err != nil {
-				return err
-			}
-		}
-		// Any repo-rooted kind (markdown, github) — the repo's effective
-		// kind decides, never a hardcoded default (plan review C-1).
-		if repo != nil {
-			kind = cfg.ProviderKindFor(repo)
-		}
-		if kind == "" {
-			kind = "markdown"
-		}
-		if prov, err = provider.FromConfigKind(cfg, kind, repoName, repo.Path); err != nil {
-			return err
-		}
-		if len(positionals) == 0 {
-			return printBacklog(prov, repoName, tasks)
-		}
-		id, err := prov.ParseID(positionals[0])
-		if err != nil {
-			return err
-		}
-		if task, err = prov.Get(id); err != nil {
-			return err
-		}
+	repoName, repo, prov, task, err := resolveGrab(cfg, *repoFlag, ref, true)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return printBacklog(prov, repoName, tasks)
 	}
 
 	if t, ok := tasks[task.ID]; ok && !t.Done {
@@ -1580,6 +1618,18 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
+	// grove-373: the base this worker forks from — an open feature's
+	// branch (--feature, or the one open feature a ticket label names),
+	// else the repo's base. Decided before any side effect.
+	features, err := state.LoadFeatures(stateDir())
+	if err != nil {
+		return err
+	}
+	choice, err := feature.ChooseForGrab(features, *featureFlag, repoName, repo.Base, task.Labels)
+	if err != nil {
+		return err
+	}
+
 	name := task.ID + "-" + slugify(task.Title)
 	fmt.Printf("→ %s on %s (branch %s)\n", task.ID, repoName, name)
 	if *modelFlag != "" {
@@ -1591,6 +1641,7 @@ func cmdGrab(args []string) error {
 	if *briefFlag != "" {
 		fmt.Println("→ operator brief attached")
 	}
+	fmt.Println(choice.Line())
 
 	// Collapse into the workspace's single session (grove-<label>, or the
 	// global grove for a true legacy run); window 0 stays the reserved
@@ -1605,11 +1656,11 @@ func cmdGrab(args []string) error {
 	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 
 	if git.HasRemote(repo.Path, "origin") {
-		if err := git.Fetch(repo.Path, "origin", repo.Base); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: git fetch failed (%v) — branching from local %s\n", err, repo.Base)
+		if err := git.Fetch(repo.Path, "origin", choice.Base); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: git fetch failed (%v) — branching from local %s\n", err, choice.Base)
 		}
 	}
-	baseRef, err := git.BaseRef(repo.Path, repo.Base)
+	baseRef, err := feature.ForkRef(repo.Path, choice)
 	if err != nil {
 		return err
 	}
@@ -1715,16 +1766,7 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
-	grabData := map[string]string{
-		"title": task.Title, "url": task.URL, "repo": repoName,
-		"branch": name, "worktree": wt.Path,
-		"tmux_session": sessionName, "tmux_window": windowName,
-	}
-	// Persist the profile only when set so an unprofiled grab's event stays
-	// byte-identical to today's (grove-36 T2).
-	if profileName != "" {
-		grabData["model_profile"] = profileName
-	}
+	grabData := taskCreatedData(task, repoName, name, wt.Path, sessionName, windowName, profileName, choice)
 	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskCreated, Ticket: task.ID, Data: grabData,
 	}); err != nil {
@@ -1740,6 +1782,89 @@ func cmdGrab(args []string) error {
 	}
 	fmt.Printf("✓ %s grabbed (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", task.ID, mode, task.ID)
 	return nil
+}
+
+// resolveGrab resolves grab's repo, provider, and ticket. Provider/repo
+// resolution order differs per kind: linear infers the repo from ticket
+// labels (fetch first), markdown roots task files in the repo (resolve
+// repo first). An explicit --repo resolves first either way so its
+// per-repo provider override wins. An empty ref returns a nil task (the
+// caller lists the backlog); linear has no backlog and refuses it.
+func resolveGrab(cfg *config.Config, repoFlag, ref string, chatty bool) (repoName string, repo *config.Repo, prov provider.Provider, task *provider.Task, err error) {
+	kind := cfg.Provider.Kind
+	if repoFlag != "" {
+		if repoName, repo, err = cfg.ResolveRepo(repoFlag, nil); err != nil {
+			return
+		}
+		kind = cfg.ProviderKindFor(repo)
+	}
+	if kind == "linear" {
+		if ref == "" {
+			err = fmt.Errorf("usage: gv grab <ticket-id-or-url> [--repo name] [--manual] [--model id] [--profile name] [--brief text] [--feature slug|none]")
+			return
+		}
+		if prov, err = provider.FromConfigKind(cfg, "linear", "", ""); err != nil {
+			return
+		}
+		if chatty {
+			fmt.Println("→ fetching ticket from Linear…")
+		}
+		var id string
+		if id, err = prov.ParseID(ref); err != nil {
+			return
+		}
+		if task, err = prov.Get(id); err != nil {
+			return
+		}
+		if repo == nil {
+			repoName, repo, err = cfg.ResolveRepo("", task.Labels)
+		}
+		return
+	}
+	if repo == nil {
+		if repoName, repo, err = cfg.ResolveRepo("", nil); err != nil {
+			return
+		}
+	}
+	// Any repo-rooted kind (markdown, github) — the repo's effective
+	// kind decides, never a hardcoded default (plan review C-1).
+	if repo != nil {
+		kind = cfg.ProviderKindFor(repo)
+	}
+	if kind == "" {
+		kind = "markdown"
+	}
+	if prov, err = provider.FromConfigKind(cfg, kind, repoName, repo.Path); err != nil {
+		return
+	}
+	if ref == "" {
+		return
+	}
+	var id string
+	if id, err = prov.ParseID(ref); err != nil {
+		return
+	}
+	task, err = prov.Get(id)
+	return
+}
+
+// taskCreatedData is grab's task_created payload. Optional keys are
+// written only when set, so a grab without them stays byte-identical to
+// the events written before they existed: model_profile (grove-36 T2),
+// feature+base (grove-373 — only when the grab rides a feature).
+func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, window, profileName string, choice feature.Choice) map[string]string {
+	d := map[string]string{
+		"title": task.Title, "url": task.URL, "repo": repoName,
+		"branch": branch, "worktree": wtPath,
+		"tmux_session": session, "tmux_window": window,
+	}
+	if profileName != "" {
+		d["model_profile"] = profileName
+	}
+	if choice.Feature != nil {
+		d["feature"], d["base"] = choice.Feature.Slug, choice.Base
+	}
+	return d
 }
 
 // repoShort strips a redundant workspace-label prefix from a repo name so a
@@ -3158,9 +3283,9 @@ func cmdDiff(args []string) error {
 	if _, statErr := os.Stat(t.Worktree); statErr != nil {
 		return fmt.Errorf("%s: worktree %s is gone — `gv adopt %s` to re-create it", t.Ticket, t.Worktree, t.Ticket)
 	}
-	base := "main"
+	base := t.BaseOr("main")
 	if repo, ok := cfg.Repos[t.Repo]; ok {
-		base = repo.Base
+		base = t.BaseOr(repo.Base)
 	}
 	gitArgs := []string{"diff", git.DiffBase(t.Worktree, base) + "...HEAD"}
 	if *stat {
@@ -3254,10 +3379,11 @@ func cmdAdopt(args []string) error {
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
 	// seen this task (active, done, or untracked), else cold via provider.
-	var repoName, branch, sessionID, storedProfile string
+	var repoName, branch, sessionID, storedProfile, storedFeature, storedBase string
 	var task *provider.Task
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID, storedProfile = t.Repo, t.Branch, t.SessionID, t.ModelProfile
+		storedFeature, storedBase = t.Feature, t.Base
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
@@ -3453,6 +3579,14 @@ func cmdAdopt(args []string) error {
 	// to change, keeping unprofiled adopt events byte-identical.
 	if profileName != "" || storedProfile != "" {
 		adoptData["model_profile"] = profileName
+	}
+	// A train car stays on its train (grove-373): carry feature+base
+	// through, only when set, so off-train adopt events stay byte-identical.
+	if storedFeature != "" {
+		adoptData["feature"] = storedFeature
+	}
+	if storedBase != "" {
+		adoptData["base"] = storedBase
 	}
 	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskAdopted, Ticket: id, Data: adoptData,
@@ -3717,6 +3851,34 @@ func cmdUntrack(args []string) error {
 	return nil
 }
 
+// removeGuard refuses a teardown that could lose the only copy of work:
+// SafeToRemove on a live worktree, else the surviving local branch
+// checked against origin/<base>. The base is the task's own (a train
+// car forked from its feature branch, grove-373), else the repo's —
+// against main a car's inherited feature commits would read as unmerged
+// work. Pure git, no tmux, so it is testable on a scratch repo.
+func removeGuard(repo *config.Repo, t *state.Task) error {
+	baseRef := "origin/" + t.BaseOr(repo.Base)
+	if _, statErr := os.Stat(t.Worktree); statErr == nil {
+		ok, reason, err := git.SafeToRemove(t.Worktree, baseRef)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%s: %s — not removing (use --force to override)", t.Ticket, reason)
+		}
+	} else if git.LocalBranchExists(repo.Path, t.Branch) {
+		// Worktree dir is gone but the branch survives — make sure
+		// deleting it can't lose the only copy of unmerged commits.
+		n, err := git.CommitsNotOn(repo.Path, baseRef, t.Branch)
+		if err != nil || n > 0 {
+			return fmt.Errorf("%s: branch %s has %d commit(s) not on %s — not deleting (use --force to override)",
+				t.Ticket, t.Branch, n, baseRef)
+		}
+	}
+	return nil
+}
+
 // removeTaskArtifacts is the shared --rm teardown (untrack --rm and
 // sweep's abandoned path): kill window, remove worktree, delete the
 // local branch. The remote branch survives unless rmRemote — an
@@ -3728,25 +3890,9 @@ func removeTaskArtifacts(cfg *config.Config, t *state.Task, rmRemote, force bool
 	if !ok {
 		return fmt.Errorf("repo %q no longer in config", t.Repo)
 	}
-	baseRef := "origin/" + repo.Base
-
 	if !force {
-		if _, statErr := os.Stat(t.Worktree); statErr == nil {
-			ok, reason, err := git.SafeToRemove(t.Worktree, baseRef)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("%s: %s — not removing (use --force to override)", t.Ticket, reason)
-			}
-		} else if git.LocalBranchExists(repo.Path, t.Branch) {
-			// Worktree dir is gone but the branch survives — make sure
-			// deleting it can't lose the only copy of unmerged commits.
-			n, err := git.CommitsNotOn(repo.Path, baseRef, t.Branch)
-			if err != nil || n > 0 {
-				return fmt.Errorf("%s: branch %s has %d commit(s) not on %s — not deleting (use --force to override)",
-					t.Ticket, t.Branch, n, baseRef)
-			}
+		if err := removeGuard(repo, t); err != nil {
+			return err
 		}
 	}
 
@@ -3822,7 +3968,11 @@ func cmdSweep(args []string) error {
 		r := byTicket[items[i].Ticket]
 		if _, statErr := os.Stat(r.Worktree); statErr == nil {
 			if repo, ok := cfg.Repos[r.Repo]; ok {
-				if ok, reason, err := git.SafeToRemove(r.Worktree, "origin/"+repo.Base); err == nil && !ok {
+				base := repo.Base
+				if t := tasks[r.Ticket]; t != nil {
+					base = t.BaseOr(repo.Base)
+				}
+				if ok, reason, err := git.SafeToRemove(r.Worktree, "origin/"+base); err == nil && !ok {
 					items[i].Detail = "guard would refuse: " + reason
 				}
 			}

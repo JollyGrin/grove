@@ -19,7 +19,7 @@ repo wins.
 
 | Command | Key | What |
 |---|---|---|
-| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task |
+| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373) |
 | `gv audit --json` | `report` | task-vs-reality classification |
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
@@ -65,7 +65,8 @@ row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
 (PR-facing) and liveness (worker-facing, beyond what the Stop hook sees)
 dimensions, folded into row fields `delivery`/`liveness`
 (`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
-full per-type data table. Workspace-scoped (empty ticket):
+full per-type data table. `task_created`/`task_adopted` data carries
+`feature` + `base` only for a feature-train car. Workspace-scoped (empty ticket):
 `workspace_parked`, `orchestrator_closed`, `feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`). Skip unknown types and lines

@@ -190,6 +190,16 @@ a restart never double-fire). The events:
 `gv supervise` (grove-253) is the poller that emits them — see the next
 section.
 
+Since grove-373 (feature trains 02) two more additive row fields:
+
+- `feature` — the slug of the open feature train the task rides (see
+  `gv feature ls --json`), set when it was grabbed with
+  `gv grab --feature <slug>` or inferred from a ticket label.
+- `base` — the branch the task forked from and PRs into: the feature's
+  branch (e.g. `feature/keys`). Both are **absent** on an off-train task,
+  whose base is its repo's configured `base:` — never read an absent
+  `base` as `main`.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the
@@ -295,7 +305,10 @@ worktree's cwd is NOT the recorded one (an orchestrator whose shell
 `session_started` keeps registering whatever id arrives, so an adopt's
 fresh pickup session still takes over. Records written before grove-250
 have no `session_id`; treat a missing one as unknown, never as foreign.
-Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+`task_created` and `task_adopted` carry optional `data.feature` and
+`data.base` (grove-373, additive): written only when the task rides a
+feature train, so an off-train grab's record is byte-identical to before;
+`task_adopted` carries the stored pair through. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
 `{slug, repo, branch, base, label}` — `gv feature new` opened a feature
 train; `branch` lives on origin, `base` is what it forks from and merges
 back to, `label` the issue label that marks its tickets), `feature_closed`
