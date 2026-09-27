@@ -877,7 +877,7 @@ func sceneHasLife(tasks []*state.Task, answered map[string]time.Time, celebratio
 // feedLen is len(feedItems(m.events)) and answered the latestAnswered map,
 // both computed once per frame in View (grove-167).
 func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityRows, sceneRows int) {
-	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight() - m.featureLayout().height
 	if leftover < 0 {
 		leftover = 0
 	}

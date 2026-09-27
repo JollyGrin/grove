@@ -45,6 +45,10 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(m.viewHeader())
 	b.WriteString("\n")
+	if lay := m.featureLayout(); lay.height > 0 {
+		b.WriteString(m.viewFeatures(lay))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
 	b.WriteString(m.viewActivity(items, activityRows))
@@ -155,7 +159,13 @@ func (m Model) viewAgents() string {
 	tw := m.ticketColWidth()
 	// Cells are padded as plain text FIRST, then styled — ANSI codes inside
 	// %-Ns break fmt's width accounting (field-tested on the first render).
-	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + pad("STATUS", 11) +
+	// grove-377: the TRAIN column exists only while a feature is open
+	// (trainW 0 otherwise), so a featureless frame is unchanged.
+	train := ""
+	if m.trainW > 0 {
+		train = pad("TRAIN", m.trainW)
+	}
+	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + train + pad("STATUS", 11) +
 		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + pad("AGE", ageColW) + "TASK"
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
@@ -164,7 +174,7 @@ func (m Model) viewAgents() string {
 		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
 			empty = emptyAgentsLine(nowHour())
 		}
-		line := sDim.Render(empty)
+		line := truncPad(sDim.Render(empty), w) // the calm variants run long (grove-377)
 		if m.fx >= fxCalm && timeOfDay(nowHour()) == 3 {
 			// A7: at night one firefly drifts through the dark (grove-56).
 			line = truncPad(line+fireflyTrail(m.tick), w)
@@ -240,8 +250,15 @@ func (m Model) viewAgents() string {
 		live := r.Live
 		line := cursor + glyphStyle.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
-			pad(trunc(t.Repo, 10), 11) +
-			st.Render(pad(statusText, 11)) +
+			pad(trunc(t.Repo, 10), 11)
+		if m.trainW > 0 {
+			slug := t.Feature
+			if slug == "" {
+				slug = "—"
+			}
+			line += sChrome.Render(pad(slug, m.trainW))
+		}
+		line += st.Render(pad(statusText, 11)) +
 			sDim.Render(pad(live, 8)) +
 			sDelivery.Render(pad(pr, 8)) +
 			ciStyle.Render(pad(ci, 4)) +
@@ -249,7 +266,7 @@ func (m Model) viewAgents() string {
 			sChrome.Render(pad(age(t.Created), ageColW))
 		// Dimmed task-title hint in the leftover width — additive, never a
 		// formal column. Omit entirely on narrow panes rather than cramp.
-		consumed := 3 + tw + 11 + 11 + 8 + 8 + 4 + 9 + ageColW
+		consumed := 3 + tw + 11 + m.trainW + 11 + 8 + 8 + 4 + 9 + ageColW
 		remaining := w - consumed
 		if r.hostTag != "" && remaining >= r.tagW {
 			// grove-178: the host tag leads the hint area so a merged board
@@ -264,7 +281,11 @@ func (m Model) viewAgents() string {
 		rows = append(rows, truncPad(line, w))
 	}
 
-	body := sPanelTitleFocus.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
+	agentsTitle := sPanelTitleFocus
+	if m.focus == focusFeatures && len(m.feats) > 0 {
+		agentsTitle = sPanelTitle // tab moved focus to FEATURES (grove-377)
+	}
+	body := agentsTitle.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
 	return m.chromeBorder().Width(m.width - 2).Render(body)
 }
 
@@ -294,7 +315,7 @@ func (m Model) viewActivity(items []feedItem, avail int) string {
 		if m.fx >= fxCalm { // A4 living empty state — time-of-day variant
 			empty = emptyActivityLine(nowHour())
 		}
-		line := sDim.Render(empty)
+		line := truncPad(sDim.Render(empty), w) // the calm variants run long (grove-377)
 		if m.fx >= fxCalm && timeOfDay(nowHour()) == 3 {
 			// A7: at night one firefly drifts through the dark (grove-56).
 			line = truncPad(line+fireflyTrail(m.tick), w)
@@ -361,12 +382,13 @@ func (m Model) viewFooter() string {
 	// have — when it doesn't fit beside the included hints, optional hints
 	// yield (never the O/)/? trio), then the flash truncates as last resort.
 	hasTasks := len(m.board) > 0
-	line := footerLegend(m.width, hasTasks)
+	hasFeatures := len(m.feats) > 0
+	line := footerLegend(m.width, hasTasks, hasFeatures)
 	if m.flash != "" {
 		flashW := len([]rune(m.flash))
 		room := m.width - lipgloss.Width(line) - 3
 		if flashW > room {
-			line = footerLegend(m.width-flashW-3, hasTasks)
+			line = footerLegend(m.width-flashW-3, hasTasks, hasFeatures)
 			room = m.width - lipgloss.Width(line) - 3
 		}
 		if room > 1 {

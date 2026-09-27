@@ -8,12 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/feature"
-	"github.com/JollyGrin/grove/internal/git"
-	"github.com/JollyGrin/grove/internal/github"
-	"github.com/JollyGrin/grove/internal/ledger"
-	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -124,63 +119,14 @@ func cmdFeatureLs(args []string) error {
 	return w.Flush()
 }
 
-// featureStatuses wires the real inputs into feature.Statuses: the full
-// event log (landed cars must survive sweep), the fold, the cost ledger,
-// the configured repos' checkouts, and — unless skipped — the backend's
-// open issues and gh. A missing config only loses the repo-rooted fields.
+// featureStatuses computes every open feature's status off the live
+// inputs (feature.LiveInput). A missing config only loses the repo-rooted
+// fields.
 func featureStatuses(features map[string]*state.Feature, withPR, withQueued bool) (map[string]*feature.Status, error) {
-	events, err := state.ReadEvents(stateDir(), 0)
-	if err != nil {
-		return nil, err
-	}
-	tasks, err := state.Peek(stateDir())
-	if err != nil {
-		return nil, err
-	}
-	rows, _ := ledger.Read(stateDir()) // no ledger = no estimates
 	cfg, _ := loadCfg()
-	repo := func(name string) *config.Repo {
-		if cfg == nil {
-			return nil
-		}
-		if r, ok := cfg.Repos[name]; ok {
-			return r
-		}
-		return nil
-	}
-	in := feature.StatusInput{
-		Features: features, Tasks: tasks, Events: events, Ledger: rows,
-		SkipQueued: !withQueued,
-		Git:        git.Run,
-		RepoDir: func(name string) string {
-			if r := repo(name); r != nil {
-				return r.Path
-			}
-			return ""
-		},
-		Issues: func(f *state.Feature) ([]*provider.Task, error) {
-			r := repo(f.Repo)
-			if r == nil {
-				return nil, fmt.Errorf("repo %q is not configured", f.Repo)
-			}
-			prov, err := provider.FromConfigKind(cfg, cfg.ProviderKindFor(r), f.Repo, r.Path)
-			if err != nil {
-				return nil, err
-			}
-			if gh, ok := prov.(*provider.GitHub); ok {
-				return gh.ListLabeled(f.Label)
-			}
-			return prov.List()
-		},
-	}
-	if withPR {
-		in.PR = func(f *state.Feature) (*github.PR, error) {
-			r := repo(f.Repo)
-			if r == nil {
-				return nil, nil
-			}
-			return github.PRForBranch(r.Path, f.Branch)
-		}
+	in, err := feature.LiveInput(cfg, stateDir(), features, withPR, withQueued)
+	if err != nil {
+		return nil, err
 	}
 	return feature.Statuses(in)
 }

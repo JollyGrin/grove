@@ -16,7 +16,8 @@ type helpEntry struct{ key, desc string }
 
 var (
 	helpRow = []helpEntry{
-		{"j/k", "move the selection up/down the fleet"},
+		{"j/k", "move the selection up/down the fleet (or the FEATURES rail, when focused)"},
+		{"tab", "focus: switch between FEATURES and AGENTS — shown while a feature train is open"},
 		{"enter", "reply: open the task and type straight into its agent's pane"},
 		{"a", "attach: switch your tmux client to the task's window"},
 		{"o", "preview: open the PR's preview deploy (falls back to PR, then ticket)"},

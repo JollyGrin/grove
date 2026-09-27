@@ -21,6 +21,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
+	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/remote"
@@ -56,6 +57,8 @@ type refreshMsg struct {
 	workers int
 	ok      bool   // state.Load succeeded — a zero msg (load error) stays false
 	focused string // grove-63: ticket at the tmux-focused window, "" if none
+	// features is the fold's open features (grove-377); nil when none.
+	features map[string]*state.Feature
 }
 
 // tickMsg is the single cockpit beat (grove-24): one per second, re-armed
@@ -245,6 +248,18 @@ type Model struct {
 	supUnlock func()
 	supNote   string
 
+	// Feature trains (grove-377). features is the last refresh's open
+	// features; featSlow the last PR-cadence status pass (featuresCmd);
+	// feats the rows FEATURES renders, rebuilt only in assemble. focus is
+	// the tab-toggled panel, featSel the cursor into feats, trainW the
+	// AGENTS TRAIN column width (0 = no column: no open feature).
+	features map[string]*state.Feature
+	featSlow map[string]*feature.Status
+	feats    []featRow
+	focus    int
+	featSel  int
+	trainW   int
+
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
 	// and so can't happen inside the tea loop. Inside tmux, attach is a
@@ -418,7 +433,8 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, handedOff: handedOff, live: live, infos: infos, events: events, mem: mem, workers: workers, ok: true, focused: focused}
+		return refreshMsg{tasks: active, handedOff: handedOff, live: live, infos: infos, events: events, mem: mem, workers: workers, ok: true, focused: focused,
+			features: openFeatures(folder.Features())}
 	}
 }
 
@@ -574,6 +590,7 @@ func (m *Model) assemble() {
 		}
 		m.scene = m.localTasks
 		m.clampSel()
+		m.assembleFeatures()
 		return
 	}
 	local := make([]fleet.Row, 0, len(m.localTasks))
@@ -597,6 +614,7 @@ func (m *Model) assemble() {
 	}
 	m.scene = m.sceneBuf
 	m.clampSel()
+	m.assembleFeatures()
 }
 
 // clampSel keeps the cursor on a real row after the board shrinks.
@@ -747,6 +765,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.localTasks, m.handedOff = msg.tasks, msg.handedOff
 			m.live = msg.live
+			// grove-377: a changed open-feature set earns one status pass
+			// now instead of waiting for the next PR beat.
+			if !sameSlugs(m.features, msg.features) {
+				cmds = append(cmds, featuresCmd(m.cfg, m.stateDir, msg.features))
+			}
+			m.features = msg.features
 			m.assemble()
 			m.events = msg.events
 			m.focused = msg.focused
@@ -842,7 +866,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The single PR-poll beat (grove-118, grove-24 pattern): kick a poll
 		// AND re-arm ONLY this timer. Ad-hoc prsMsg deliveries (below) never
 		// re-arm, so 'r' and other ad-hoc refreshes can't multiply the loop.
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), prTickEvery(30*time.Second))
+		// grove-377: the feature status pass (queued issues, feature PR)
+		// rides this beat — nil, and free, with no open feature.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), featuresCmd(m.cfg, m.stateDir, m.features), prTickEvery(30*time.Second))
 
 	case prsMsg:
 		// Data only — the poll loop lives on prTickMsg now (grove-118). This
@@ -875,6 +901,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prs = msg.prs
 		m.prUnknown = msg.unknown
 		return m, push
+
+	case featuresMsg:
+		// Data only, like prsMsg: never re-arms anything.
+		if msg.statuses != nil {
+			m.featSlow = msg.statuses
+		}
+		m.assemble()
+		return m, nil
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
@@ -962,6 +996,17 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// state is consumed here and cleared before they can be reached again.
 	if m.armedHost != "" {
 		return m.handleArmedKey(k)
+	}
+
+	// grove-377: with FEATURES focused the row keys have no task under
+	// them — say so instead of acting on the AGENTS cursor out of sight.
+	// (enter/l/s/m on a feature arrive with tickets 07 and 10.)
+	if m.focus == focusFeatures && len(m.feats) > 0 {
+		switch k.String() {
+		case "enter", "n", "a", "o", "p", "t", "v", "d", "l", "s", "m":
+			m.flash = "FEATURES focused — tab to AGENTS for task keys"
+			return m, nil
+		}
 	}
 
 	// grove-178 kept every non-local row read-only; grove-185 lifts that
@@ -1080,6 +1125,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.spawnProfile(profile)
+	case "tab": // FEATURES ⇄ AGENTS (grove-377); inert with no open feature
+		if len(m.feats) > 0 {
+			m.focus = 1 - m.focus
+		}
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -1158,7 +1207,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Local tasks only: PRs polled off a merged board would land a
 		// tombstone's handoff PR in m.prs and inflate the review count.
 		m.flash = "refreshing PRs…"
-		return m, prsCmd(m.cfg, m.stateDir, m.localTasks)
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
 	case "?": // the cheat-sheet overlay (grove-60) — esc/? closes
 		m.mode = modeHelp
 		m.flash = ""
@@ -1559,6 +1608,10 @@ var AttachTask = func(t *state.Task) error {
 }
 
 func (m *Model) move(delta int) {
+	if m.focus == focusFeatures && len(m.feats) > 0 {
+		m.featSel = (m.featSel + delta + len(m.feats)) % len(m.feats)
+		return
+	}
 	rows := len(m.board)
 	if rows == 0 {
 		return

@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 06: cockpit FEATURES rail panel + `TRAIN` column +
+      `tab` focus (grove-377, 2026-09-27, on `feature/feature-trains`).
+      Panel between header and AGENTS only while a feature is open
+      (title `landed/total ↓N <base> serve – est`, rail `·●◆✓⬢ ▷ base`,
+      issue labels, amber hint on the selected one); ≤3 expanded +
+      `+N more`, collapses to title+strip under 12 spare rows. Status
+      is computed in `assemble()` (live car states each refresh) merged
+      with a `featuresCmd` pass that rides the 30s PR beat / `r` / a
+      changed feature set — no new poll. Wiring shared with `gv feature
+      ls` as `feature.LiveInput`. No-feature frames pinned by goldens
+      (`internal/tui/testdata`). `enter/l/s/m` on a feature: 07/10.
 - [x] feature-trains 04: feature status function + `gv feature ls`
       status fields (grove-375, 2026-09-27, on `feature/feature-trains`).
       `internal/feature.Statuses` (inputs injected: fold, event log,
