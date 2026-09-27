@@ -950,7 +950,7 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}"
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -968,12 +968,15 @@ type LivePane struct {
 	Dir         string // pane_current_path
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
+	Remote      string // @grove_remote (grove-199): the host a remote chat pane attaches to, "" for a local pane
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
-// empty list, not an error (SessionNames' rule).
+// empty list, not an error (SessionNames' rule). Exactly ONE tmux
+// invocation, through the exec seam — the cockpit's CHATS box rides it
+// every second (grove-402), so the count is pinned by a test.
 func Panes() []LivePane {
-	out, err := run("list-panes", "-a", "-F", paneListFormat)
+	out, err := execTmux("list-panes", "-a", "-F", paneListFormat)
 	if err != nil || out == "" {
 		return nil
 	}
@@ -999,6 +1002,7 @@ func ParsePanes(out string) []LivePane {
 			Dir:         paneField(f, 7),
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
+			Remote:      paneField(f, 10),
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))

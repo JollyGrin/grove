@@ -64,6 +64,10 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
+	if lay := m.chatLayout(); lay.height > 0 {
+		b.WriteString(m.viewChats(lay))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.viewActivity(items, activityRows))
 	// The living grove (grove-63): the scene fills exactly the rows ACTIVITY
 	// yielded to it (rowBudgets), between the feed and the footer, no
@@ -297,6 +301,9 @@ func (m Model) viewAgents() string {
 	agentsTitle := sPanelTitleFocus
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		agentsTitle = sPanelTitle // tab moved focus to FEATURES (grove-377)
+	}
+	if m.focus == focusChats && len(m.chats) > 0 {
+		agentsTitle = sPanelTitle // … or to CHATS (grove-402)
 	}
 	body := agentsTitle.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
 	return m.chromeBorder().Width(m.width - 2).Render(body)
