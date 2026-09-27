@@ -46,6 +46,21 @@
       sweep's preview. `--host` refuses an explicit or inferred feature.
       `gv ls --json` rows gain `feature`/`base`; plugins.md, skill,
       e2e/plugin.sh updated.
+- [x] feature-trains 09: serve — run.sh contract, trust, ports, `gv serve`
+      (grove-380, 2026-09-27, on `feature/feature-trains`). New
+      internal/serve: `<workspace>/.grove/run.sh` runs in window `▶ <slug>`
+      (exact-name match, `tmux.WindowIDExact`) with GROVE_WORKTREE/BRANCH/
+      PORT/FEATURE, output teed to `state/serve/<slug>.log`; gv waits
+      (`--timeout`, 60s) for `GROVE_READY <url-or-path>`. Runs a snapshot
+      of the hashed bytes only when the sha256 matches the latest
+      `run_script_trusted`; TTY asks `trust and run? [y/N]`, non-TTY
+      refuses, no bypass flag. Ports from 4100, reused per feature. Serve
+      worktree `<slug>-serve` (detached, moved to the fetched tip each
+      start) is removed by `gv feature close` — only when detached.
+      Events `feature_served`/`feature_serve_stopped`/`run_script_trusted`;
+      `gv feature ls --json` rows gain `serve {state, port, url, tip,
+      behind}`. e2e/serve.sh (isolated tmux) in all.sh; plugin.sh asserts
+      the field.
 - [x] feature-trains 01: feature events + fold + `gv feature new/ls/close`
       (grove-372, 2026-09-27, on `feature/feature-trains`). Workspace-scoped
       `feature_created` {slug, repo, branch, base, label} / `feature_closed`

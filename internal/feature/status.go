@@ -13,6 +13,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/provider"
+	"github.com/JollyGrin/grove/internal/serve"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -59,6 +60,9 @@ type Status struct {
 	Mergeable  *bool      `json:"mergeable,omitempty"`
 	PR         *FeaturePR `json:"pr,omitempty"`
 	EstUSD     float64    `json:"est_usd"`
+	// Serve is the feature's local serve (grove-380, Decision 7), filled
+	// by the caller after Statuses — it needs tmux and the run.sh hash.
+	Serve *serve.Status `json:"serve,omitempty"`
 }
 
 // StatusInput is everything Statuses reads, injected so it is

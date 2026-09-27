@@ -310,6 +310,19 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
+  before the child prompts** (grove-380): `e2e/serve.sh` drives the TTY
+  trust prompt with `printf 'y\n' | script -q /dev/null gv serve …`, and
+  gv read a bare EOF (the pane echoed `^Dy`) — so "y" became "no". Hold
+  the answer back (`{ sleep 1; printf 'y\n'; sleep 1; } | script …`) so
+  it lands after the prompt. Related, verified on tmux 3.6a: `new-window
+  -n <name> <argv…>` with more than one command argument execs argv
+  directly (no user shell), `-e K=V` sets the env for just that window,
+  and `-P -F '#{window_id}'` hands back the `@N` id — the serve window
+  needs none of SendKeys' quoting. Serve windows are matched by EXACT
+  name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
+  tolerance would let `▶ keys` hit a `▶ keys 2`.
+
 - **2026-09-05 · macOS login-shell panes run `path_helper` and silently
   reorder PATH out from under a faked binary** (grove-230): `e2e/cockpit.sh`
   faked `ssh` on `$PATH` and typed `gv dash` into a tmux pane via
