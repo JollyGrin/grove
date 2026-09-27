@@ -50,6 +50,29 @@ perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$WCFG"
 grep -q 'claude: echo' "$WCFG" || fail "claude stub not written"
 "$GV" grab task-001 > "$SCRATCH/grab.out"
 
+say "feature trains (grove-372): open one, adopt one, close one — the operator's side"
+# A bare origin so feature new can push; added after the grab so the grab
+# path is unchanged.
+git init -q --bare -b main "$SCRATCH/origin.git"
+git remote add origin "$SCRATCH/origin.git"
+git push -q origin main
+MAIN_SHA="$(git rev-parse main)"
+"$GV" feature new trains --repo dummy > "$SCRATCH/fnew.out" || fail "feature new failed"
+[ "$(git ls-remote origin refs/heads/feature/trains | cut -f1)" = "$MAIN_SHA" ] || fail "feature/trains not pushed at origin/main"
+if "$GV" feature new trains --repo dummy > "$SCRATCH/fdup.out" 2>&1; then fail "second new of an open slug succeeded"; fi
+git push -q origin main:refs/heads/feature/live-train
+if "$GV" feature new live --branch feature/live-train --repo dummy > "$SCRATCH/fexist.out" 2>&1; then
+  fail "new on an existing remote branch succeeded without --adopt"
+fi
+grep -q -- '--adopt' "$SCRATCH/fexist.out" || fail "refusal does not name --adopt"
+if "$GV" feature new ghost --adopt --repo dummy > /dev/null 2>&1; then fail "--adopt of a missing branch succeeded"; fi
+if "$GV" feature new Bad_Slug --repo dummy > /dev/null 2>&1; then fail "bad slug accepted"; fi
+REFS_BEFORE="$(git ls-remote origin)"
+"$GV" feature new live --branch feature/live-train --label live-train --adopt --repo dummy > /dev/null || fail "--adopt failed"
+[ "$(git ls-remote origin)" = "$REFS_BEFORE" ] || fail "--adopt pushed something"
+"$GV" feature new gone --repo dummy > /dev/null && "$GV" feature close gone --reason abandoned > /dev/null || fail "feature close failed"
+git ls-remote --exit-code origin refs/heads/feature/gone > /dev/null || fail "feature close deleted the branch"
+
 # --- the plugin: knows ONLY the contract + the gv path -------------------
 # Everything below the line is what a gv-<surface> sidecar would do.
 cat > "$SCRATCH/plugin.sh" <<'PLUGIN'
@@ -75,6 +98,22 @@ assert data['schema_version'] == 1, data
 print(data['tasks'][0]['ticket'])
 ")"
 
+# 2b. READ: open feature trains (grove-372).
+( cd "$ROOT" && "$GV" feature ls --json > "$OUT/features.json" && "$GV" feature ls --all --json > "$OUT/features-all.json" )
+python3 -c "
+import json
+data = json.load(open('$OUT/features.json'))
+assert data['schema_version'] == 1, data
+fs = {f['slug']: f for f in data['features']}
+assert set(fs) == {'trains', 'live'}, fs
+t = fs['trains']
+assert (t['repo'], t['branch'], t['base'], t['label']) == ('dummy', 'feature/trains', 'main', 'trains'), t
+assert t['created_at'] and 'closed' not in t, t
+assert fs['live']['branch'] == 'feature/live-train' and fs['live']['label'] == 'live-train', fs
+alld = {f['slug']: f for f in json.load(open('$OUT/features-all.json'))['features']}
+assert alld['gone']['closed']['reason'] == 'abandoned' and alld['gone']['closed']['at'], alld
+"
+
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.
 tail -n 50 "$ROOT/.grove/state/events.jsonl" > "$OUT/events.tail"
 python3 -c "
@@ -83,6 +122,11 @@ evs = [json.loads(l) for l in open('$OUT/events.tail')]
 created = [e for e in evs if e['type'] == 'task_created']
 assert created, 'no task_created in the tail'
 assert all(e.get('v', 1) == 1 for e in evs), 'unexpected record version'
+fc = [e for e in evs if e['type'] == 'feature_created']
+assert len(fc) == 3 and all(e['ticket'] == '' for e in fc), fc
+assert set(fc[0]['data']) == {'slug', 'repo', 'branch', 'base', 'label'}, fc[0]
+cl = [e for e in evs if e['type'] == 'feature_closed']
+assert len(cl) == 1 and cl[0]['data'] == {'slug': 'gone', 'reason': 'abandoned'}, cl
 "
 
 # 4. STEER: mutations go through gv only.

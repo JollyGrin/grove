@@ -1,0 +1,43 @@
+[
+  {
+    "ticket": "grove-1",
+    "title": "one",
+    "url": "u1",
+    "repo": "grove",
+    "branch": "grove-1-one",
+    "worktree": "/wt/grove-1",
+    "tmux_session": "grove-x",
+    "tmux_window": "grove-1",
+    "claude_session_id": "s1",
+    "agent": "waiting",
+    "sentinel": "question",
+    "question": "tabs?",
+    "attached": false,
+    "done": false,
+    "sentinel_at": "2026-09-27T10:02:00Z",
+    "created": "2026-09-27T10:00:00Z",
+    "updated": "2026-09-27T10:02:00Z"
+  },
+  {
+    "ticket": "grove-2",
+    "title": "two",
+    "url": "",
+    "repo": "grove",
+    "branch": "grove-2-two",
+    "worktree": "",
+    "tmux_session": "",
+    "tmux_window": "",
+    "model_profile": "zai-plan-glm",
+    "agent": "setup",
+    "attached": false,
+    "done": false,
+    "delivery": {
+      "state": "opened",
+      "pr": 7,
+      "url": "p7",
+      "at": "2026-09-27T10:04:00Z"
+    },
+    "created": "2026-09-27T10:03:00Z",
+    "updated": "2026-09-27T10:04:00Z"
+  }
+]

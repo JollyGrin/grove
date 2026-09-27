@@ -85,6 +85,8 @@ var KnownTypes = []string{
 	state.EvOrchestratorClosed,
 	state.EvOrchestratorSpawned,
 	state.EvWorkspaceParked,
+	state.EvFeatureCreated,
+	state.EvFeatureClosed,
 	state.EvPROpened,
 	state.EvPRUpdated,
 	state.EvPRCIFailed,

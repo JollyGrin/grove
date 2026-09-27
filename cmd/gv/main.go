@@ -111,6 +111,11 @@ const usage = `gv — grove
   gv attach <ticket>                          jump into the tmux window
   gv editor [<ticket>]                        open a side-by-side editor pane in the worker window (no ticket: this worktree's task)
   gv diff <ticket> [--stat]                   branch diff vs base — review without attach
+  gv feature new <slug> --repo R [--branch B] [--base main] [--label L] [--adopt]
+                                              open a feature train: create + push feature/<slug> at
+                                              origin/<base> (--adopt: register an existing origin branch)
+  gv feature ls [--all] [--json]              open features (--all: closed too)
+  gv feature close <slug> [--reason merged|abandoned]   close a feature (deletes nothing)
   gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
                                               branch, and uncommitted changes survive; resume: gv adopt
@@ -453,6 +458,8 @@ func main() {
 		err = cmdEditor(args)
 	case "diff":
 		err = cmdDiff(args)
+	case "feature":
+		err = cmdFeature(args)
 	case "adopt":
 		err = cmdAdopt(args)
 	case "pause":

@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 01: feature events + fold + `gv feature new/ls/close`
+      (grove-372, 2026-09-27, on `feature/feature-trains`). Workspace-scoped
+      `feature_created` {slug, repo, branch, base, label} / `feature_closed`
+      {slug, reason merged|abandoned}; `state.LoadFeatures` (CLI) +
+      `Folder.Features()` (cockpit) fold a slug-keyed view in
+      internal/state/features.go — task fold untouched, tasks.json golden.
+      New internal/feature: slug rules, `new` pushes `feature/<slug>` at
+      origin/<base> via a lease-guarded ref push (no local branch), refuses
+      an existing remote branch without `--adopt`; `--adopt` pushes nothing.
+      `gv feature ls [--all] --json` (`features` key); plugins.md, the
+      plugin-authoring skill and e2e/plugin.sh cover both.
 - [x] Worker editor pane is config-gated, default off (grove-359,
       2026-09-27). `editor.enabled` (false) / `editor.command` (nvim):
       off, grab/adopt build a single-pane window (claude only, no split,
