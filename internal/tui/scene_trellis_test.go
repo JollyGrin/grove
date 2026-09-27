@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/JollyGrin/grove/internal/feature"
+	"github.com/JollyGrin/grove/internal/serve"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -278,7 +279,7 @@ func TestBuildFeatRowTrellis(t *testing.T) {
 		{Ticket: "grove-364", Number: 364, State: feature.CarWorking},
 		{Ticket: "grove-366", Number: 366, State: feature.CarQueued},
 	}}
-	r := buildFeatRow(f, st, "", nil)
+	r := buildFeatRow(f, st, "", nil, serve.Status{}, false)
 	if r.trellis != "gv-keys 1/3" {
 		t.Errorf("trellis = %q, want %q", r.trellis, "gv-keys 1/3")
 	}

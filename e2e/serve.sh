@@ -173,6 +173,62 @@ has_window "▶ trains" || fail "timeout must leave the window for inspection"
 [ "$(events | grep -c run_script_trusted)" = 2 ] || fail "re-trust not recorded"
 "$GV" serve stop trains > /dev/null
 
+say "cockpit s (grove-381): untrusted → review modal; esc cancels; y trusts + serves; s on a running serve stops"
+cat > "$DUMMY/.grove/run.sh" <<'EOF'
+#!/bin/sh
+echo "GROVE_READY http://localhost:$GROVE_PORT"
+exec sleep 600
+EOF
+SHA3="$(shasum -a 256 "$DUMMY/.grove/run.sh" | cut -d' ' -f1)"
+TRUSTS="$(events | grep -c run_script_trusted)"
+# The dashboard in its own session on the isolated server, sized big
+# enough for the sha line. Keys are single keys only (tmux-discipline §2).
+tmux new-session -d -s e2e-dash -x 160 -y 50 -c "$DUMMY" "$GV dash"
+DASH="$(tmux list-panes -t '=e2e-dash' -F '#{pane_id}' | head -1)"
+wait_dash() {
+  local i
+  for i in $(seq 1 100); do
+    CAP="$(tmux capture-pane -p -S -300 -t "$DASH" | tr -d '\n')"
+    echo "$CAP" | grep -qF -- "$1" && return 0
+    sleep 0.2
+  done
+  return 1
+}
+wait_dash 'FEATURES' || fail "cockpit shows no FEATURES panel: $CAP"
+wait_dash 'serve untrusted' || fail "rail does not show the untrusted script: $CAP"
+tmux send-keys -t "$DASH" Tab
+sleep 0.5
+tmux send-keys -t "$DASH" s
+wait_dash 'REVIEW .grove/run.sh' || fail "s on an untrusted script opened no review modal: $CAP"
+wait_dash "$SHA3" || fail "modal does not show the sha256: $CAP"
+has_window "▶ trains" && fail "the modal ran the script"
+[ "$(events | grep -c run_script_trusted)" = "$TRUSTS" ] || fail "opening the modal recorded trust"
+tmux send-keys -t "$DASH" Escape
+wait_dash 'nothing ran' || fail "esc did not cancel: $CAP"
+[ "$(events | grep -c run_script_trusted)" = "$TRUSTS" ] || fail "esc recorded trust"
+has_window "▶ trains" && fail "esc ran the script"
+tmux send-keys -t "$DASH" s
+wait_dash 'REVIEW .grove/run.sh' || fail "second s: no modal: $CAP"
+tmux send-keys -t "$DASH" y
+wait_dash 'trains ready — http://localhost:4100' || fail "y did not serve / READY not in the status line: $CAP"
+has_window "▶ trains" || fail "y: no '▶ trains' window"
+[ "$(events | grep -c run_script_trusted)" = "$((TRUSTS + 1))" ] || fail "y did not record exactly one trust"
+events | grep run_script_trusted | tail -1 | grep -q "$SHA3" || fail "trust event is not for the reviewed sha"
+wait_dash 'serve ▶ http://localhost:4100' || fail "rail does not show the running serve: $CAP"
+tmux send-keys -t "$DASH" Enter
+wait_dash 'running :4100  http://localhost:4100' || fail "lens SERVE does not show the running serve: $CAP"
+tmux send-keys -t "$DASH" s
+wait_dash 'stop ▶ trains?' || fail "s on a running serve (lens) did not offer stop: $CAP"
+tmux send-keys -t "$DASH" y
+wait_dash 'trains serve stopped' || fail "y did not stop: $CAP"
+has_window "▶ trains" && fail "stop left '▶ trains'"
+wait_dash 'stopped (last :4100)' || fail "lens SERVE does not show the stop: $CAP"
+tmux send-keys -t "$DASH" Escape
+sleep 0.5
+tmux send-keys -t "$DASH" q
+sleep 0.5
+tmux kill-session -t '=e2e-dash' 2>/dev/null || true
+
 say "feature close removes the serve worktree gv made — and nothing else"
 MINE="$SCRATCH/repos/.worktrees/dummy/other-serve"
 "$GV" feature close trains > "$SCRATCH/close.out"

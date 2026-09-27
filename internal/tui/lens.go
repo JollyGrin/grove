@@ -173,11 +173,15 @@ func serveLine(s *serve.Status) string {
 	return line
 }
 
-// buildLens derives one feature's lens strings once per assemble.
-func buildLens(f *state.Feature, st *feature.Status, tip string, merged map[string]bool) lensData {
+// buildLens derives one feature's lens strings once per assemble. sv is
+// the cockpit's serve status (grove-381); nil falls back to st.Serve.
+func buildLens(f *state.Feature, st *feature.Status, tip string, merged map[string]bool, sv *serve.Status) lensData {
+	if sv == nil {
+		sv = st.Serve
+	}
 	d := lensData{
 		head:  fmt.Sprintf("%s ▷ %s  %d/%d landed  est $%.2f", f.Branch, f.Base, st.Landed, st.Total, st.EstUSD),
-		serve: serveLine(st.Serve),
+		serve: serveLine(sv),
 		next: nextActions(nextInput{Cars: st.Cars, Merged: merged, Behind: st.BehindBase,
 			Mergeable: st.Mergeable, PR: st.PR, Branch: f.Branch, Base: f.Base}),
 	}
@@ -408,6 +412,8 @@ func (m Model) handleLensKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "l":
 		return m.openLand(f.slug)
+	case "s": // serve this train (grove-381): same gate as the rail
+		return m.serveKey(f.slug)
 	case "r":
 		m.flash = "refreshing PRs…"
 		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
@@ -529,8 +535,12 @@ func (m Model) viewLens() string {
 		sKey.Render("j/k") + sFoot.Render(" car") + sDim.Render(" · ") +
 		sKey.Render("enter") + sFoot.Render(" reply") + sDim.Render(" · ") +
 		sKey.Render("m") + sFoot.Render(" feature PR") + sDim.Render(" · ") +
-		sKey.Render("l") + sFoot.Render(" land")
-	if m.flash != "" {
+		sKey.Render("l") + sFoot.Render(" land") + sDim.Render(" · ") +
+		sKey.Render("s") + sFoot.Render(" serve")
+	if m.mode == modeServeStop && m.serveStop != "" {
+		foot = " " + sBlocked.Render("stop "+serve.Window(m.serveStop)+"? kills the serve window ") +
+			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+	} else if m.flash != "" {
 		foot += "   " + sChrome.Render(m.flash)
 	}
 	return m.viewHeader() + "\n" + panel + "\n" + truncPad(foot, m.width)

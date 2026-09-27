@@ -65,7 +65,8 @@ var (
 // to read its inputs, and the last good answer stands.
 type featuresMsg struct {
 	statuses map[string]*feature.Status
-	tips     map[string]string // slug → origin/<branch> sha, local rev-parse (the lens)
+	tips     map[string]string       // slug → origin/<branch> sha, local rev-parse (the lens)
+	serves   map[string]serve.Status // grove-381; nil = unknown, the last answer stands
 }
 
 // featuresCmd runs the network half of feature status. nil when no
@@ -75,9 +76,10 @@ func featuresCmd(cfg *config.Config, stateDir string, features map[string]*state
 		return nil
 	}
 	return func() tea.Msg {
+		serves := ServeStatuses(featureList(features))
 		in, err := feature.LiveInput(cfg, stateDir, features, true, true)
 		if err != nil {
-			return featuresMsg{}
+			return featuresMsg{serves: serves}
 		}
 		st, _ := statusesFn(in) // lookup failures leave fields empty
 		// The lens's tip: one local rev-parse per feature, no fetch.
@@ -90,7 +92,7 @@ func featuresCmd(cfg *config.Config, stateDir string, features map[string]*state
 				tips[slug] = serve.BranchTip(r.Path, f.Branch)
 			}
 		}
-		return featuresMsg{statuses: st, tips: tips}
+		return featuresMsg{statuses: st, tips: tips, serves: serves}
 	}
 }
 
@@ -241,21 +243,25 @@ func featureHint(f *state.Feature, st *feature.Status) string {
 
 // buildFeatRow derives one feature's plain strings once per assemble —
 // the rail panel's and the lens's. tip is the branch sha ("" unknown);
-// merged marks the cars whose PR the last poll saw MERGED.
-func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[string]bool) featRow {
+// merged marks the cars whose PR the last poll saw MERGED; sv/svOK the
+// serve status (grove-381, svOK false = unknown).
+func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[string]bool, sv serve.Status, svOK bool) featRow {
+	var svp *serve.Status
+	if svOK {
+		svp = &sv
+	}
 	behind := "?"
 	if st.BehindBase != nil {
 		behind = fmt.Sprint(*st.BehindBase)
 	}
 	r := featRow{
-		slug: f.Slug,
-		base: f.Base,
-		// serve state is a placeholder until tickets 09/10.
-		title:   fmt.Sprintf("%d/%d  ↓%s %s  serve –  est $%.2f", st.Landed, st.Total, behind, f.Base, st.EstUSD),
+		slug:    f.Slug,
+		base:    f.Base,
+		title:   fmt.Sprintf("%d/%d  ↓%s %s  %s  est $%.2f", st.Landed, st.Total, behind, f.Base, serveLabel(sv, svOK), st.EstUSD),
 		hint:    featureHint(f, st),
 		trellis: fmt.Sprintf("%s %d/%d", f.Slug, st.Landed, st.Total),
 		label:   f.Label,
-		lens:    buildLens(f, st, tip, merged),
+		lens:    buildLens(f, st, tip, merged, svp),
 	}
 	if st.PR != nil {
 		r.prURL = st.PR.URL
@@ -316,7 +322,8 @@ func (m *Model) assembleFeatures() {
 	}
 	m.trainW = len("TRAIN")
 	for _, slug := range slugs {
-		m.feats = append(m.feats, buildFeatRow(m.features[slug], mergeStatus(live[slug], m.featSlow[slug]), m.featTips[slug], merged))
+		sv, svOK := m.serves[slug]
+		m.feats = append(m.feats, buildFeatRow(m.features[slug], mergeStatus(live[slug], m.featSlow[slug]), m.featTips[slug], merged, sv, svOK))
 		if n := len([]rune(slug)); n > m.trainW {
 			m.trainW = n
 		}

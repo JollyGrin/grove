@@ -18,6 +18,7 @@ var (
 	helpRow = []helpEntry{
 		{"j/k", "move the selection up/down the fleet (or the FEATURES rail, when focused)"},
 		{"tab", "focus: switch between FEATURES and AGENTS — shown while a feature train is open"},
+		{"s", "serve (FEATURES focused, or in the lens): run the feature's .grove/run.sh — an untrusted or changed script opens a review first (y trust & run); a running serve offers stop"},
 		{"enter", "reply: open the task and type straight into its agent's pane"},
 		{"a", "attach: switch your tmux client to the task's window"},
 		{"o", "preview: open the PR's preview deploy (falls back to PR, then ticket)"},
