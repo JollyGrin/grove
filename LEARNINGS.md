@@ -310,6 +310,15 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-27 · `tmux kill-server` returns before the server's panes
+  are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
+  (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
+  assertion passed, then cleanup died on "rm: Directory not empty" because
+  a pane process was still writing under the scratch tree, and the suite
+  read red. Wait for the isolated socket
+  (`$TMUX_TMPDIR/tmux-$(id -u)/default`) to vanish, then retry the rm
+  once — `e2e/serve.sh`'s `cleanup()` already did; plugin.sh now does too.
+
 - **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
   before the child prompts** (grove-380): `e2e/serve.sh` drives the TTY
   trust prompt with `printf 'y\n' | script -q /dev/null gv serve …`, and
@@ -631,6 +640,14 @@
   under `<CLAUDE_CONFIG_DIR>/projects/<encoded-cwd>/`.
 
 ## Go / CLI
+
+- **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
+  not the branch or the issues' label** (grove-383): the gv-keys train's
+  issues carry the label `gv-keys`, so `gv feature new keys --adopt
+  --branch feature/gv-keys-secrets` registers label `keys`, infers
+  nothing on grab, and every car silently forks from main. Pass
+  `--label <the issues' label>` whenever the slug differs from it; check
+  with `gh issue view <n> --json labels` first.
 
 - **2026-09-26 · A shared-repo host turns "orphan" into "every sibling
   workspace's live worker"** (grove-350, seen on groveremote). `gv audit`'s

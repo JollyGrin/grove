@@ -22,6 +22,11 @@ gofmt -l .                                        # must be empty
 - The same trap in reverse: `cmd | grep -q` flakes under
   `set -o pipefail` (grep exits at first match, the producer SIGPIPEs).
   E2E assertions capture to a file first, then grep the file.
+- **Teardown: `tmux kill-server` returns before the panes are gone.** A
+  pane still writing under `$SCRATCH` makes `rm -rf "$SCRATCH"` fail with
+  "Directory not empty" after every assertion passed (grove-383). Wait for
+  the isolated socket to disappear, then retry the rm once — copy
+  `cleanup()` from `e2e/serve.sh` or `e2e/feature.sh`.
 - **Write e2e shell for BSD userland too — the operator runs it on a Mac.**
   No GNU-only flags (`touch -d @<epoch>` is GNU; BSD needs
   `-t YYYYMMDDhhmm.SS`), and resolve the scratch root with
@@ -38,7 +43,9 @@ pass `e2e/dummy.sh` before merge. It runs the full loop against scratch
 everything: scratch `HOME` (config), `GROVE_STATE_DIR` override (state),
 and the repo's `claude:` command set to `echo` (worker). Other suites:
 `wizard.sh`, `workspace.sh`, `github.sh` (stub `gh`), `cockpit.sh`,
-`plugin.sh`. **`e2e/all.sh` runs all six** — no CI covers them, so run it
+`plugin.sh`, `serve.sh`, `feature.sh` (the feature-train lifecycle), and
+more — `ls e2e/`. **`e2e/all.sh` runs every one** (a new suite is not
+covered until it is added to all.sh's list) — no CI covers them, so run it
 before merging anything that touches the TUI or the task lifecycle
 (grove-79: three TUI PRs merged while `cockpit.sh` + `workspace.sh` were
 red, because nothing ran them; the panic had shipped in a fourth a day

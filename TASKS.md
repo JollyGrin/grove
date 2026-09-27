@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 12: cutover (grove-383, 2026-09-27, on
+      `feature/feature-trains`). New `e2e/feature.sh` (wired into
+      `e2e/all.sh`) walks one train end to end in a single workspace:
+      `feature new` on a scratch bare origin, `--adopt` (pushes nothing),
+      grab by label (forks from the feature tip, kickoff says
+      `--base feature/<slug>`, `gv ls --json` carries `feature`/`base`),
+      `feature ls --json` status (cars, `behind_base`, `mergeable`),
+      `land --json` dry run, `land --yes` (backend task files byte-identical
+      after), `close` (branch left, label stops inferring). Grove's own
+      `.grove/run.sh`: throwaway build to `/tmp/gv-$GROVE_FEATURE`, prints
+      `GROVE_READY <path>`. `e2e/plugin.sh` teardown race fixed (wait for
+      the isolated socket, retry the rm). Merge to main PROPOSED in the PR,
+      not performed.
 - [x] feature-trains 10: serve in the cockpit — `s`, review modal,
       `gv serve init` (grove-381, 2026-09-27, on `feature/feature-trains`).
       `s` on the selected FEATURES row: trusted run.sh → `startServe`
