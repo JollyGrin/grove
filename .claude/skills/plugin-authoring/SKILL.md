@@ -67,7 +67,11 @@ dimensions, folded into row fields `delivery`/`liveness`
 (`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
 full per-type data table. `task_created`/`task_adopted` data carries
 `feature` + `base` only for a feature-train car. Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`, `feature_created`
+`workspace_parked`, `orchestrator_closed`, `chat_hidden` / `chat_shown`
+(`{session, pane, workspace, session_id?}` — a local cockpit chat pane
+moved into a detached `grove-chat-*` session and back; same process, same
+`session_id`, only `gv chat ls`'s `session`/`kind`/`writable` change),
+`feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,
 window, url}`), `feature_serve_stopped` (`{slug}`), `run_script_trusted`
