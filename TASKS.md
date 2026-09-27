@@ -21,6 +21,18 @@
       the fields flat on open rows; `--no-pr`/`--no-queued`.
       `provider.GitHub.ListLabeled` (bodies included). plugins.md, skill,
       e2e/plugin.sh updated. For the cockpit (ticket 06).
+- [x] feature-trains 03: kickoff templates name the PR base (grove-374,
+      2026-09-27, on `feature/feature-trains`). `kickoff.Render` gains
+      `base`/`feature` params; grab passes `choice.Base` + the feature's
+      slug (already resolved to task-base-else-repo-base by
+      `feature.ChooseForGrab`), adopt/pickup passes `storedBase` (falling
+      back to `repo.Base`) + `storedFeature`. Every template that mentions
+      a PR now says `gh pr create --base {{.Base}}` explicitly instead of
+      "against main"/"against the base branch"; when `Feature` is set, a
+      fixed paragraph warns the PR targets the train, not main, and to
+      rebase only on `origin/{{.Base}}`. manual/md_manual (no PR mention)
+      untouched. Goldens updated; new `TestRenderNamesThePRBase` covers
+      both template sets × default/pickup × with/without a feature.
 - [x] feature-trains 02: `gv grab --feature`, label inference, per-task
       base (grove-373, 2026-09-27, on `feature/feature-trains`).
       `gv grab --feature <slug>|none`; absent, exactly one open feature

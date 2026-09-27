@@ -1,6 +1,7 @@
 package kickoff
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ func TestLinearGoldenParity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := Render(goldenTask, linearVerbs, "linear", "", mode, "")
+		got, err := Render(goldenTask, linearVerbs, "linear", "", mode, "", "main", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +64,7 @@ func TestLinearGoldenParity(t *testing.T) {
 }
 
 func TestRenderDefaultUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "")
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestRenderDefaultUnchanged(t *testing.T) {
 // grove-146: an empty brief must not alter existing renders (every other
 // call site in this file passes "" and depends on byte-identical output).
 func TestRenderNoBriefUnchanged(t *testing.T) {
-	withBrief, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "")
+	withBrief, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestRenderNoBriefUnchanged(t *testing.T) {
 }
 
 func TestRenderOperatorBrief(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "Only touch the staging config, do not deploy.")
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "Only touch the staging config, do not deploy.", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestRenderOperatorBrief(t *testing.T) {
 }
 
 func TestRenderManualUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeManual, "")
+	got, err := Render(testTask, linearVerbs, "linear", "", ModeManual, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestRenderManualUnchanged(t *testing.T) {
 }
 
 func TestRenderPickup(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModePickup, "")
+	got, err := Render(testTask, linearVerbs, "linear", "", ModePickup, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Render(testTask, linearVerbs, "linear", custom, ModeDefault, "")
+	got, err := Render(testTask, linearVerbs, "linear", custom, ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 	}
 
 	for _, mode := range []Mode{ModeManual, ModePickup} {
-		got, err := Render(testTask, linearVerbs, "linear", custom, mode, "")
+		got, err := Render(testTask, linearVerbs, "linear", custom, mode, "", "main", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +182,7 @@ var mdTask = &provider.Task{
 }
 
 func TestRenderMarkdownDefault(t *testing.T) {
-	got, err := Render(mdTask, mdVerbs, "markdown", "", ModeDefault, "")
+	got, err := Render(mdTask, mdVerbs, "markdown", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +209,7 @@ func TestRenderMarkdownDefault(t *testing.T) {
 }
 
 func TestRenderMarkdownManualAndPickup(t *testing.T) {
-	man, err := Render(mdTask, mdVerbs, "markdown", "", ModeManual, "")
+	man, err := Render(mdTask, mdVerbs, "markdown", "", ModeManual, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func TestRenderMarkdownManualAndPickup(t *testing.T) {
 		t.Errorf("markdown manual render wrong:\n%s", man)
 	}
 
-	pick, err := Render(mdTask, mdVerbs, "markdown", "", ModePickup, "")
+	pick, err := Render(mdTask, mdVerbs, "markdown", "", ModePickup, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,5 +228,57 @@ func TestRenderMarkdownManualAndPickup(t *testing.T) {
 	}
 	if strings.Contains(pick, "Linear") {
 		t.Error("markdown pickup render leaks Linear")
+	}
+}
+
+// featureParagraph is the fixed paragraph every PR-mentioning template adds
+// when the task rides a feature train (grove-374, feature trains Decision 3).
+func featureParagraph(feature, base string) string {
+	return fmt.Sprintf("This task belongs to feature `%s`. Your PR targets\n`%s`, not main. If you must catch up, rebase only on\n`origin/%s` — never on main.", feature, base, base)
+}
+
+// TestRenderNamesThePRBase covers the kickoff-03 acceptance criteria: every
+// template that mentions a PR must name Base explicitly, and add the
+// feature paragraph verbatim only when the task rides a feature train —
+// across both template sets (linear, markdown) and both PR-mentioning
+// modes (default, pickup).
+func TestRenderNamesThePRBase(t *testing.T) {
+	cases := []struct {
+		name  string
+		kind  string
+		task  *provider.Task
+		verbs provider.Verbs
+		mode  Mode
+	}{
+		{"linear default", "linear", testTask, linearVerbs, ModeDefault},
+		{"markdown default", "markdown", mdTask, mdVerbs, ModeDefault},
+		{"linear pickup", "linear", testTask, linearVerbs, ModePickup},
+		{"markdown pickup", "markdown", mdTask, mdVerbs, ModePickup},
+	}
+	for _, c := range cases {
+		t.Run(c.name+"/no feature", func(t *testing.T) {
+			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "main", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(got, "gh pr create --base main") {
+				t.Errorf("%s: missing `gh pr create --base main`:\n%s", c.name, got)
+			}
+			if strings.Contains(got, "belongs to feature") {
+				t.Errorf("%s: unexpected feature paragraph with no feature set:\n%s", c.name, got)
+			}
+		})
+		t.Run(c.name+"/feature", func(t *testing.T) {
+			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "feature/x", "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(got, "gh pr create --base feature/x") {
+				t.Errorf("%s: missing `gh pr create --base feature/x`:\n%s", c.name, got)
+			}
+			if want := featureParagraph("x", "feature/x"); !strings.Contains(got, want) {
+				t.Errorf("%s: missing feature paragraph verbatim, want:\n%s\ngot:\n%s", c.name, want, got)
+			}
+		})
 	}
 }

@@ -1702,7 +1702,14 @@ func cmdGrab(args []string) error {
 	if *manual {
 		promptMode = kickoff.ModeManual
 	}
-	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode, *briefFlag)
+	// grove-374: choice.Base already resolves to the feature's branch, else
+	// the repo's base (feature.ChooseForGrab) — the kickoff names it as the
+	// PR target directly, no separate fallback needed here.
+	featureSlug := ""
+	if choice.Feature != nil {
+		featureSlug = choice.Feature.Slug
+	}
+	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode, *briefFlag, choice.Base, featureSlug)
 	if err != nil {
 		return err
 	}
@@ -3527,7 +3534,14 @@ func cmdAdopt(args []string) error {
 	if provErr == nil {
 		verbs = prov.Verbs()
 	}
-	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode, "")
+	// grove-374: storedBase (from tracked state, grove-373) names the
+	// feature's branch when the task rides one, else falls back to the
+	// repo's base — the pickup kickoff names it as the PR target.
+	pickupBase := storedBase
+	if pickupBase == "" {
+		pickupBase = repo.Base
+	}
+	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode, "", pickupBase, storedFeature)
 	if err != nil {
 		return err
 	}
