@@ -20,6 +20,25 @@
       changed feature set — no new poll. Wiring shared with `gv feature
       ls` as `feature.LiveInput`. No-feature frames pinned by goldens
       (`internal/tui/testdata`). `enter/l/s/m` on a feature: 07/10.
+- [x] feature-trains 05: `gv feature land` (grove-376, 2026-09-27, on
+      `feature/feature-trains`). `internal/feature.BuildLandPlan` walks
+      every tracked, not-done task on a slug, checks each one's PR fresh
+      (`gh pr list`, same merge check `finishTask` uses — never git
+      ancestry) and classifies it: `MERGED` lands, an unmerged PR is
+      skipped `PR open`, no PR is `working` or `no PR` (the car already
+      looks finished but has nothing to show); queued cars (reused from
+      ticket 04's `Statuses`) are skipped `queued`. `internal/feature.Land`
+      runs an injected `Finisher` per landed row — one failure is
+      recorded and the rest still run. `gv feature land <slug> [--json]
+      [--yes]`: human mode prints the plan table then `land N? [y/N]`;
+      `--json` without `--yes` is a pure dry run (no prompt, no
+      execution, `landed`/`failed` genuinely absent — echoWorkspace is
+      skipped so stdout stays one JSON object); `--json --yes` executes
+      and adds `landed`/`failed` (present as `[]`, never omitted). Never
+      a backend mutation — closing is the orchestrator's, on the
+      operator's order (Decision 8). plugins.md row, e2e/plugin.sh
+      (stub `gh`, dry run + execute + skip reasons, asserts no mutating
+      `gh` verb). Cockpit `l` modal is ticket 07.
 - [x] feature-trains 04: feature status function + `gv feature ls`
       status fields (grove-375, 2026-09-27, on `feature/feature-trains`).
       `internal/feature.Statuses` (inputs injected: fold, event log,
