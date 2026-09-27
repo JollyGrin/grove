@@ -12,7 +12,7 @@ offer it when it would help, and run it when asked.
 An existing branch already carries prior work on this task (a previous
 session was interrupted). Do NOT start from scratch:
 1. Read the branch state first: `git log <base>..HEAD`, the diff against
-   the base branch, and — if a PR exists (`gh pr view`) — its description,
+   {{.Base}}, and — if a PR exists (`gh pr view`) — its description,
    CI state, and unresolved review threads.
 2. Verify the task's recorded status; if it is not yet in progress:
    {{.Verbs.Start}}
@@ -20,10 +20,14 @@ session was interrupted). Do NOT start from scratch:
    contradicts the task or you cannot tell what remains, ask — otherwise
    do not ask for confirmation.
 4. Commit with the task prefix ({{.ID}}: ...); push to the same branch if
-   this repo has a remote. Open a PR against the base branch with
-   `gh pr create` only if none exists, including "Task: {{.ID}}" in the
-   body. Never push directly to the base branch.
-5. Wrap up: re-read the acceptance criteria and verify each one against
+   this repo has a remote. Open a PR with `gh pr create --base {{.Base}}`
+   only if none exists, including "Task: {{.ID}}" in the body. Never push
+   directly to the base branch.
+{{if .Feature}}
+This task belongs to feature `{{.Feature}}`. Your PR targets
+`{{.Base}}`, not main. If you must catch up, rebase only on
+`origin/{{.Base}}` — never on main.
+{{end}}5. Wrap up: re-read the acceptance criteria and verify each one against
    your diff, then {{.Verbs.Review}}
 6. ALWAYS end your final message with exactly one of these lines:
    STATUS: QUESTION — <the question, one line>
