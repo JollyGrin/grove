@@ -243,3 +243,26 @@ func OpenPRBody(repoDir, branch string) (number int, url, body string, err error
 	}
 	return prs[0].Number, prs[0].URL, prs[0].Body, nil
 }
+
+// MergedPR is one PR merged into a branch — the feature-status landed
+// lookup (grove-397) reads head branches to tie each PR to its ticket.
+type MergedPR struct {
+	Number      int       `json:"number"`
+	HeadRefName string    `json:"headRefName"`
+	MergedAt    time.Time `json:"mergedAt"`
+}
+
+// MergedInto lists the PRs merged into base, newest first as gh returns
+// them. One gh call.
+func MergedInto(repoDir, base string) ([]MergedPR, error) {
+	out, err := gh(repoDir, "pr", "list", "--state", "merged", "--base", base, "--limit", "200",
+		"--json", "number,headRefName,mergedAt")
+	if err != nil {
+		return nil, err
+	}
+	var prs []MergedPR
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return nil, fmt.Errorf("parse gh pr list: %w", err)
+	}
+	return prs, nil
+}
