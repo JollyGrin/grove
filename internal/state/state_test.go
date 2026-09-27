@@ -638,3 +638,55 @@ func TestFoldLiveSince(t *testing.T) {
 		t.Fatalf("LiveSince must never be serialized (json:\"-\"): %s", raw)
 	}
 }
+
+func TestFoldFeatureAndBaseSurviveAdopt(t *testing.T) {
+	dir := t.TempDir()
+	// grove-373: a train grab carries feature+base; an off-train grab and a
+	// pre-field event carry neither and fold to "".
+	evs := []Event{
+		{Type: EvTaskCreated, Ticket: "grove-40", Data: map[string]string{
+			"title": "car", "repo": "grove", "feature": "keys", "base": "feature/keys",
+		}},
+		{Type: EvTaskCreated, Ticket: "grove-41", Data: map[string]string{"title": "plain", "repo": "grove"}},
+		{Type: EvTaskUntracked, Ticket: "grove-40"},
+		// gv adopt writes both back (carry-through) …
+		{Type: EvTaskAdopted, Ticket: "grove-40", Data: map[string]string{
+			"worktree": "/wt/40", "feature": "keys", "base": "feature/keys",
+		}},
+		// … and an adopt event without them never clears them.
+		{Type: EvTaskAdopted, Ticket: "grove-40", Data: map[string]string{"worktree": "/wt/40b"}},
+	}
+	for _, ev := range evs {
+		if err := Append(dir, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	car := tasks["grove-40"]
+	if car.Feature != "keys" || car.Base != "feature/keys" || car.Done {
+		t.Errorf("adopted car = feature %q base %q done %v, want keys, feature/keys, live", car.Feature, car.Base, car.Done)
+	}
+	if got := car.BaseOr("main"); got != "feature/keys" {
+		t.Errorf("car BaseOr = %q, want feature/keys", got)
+	}
+	plain := tasks["grove-41"]
+	if plain.Feature != "" || plain.Base != "" {
+		t.Errorf("plain task = feature %q base %q, want empty", plain.Feature, plain.Base)
+	}
+	if got := plain.BaseOr("main"); got != "main" {
+		t.Errorf("plain BaseOr = %q, want the repo base main", got)
+	}
+	// omitempty: an off-train task's JSON (tasks.json, gv ls --json) has
+	// no feature/base keys at all.
+	b, _ := json.Marshal(plain)
+	if s := string(b); strings.Contains(s, `"feature"`) || strings.Contains(s, `"base"`) {
+		t.Errorf("off-train task JSON carries feature/base: %s", s)
+	}
+	b, _ = json.Marshal(car)
+	if s := string(b); !strings.Contains(s, `"feature":"keys"`) || !strings.Contains(s, `"base":"feature/keys"`) {
+		t.Errorf("train task JSON lacks feature/base: %s", s)
+	}
+}

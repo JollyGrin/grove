@@ -134,6 +134,15 @@ cost:
   # r) toggles at runtime, persisted in <state>/cost-recording, which wins.
   record: false
 
+# Side-by-side editor pane in worker windows (grove-359). Off by default:
+# worker windows are single-pane (claude only) — no split, no editor RAM.
+# `gv editor [<ticket>]` opens one on demand either way (also from inside a
+# worker's worktree, no ticket needed). On restores the old always-split
+# layout, launching `<command> .` on first attach.
+# editor:
+#   enabled: false
+#   command: nvim
+
 # Cockpit presentation (grove-22).
 cockpit:
   # Joy knob for the dashboard TUI:

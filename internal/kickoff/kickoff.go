@@ -44,11 +44,15 @@ const (
 
 // data is the template input. It embeds the provider-neutral task and keeps
 // Identifier as a legacy alias for ID so pre-existing repo prompt overrides
-// ({{.Identifier}}) keep rendering.
+// ({{.Identifier}}) keep rendering. Base and Feature (grove-374, feature
+// trains Decision 3) name the branch a PR targets and, when the task rides
+// a feature train, the train it belongs to.
 type data struct {
 	*provider.Task
 	Identifier string
 	Verbs      provider.Verbs
+	Base       string
+	Feature    string
 }
 
 // Render produces the kickoff prompt. kind selects the template set
@@ -58,7 +62,10 @@ type data struct {
 // brief is ad-hoc operator text (grove-146); appended verbatim as a final
 // "## Operator brief" section after all ticket-derived content, for any
 // mode — empty means no section, keeping every existing caller byte-stable.
-func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode, brief string) (string, error) {
+// base is the branch the PR targets (the caller resolves it: a feature's
+// branch, else the repo's base — never empty); feature is the feature's
+// slug, empty when the task rides no train (grove-374).
+func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode, brief, base, feature string) (string, error) {
 	linearSet := kind == "linear"
 	var text string
 	switch mode {
@@ -90,7 +97,7 @@ func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string
 		return "", err
 	}
 	var b strings.Builder
-	if err := t.Execute(&b, data{Task: task, Identifier: task.ID, Verbs: verbs}); err != nil {
+	if err := t.Execute(&b, data{Task: task, Identifier: task.ID, Verbs: verbs, Base: base, Feature: feature}); err != nil {
 		return "", err
 	}
 	if brief != "" {

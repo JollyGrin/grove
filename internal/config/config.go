@@ -110,6 +110,16 @@ type Config struct {
 			TankUSD float64 `yaml:"tank_usd"`
 		} `yaml:"openrouter"`
 	} `yaml:"cost"`
+	// Editor is the worker window's side-by-side editor pane (grove-359).
+	// Enabled (default false) splits every grab/adopt window and launches
+	// Command in the left pane on first attach; off, worker windows stay
+	// single-pane (10 headless worktrees × nvim+LSP is real RAM) until
+	// `gv editor` opens one on demand. Command defaults to "nvim" and is
+	// run as `<command> .` in the worktree.
+	Editor struct {
+		Enabled bool   `yaml:"enabled"`
+		Command string `yaml:"command"`
+	} `yaml:"editor"`
 	// Workspace is the optional identity block a per-workspace
 	// <root>/.grove/config.yaml carries (DESIGN §6.5). Absent (zero) in
 	// the global file and for legacy no-workspace loads.
@@ -314,6 +324,9 @@ func parse(raw []byte, src string) (*Config, error) {
 	}
 	if len(c.Cost.Pricing) > 0 {
 		cost.Overrides(c.Cost.Pricing)
+	}
+	if strings.TrimSpace(c.Editor.Command) == "" {
+		c.Editor.Command = "nvim"
 	}
 	if c.Sub.MaxTurns <= 0 {
 		c.Sub.MaxTurns = 12

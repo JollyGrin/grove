@@ -5,6 +5,10 @@ You are working on task {{.ID}}: {{.Title}}
 {{range .Comments}}[{{.Author}}]: {{.Body}}
 {{end}}--- END TASK ---
 
+If the operator wants to read the code alongside you, `gv editor` (run
+from this worktree) opens a side-by-side editor pane in your tmux window —
+offer it when it would help, and run it when asked.
+
 Work autonomously:
 1. {{.Verbs.Start}}
 2. Investigate the relevant code and form a plan. When reconnaissance
@@ -17,11 +21,15 @@ Work autonomously:
    confirmation.
 3. Implement. Run the repo's lint, build, and tests before finishing.
 4. Commit with the task prefix ({{.ID}}: ...).
-5. If this repo has a remote, push and open a PR against the base branch
-   with `gh pr create`, including "Task: {{.ID}}" in the body. Never push
-   directly to the base branch. If there is no remote, leave your work
-   committed on this branch and say so in your wrap-up.
-6. Wrap up: re-read the acceptance criteria and verify each one against
+5. If this repo has a remote, push and open a PR with
+   `gh pr create --base {{.Base}}`, including "Task: {{.ID}}" in the body.
+   Never push directly to the base branch. If there is no remote, leave
+   your work committed on this branch and say so in your wrap-up.
+{{if .Feature}}
+This task belongs to feature `{{.Feature}}`. Your PR targets
+`{{.Base}}`, not main. If you must catch up, rebase only on
+`origin/{{.Base}}` — never on main.
+{{end}}6. Wrap up: re-read the acceptance criteria and verify each one against
    your diff, then {{.Verbs.Review}}
 7. ALWAYS end your final message with exactly one of these lines:
    STATUS: QUESTION — <the question, one line>

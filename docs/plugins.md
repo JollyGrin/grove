@@ -68,6 +68,8 @@ payload under one named key.
 | `gv sub "<prompt>" [path…] --json` | `sub` | object — one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | array — usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | array — this workspace's `sub.jsonl` history, one `Record` per row (see below) |
+| `gv feature ls [--all] --json` | `features` | array — open feature trains, oldest first (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`. `--all` adds closed ones, which carry `closed: {reason, at}` (`reason` is `merged` or `abandoned`); an open row has no `closed` key. A slug re-opened after a close lists only its newest incarnation. Since grove-375 an **open** row also carries status (a closed row carries none of these keys): `cars` — array, `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}`, ordered landed (by `landed_at`) → active (by grab time) → queued (by `number`); `state` is `queued` (an open backend issue with the feature's label that no task tracks), `working`, `question` (waiting on the operator: a question, a block or a menu), `ready` (the worker reported done or its PR is ready/merged) or `landed` (a `task_done` followed its `task_created` on this feature — survives untrack and sweep); `number` is the ticket's trailing number (absent when it has none); `pr` the car's PR number, when known; `landed_at` only on landed cars; `after` (queued cars only, display only) lists the `#N`s from `depends on #N` lines in the issue body; `est_usd` the car's latest ledger estimate (0 when unrecorded). Then `landed` and `total` (counts over `cars`), `behind_base` (commits on `origin/<base>` missing from `origin/<branch>`, on the last FETCHED refs — nothing is fetched), `mergeable` (a local `git merge-tree` dry run of branch into base), both **absent** when the refs are not there locally; `pr` — `{number, url, state}` of the feature branch → base PR, absent when there is none; `est_usd` — the sum over `cars`. `--no-pr` skips the `pr` lookup and `--no-queued` skips the issue lookup (queued cars then simply don't appear); a failed lookup warns on stderr and leaves its field out. `serve` (grove-380): `{state, port?, url?, tip?, behind}` — `state` is `none` (never served), `untrusted` (`.grove/run.sh` exists and its sha256 is not the latest `run_script_trusted`), `stopped` (served before, window gone) or `running` (the exact `▶ <slug>` window exists at refresh; this wins over `untrusted`); `port`/`url`/`tip` come from the latest `feature_served`, and `behind` is true when that `tip` differs from `origin/<branch>` as last fetched |
+| `gv feature land <slug> [--json] [--yes]` | *(flat — no single key)* | object — `{schema_version, feature, land, skipped}`, plus `landed`/`failed` once a run actually executed (grove-376, Decision 6). `land` is an array, `{ticket, number, pr}`, of every tracked, not-done car whose PR is `MERGED` (the same `gh`-backed merge check `gv done`/`finishTask` uses — never git ancestry, since squash-merges break it). `skipped` is an array, `{ticket, number, reason}`, of every other car and why: `working` (no PR yet, still in progress), `PR open` (a PR exists but isn't merged), `no PR` (the car looks finished — done/ready — but no PR was found), or `queued` (an open backend issue under the feature's label, not yet grabbed). Without `--yes` this is a dry run — nothing runs, `landed`/`failed` are absent entirely, and (human mode) it prompts `land N? [y/N]`. With `--yes` (or a `y` at the prompt) it runs `finishTask` per `land` row — a failing row lands in `failed: [{ticket, error}]` and the rest still run — and `landed: [numbers]` names the issue numbers actually finished (`[]` when none, never omitted once a run executed). It never closes an issue or comments on one — that's the orchestrator's act, on the operator's order (Decision 8) |
 
 ```sh
 $ gv ls --json --no-pr --no-cost
@@ -189,6 +191,16 @@ a restart never double-fire). The events:
 `gv supervise` (grove-253) is the poller that emits them — see the next
 section.
 
+Since grove-373 (feature trains 02) two more additive row fields:
+
+- `feature` — the slug of the open feature train the task rides (see
+  `gv feature ls --json`), set when it was grabbed with
+  `gv grab --feature <slug>` or inferred from a ticket label.
+- `base` — the branch the task forked from and PRs into: the feature's
+  branch (e.g. `feature/keys`). Both are **absent** on an off-train task,
+  whose base is its repo's configured `base:` — never read an absent
+  `base` as `main`.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the
@@ -294,7 +306,26 @@ worktree's cwd is NOT the recorded one (an orchestrator whose shell
 `session_started` keeps registering whatever id arrives, so an adopt's
 fresh pickup session still takes over. Records written before grove-250
 have no `session_id`; treat a missing one as unknown, never as foreign.
-Workspace-scoped (empty `ticket`): `workspace_parked`,
+`task_created` and `task_adopted` carry optional `data.feature` and
+`data.base` (grove-373, additive): written only when the task rides a
+feature train, so an off-train grab's record is byte-identical to before;
+`task_adopted` carries the stored pair through. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+`{slug, repo, branch, base, label}` — `gv feature new` opened a feature
+train; `branch` lives on origin, `base` is what it forks from and merges
+back to, `label` the issue label that marks its tickets), `feature_closed`
+(grove-372: data `{slug, reason}`, `reason` `merged` or `abandoned`;
+the branch is never deleted — a slug may be opened again later; since
+grove-380 the detached `<slug>-serve` worktree gv created is removed),
+`feature_served` (grove-380: data `{slug, port, tip, window, url}` —
+`gv serve` ran the workspace's trusted `.grove/run.sh` on the feature's
+`tip` in tmux window `window` (`▶ <slug>`) with `GROVE_PORT=port`, and
+the script printed `GROVE_READY <url>`; `url` may be a filesystem path,
+e.g. a throwaway build), `feature_serve_stopped` (grove-380: data
+`{slug}` — `gv serve stop` killed the window; liveness is the window's
+existence, so a window closed by hand has no stop record),
+`run_script_trusted` (grove-380: data `{sha256}` — the operator reviewed
+`.grove/run.sh` at that hash and trusted it; only the latest one counts),
+`workspace_parked`,
 `orchestrator_closed` (data `{reason, ticket?}`; grove-294, additive: a
 chat ended from outside by `gv chat close` / the phone's End chat carries
 `reason: "ended"` plus `{session, workspace, session_id?}`, logged in the

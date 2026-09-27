@@ -37,6 +37,23 @@ asserts it). One caution: `gv hooks install` writes the **shared**
 included) also read — it is tested to preserve their entries, but treat
 it with respect.
 
+## Feature trains
+
+A long-lived feature branch is a first-class thing: `gv feature new
+<slug> --repo R [--base main]` opens `feature/<slug>` (or `--adopt`
+registers one already pushed by convention); `gv grab DEV-X --feature
+<slug>` forks the worktree from it and PRs back into it instead of the
+repo base — inferred automatically for a ticket carrying the feature's
+label, no flag needed. `gv feature ls [--json]` shows every open train's
+cars, how far behind base it is, and its own PR into base. `gv feature
+land <slug> [--yes]` runs `gv done` for every car whose PR merged into
+the train's branch; it never closes an issue itself — that needs an
+explicit operator order, taught to the orchestrator seed as the
+exception to "never close any issue" (`orchestrator/CLAUDE.md`). `gv
+serve <slug>` runs the train's tip from `.grove/run.sh`, committed with
+the workspace — trust is a recorded sha256 (`run_script_trusted`); a
+changed script always re-prompts, never runs silently.
+
 ## Build / test
 
 - `go build ./... && go vet ./... && go test ./...` must be green;

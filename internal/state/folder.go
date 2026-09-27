@@ -20,16 +20,17 @@ import (
 type Folder struct {
 	mu       sync.Mutex
 	stateDir string
-	tailCap  int              // feed tail bound; 0 = unbounded (don't)
-	offset   int64            // bytes of events.jsonl already consumed
-	tasks    map[string]*Task // running fold state
-	tail     []Event          // last tailCap events, oldest-first
-	viewHash uint64           // fnv-64a of the last tasks.json written
-	wrote    bool             // view written at least once this process
+	tailCap  int                 // feed tail bound; 0 = unbounded (don't)
+	offset   int64               // bytes of events.jsonl already consumed
+	tasks    map[string]*Task    // running fold state
+	features map[string]*Feature // running feature fold (grove-372)
+	tail     []Event             // last tailCap events, oldest-first
+	viewHash uint64              // fnv-64a of the last tasks.json written
+	wrote    bool                // view written at least once this process
 }
 
 func NewFolder(stateDir string, tailCap int) *Folder {
-	return &Folder{stateDir: stateDir, tailCap: tailCap, tasks: map[string]*Task{}}
+	return &Folder{stateDir: stateDir, tailCap: tailCap, tasks: map[string]*Task{}, features: map[string]*Feature{}}
 }
 
 // Refresh consumes any bytes appended since the last call and returns the
@@ -73,7 +74,7 @@ func (f *Folder) consume() (bool, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Log gone: an empty fleet, and any prior state is a ghost.
-			dirty := len(f.tasks) > 0 || len(f.tail) > 0
+			dirty := len(f.tasks) > 0 || len(f.tail) > 0 || len(f.features) > 0
 			f.reset()
 			return dirty, nil
 		}
@@ -113,6 +114,7 @@ func (f *Folder) consume() (bool, error) {
 			continue // complete but malformed: skip, it will never become valid
 		}
 		fold(f.tasks, ev)
+		foldFeature(f.features, ev)
 		f.tail = append(f.tail, ev)
 		if f.tailCap > 0 && len(f.tail) > f.tailCap {
 			f.tail = f.tail[1:]
@@ -125,7 +127,16 @@ func (f *Folder) consume() (bool, error) {
 func (f *Folder) reset() {
 	f.offset = 0
 	f.tasks = map[string]*Task{}
+	f.features = map[string]*Feature{}
 	f.tail = nil
+}
+
+// Features returns per-call copies of the feature view as of the last
+// Refresh — call it after Refresh on the same beat; it reads no bytes.
+func (f *Folder) Features() map[string]*Feature {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return copyFeatures(f.features)
 }
 
 // writeView refreshes the derived tasks.json, skipping the disk write when

@@ -853,3 +853,37 @@ sub:
 		t.Errorf("err = %v, want it to mention sub.timeout:", err)
 	}
 }
+
+// grove-359: no editor block = editor off, command nvim (no migration);
+// a workspace can switch it on over a global that never mentions it.
+func TestEditorDefaultsAndWorkspaceOverride(t *testing.T) {
+	setHome(t)
+	repo := t.TempDir()
+	writeGlobal(t, `
+repos:
+  demo:
+    path: `+repo+`
+`)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Editor.Enabled || c.Editor.Command != "nvim" {
+		t.Errorf("editor defaults = %+v, want {false nvim}", c.Editor)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".grove"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".grove", "config.yaml"), []byte("editor:\n  enabled: true\n  command: hx\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err = LoadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Editor.Enabled || c.Editor.Command != "hx" {
+		t.Errorf("workspace editor = %+v, want {true hx}", c.Editor)
+	}
+}

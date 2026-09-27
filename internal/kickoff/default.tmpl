@@ -13,10 +13,14 @@ Work autonomously:
    for confirmation.
 3. Implement. Run lint and the affected app's build before finishing.
 4. Commit with the ticket prefix ({{.Identifier}}: ...) per repo convention.
-5. Push and open a PR against main with `gh pr create`, filling the PR
+5. Push and open a PR with `gh pr create --base {{.Base}}`, filling the PR
    template. Include "Closes {{.Identifier}}" in the body. Never push to
    main; never target deploy/* branches.
-6. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
+{{if .Feature}}
+This task belongs to feature `{{.Feature}}`. Your PR targets
+`{{.Base}}`, not main. If you must catch up, rebase only on
+`origin/{{.Base}}` — never on main.
+{{end}}6. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
    address CRITICAL and IMPORTANT findings, verify CI is green, move the
    ticket to "In Review". Do NOT post Linear comments and do NOT move the
    ticket to Done.
