@@ -278,7 +278,7 @@ func TestBuildFeatRowTrellis(t *testing.T) {
 		{Ticket: "grove-364", Number: 364, State: feature.CarWorking},
 		{Ticket: "grove-366", Number: 366, State: feature.CarQueued},
 	}}
-	r := buildFeatRow(f, st)
+	r := buildFeatRow(f, st, "", nil)
 	if r.trellis != "gv-keys 1/3" {
 		t.Errorf("trellis = %q, want %q", r.trellis, "gv-keys 1/3")
 	}

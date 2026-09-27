@@ -47,11 +47,18 @@ var (
 		{"R", "remote: fold every configured host's fleet in (one ssh per host per press; rows tagged @host)"},
 		{"q", "quit the cockpit — workers keep running"},
 	}
+	helpFeature = []helpEntry{
+		{"enter", "lens: open the focused feature train full-screen — TRAIN, BRANCH, SERVE, NEXT"},
+		{"esc", "back from the lens to the list (row keys there act on the selected car)"},
+		{"m", "in the lens: open the feature PR in the browser"},
+		{"l", "land: finish every merged car of the feature — shows the plan, asks to confirm"},
+	}
 	helpSections = []struct {
 		title   string
 		entries []helpEntry
 	}{
 		{"ROW — act on the selected task", helpRow},
+		{"FEATURES — with a feature train focused (tab)", helpFeature},
 		{helpSpawnTitle, helpSpawn},
 		{"GLOBAL", helpGlobal},
 	}
