@@ -1133,3 +1133,127 @@ func chatIndex(session, prefix string) (int, bool) {
 	}
 	return n, true
 }
+
+// EditorAction is what OpenEditor did to a worker window (grove-359).
+type EditorAction int
+
+const (
+	// EditorSplit: no free shell pane — a new pane was split in left of
+	// claude and the editor launched in it.
+	EditorSplit EditorAction = iota
+	// EditorSent: an idle shell pane already existed beside claude; the
+	// editor was typed into it.
+	EditorSent
+	// EditorRunning: the editor already runs in a pane beside claude —
+	// nothing was sent.
+	EditorRunning
+)
+
+// shells are pane foreground commands that mean "idle prompt, safe to type
+// into". Anything else (a dev server, a pager) is left alone.
+var shells = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true,
+	"ksh": true, "tcsh": true, "csh": true, "nu": true,
+}
+
+// editorFormat is the list-panes format OpenEditor plans from. The tag is
+// last and prefixed so an unset option never shifts the fields pickPaneID
+// reads.
+const editorFormat = "#{pane_id} #{pane_index} #{pane_current_command} e=#{@grove_editor}"
+
+// planEditor parses editorFormat list-panes output and decides where an
+// on-demand editor goes. The editor pane is recognized by its
+// @grove_editor tag, not its process name — an editor command is often a
+// wrapper or alias (live: `vi` → nvim reports "nvim"), and a name miss
+// would stack a second editor beside the first. A tagged pane that idles
+// at a shell gets the editor typed in (send); tagged and busy is the
+// editor itself (running). Untagged, the lowest-index non-claude pane is
+// reused only when it idles at a shell (the editor.enabled split before
+// its first attach); a pane busy with anything else — or no pane at all —
+// means a fresh split. editorBin still matches by name, so an untagged
+// pane already running the editor is not doubled either.
+func planEditor(out, claudePane, editorBin string) (EditorAction, string) {
+	var tagged, free, busyEditor string
+	taggedCmd, freeIdx := "", -1
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] == claudePane {
+			continue
+		}
+		idx, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		id, cmd := fields[0], fields[2]
+		if len(fields) > 3 && fields[3] == "e=1" {
+			if tagged == "" {
+				tagged, taggedCmd = id, cmd
+			}
+			continue
+		}
+		if cmd == editorBin && busyEditor == "" {
+			busyEditor = id
+		}
+		if shells[strings.TrimPrefix(cmd, "-")] && (freeIdx == -1 || idx < freeIdx) {
+			free, freeIdx = id, idx
+		}
+	}
+	switch {
+	case tagged != "" && shells[strings.TrimPrefix(taggedCmd, "-")]:
+		return EditorSent, tagged
+	case tagged != "":
+		return EditorRunning, tagged
+	case busyEditor != "":
+		return EditorRunning, busyEditor
+	case free != "":
+		return EditorSent, free
+	}
+	return EditorSplit, ""
+}
+
+// MarkEditorPane tags a pane as the worker's editor pane (@grove_editor),
+// the durable marker planEditor recognizes it by.
+func MarkEditorPane(pane string) error {
+	_, err := run("set-option", "-p", "-t", pane, "@grove_editor", "1")
+	return err
+}
+
+// OpenEditor puts `<editorCmd> .` beside a worker's claude pane on demand
+// (grove-359: the editor pane is config-gated, default off). It reuses an
+// idle shell pane when one exists, otherwise splits a new pane LEFT of
+// claude (-b, the historical layout: editor left, claude right) rooted at
+// workDir. The window is resolved by id and the claude pane by pickPane's
+// rules (grove-116/168), so the editor is never typed into the agent's
+// pane or a sibling window. Focus is left alone: the caller may be the
+// agent itself, and stealing the operator's focus is not its call.
+func OpenEditor(session, base, workDir, editorCmd string) (EditorAction, error) {
+	id, ok := WindowID(session, base)
+	if !ok {
+		return 0, fmt.Errorf("no window matching %q in session %q", base, session)
+	}
+	out, err := run("list-panes", "-t", id, "-F", editorFormat)
+	if err != nil {
+		return 0, err
+	}
+	claudePane, ok := pickPaneID(out)
+	if !ok {
+		return 0, fmt.Errorf("no panes in window %s (%q)", id, base)
+	}
+	bin := editorCmd
+	if f := strings.Fields(editorCmd); len(f) > 0 {
+		bin = f[0]
+	}
+	action, pane := planEditor(out, claudePane, bin)
+	switch action {
+	case EditorRunning:
+		return action, nil
+	case EditorSplit:
+		split, err := run("split-window", "-h", "-b", "-t", claudePane, "-c", workDir, "-P", "-F", "#{pane_id}")
+		if err != nil {
+			return 0, err
+		}
+		pane = strings.TrimSpace(split)
+	}
+	_ = MarkEditorPane(pane)
+	return action, SendKeys(pane, editorCmd+" .")
+}

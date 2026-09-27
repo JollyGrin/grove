@@ -109,6 +109,7 @@ const usage = `gv — grove
   gv answer <ticket> [text]                   reply to a waiting agent
   gv nudge <ticket> [text]                    follow-up prompt to a session
   gv attach <ticket>                          jump into the tmux window
+  gv editor [<ticket>]                        open a side-by-side editor pane in the worker window (no ticket: this worktree's task)
   gv diff <ticket> [--stat]                   branch diff vs base — review without attach
   gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
@@ -448,6 +449,8 @@ func main() {
 		err = cmdRelay(args, false)
 	case "attach":
 		err = cmdAttach(args)
+	case "editor":
+		err = cmdEditor(args)
 	case "diff":
 		err = cmdDiff(args)
 	case "adopt":
@@ -1682,10 +1685,7 @@ func cmdGrab(args []string) error {
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
-	// The split's "%N" id is captured at creation (grove-168): its numeric
-	// index depends on the user's pane-base-index, so a literal ".1" target
-	// could land the claude command in the worktree SHELL pane instead.
-	claudePane, err := tmux.SplitVerticalWindow(windowTarget, wt.Path)
+	claudePane, err := workerPane(cfg, windowTarget, wt.Path)
 	if err != nil {
 		return err
 	}
@@ -3006,20 +3006,23 @@ func cmdAttach(args []string) error {
 // running in its cockpit pane.
 func attachTask(t *state.Task) error {
 	if !t.Attached {
-		maybeInjectEditor(t.TmuxSession, t.TmuxWindow)
+		if cfg, err := loadCfg(); err == nil && cfg.Editor.Enabled {
+			maybeInjectEditor(t.TmuxSession, t.TmuxWindow, cfg.Editor.Command)
+		}
 		_ = state.Append(stateDir(), state.Event{Type: state.EvAttached, Ticket: t.Ticket})
 	}
 	return tmux.AttachWindow(t.TmuxSession, t.TmuxWindow)
 }
 
-// maybeInjectEditor lazily starts nvim in the window's first (shell) pane
-// on first attach (10 headless worktrees × tsserver is real RAM) — but only
-// when that pane is not where claude lives: a window that lost its split
+// maybeInjectEditor lazily starts the configured editor in the window's
+// first (shell) pane on first attach (10 headless worktrees × tsserver is
+// real RAM) — only when editor.enabled, and only when that pane is not
+// where claude lives: a window that lost its split (or never had one)
 // would otherwise get "nvim ." typed INTO the agent session. Both panes are
 // resolved to "%N" ids (grove-168): the first pane's numeric index depends
 // on the user's pane-base-index, so neither a ".0" target nor an `== 0`
 // lost-split check survives `pane-base-index 1`.
-func maybeInjectEditor(session, window string) {
+func maybeInjectEditor(session, window, editorCmd string) {
 	// Window resolved by id (grove-116) so the inject can never type into
 	// a prefix-extending sibling's shell pane.
 	id, ok := tmux.WindowID(session, window)
@@ -3034,7 +3037,97 @@ func maybeInjectEditor(session, window string) {
 	if err != nil || claudePane == shellPane {
 		return // lost split: claude is the first pane — don't type into it
 	}
-	_ = tmux.SendKeys(shellPane, "nvim .")
+	_ = tmux.MarkEditorPane(shellPane)
+	_ = tmux.SendKeys(shellPane, editorCmd+" .")
+}
+
+// workerPane returns the pane a fresh worker window runs claude in. With
+// editor.enabled the window is split side-by-side (shell/editor left,
+// claude right) and the split's "%N" id is captured at creation
+// (grove-168: a literal ".1" only names it under the default
+// pane-base-index). Off (the default, grove-359) the window stays
+// single-pane and claude runs in its only pane — `gv editor` adds the
+// editor pane on demand.
+func workerPane(cfg *config.Config, windowTarget, workDir string) (string, error) {
+	if cfg.Editor.Enabled {
+		return tmux.SplitVerticalWindow(windowTarget, workDir)
+	}
+	return tmux.FirstPaneID(windowTarget)
+}
+
+// taskByCwd finds the active task whose worktree contains cwd (the cwd
+// itself or any parent — the agent may have cd'd into a subdir) plus the
+// config of the workspace that owns it. It scans the hook receiver's
+// candidate order rather than the ambient state: a worker's worktree is a
+// checkout of its repo, so a committed .grove/ makes the worktree itself
+// the ambient "workspace", whose state knows no tasks.
+func taskByCwd(cwd string) (*state.Task, *config.Config) {
+	var roots []string
+	list, _ := workspace.LoadRegistry()
+	sort.Slice(list, func(i, j int) bool { return list[i].Label < list[j].Label })
+	for _, ws := range list {
+		if workspace.Alive(ws) {
+			roots = append(roots, ws.Root)
+		}
+	}
+	roots = append(roots, "") // legacy global last, as hookCandidates
+	for _, root := range roots {
+		tasks := state.ReadTasks(config.StateDirAt(root))
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			if t := state.FindByCwd(tasks, dir); t != nil {
+				cfg, err := config.LoadAt(root)
+				if err != nil {
+					return nil, nil
+				}
+				return t, cfg
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	return nil, nil
+}
+
+// cmdEditor opens a side-by-side editor pane in a worker's window on demand
+// (grove-359). With no ticket it resolves the task whose worktree contains
+// the cwd, so the worker agent can run it from its own session. Works
+// whatever the window's shape: never split (editor.enabled off), split but
+// idle, or the editor pane closed since.
+func cmdEditor(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("usage: gv editor [<ticket>]")
+	}
+	var t *state.Task
+	var cfg *config.Config
+	var err error
+	if len(args) == 1 {
+		if t, err = findTask(args[0]); err != nil {
+			return err
+		}
+		if cfg, err = loadCfg(); err != nil {
+			return err
+		}
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if t, cfg = taskByCwd(cwd); t == nil {
+			return fmt.Errorf("no tracked task owns %s — usage: gv editor <ticket>", cwd)
+		}
+	}
+	action, err := tmux.OpenEditor(t.TmuxSession, t.TmuxWindow, t.Worktree, cfg.Editor.Command)
+	if err != nil {
+		return fmt.Errorf("%s: %w", t.Ticket, err)
+	}
+	switch action {
+	case tmux.EditorRunning:
+		fmt.Printf("✓ %s: %s already open beside claude\n", t.Ticket, cfg.Editor.Command)
+	default:
+		fmt.Printf("✓ %s: %s opened beside claude (`gv attach %s` to see it)\n", t.Ticket, cfg.Editor.Command, t.Ticket)
+	}
+	return nil
 }
 
 // --- diff ---
@@ -3335,9 +3428,7 @@ func cmdAdopt(args []string) error {
 	if err := tmux.DisableAutoRename(windowTarget); err != nil {
 		return err
 	}
-	// Capture the split's "%N" id at creation (grove-168): a literal ".1"
-	// index only names this pane under the default pane-base-index.
-	claudePane, err := tmux.SplitVerticalWindow(windowTarget, wtPath)
+	claudePane, err := workerPane(cfg, windowTarget, wtPath)
 	if err != nil {
 		return err
 	}

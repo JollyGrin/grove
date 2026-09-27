@@ -606,6 +606,14 @@
   scan the full ~30-line capture, not a bottom window; both markers are
   transient so the wide scan is safe. Hooks were right both times — the
   scraper is liveness garnish, hooks are truth.
+- **A pane's foreground command is not the command you typed**
+  (grove-359, 2026-09-27) — `vi .` on a Mac whose `vi` is aliased to
+  nvim reports `pane_current_command` = `nvim`, so "is the editor
+  already running?" by name missed and `gv editor` stacked a second
+  editor beside the first (caught only by a live smoke test; unit tests
+  had fed the planner matching names). Recognize panes grove made by a
+  pane user option (`@grove_editor`) set at creation, same as the
+  title-tag rule — never by process name alone.
 - **Detector reads `unknown` for a plain shell pane** — LIVE shows
   `unknown` until claude actually boots (e.g. during setup). Expected; the
   task status column carries the truth.

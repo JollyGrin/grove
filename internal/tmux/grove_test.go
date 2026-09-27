@@ -406,3 +406,28 @@ func TestChatSessionsInCarriesIdentity(t *testing.T) {
 		t.Errorf("a profiled chat must report its OWN cwd (its project dir): %+v", got[1])
 	}
 }
+
+func TestPlanEditor(t *testing.T) {
+	cases := []struct {
+		name, out, claude string
+		want              EditorAction
+		wantPane          string
+	}{
+		{"single pane (toggle off)", "%5 1 2.1.197 e=\n", "%5", EditorSplit, ""},
+		{"idle shell beside claude", "%4 1 zsh e=\n%5 2 claude e=\n", "%5", EditorSent, "%4"},
+		{"login shell", "%4 0 -zsh e=\n%5 1 node e=\n", "%5", EditorSent, "%4"},
+		{"editor running by name", "%4 1 nvim e=\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
+		{"tagged editor under an alias name", "%4 1 hx e=1\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
+		{"tagged pane back at its shell", "%4 1 zsh e=1\n%5 2 claude e=\n", "%5", EditorSent, "%4"},
+		{"tag beats a lower idle shell", "%3 0 bash e=\n%4 1 vim e=1\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
+		{"busy pane is not reused", "%4 1 npm e=\n%5 2 claude e=\n", "%5", EditorSplit, ""},
+		{"lowest idle shell wins", "%7 3 zsh e=\n%6 1 bash e=\n%5 4 claude e=\n", "%5", EditorSent, "%6"},
+		{"empty", "", "", EditorSplit, ""},
+	}
+	for _, c := range cases {
+		got, pane := planEditor(c.out, c.claude, "nvim")
+		if got != c.want || pane != c.wantPane {
+			t.Errorf("%s: planEditor = (%v, %q), want (%v, %q)", c.name, got, pane, c.want, c.wantPane)
+		}
+	}
+}

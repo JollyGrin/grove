@@ -5,6 +5,10 @@ You are working on task {{.ID}}: {{.Title}}
 {{range .Comments}}[{{.Author}}]: {{.Body}}
 {{end}}--- END TASK ---
 
+If the operator wants to read the code alongside you, `gv editor` (run
+from this worktree) opens a side-by-side editor pane in your tmux window —
+offer it when it would help, and run it when asked.
+
 Work autonomously:
 1. {{.Verbs.Start}}
 2. Investigate the relevant code and form a plan. When reconnaissance
