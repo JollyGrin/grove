@@ -9,6 +9,16 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 08: trellis in the scene (grove-379, 2026-09-27,
+      on `feature/feature-trains`). At fx ≥ calm a feature's plants stand
+      together, in rail order, under a `▁ <slug> landed/total ▁▁` bracket
+      (just above the marker row; shares the ambient/marker row at
+      compact/strip, markers + fairy win, ambient yields). Landed-and-done
+      cars leave the orchard for their trellis as ♠; queued cars are `.`
+      seeds. Glyphs only from the locked set (soil rule + grass tuft);
+      the label degrades to the tally, then a bare rule — never `…`.
+      Reads `featRow` (now carrying `trellis` + car tickets) built in
+      `assemble()`; no features / fx=off stay byte-identical.
 - [x] feature-trains 06: cockpit FEATURES rail panel + `TRAIN` column +
       `tab` focus (grove-377, 2026-09-27, on `feature/feature-trains`).
       Panel between header and AGENTS only while a feature is open
