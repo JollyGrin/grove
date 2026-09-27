@@ -663,6 +663,9 @@
 
 ## Go / CLI
 
+- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
+- **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
+- **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt
