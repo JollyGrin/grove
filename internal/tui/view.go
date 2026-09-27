@@ -29,6 +29,12 @@ func (m Model) View() string {
 	if m.mode == modeAlmanac {
 		return m.viewAlmanac()
 	}
+	if m.mode == modeLens {
+		return m.viewLens()
+	}
+	if m.mode == modeConfirmLand {
+		return m.viewLand()
+	}
 
 	// grove-167: the feed tail and the answered map are pure functions of
 	// m.events — build each at most once per frame here and hand them down,

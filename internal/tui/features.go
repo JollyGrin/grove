@@ -10,6 +10,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/feature"
+	"github.com/JollyGrin/grove/internal/serve"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -64,6 +65,7 @@ var (
 // to read its inputs, and the last good answer stands.
 type featuresMsg struct {
 	statuses map[string]*feature.Status
+	tips     map[string]string // slug → origin/<branch> sha, local rev-parse (the lens)
 }
 
 // featuresCmd runs the network half of feature status. nil when no
@@ -78,7 +80,17 @@ func featuresCmd(cfg *config.Config, stateDir string, features map[string]*state
 			return featuresMsg{}
 		}
 		st, _ := statusesFn(in) // lookup failures leave fields empty
-		return featuresMsg{statuses: st}
+		// The lens's tip: one local rev-parse per feature, no fetch.
+		tips := map[string]string{}
+		for slug, f := range features {
+			if cfg == nil {
+				break
+			}
+			if r, ok := cfg.Repos[f.Repo]; ok {
+				tips[slug] = serve.BranchTip(r.Path, f.Branch)
+			}
+		}
+		return featuresMsg{statuses: st, tips: tips}
 	}
 }
 
@@ -131,6 +143,9 @@ type featRow struct {
 	// trellis is the scene bracket's label, `<slug> landed/total`
 	// (grove-379) — built here so the scene never formats per frame.
 	trellis string
+	label   string
+	prURL   string   // the feature PR, "" when none (lens `m`)
+	lens    lensData // the full-screen lens (grove-378)
 }
 
 // mergeStatus overlays the refresh beat's live car states onto the last
@@ -144,7 +159,10 @@ func mergeStatus(live, slow *feature.Status) *feature.Status {
 	if slow == nil {
 		return live
 	}
-	out := &feature.Status{BehindBase: slow.BehindBase, Mergeable: slow.Mergeable, PR: slow.PR}
+	out := &feature.Status{BehindBase: slow.BehindBase, Mergeable: slow.Mergeable, PR: slow.PR, Serve: live.Serve}
+	if out.Serve == nil {
+		out.Serve = slow.Serve
+	}
 	liveBy := make(map[string]feature.Car, len(live.Cars))
 	for _, c := range live.Cars {
 		liveBy[c.Ticket] = c
@@ -221,8 +239,10 @@ func featureHint(f *state.Feature, st *feature.Status) string {
 	return "nothing needs you — the train is rolling"
 }
 
-// buildFeatRow derives one feature's plain strings once per assemble.
-func buildFeatRow(f *state.Feature, st *feature.Status) featRow {
+// buildFeatRow derives one feature's plain strings once per assemble —
+// the rail panel's and the lens's. tip is the branch sha ("" unknown);
+// merged marks the cars whose PR the last poll saw MERGED.
+func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[string]bool) featRow {
 	behind := "?"
 	if st.BehindBase != nil {
 		behind = fmt.Sprint(*st.BehindBase)
@@ -234,6 +254,11 @@ func buildFeatRow(f *state.Feature, st *feature.Status) featRow {
 		title:   fmt.Sprintf("%d/%d  ↓%s %s  serve –  est $%.2f", st.Landed, st.Total, behind, f.Base, st.EstUSD),
 		hint:    featureHint(f, st),
 		trellis: fmt.Sprintf("%s %d/%d", f.Slug, st.Landed, st.Total),
+		label:   f.Label,
+		lens:    buildLens(f, st, tip, merged),
+	}
+	if st.PR != nil {
+		r.prURL = st.PR.URL
 	}
 	cellW := 3
 	for _, c := range st.Cars {
@@ -258,6 +283,7 @@ func (m *Model) assembleFeatures() {
 	m.feats = m.feats[:0]
 	if len(m.features) == 0 {
 		m.focus, m.featSel, m.trainW = focusAgents, 0, 0
+		m.clampLens()
 		return
 	}
 	tasks := map[string]*state.Task{}
@@ -279,9 +305,18 @@ func (m *Model) assembleFeatures() {
 		}
 		return slugs[i] < slugs[j]
 	})
+	var merged map[string]bool
+	for ticket := range tasks {
+		if pr := m.prs[ticket]; pr != nil && pr.State == "MERGED" {
+			if merged == nil {
+				merged = map[string]bool{}
+			}
+			merged[ticket] = true
+		}
+	}
 	m.trainW = len("TRAIN")
 	for _, slug := range slugs {
-		m.feats = append(m.feats, buildFeatRow(m.features[slug], mergeStatus(live[slug], m.featSlow[slug])))
+		m.feats = append(m.feats, buildFeatRow(m.features[slug], mergeStatus(live[slug], m.featSlow[slug]), m.featTips[slug], merged))
 		if n := len([]rune(slug)); n > m.trainW {
 			m.trainW = n
 		}
@@ -293,6 +328,7 @@ func (m *Model) assembleFeatures() {
 	if m.featSel >= len(m.feats) {
 		m.featSel = len(m.feats) - 1
 	}
+	m.clampLens()
 }
 
 // featLayout is how the FEATURES panel spends its rows this frame.

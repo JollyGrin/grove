@@ -9,6 +9,17 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 07: feature lens + cockpit `l` land modal + `m`
+      feature PR (grove-378, 2026-09-27, on `feature/feature-trains`).
+      `enter` on a focused feature opens `internal/tui/lens.go`'s
+      full-screen lens: TRAIN (every car, landed dimmed, est per car),
+      BRANCH (tip, behind base, feature PR, closes = landed cars), SERVE
+      (status `serve` or `no run.sh`), NEXT (pure `nextActions`: answer,
+      land, review, grab when `after` landed, rebase, feature PR). Row
+      keys hand off to the AGENTS handler with the cursor on the car's
+      task; modals return to the lens. `l` builds the land plan from the
+      fold + last PR poll (no network) and confirms before `feature.Land`
+      × `FinishTask`. All lens strings built in `assemble()`.
 - [x] feature-trains 08: trellis in the scene (grove-379, 2026-09-27,
       on `feature/feature-trains`). At fx ≥ calm a feature's plants stand
       together, in rail order, under a `▁ <slug> landed/total ▁▁` bracket

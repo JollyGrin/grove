@@ -40,6 +40,8 @@ const (
 	modeProfilePick
 	modeHelp
 	modeAlmanac
+	modeLens        // one feature train full-screen (grove-378)
+	modeConfirmLand // the land plan, confirm-gated (grove-378)
 )
 
 type refreshMsg struct {
@@ -259,6 +261,17 @@ type Model struct {
 	focus    int
 	featSel  int
 	trainW   int
+	// featTips is the last PR-cadence pass's branch tip per feature.
+	featTips map[string]string
+
+	// The feature lens (grove-378): lensSlug is the lensed feature ("" =
+	// no lens open — modals return to the list), lensSel the car cursor.
+	// landSlug/landPlan are the land modal's plan, built from refresh data
+	// once when `l` is pressed.
+	lensSlug string
+	lensSel  int
+	landSlug string
+	landPlan feature.LandPlan
 
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
@@ -801,7 +814,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.detail = fresh
 					if fresh == nil && (m.mode == modeDetail || m.mode == modeConfirmDone) {
-						m.mode = modeList
+						m.mode = m.backMode()
 						m.input.Blur()
 					}
 				}
@@ -900,15 +913,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.prs = msg.prs
 		m.prUnknown = msg.unknown
+		if len(m.features) > 0 {
+			m.assembleFeatures() // merged cars feed the lens and the land plan
+		}
 		return m, push
 
 	case featuresMsg:
 		// Data only, like prsMsg: never re-arms anything.
 		if msg.statuses != nil {
 			m.featSlow = msg.statuses
+			m.featTips = msg.tips
 		}
 		m.assemble()
 		return m, nil
+
+	case landDoneMsg:
+		m.flash = landFlash(msg)
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
@@ -989,6 +1010,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeAlmanac {
 		return m.handleAlmanacKey(k)
 	}
+	if m.mode == modeLens {
+		return m.handleLensKey(k)
+	}
+	if m.mode == modeConfirmLand {
+		return m.handleLandKey(k)
+	}
 
 	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
 	// it intercepts everything — including the remote-row keys below and
@@ -1000,10 +1027,15 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// grove-377: with FEATURES focused the row keys have no task under
 	// them — say so instead of acting on the AGENTS cursor out of sight.
-	// (enter/l/s/m on a feature arrive with tickets 07 and 10.)
+	// enter opens the lens and l the land modal (grove-378); s arrives
+	// with ticket 10.
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		switch k.String() {
-		case "enter", "n", "a", "o", "p", "t", "v", "d", "l", "s", "m":
+		case "enter":
+			return m.openLens()
+		case "l":
+			return m.openLand(m.feats[m.featSel].slug)
+		case "n", "a", "o", "p", "t", "v", "d", "s", "m":
 			m.flash = "FEATURES focused — tab to AGENTS for task keys"
 			return m, nil
 		}
@@ -1232,7 +1264,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.mode = modeList
+		m.mode = m.backMode()
 		m.detail = nil
 		m.detailHost = ""
 		m.input.Blur()
@@ -1249,7 +1281,7 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// to local rows, but the relay is where a miss steers an agent, so
 		// it re-checks.
 		if t == nil || t.HandedOffTo != "" {
-			m.mode = modeList
+			m.mode = m.backMode()
 			m.detail = nil
 			m.detailHost = ""
 			m.input.Blur()
@@ -1270,7 +1302,7 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				verb = "nudge"
 			}
 			m.flash = "relaying " + verb + " to " + t.Ticket + " on " + host + "…"
-			m.mode = modeList
+			m.mode = m.backMode()
 			m.detail = nil
 			m.detailHost = ""
 			m.input.Blur()
@@ -1285,7 +1317,7 @@ func (m Model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		ticket := t.Ticket
 		m.flash = "sending to " + ticket + "…"
-		m.mode = modeList
+		m.mode = m.backMode()
 		m.detail = nil
 		m.input.Blur()
 		return m, relayCmd(m.stateDir, ticket, pane, text)
@@ -1300,13 +1332,13 @@ func (m Model) handleConfirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		t := m.detail
 		cfg := m.cfg
-		m.mode = modeList
+		m.mode = m.backMode()
 		m.detail = nil
 		m.detailHost = ""
 		m.flash = "cleaning up " + t.Ticket + "…"
 		return m, func() tea.Msg { return actionDoneMsg{err: FinishTask(cfg, t, false), ticket: t.Ticket} }
 	default:
-		m.mode = modeList
+		m.mode = m.backMode()
 		m.detail = nil
 		m.detailHost = ""
 	}
