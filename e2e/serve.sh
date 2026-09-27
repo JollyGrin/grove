@@ -62,7 +62,7 @@ windows() { tmux list-windows -a -F '#{session_name}|#{window_name}' 2>/dev/null
 has_window() { windows | grep -Fxq "$SESSION|$1"; }
 events() { cat "$DUMMY/.grove/state/events.jsonl"; }
 serve_field() { # <slug> <python expr on s>
-  "$GV" feature ls --json > "$SCRATCH/ls.json"
+  "$GV" feature ls --json --no-pr --no-queued > "$SCRATCH/ls.json"
   python3 -c "
 import json,sys
 rows = {r['slug']: r for r in json.load(open('$SCRATCH/ls.json'))['features']}
