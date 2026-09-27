@@ -108,7 +108,7 @@ func TestFeaturesPanelOneFeature(t *testing.T) {
 	for _, want := range []string{
 		"FEATURES",
 		"train-0  1/3  ↓2 main  serve –  est $2.00", // title line
-		"⬢────◆────·────▷ main",                     // rail: grove-101's live QUESTION wins
+		"⬢1 ▸ ◆────·────▷ main",                     // rail: landed collapse; grove-101's live QUESTION wins
 		"#100 #101 #102",           // labels, one cell per car
 		"◆ #101 is waiting on you", // the selected feature's hint
 	} {
@@ -163,7 +163,7 @@ func TestFeaturesPanelCollapsesOnShortPane(t *testing.T) {
 	if strings.Contains(out, "#100") {
 		t.Error("collapsed features have no label line")
 	}
-	if !strings.Contains(out, "train-0  1/3  ↓2 main  serve –  est $2.00  ⬢◆· ▷ main") {
+	if !strings.Contains(out, "train-0  1/3  ↓2 main  serve –  est $2.00  ⬢1 ▸ ◆· ▷ main") {
 		t.Errorf("collapsed title + strip missing:\n%s", out)
 	}
 }
@@ -321,5 +321,81 @@ func TestRefreshFiresFeaturePassOnNewFeature(t *testing.T) {
 	nm, _ = m.Update(refreshMsg{ok: true})
 	if len(nm.(Model).feats) != 0 || nm.(Model).trainW != 0 {
 		t.Error("closing the last feature removes the panel and TRAIN column")
+	}
+}
+
+// railModel is one feature whose slow pass carries the given landed
+// numbers, then two active and two queued cars (#364..#367).
+func railModel(t *testing.T, w, h int, landed ...int) Model {
+	t.Helper()
+	pinHour(t, 10)
+	m := New(nil, "", "golden")
+	m.width, m.height, m.fx = w, h, fxOff
+	m.features = map[string]*state.Feature{"keys": {Slug: "keys", Branch: "feature/keys", Base: "main", Label: "keys", CreatedAt: time.Now()}}
+	var cars []feature.Car
+	for _, n := range landed {
+		cars = append(cars, feature.Car{Ticket: fmt.Sprintf("grove-%d", n), Number: n, State: feature.CarLanded})
+	}
+	for i, st := range []string{feature.CarWorking, feature.CarWorking, feature.CarQueued, feature.CarQueued} {
+		cars = append(cars, feature.Car{Ticket: fmt.Sprintf("grove-%d", 364+i), Number: 364 + i, State: st})
+	}
+	m.featSlow = map[string]*feature.Status{"keys": {Cars: cars}}
+	m.assemble()
+	return m
+}
+
+// grove-397: landed cars collapse into one leading `⬢N ▸` token.
+func TestRailCollapsesLanded(t *testing.T) {
+	cases := []struct {
+		name   string
+		landed []int
+		rail   string
+		labels string
+	}{
+		{"consecutive", []int{362, 361, 363}, "  ⬢3 ▸    ●────●────·────·────▷ main", "  361-363 #364 #365 #366 #367"},
+		{"gapped", []int{300, 361, 363}, "  ⬢3 ▸     ●────●────·────·────▷ main", "  3 landed #364 #365 #366 #367"},
+		{"one", []int{361}, "  ⬢1 ▸ ●────●────·────·────▷ main", "  #361 #364 #365 #366 #367"},
+		// Zero landed: exactly today's rail.
+		{"none", nil, "  ●────●────·────·────▷ main", "  #364 #365 #366 #367"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := railModel(t, 120, 40, c.landed...)
+			var rail, labels string
+			for _, ln := range frameLines(m.View()) {
+				ln = strings.TrimRight(strings.Trim(ln, " │"), " ")
+				if strings.HasSuffix(ln, "▷ main") {
+					rail = "  " + strings.TrimLeft(ln, " ")
+				}
+				if strings.Contains(ln, "#364 #365") {
+					labels = "  " + strings.TrimLeft(ln, " ")
+				}
+			}
+			if rail != c.rail || labels != c.labels {
+				t.Errorf("rail   %q\nwant   %q\nlabels %q\nwant   %q", rail, c.rail, labels, c.labels)
+			}
+			if len(m.feats[0].cars) != len(c.landed)+4 {
+				t.Errorf("scene cars = %d, want every car", len(m.feats[0].cars))
+			}
+		})
+	}
+	short := railModel(t, 120, 18, 361, 362, 363)
+	if lay := short.featureLayout(); lay.expanded {
+		t.Fatal("18 rows should collapse")
+	}
+	if out := short.View(); !strings.Contains(out, "⬢3 ▸ ●●·· ▷ main") {
+		t.Errorf("collapsed form lacks the token:\n%s", out)
+	}
+	for _, sz := range [][2]int{{120, 59}, {80, 24}, {60, 16}, {40, 12}} {
+		m := railModel(t, sz[0], sz[1], 361, 362, 363)
+		lines := frameLines(m.View())
+		if len(lines) > m.height {
+			t.Errorf("%v: %d lines", sz, len(lines))
+		}
+		for i, ln := range lines {
+			if lipgloss.Width(ln) > m.width {
+				t.Errorf("%v: line %d is %d cells", sz, i, lipgloss.Width(ln))
+			}
+		}
 	}
 }

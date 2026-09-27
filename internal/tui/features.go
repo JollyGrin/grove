@@ -135,13 +135,18 @@ type carCell struct {
 
 // featRow is one feature, fully derived in assemble: View only styles it.
 type featRow struct {
-	slug   string
-	title  string // plain title-line text after the slug
-	base   string
-	cars   []carCell
-	dash   string // rail filler after each glyph (cellW-1 × ─)
-	labels string // plain label line, one cellW cell per car
-	hint   string // what needs the operator (the selected feature's line)
+	slug  string
+	title string // plain title-line text after the slug
+	base  string
+	cars  []carCell // every car, landed included (the scene trellis)
+	rail  []carCell // the cars the rail draws one glyph each: all but landed
+	// landed is the rail's leading `⬢N ▸` token (grove-397), padded to
+	// its label cell; "" when nothing landed.
+	landed    string
+	landedTok string // the same token unpadded + one space: the one-line form
+	dash      string // rail filler after each glyph (cellW-1 × ─)
+	labels    string // plain label line: the landed range cell, then one cellW cell per rail car
+	hint      string // what needs the operator (the selected feature's line)
 	// trellis is the scene bracket's label, `<slug> landed/total`
 	// (grove-379) — built here so the scene never formats per frame.
 	trellis string
@@ -267,20 +272,52 @@ func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[s
 		r.prURL = st.PR.URL
 	}
 	cellW := 3
+	var landed []int
 	for _, c := range st.Cars {
 		l := carLabel(c)
-		r.cars = append(r.cars, carCell{ticket: c.Ticket, state: c.State, label: l})
+		cell := carCell{ticket: c.Ticket, state: c.State, label: l}
+		r.cars = append(r.cars, cell)
+		if c.State == feature.CarLanded {
+			landed = append(landed, c.Number)
+			continue
+		}
+		r.rail = append(r.rail, cell)
 		if n := len([]rune(l)) + 1; n > cellW {
 			cellW = n
 		}
 	}
 	r.dash = strings.Repeat("─", cellW-1)
 	var lb strings.Builder
-	for _, c := range r.cars {
+	if len(landed) > 0 {
+		token, label := fmt.Sprintf("⬢%d ▸", len(landed)), landedLabel(landed)
+		w := max(len([]rune(token)), len([]rune(label))) + 1
+		r.landed, r.landedTok = pad(token, w), token+" "
+		lb.WriteString(pad(label, w))
+	}
+	for _, c := range r.rail {
 		lb.WriteString(pad(c.label, cellW))
 	}
 	r.labels = lb.String()
 	return r
+}
+
+// landedLabel names the collapsed landed cars under their rail token:
+// `#361` for one, `361-363` when the issue numbers run consecutively,
+// `3 landed` otherwise.
+func landedLabel(nums []int) string {
+	if len(nums) == 1 && nums[0] > 0 {
+		return fmt.Sprintf("#%d", nums[0])
+	}
+	sorted := append([]int(nil), nums...)
+	sort.Ints(sorted)
+	run := sorted[0] > 0
+	for i := 1; run && i < len(sorted); i++ {
+		run = sorted[i] == sorted[i-1]+1
+	}
+	if run {
+		return fmt.Sprintf("%d-%d", sorted[0], sorted[len(sorted)-1])
+	}
+	return fmt.Sprintf("%d landed", len(nums))
 }
 
 // assembleFeatures rebuilds m.feats from the fold (every refresh) and the
@@ -396,7 +433,10 @@ func (m Model) viewFeatures(lay featLayout) string {
 		title := cursor + sTitle.Render(f.slug) + "  " + sChrome.Render(f.title)
 		if !lay.expanded {
 			var strip strings.Builder
-			for _, c := range f.cars {
+			if f.landedTok != "" {
+				strip.WriteString(carStyles[feature.CarLanded].Render(f.landedTok))
+			}
+			for _, c := range f.rail {
 				strip.WriteString(carStyles[c.state].Render(carGlyphs[c.state]))
 			}
 			rows = append(rows, truncPad(title+"  "+strip.String()+sDim.Render(" ▷ ")+sChrome.Render(f.base), w))
@@ -404,7 +444,10 @@ func (m Model) viewFeatures(lay featLayout) string {
 		}
 		var rail strings.Builder
 		rail.WriteString("  ")
-		for _, c := range f.cars {
+		if f.landed != "" {
+			rail.WriteString(carStyles[feature.CarLanded].Render(f.landed))
+		}
+		for _, c := range f.rail {
 			rail.WriteString(carStyles[c.state].Render(carGlyphs[c.state]))
 			rail.WriteString(sDim.Render(f.dash))
 		}

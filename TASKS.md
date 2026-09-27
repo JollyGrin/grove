@@ -9,6 +9,16 @@
 
 ## Now (2026-07-12)
 
+- [x] feature trains: landed cars from GitHub + collapsed rail count
+      (grove-397, 2026-09-27). On a GitHub provider a car is landed when
+      its labelled issue is CLOSED and a PR from its `<ticket>-…` branch
+      is MERGED into the feature branch (`landed_at` = mergedAt, `pr` =
+      that PR) — two `gh` calls riding the queued pass
+      (`StatusInput.ClosedIssues`/`MergedPRs`); events stay the fallback
+      and the union, GitHub wins a ticket both know, a ticket tracked on the
+      feature stays active. The rail collapses landed cars into one leading
+      `⬢N ▸` token, labelled `361-363` or `3 landed`; the scene and lens
+      keep every car. `e2e/github.sh` covers the lookup.
 - [x] feature-trains 12: cutover (grove-383, 2026-09-27, on
       `feature/feature-trains`). New `e2e/feature.sh` (wired into
       `e2e/all.sh`) walks one train end to end in a single workspace:
