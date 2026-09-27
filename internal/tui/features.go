@@ -114,8 +114,9 @@ func sameSlugs(a, b map[string]*state.Feature) bool {
 
 // carCell is one car on the rail: its state and its label (#N).
 type carCell struct {
-	state string
-	label string
+	ticket string // scene trellis: matches the car to its live plant
+	state  string
+	label  string
 }
 
 // featRow is one feature, fully derived in assemble: View only styles it.
@@ -127,6 +128,9 @@ type featRow struct {
 	dash   string // rail filler after each glyph (cellW-1 × ─)
 	labels string // plain label line, one cellW cell per car
 	hint   string // what needs the operator (the selected feature's line)
+	// trellis is the scene bracket's label, `<slug> landed/total`
+	// (grove-379) — built here so the scene never formats per frame.
+	trellis string
 }
 
 // mergeStatus overlays the refresh beat's live car states onto the last
@@ -227,13 +231,14 @@ func buildFeatRow(f *state.Feature, st *feature.Status) featRow {
 		slug: f.Slug,
 		base: f.Base,
 		// serve state is a placeholder until tickets 09/10.
-		title: fmt.Sprintf("%d/%d  ↓%s %s  serve –  est $%.2f", st.Landed, st.Total, behind, f.Base, st.EstUSD),
-		hint:  featureHint(f, st),
+		title:   fmt.Sprintf("%d/%d  ↓%s %s  serve –  est $%.2f", st.Landed, st.Total, behind, f.Base, st.EstUSD),
+		hint:    featureHint(f, st),
+		trellis: fmt.Sprintf("%s %d/%d", f.Slug, st.Landed, st.Total),
 	}
 	cellW := 3
 	for _, c := range st.Cars {
 		l := carLabel(c)
-		r.cars = append(r.cars, carCell{state: c.State, label: l})
+		r.cars = append(r.cars, carCell{ticket: c.Ticket, state: c.State, label: l})
 		if n := len([]rune(l)) + 1; n > cellW {
 			cellW = n
 		}
