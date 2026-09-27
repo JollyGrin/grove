@@ -218,4 +218,52 @@ while read -r p; do tmux capture-pane -p -S - -t "$p" >> "$SCRATCH/pane.txt"; do
 tr -d '\n' < "$SCRATCH/pane.txt" > "$SCRATCH/pane.flat"
 grep -q 'plugin-smoke-ping' "$SCRATCH/pane.flat" || fail "nudge text not delivered to the pane"
 
+say "feature land (grove-376): plan, dry run, execute, skip reasons"
+# task-002 is the only active (not-done) car on trains; a stub gh answers
+# its PR lookup MERGED, so it lands. task-005 is still queued (no task at
+# all — no gh call, the queued lookup is the local markdown backend).
+# task-004 already landed via `gv done`, so it's absent from both lists.
+# Runs LAST: it finishes task-002, and everything above depends on it
+# still reading "working".
+mkdir -p "$SCRATCH/bin"
+cat > "$SCRATCH/bin/gh" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$GH_LOG"
+case "$*" in
+  *"pr list"*) printf '[{"number":42,"url":"https://github.com/x/y/pull/42","state":"MERGED","mergedAt":"2026-09-27T00:00:00Z","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[],"comments":[]}]' ;;
+  *) printf '[]' ;;
+esac
+EOF
+chmod +x "$SCRATCH/bin/gh"
+export PATH="$SCRATCH/bin:$PATH"
+export GH_LOG="$SCRATCH/gh.log"
+
+( cd "$DUMMY" && "$GV" feature land trains --json > "$SCRATCH/fland-dry.json" ) || fail "feature land dry run failed"
+python3 -c "
+import json
+data = json.load(open('$SCRATCH/fland-dry.json'))
+assert data['schema_version'] == 1, data
+assert data['feature'] == 'trains', data
+land = {r['ticket']: r for r in data['land']}
+assert set(land) == {'task-002'}, land
+assert (land['task-002']['pr'], land['task-002']['number']) == (42, 2), land['task-002']
+skipped = {r['ticket']: r['reason'] for r in data['skipped']}
+assert skipped == {'task-005': 'queued'}, skipped
+assert 'landed' not in data and 'failed' not in data, data
+"
+[ -d "$CAR_WT" ] || fail "feature land dry run must not touch the worktree"
+grep -Ei 'issue (close|comment|edit)|pr (merge|close|comment)' "$SCRATCH/gh.log" > /dev/null && fail "gh invoked with a mutating verb during the dry run"
+
+( cd "$DUMMY" && "$GV" feature land trains --yes > "$SCRATCH/fland.out" ) || fail "feature land --yes failed"
+tail -n1 "$SCRATCH/fland.out" > "$SCRATCH/fland-last.out"
+grep -qx 'landed: #2' "$SCRATCH/fland-last.out" || { cat "$SCRATCH/fland.out"; fail "feature land --yes did not report landed: #2"; }
+[ -d "$CAR_WT" ] && fail "feature land --yes left the landed worktree behind"
+( cd "$DUMMY" && "$GV" ls --json --no-pr --no-cost > "$SCRATCH/fland-ls.json" )
+python3 -c "
+import json
+data = json.load(open('$SCRATCH/fland-ls.json'))
+assert 'task-002' not in {t['ticket'] for t in data['tasks']}, data
+"
+grep -Ei 'issue (close|comment|edit)|pr (merge|close|comment)' "$SCRATCH/gh.log" > /dev/null && fail "gh invoked with a mutating verb during feature land --yes"
+
 say "PASS — external plugin drove read/react/steer through the contract alone"

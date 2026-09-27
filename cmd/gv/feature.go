@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/JollyGrin/grove/internal/feature"
+	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -25,8 +29,10 @@ func cmdFeature(args []string) error {
 		return cmdFeatureLs(args[1:])
 	case "close":
 		return cmdFeatureClose(args[1:])
+	case "land":
+		return cmdFeatureLand(args[1:])
 	}
-	return fmt.Errorf("unknown `gv feature %s` (want new|ls|close)", args[0])
+	return fmt.Errorf("unknown `gv feature %s` (want new|ls|close|land)", args[0])
 }
 
 func cmdFeatureNew(args []string) error {
@@ -147,6 +153,160 @@ func cmdFeatureClose(args []string) error {
 	}
 	fmt.Printf("✓ feature %s closed (%s) — branch %s left as is\n", f.Slug, *reason, f.Branch)
 	return nil
+}
+
+// cmdFeatureLand is `gv feature land <slug>` (feature trains Decision 6):
+// build the plan (every tracked, not-done car whose PR is MERGED), show
+// it, and on confirm run finishTask per row. It never closes an issue or
+// comments on one — that's the orchestrator's act, on the operator's
+// order (Decision 8).
+func cmdFeatureLand(args []string) error {
+	fs := flag.NewFlagSet("feature land", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output; without --yes, a dry run that never prompts")
+	yes := fs.Bool("yes", false, "land without confirming")
+	pos := parseAnywhere(fs, args)
+	if len(pos) != 1 {
+		return fmt.Errorf("usage: gv feature land <slug> [--json] [--yes]")
+	}
+	slug := pos[0]
+	// The nested-workspace guard is for a human watching a mutating verb
+	// act (DESIGN §14); `--json` is the plugin contract's pure envelope —
+	// docs/plugins.md promises stdout is exactly one JSON object.
+	if !*asJSON {
+		echoWorkspace()
+	}
+
+	cfg, err := loadCfg()
+	if err != nil {
+		return err
+	}
+	features, err := state.LoadFeatures(stateDir())
+	if err != nil {
+		return err
+	}
+	if state.OpenFeature(features, slug) == nil {
+		return fmt.Errorf("no open feature %q — `gv feature ls --all` lists them", slug)
+	}
+	tasks, err := state.Load(stateDir())
+	if err != nil {
+		return err
+	}
+
+	plan, lookupErr := feature.BuildLandPlan(feature.LandInput{
+		Tasks: tasks, Slug: slug,
+		PR: func(t *state.Task) (*github.PR, error) {
+			repo, ok := cfg.Repos[t.Repo]
+			if !ok {
+				return nil, fmt.Errorf("repo %q no longer in config", t.Repo)
+			}
+			return github.PRForBranch(repo.Path, t.Branch)
+		},
+	})
+	if lookupErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", lookupErr)
+	}
+	// Queued cars (open backend issues under the feature's label, not yet
+	// grabbed) reuse the same lookup `gv feature ls` already does — no PR
+	// lookup needed here, land does its own fresher one above.
+	if statuses, err := featureStatuses(features, false, true); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	} else if st := statuses[slug]; st != nil {
+		for _, c := range st.Cars {
+			if c.State == feature.CarQueued {
+				plan.Skipped = append(plan.Skipped, feature.SkipRow{Ticket: c.Ticket, Number: c.Number, Reason: feature.SkipQueued})
+			}
+		}
+	}
+
+	finish := func(ticket string) error {
+		t, ok := tasks[ticket]
+		if !ok {
+			return fmt.Errorf("%s: no longer tracked", ticket)
+		}
+		return finishTask(cfg, t, false)
+	}
+
+	if *asJSON && !*yes {
+		return printLandJSON(slug, plan, nil)
+	}
+
+	if !*asJSON {
+		printLandTable(slug, plan)
+	}
+	if len(plan.Land) == 0 {
+		if *asJSON {
+			return printLandJSON(slug, plan, &feature.LandResult{Landed: []int{}, Failed: []feature.LandFailure{}})
+		}
+		fmt.Println("landed: none")
+		return nil
+	}
+	if !*yes {
+		fmt.Printf("land %d? [y/N] ", len(plan.Land))
+		sc := bufio.NewScanner(os.Stdin)
+		if !(sc.Scan() && strings.ToLower(strings.TrimSpace(sc.Text())) == "y") {
+			fmt.Println("landed: none")
+			return nil
+		}
+	}
+
+	res := feature.Land(plan, finish)
+	if *asJSON {
+		if err := printLandJSON(slug, plan, &res); err != nil {
+			return err
+		}
+	} else if len(res.Landed) == 0 {
+		fmt.Println("landed: none")
+	} else {
+		nums := make([]string, len(res.Landed))
+		for i, n := range res.Landed {
+			nums[i] = fmt.Sprintf("#%d", n)
+		}
+		fmt.Println("landed: " + strings.Join(nums, " "))
+	}
+	if len(res.Failed) > 0 {
+		for _, f := range res.Failed {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", f.Ticket, f.Error)
+		}
+		return fmt.Errorf("%d of %d ticket(s) failed to land", len(res.Failed), len(plan.Land))
+	}
+	return nil
+}
+
+func printLandTable(slug string, plan feature.LandPlan) {
+	if len(plan.Land) == 0 && len(plan.Skipped) == 0 {
+		fmt.Printf("no cars on feature %s\n", slug)
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TICKET\tPR\tACTION")
+	for _, r := range plan.Land {
+		fmt.Fprintf(w, "%s\t#%d\tland\n", r.Ticket, r.PR)
+	}
+	for _, s := range plan.Skipped {
+		fmt.Fprintf(w, "%s\t-\tskip (%s)\n", s.Ticket, s.Reason)
+	}
+	w.Flush()
+}
+
+// printLandJSON is `gv feature land --json`'s envelope (docs/plugins.md):
+// flat, not nested under one key. A map, not a struct with `omitempty` —
+// `landed`/`failed` must be genuinely absent on a dry run (res == nil)
+// but present as `[]` once a run actually executed with nothing to show,
+// which plain `omitempty` on a struct field cannot tell apart.
+func printLandJSON(slug string, plan feature.LandPlan, res *feature.LandResult) error {
+	out := map[string]any{
+		"schema_version": schema.Version,
+		"feature":        slug,
+		"land":           plan.Land,
+		"skipped":        plan.Skipped,
+	}
+	if res != nil {
+		out["landed"] = res.Landed
+		out["failed"] = res.Failed
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 func shortSHA(sha string) string {
