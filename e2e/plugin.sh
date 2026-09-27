@@ -32,8 +32,16 @@ mkdir -p "$HOME" "$TMUX_TMPDIR"
 unset GROVE_STATE_DIR || true   # registry → per-workspace state is the subject
 cleanup() {
   tmux kill-server 2>/dev/null || true   # isolated server only (TMUX_TMPDIR)
+  # kill-server returns before the server and its panes are gone; a pane
+  # process still writing under $SCRATCH made rm -rf fail with "Directory
+  # not empty" after every assertion had passed (grove-377, grove-383).
+  # Wait for the socket to go, then retry the rm once.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$TMUX_TMPDIR/tmux-$(id -u)/default" ] || break
+    sleep 0.2
+  done
   chmod -R u+w "$SCRATCH" 2>/dev/null || true
-  rm -rf "$SCRATCH"
+  rm -rf "$SCRATCH" 2>/dev/null || { sleep 0.5; chmod -R u+w "$SCRATCH" 2>/dev/null || true; rm -rf "$SCRATCH"; }
 }
 trap cleanup EXIT
 
