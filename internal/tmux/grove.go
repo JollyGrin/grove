@@ -1573,6 +1573,17 @@ func lastPaneID(out string) (string, bool) {
 // announce runs after every check and before the pane moves (see
 // HideChatPane); an error from it aborts with nothing moved.
 func ShowChatPane(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error) (string, error) {
+	return showChatPane(session, cockpitSession, isCockpit, announce, true)
+}
+
+// ShowChatPaneUnfocused is ShowChatPane for a caller that must keep the
+// keyboard (grove-403: the cockpit's `h` on a hidden row): the pane joins
+// with -d, so whichever pane was active in the cockpit window stays active.
+func ShowChatPaneUnfocused(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error) (string, error) {
+	return showChatPane(session, cockpitSession, isCockpit, announce, false)
+}
+
+func showChatPane(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error, focus bool) (string, error) {
 	facts, err := ChatShowable(session, cockpitSession, isCockpit)
 	if err != nil {
 		return "", err
@@ -1591,13 +1602,29 @@ func ShowChatPane(session, cockpitSession string, isCockpit CockpitCheck, announ
 			return "", err
 		}
 	}
-	if _, err := run("join-pane", "-h", "-s", pane, "-t", last); err != nil {
+	join := []string{"join-pane", "-h"}
+	if !focus {
+		join = append(join, "-d")
+	}
+	if _, err := run(append(join, "-s", pane, "-t", last)...); err != nil {
 		// A crowded cockpit's last pane can be too narrow to split. -f asks
 		// for a full-height column of the WINDOW instead; the re-tile below
 		// evens the widths out either way.
-		if _, ferr := run("join-pane", "-f", "-h", "-s", pane, "-t", last); ferr != nil {
+		if _, ferr := run(append(join, "-f", "-s", pane, "-t", last)...); ferr != nil {
 			return "", err
 		}
 	}
 	return pane, retileCockpit(cockpitSession, facts.CockpitWindow)
+}
+
+// FocusChatPane makes a cockpit chat pane the active pane of its window
+// (grove-403: `enter` on a CHATS row). Guarded by PaneHidable — the panes
+// that may be hidden are exactly the cockpit's chat panes — so it can never
+// move the keyboard into a worker window or a foreign session.
+func FocusChatPane(pane string, isCockpit CockpitCheck) error {
+	if _, err := PaneHidable(pane, isCockpit); err != nil {
+		return err
+	}
+	_, err := run("select-pane", "-t", pane)
+	return err
 }

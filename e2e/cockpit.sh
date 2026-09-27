@@ -533,4 +533,158 @@ sleep 3
 EVENTS_AFTER=$(count_events)
 [ "$EVENTS_AFTER" -eq "$EVENTS_BEFORE" ] || fail "the CHATS box wrote events ($EVENTS_BEFORE → $EVENTS_AFTER)"
 
-say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host, the cockpit supervises, CHATS lists shown + hidden chats"
+# --- grove-403: keys on CHATS rows ---
+# h / enter / a / x act on the selected chat while the box holds focus. Every
+# key is driven through the live TUI; what it did is read back from tmux.
+# The "agent" in these panes is a shell (orchestrator claude: echo), so a
+# reply that was SUBMITTED runs as a command and leaves its output behind.
+
+chat_events() { find "$SCRATCH" -name events.jsonl -exec cat {} + 2>/dev/null | grep -c "\"type\":\"$1\"" || true; }
+active_pane() { tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_active} #{pane_id}' | awk '$1 == 1 {print $2}'; }
+pane_session() { tmux display-message -p -t "$1" -F '#{session_name}'; }
+# select_chat <name> — walk the CHATS cursor until it sits on the row.
+select_chat() {
+  local i
+  for i in 1 2 3 4 5 6; do
+    wait_grep "▸. $1" && return 0
+    tmux send-keys -t "$PANE0" j
+    sleep 0.3
+  done
+  return 1
+}
+
+say "grove-403: tab focuses CHATS, the footer offers the chat keys"
+LOCALPANE="$(tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id} #{@grove_remote}' | awk -v d="$PANE0" 'NF == 1 && $1 != d {print $1; exit}')"
+[ -n "$LOCALPANE" ] || fail "no local orchestrator pane in the rws cockpit"
+LOCALPID="$(tmux display-message -p -t "$LOCALPANE" -F '#{pane_pid}')"
+tmux select-pane -t "$PANE0"
+HIDDEN_EVENTS=$(chat_events chat_hidden)
+tmux send-keys -t "$PANE0" Tab
+wait_grep '▸▣ cockpit' || fail "tab did not put the cursor on the first chat:
+$CAP"
+# A flash left on the footer squeezes the hints down to their bare keys.
+echo "$CAP" | grep -Eq 'h( hide)? · enter( focus)? · x' || fail "the footer does not offer the chat keys under CHATS focus:
+$CAP"
+[ "$(chat_events chat_hidden)" -eq "$HIDDEN_EVENTS" ] || fail "focusing the box hid something"
+[ "$(pane_session "$LOCALPANE")" = "grove-rws" ] || fail "no key was pressed, yet the chat left the cockpit"
+
+say "h hides the selected chat: ▣ → ○, same pane, process still alive"
+select_chat 'cockpit·[0-9]  ' || fail "could not select the local chat's row:
+$CAP"
+tmux send-keys -t "$PANE0" h
+wait_grep 'CHATS 3 · 2 hidden' || fail "h did not hide the chat:
+$CAP"
+wait_grep '○ chat-2' || fail "the hidden chat has no ○ row:
+$CAP"
+[ "$(pane_session "$LOCALPANE")" = "grove-chat-rws-2" ] || fail "pane $LOCALPANE is in $(pane_session "$LOCALPANE"), want grove-chat-rws-2"
+[ "$(tmux display-message -p -t "$LOCALPANE" -F '#{pane_pid}')" = "$LOCALPID" ] || fail "the hidden pane is not the same process"
+kill -0 "$LOCALPID" 2>/dev/null || fail "the hidden chat's process died"
+[ "$(chat_events chat_hidden)" -eq $((HIDDEN_EVENTS + 1)) ] || fail "the hide wrote no chat_hidden event"
+wait_grep 'hid grove-chat-rws-2' || fail "ACTIVITY has no line for the hide:
+$CAP"
+
+say "a remote row is inert"
+select_chat 'cockpit·[0-9] @pc' || fail "could not select the remote chat's row:
+$CAP"
+for k in h a x Enter; do
+  tmux send-keys -t "$PANE0" "$k"
+  sleep 0.3
+done
+wait_grep 'remote chats: not yet' || fail "a remote row did not refuse the chat keys:
+$CAP"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq 2 ] || fail "a chat key on a remote row moved a pane"
+
+say "a replies inline to the hidden chat — delivered AND submitted, the chat stays hidden"
+select_chat 'chat-2' || fail "could not select the hidden chat's row:
+$CAP"
+tmux send-keys -t "$PANE0" a
+wait_grep 'reply → chat-2' || fail "a did not open the inline reply:
+$CAP"
+# q, X and a digit are typed, not obeyed.
+tmux send-keys -t "$PANE0" -l 'qX1'
+sleep 0.3
+tmux send-keys -t "$PANE0" BSpace BSpace BSpace
+tmux has-session -t '=grove-rws' 2>/dev/null || fail "a hotkey leaked out of the inline reply and took the cockpit down"
+wait_grep 'reply → chat-2' || fail "a hotkey leaked out of the inline reply:
+$CAP"
+tmux send-keys -t "$PANE0" -l 'echo landed-$((400+3))'
+tmux send-keys -t "$PANE0" Enter
+wait_grep 'sent to chat-2' || fail "the reply was not reported as sent:
+$CAP"
+LANDED=""
+for _ in $(seq 1 30); do
+  tmux capture-pane -p -S - -t "$LOCALPANE" > "$SCRATCH/hidden-pane.cap"
+  grep -qx 'landed-403' "$SCRATCH/hidden-pane.cap" && { LANDED=1; break; }
+  sleep 0.2
+done
+[ -n "$LANDED" ] || fail "the reply never ran in the hidden chat's pane — delivered is not submitted:
+$(cat "$SCRATCH/hidden-pane.cap")"
+[ "$(pane_session "$LOCALPANE")" = "grove-chat-rws-2" ] || fail "replying showed the chat"
+
+say "esc cancels a reply without sending"
+tmux send-keys -t "$PANE0" a
+wait_grep 'reply → chat-2' || fail "a did not reopen the inline reply:
+$CAP"
+tmux send-keys -t "$PANE0" -l 'echo never-403'
+tmux send-keys -t "$PANE0" Escape
+wait_grep 'nothing sent' || fail "esc did not cancel the reply:
+$CAP"
+sleep 0.5
+tmux capture-pane -p -S - -t "$LOCALPANE" > "$SCRATCH/hidden-pane.cap"
+grep -q 'never-403' "$SCRATCH/hidden-pane.cap" && fail "a cancelled reply reached the chat" || true
+
+say "h shows it again: the SAME pane, and the keyboard stays on the dashboard"
+tmux send-keys -t "$PANE0" h
+wait_grep 'CHATS 3 · 1 hidden' || fail "h did not show the chat:
+$CAP"
+tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' > "$SCRATCH/cockpit-panes.txt"
+grep -qx "$LOCALPANE" "$SCRATCH/cockpit-panes.txt" || fail "pane $LOCALPANE did not come back to the cockpit:
+$(cat "$SCRATCH/cockpit-panes.txt")"
+[ "$(tmux display-message -p -t "$LOCALPANE" -F '#{pane_pid}')" = "$LOCALPID" ] || fail "the shown pane is not the same process"
+[ "$(active_pane)" = "$PANE0" ] || fail "h moved the keyboard off the dashboard (active pane $(active_pane))"
+tmux has-session -t '=grove-chat-rws-2' 2>/dev/null && fail "the emptied chat session is still there" || true
+[ "$(chat_events chat_shown)" -ge 1 ] || fail "the show wrote no chat_shown event"
+
+say "a on a shown chat is refused; enter focuses its pane"
+select_chat 'cockpit·[0-9]  ' || fail "could not select the shown chat's row:
+$CAP"
+tmux send-keys -t "$PANE0" a
+wait_grep 'shown — enter to focus' || fail "a on a shown chat was not refused:
+$CAP"
+tmux send-keys -t "$PANE0" Enter
+for _ in $(seq 1 25); do [ "$(active_pane)" = "$LOCALPANE" ] && break; sleep 0.2; done
+[ "$(active_pane)" = "$LOCALPANE" ] || fail "enter did not focus the chat's pane (active pane $(active_pane))"
+tmux select-pane -t "$PANE0"
+
+say "x asks first: anything but y cancels, y closes"
+select_chat 'chat-1' || fail "could not select chat-1's row:
+$CAP"
+tmux send-keys -t "$PANE0" x
+wait_grep 'close chat-1?' || fail "x did not ask to confirm:
+$CAP"
+tmux send-keys -t "$PANE0" n
+sleep 1
+tmux has-session -t '=grove-chat-rws-1' 2>/dev/null || fail "n closed the chat"
+tmux send-keys -t "$PANE0" x
+wait_grep 'close chat-1?' || fail "x did not ask to confirm the second time:
+$CAP"
+tmux send-keys -t "$PANE0" y
+for _ in $(seq 1 25); do tmux has-session -t '=grove-chat-rws-1' 2>/dev/null || break; sleep 0.2; done
+tmux has-session -t '=grove-chat-rws-1' 2>/dev/null && fail "y did not close chat-1" || true
+wait_grep 'CHATS 2' || fail "the closed chat's row is still there:
+$CAP"
+select_chat 'cockpit·[0-9]  ' || fail "could not select the shown chat's row to close it:
+$CAP"
+tmux send-keys -t "$PANE0" x
+wait_grep 'close cockpit·[0-9]?' || fail "x on a shown chat did not ask to confirm:
+$CAP"
+tmux send-keys -t "$PANE0" y
+for _ in $(seq 1 25); do
+  tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' > "$SCRATCH/cockpit-panes.txt"
+  grep -qx "$LOCALPANE" "$SCRATCH/cockpit-panes.txt" || break
+  sleep 0.2
+done
+grep -qx "$LOCALPANE" "$SCRATCH/cockpit-panes.txt" && fail "y did not close the shown chat's pane" || true
+grep -qx "$PANE0" "$SCRATCH/cockpit-panes.txt" || fail "closing a chat took the dashboard with it"
+
+say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host, the cockpit supervises, CHATS lists shown + hidden chats, h/enter/a/x act on them"

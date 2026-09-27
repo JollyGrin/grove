@@ -17,12 +17,12 @@ import (
 
 // Chat fixtures, by scenario.
 func chatShownRow(n int) ChatRow {
-	return ChatRow{Pane: fmt.Sprintf("%%%d", n), N: n, Model: "opus", Busy: true, Turn: "idle",
+	return ChatRow{Pane: fmt.Sprintf("%%%d", n), Session: "grove-golden", N: n, Model: "opus", Busy: true, Turn: "idle",
 		LastActive: time.Now().Add(-2 * time.Minute), Last: "anything need me? — fleet summary sent"}
 }
 
 func chatHiddenRow(n int) ChatRow {
-	return ChatRow{Pane: fmt.Sprintf("%%%d", 10+n), Hidden: true, N: n, Model: "sonnet", Busy: true, Turn: "running",
+	return ChatRow{Pane: fmt.Sprintf("%%%d", 10+n), Session: fmt.Sprintf("grove-chat-golden-%d", n), Hidden: true, N: n, Model: "sonnet", Busy: true, Turn: "running",
 		LastActive: time.Now().Add(-6 * time.Minute), Last: "token-diet spec sweep · 4/7 subagents back"}
 }
 
@@ -33,7 +33,7 @@ func chatWaitingRow(n int) ChatRow {
 }
 
 func chatRemoteRow(n int) ChatRow {
-	return ChatRow{Pane: fmt.Sprintf("%%%d", 20+n), N: n, Host: "groveremote", Model: "glm-4.6",
+	return ChatRow{Pane: fmt.Sprintf("%%%d", 20+n), Session: "grove-golden", N: n, Host: "groveremote", Model: "glm-4.6",
 		Created: time.Now().Add(-41 * time.Minute)}
 }
 
@@ -428,11 +428,9 @@ func TestChatsFocusAndSelection(t *testing.T) {
 	if m.chatSel != 2 {
 		t.Errorf("k wraps: chatSel = %d, want 2", m.chatSel)
 	}
-	for _, k := range []string{"enter", "n", "a", "d", "v", "m", "o", "p", "t"} {
-		nm, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-		if k != "enter" {
-			nm, cmd = m.handleKey(fkey(k))
-		}
+	// Task keys have no chat under them (the chat keys: chatkeys_test.go).
+	for _, k := range []string{"n", "d", "v", "m", "o", "p", "t"} {
+		nm, cmd := m.handleKey(fkey(k))
 		got := nm.(Model)
 		if cmd != nil || got.mode != modeList || got.detail != nil || !strings.Contains(got.flash, "tab to AGENTS") {
 			t.Errorf("%s on CHATS must not act (mode=%d flash=%q)", k, got.mode, got.flash)

@@ -43,6 +43,7 @@ const (
 // the cheap pass's; the second is filled only by a costly pass (Deep).
 type ChatRow struct {
 	Pane    string // the pane's immutable %id — the row's identity across beats
+	Session string // the tmux session it lives in: the cockpit's, or its own grove-chat-<label>-<n>
 	Hidden  bool   // kind `chat` (a detached grove-chat-<label>-<n> session) vs kind `cockpit`
 	N       int    // the chat number, or the cockpit pane's index
 	Host    string // @grove_remote: the host a remote chat pane attaches to
@@ -297,7 +298,8 @@ type chatLayout struct {
 	height int // total box rows incl. border; 0 = no box
 	start  int // first shown chat
 	shown  int
-	more   int // chats behind the `+N more` line
+	more   int  // chats behind the `+N more` line
+	reply  bool // the inline reply row is open under the selected chat
 }
 
 // chatLayout budgets the box against the spare rows. It leaves the feed
@@ -312,7 +314,14 @@ func (m Model) chatLayout() chatLayout {
 	if room < 1 {
 		return chatLayout{}
 	}
-	lay := chatLayout{shown: min(min(n, maxChatRows), room)}
+	// The inline reply (grove-403) takes one of the box's rows; with a
+	// single row to spare it borrows the feed's instead, for as long as it
+	// is open — the chat being answered never scrolls out from over it.
+	reply := m.mode == modeChatReply
+	if reply && room > 1 {
+		room--
+	}
+	lay := chatLayout{shown: min(min(n, maxChatRows), room), reply: reply}
 	if lay.shown < n {
 		if room == lay.shown && lay.shown > 1 {
 			lay.shown-- // make room for the +N more line
@@ -323,6 +332,9 @@ func (m Model) chatLayout() chatLayout {
 	}
 	lay.height = 4 + lay.shown
 	if lay.more > 0 {
+		lay.height++
+	}
+	if lay.reply {
 		lay.height++
 	}
 	if m.chatSel >= lay.shown {
@@ -404,6 +416,9 @@ func (m Model) viewChats(lay chatLayout) string {
 			line += last.Render(trunc(l.last, lastW))
 		}
 		rows = append(rows, truncPad(line, w))
+		if lay.reply && i == m.chatSel {
+			rows = append(rows, truncPad(strings.Repeat(" ", chatInputIndent)+m.input.View(), w))
+		}
 	}
 	if lay.more > 0 {
 		rows = append(rows, truncPad(sDim.Render(fmt.Sprintf("  +%d more", lay.more)), w))

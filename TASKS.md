@@ -9,6 +9,24 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
+      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
+      chat / shows a hidden one (the keyboard stays on the dashboard —
+      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
+      pane (showing it first when hidden), `a` opens a one-line inline
+      reply under the row for a HIDDEN chat (a shown one refuses via
+      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
+      are inert ("remote chats: not yet"); task keys stay refused; every
+      global key is untouched. The keys call the functions behind the CLI
+      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
+      `closeChat`, `closeCockpitPane` — the first, second and last factored
+      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
+      `tea.Cmd` per press and one costly pass of the box on its answer.
+      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
+      renders `chat_hidden` / `chat_shown`; the footer offers the row's
+      chat keys under CHATS focus only; help gains a CHATS section. No new
+      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
+      keys through the live TUI.
 - [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
       `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
       one row per live chat of the workspace: `▣` on screen, `○` hidden

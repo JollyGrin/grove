@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,16 @@ func TestCockpitChatsCheapPassCostsOnePaneListing(t *testing.T) {
 		if r.Label != "" || r.Last != "" || r.Turn != "" || r.Waiting || !r.LastActive.IsZero() {
 			t.Errorf("cheap row carries a costly field: %+v", r)
 		}
+	}
+	// grove-403: every row names the tmux session it lives in — the chat
+	// keys need it, and it comes off the same one listing.
+	sessions := map[string]string{}
+	for _, r := range rows {
+		sessions[r.Pane] = r.Session
+	}
+	want := map[string]string{"%2": "grove-unbrewed", "%3": "grove-unbrewed", "%7": "grove-chat-unbrewed-1", "%8": "grove-chat-unbrewed-2"}
+	if !reflect.DeepEqual(sessions, want) {
+		t.Errorf("row sessions = %v, want %v", sessions, want)
 	}
 }
 

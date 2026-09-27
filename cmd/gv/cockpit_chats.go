@@ -103,7 +103,7 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 			continue
 		}
 		found = append(found, cockpitChatPane{pane: p, row: tui.ChatRow{
-			Pane: p.Pane, N: p.Index, Host: p.Remote, Model: p.Model,
+			Pane: p.Pane, Session: p.Session, N: p.Index, Host: p.Remote, Model: p.Model,
 			Busy: chat.Busy(p.Command), Created: p.Created,
 		}})
 	}
@@ -128,7 +128,7 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 		found = append(found, cockpitChatPane{
 			pane: tmux.LivePane{Session: c.Session, PID: c.PID, Command: c.Command, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID},
 			row: tui.ChatRow{
-				Pane: c.Pane, Hidden: true, N: c.N, Model: c.Model,
+				Pane: c.Pane, Session: c.Session, Hidden: true, N: c.N, Model: c.Model,
 				Busy: chat.Busy(c.Command), Created: c.Created,
 			},
 		})
@@ -233,4 +233,33 @@ func lastSaid(lines []string) string {
 		}
 	}
 	return ""
+}
+
+// wireChatKeys hands the cockpit the functions behind the chat verbs
+// (grove-403): the CHATS row keys call these — the same code the CLI runs,
+// never a second implementation and never a `gv` subprocess.
+func wireChatKeys() {
+	tui.HideChat = func(pane string) (string, error) { return hideChat(pane, "") }
+	tui.ShowChat = func(session string, focus bool) (string, error) {
+		pane, _, err := showChat(session, focus)
+		return pane, err
+	}
+	tui.FocusChat = func(pane string) error {
+		isCockpit, err := cockpitSessionCheck()
+		if err != nil {
+			return err
+		}
+		return tmux.FocusChatPane(pane, isCockpit)
+	}
+	tui.SendChat = func(session, text string) (string, error) {
+		warn, _, err := relayChat(session, text)
+		return warn, err
+	}
+	tui.CloseChatPane = func(pane string) error {
+		return closeCockpitPane(pane, map[string]string{"reason": "closed from the cockpit"})
+	}
+	tui.CloseChatSession = func(session string) error {
+		_, err := closeChat(session)
+		return err
+	}
 }

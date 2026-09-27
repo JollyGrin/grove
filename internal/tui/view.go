@@ -393,6 +393,9 @@ func (m Model) viewFooter() string {
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
 	}
+	if m.chatModal() {
+		return m.viewChatFooter()
+	}
 	if m.armedHost != "" {
 		// grove-199: the armed prompt REPLACES the legend for exactly one
 		// keypress — the keys it lists are the only ones that spawn, and
@@ -409,14 +412,12 @@ func (m Model) viewFooter() string {
 	// so footerHeight is a constant 1. The flash is the only surface errors
 	// have — when it doesn't fit beside the included hints, optional hints
 	// yield (never the O/)/? trio), then the flash truncates as last resort.
-	hasTasks := len(m.board) > 0
-	hasFeatures := len(m.feats) > 0
-	line := footerLegend(m.width, hasTasks, hasFeatures)
+	line := m.legendFor(m.width)
 	if m.flash != "" {
 		flashW := len([]rune(m.flash))
 		room := m.width - lipgloss.Width(line) - 3
 		if flashW > room {
-			line = footerLegend(m.width-flashW-3, hasTasks, hasFeatures)
+			line = m.legendFor(m.width - flashW - 3)
 			room = m.width - lipgloss.Width(line) - 3
 		}
 		if room > 1 {
