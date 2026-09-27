@@ -43,7 +43,8 @@ pass `e2e/dummy.sh` before merge. It runs the full loop against scratch
 everything: scratch `HOME` (config), `GROVE_STATE_DIR` override (state),
 and the repo's `claude:` command set to `echo` (worker). Other suites:
 `wizard.sh`, `workspace.sh`, `github.sh` (stub `gh`), `cockpit.sh`,
-`plugin.sh`, `serve.sh`, `feature.sh` (the feature-train lifecycle), and
+`plugin.sh`, `serve.sh`, `feature.sh` (the feature-train lifecycle),
+`feature_host.sh` (a train car on a fake ssh host), and
 more — `ls e2e/`. **`e2e/all.sh` runs every one** (a new suite is not
 covered until it is added to all.sh's list) — no CI covers them, so run it
 before merging anything that touches the TUI or the task lifecycle

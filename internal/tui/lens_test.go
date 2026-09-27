@@ -10,6 +10,7 @@ import (
 	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/serve"
+	"github.com/JollyGrin/grove/internal/state"
 )
 
 // lensModel is featureModel(1) with FEATURES focused and the lens open on
@@ -292,5 +293,41 @@ func TestHelpListsFeatureKeys(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q", want)
 		}
+	}
+}
+
+// TestLensRemoteCarHost (grove-398): a car another host runs carries a
+// dim @host in its TRAIN row; a local car carries none.
+func TestLensRemoteCarHost(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(1)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+
+	f := &state.Feature{Slug: "keys", Branch: "feature/keys", Base: "main"}
+	st := &feature.Status{Cars: []feature.Car{
+		{Ticket: "grove-1", Number: 1, Title: "here", State: feature.CarWorking},
+		{Ticket: "grove-2", Number: 2, Title: "there", State: feature.CarQuestion, Host: "pc"},
+	}}
+	d := buildLens(f, st, "", nil, nil)
+	if d.cars[0].host != "" || d.cars[1].host != "@pc" {
+		t.Fatalf("hosts = %q %q", d.cars[0].host, d.cars[1].host)
+	}
+	row := lensCarRow(d.cars[1], d.labelW, false, 116)
+	if !strings.Contains(row, sDim.Render("@pc")+" there") {
+		t.Errorf("remote row lacks a dim @pc before the title: %q", row)
+	}
+	if strings.Contains(lensCarRow(d.cars[0], d.labelW, false, 116), "@") {
+		t.Error("a local car shows a host")
+	}
+}
+
+// TestMergeStatusLocalWinsHost (grove-398): the live beat taking over a
+// car the slow pass saw on a host clears the host.
+func TestMergeStatusLocalWinsHost(t *testing.T) {
+	slow := &feature.Status{Cars: []feature.Car{{Ticket: "grove-2", State: feature.CarQuestion, Host: "pc"}, {Ticket: "grove-3", State: feature.CarWorking, Host: "pc"}}}
+	live := &feature.Status{Cars: []feature.Car{{Ticket: "grove-2", State: feature.CarWorking}}}
+	out := mergeStatus(live, slow)
+	if out.Cars[0].Host != "" || out.Cars[0].State != feature.CarWorking || out.Cars[1].Host != "pc" {
+		t.Errorf("merged = %+v", out.Cars)
 	}
 }

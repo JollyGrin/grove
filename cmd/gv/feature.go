@@ -10,7 +10,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/feature"
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
@@ -84,13 +86,15 @@ func cmdFeatureLs(args []string) error {
 	all := fs.Bool("all", false, "include closed features")
 	noPR := fs.Bool("no-pr", false, "skip the feature PR lookup (gh)")
 	noQueued := fs.Bool("no-queued", false, "skip the queued-issue lookup (the backend's open issues)")
+	noRemote := fs.Bool("no-remote", false, "skip asking the configured hosts for their cars (ssh)")
 	parseAnywhere(fs, args)
 	features, err := state.LoadFeatures(stateDir())
 	if err != nil {
 		return err
 	}
 	rows := feature.Rows(features, *all)
-	statuses, lookupErr := featureStatuses(features, !*noPR, !*noQueued)
+	cfg, _ := loadCfg()
+	statuses, lookupErr := featureStatuses(cfg, features, !*noPR, !*noQueued, !*noRemote, nil)
 	if lookupErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", lookupErr)
 	}
@@ -126,13 +130,17 @@ func cmdFeatureLs(args []string) error {
 }
 
 // featureStatuses computes every open feature's status off the live
-// inputs (feature.LiveInput). A missing config only loses the repo-rooted
-// fields.
-func featureStatuses(features map[string]*state.Feature, withPR, withQueued bool) (map[string]*feature.Status, error) {
-	cfg, _ := loadCfg()
+// inputs (feature.LiveInput). A nil config only loses the repo-rooted
+// fields. withRemote=false (--no-remote) never asks the hosts; run is the
+// host runner (nil = ssh).
+func featureStatuses(cfg *config.Config, features map[string]*state.Feature, withPR, withQueued, withRemote bool, run fleet.Runner) (map[string]*feature.Status, error) {
 	in, err := feature.LiveInput(cfg, stateDir(), features, withPR, withQueued)
 	if err != nil {
 		return nil, err
+	}
+	in.Remote = nil
+	if withRemote {
+		in.Remote = feature.RemoteLookup(cfg, run)
 	}
 	return feature.Statuses(in)
 }
@@ -207,8 +215,10 @@ func cmdFeatureLand(args []string) error {
 	}
 	// Queued cars (open backend issues under the feature's label, not yet
 	// grabbed) reuse the same lookup `gv feature ls` already does — no PR
-	// lookup needed here, land does its own fresher one above.
-	if statuses, err := featureStatuses(features, false, true); err != nil {
+	// lookup needed here, land does its own fresher one above. Hosts are
+	// asked too (grove-398), so a car running on one is not mislabelled
+	// queued.
+	if statuses, err := featureStatuses(cfg, features, false, true, true, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	} else if st := statuses[slug]; st != nil {
 		for _, c := range st.Cars {

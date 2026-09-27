@@ -178,7 +178,9 @@ func mergeStatus(live, slow *feature.Status) *feature.Status {
 	var queued []feature.Car
 	for _, c := range slow.Cars {
 		if lc, ok := liveBy[c.Ticket]; ok {
-			c.State, c.PR = lc.State, lc.PR
+			// Local wins (grove-398): a car the slow pass saw on a host
+			// and this host now tracks drops its @host.
+			c.State, c.PR, c.Host = lc.State, lc.PR, lc.Host
 			used[c.Ticket] = true
 		}
 		if c.State == feature.CarQueued {

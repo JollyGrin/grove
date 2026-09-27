@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,12 +150,158 @@ func TestScanGrabArgs(t *testing.T) {
 	}
 }
 
-func TestRefuseHostFeatureGrabExplicit(t *testing.T) {
-	err := refuseHostFeatureGrab([]string{"grove-9", "--feature", "keys"})
-	if err == nil || !strings.Contains(err.Error(), "--host") {
-		t.Errorf("explicit --feature over --host = %v, want a refusal naming --host", err)
+// hostFeatures is one open train, the ticket's label set, and a resolver
+// that knows grove-9 on repo grove.
+func hostFeatures() (map[string]*state.Feature, func(string, string) (string, string, []string, bool)) {
+	features := map[string]*state.Feature{
+		"keys": {Slug: "keys", Repo: "grove", Branch: "feature/gv-keys-secrets", Base: "main", Label: "keys"},
+		"old":  {Slug: "old", Repo: "grove", Branch: "feature/old", Base: "main", Label: "old", Closed: true},
 	}
-	if err := refuseHostFeatureGrab([]string{"grove-9", "--feature", "none"}); err != nil {
-		t.Errorf("--feature none over --host refused: %v", err)
+	resolve := func(repoFlag, ref string) (string, string, []string, bool) {
+		switch ref {
+		case "grove-9":
+			return "grove", "main", []string{"keys"}, true
+		case "grove-10":
+			return "grove", "main", []string{"bug"}, true
+		}
+		return "", "", nil, false
+	}
+	return features, resolve
+}
+
+// TestForwardGrabFeature (grove-398): the registering host resolves the
+// feature and forwards its branch; the argv the remote runner sees is
+// the assertion.
+func TestForwardGrabFeature(t *testing.T) {
+	features, resolve := hostFeatures()
+	var got [][]string
+	orig := remoteRun
+	remoteRun = func(_ *config.Config, host, verb string, args []string, _, _ io.Writer) (int, error) {
+		if host != "pc" || verb != "grab" {
+			t.Errorf("remote %s %s, want pc grab", host, verb)
+		}
+		got = append(got, append([]string(nil), args...))
+		return 0, nil
+	}
+	defer func() { remoteRun = orig }()
+
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"explicit", []string{"grove-9", "--feature", "keys"},
+			[]string{"grove-9", "--feature", "keys", "--feature-branch", "feature/gv-keys-secrets"}},
+		{"explicit=", []string{"--feature=keys", "--brief", "--feature x", "grove-77"},
+			[]string{"--brief", "--feature x", "grove-77", "--feature", "keys", "--feature-branch", "feature/gv-keys-secrets"}},
+		{"label inference", []string{"grove-9", "--profile", "p"},
+			[]string{"grove-9", "--profile", "p", "--feature", "keys", "--feature-branch", "feature/gv-keys-secrets"}},
+		{"opt out", []string{"grove-9", "--feature", "none"}, []string{"grove-9", "--feature", "none"}},
+		{"off train", []string{"grove-10"}, []string{"grove-10"}},
+		{"unresolvable here", []string{"grove-99"}, []string{"grove-99"}},
+	}
+	for _, tc := range cases {
+		got = nil
+		if _, err := forwardGrab(&config.Config{}, "pc", tc.args, features, resolve); err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if len(got) != 1 || strings.Join(got[0], "\x00") != strings.Join(tc.want, "\x00") {
+			t.Errorf("%s: remote argv %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	for _, bad := range [][]string{
+		{"grove-9", "--feature", "old"},                 // closed
+		{"grove-9", "--feature", "keys", "--repo", "x"}, // wrong repo
+		{"grove-9", "--feature-branch", "feature/x"},    // internal flag from a human
+	} {
+		got = nil
+		if _, err := forwardGrab(&config.Config{}, "pc", bad, features, resolve); err == nil || len(got) != 0 {
+			t.Errorf("%q: err=%v calls=%d, want a refusal and no remote call", bad, err, len(got))
+		}
+	}
+}
+
+func TestCheckForwardedFeature(t *testing.T) {
+	if err := checkForwardedFeature("", "feature/x"); err == nil || !strings.Contains(err.Error(), "--feature") {
+		t.Errorf("--feature-branch without --feature = %v, want a refusal", err)
+	}
+	if err := checkForwardedFeature("none", "feature/x"); err == nil {
+		t.Error("--feature none with --feature-branch accepted")
+	}
+	if err := checkForwardedFeature("keys", "feature/x"); err != nil {
+		t.Errorf("keys + branch refused: %v", err)
+	}
+}
+
+func TestTakeFlag(t *testing.T) {
+	v, set, rest := takeFlag([]string{"grove-9", "--brief", "--feature-branch y", "--feature-branch=feature/x", "--manual"}, "feature-branch")
+	if !set || v != "feature/x" || strings.Join(rest, ",") != "grove-9,--brief,--feature-branch y,--manual" {
+		t.Errorf("takeFlag = %q %v %q", v, set, rest)
+	}
+}
+
+// TestForwardedChoiceForks (grove-398): the receiving host forks from
+// origin/<branch> with no feature registry, records feature+base, and
+// refuses a branch origin does not have. Local bare origin, no tmux.
+func TestForwardedChoiceForks(t *testing.T) {
+	base := t.TempDir()
+	origin := filepath.Join(base, "origin.git")
+	seed := filepath.Join(base, "seed")
+	root := filepath.Join(base, "repo")
+	gitT(t, base, "init", "-q", "--bare", "-b", "main", origin)
+	gitT(t, base, "clone", "-q", origin, seed)
+	gitT(t, seed, "config", "user.email", "t@t")
+	gitT(t, seed, "config", "user.name", "t")
+	gitT(t, seed, "checkout", "-q", "-b", "main")
+	gitT(t, seed, "commit", "-q", "--allow-empty", "-m", "one")
+	gitT(t, seed, "push", "-q", "origin", "main")
+	// The host's clone predates the feature branch: only the fetch can
+	// bring it in.
+	gitT(t, base, "clone", "-q", origin, root)
+	gitT(t, seed, "checkout", "-q", "-b", "feature/gv-keys-secrets")
+	gitT(t, seed, "commit", "-q", "--allow-empty", "-m", "feature work")
+	gitT(t, seed, "push", "-q", "origin", "feature/gv-keys-secrets")
+	tip := strings.TrimSpace(gitT(t, seed, "rev-parse", "HEAD"))
+
+	c, err := forwardedChoice(root, "keys", "feature/gv-keys-secrets")
+	if err != nil {
+		t.Fatalf("forwardedChoice: %v", err)
+	}
+	ref, err := feature.ForkRef(root, c)
+	if err != nil || ref != "origin/feature/gv-keys-secrets" {
+		t.Fatalf("ForkRef = %q %v, want origin/feature/gv-keys-secrets", ref, err)
+	}
+	if got := strings.TrimSpace(gitT(t, root, "rev-parse", ref)); got != tip {
+		t.Errorf("fork ref at %s, want the feature tip %s", got, tip)
+	}
+	task := &provider.Task{ID: "grove-9", Title: "car"}
+	d := taskCreatedData(task, "grove", "grove-9-car", "/wt", "s", "w", "", c)
+	if d["feature"] != "keys" || d["base"] != "feature/gv-keys-secrets" {
+		t.Errorf("task_created feature=%q base=%q", d["feature"], d["base"])
+	}
+
+	if _, err := forwardedChoice(root, "keys", "feature/missing"); err == nil {
+		t.Error("a branch missing on origin was accepted")
+	}
+}
+
+// TestFeatureStatusesNoRemote (grove-398): --no-remote never runs the
+// host runner; without it, one run per configured host.
+func TestFeatureStatusesNoRemote(t *testing.T) {
+	oldDir := ambient.stateDir
+	ambient.stateDir = t.TempDir()
+	t.Cleanup(func() { ambient.stateDir = oldDir })
+	features, _ := hostFeatures()
+	cfg := &config.Config{Hosts: map[string]*config.Host{"pc": {SSH: "pc", GV: "gv"}}}
+	calls := 0
+	run := func(context.Context, *config.Host) ([]byte, error) { calls++; return []byte(`{"tasks":[]}`), nil }
+
+	if _, _ = featureStatuses(cfg, features, false, true, false, run); calls != 0 {
+		t.Errorf("--no-remote ran the host runner %d times", calls)
+	}
+	if _, _ = featureStatuses(cfg, features, false, true, true, run); calls != 1 {
+		t.Errorf("remote lookup ran %d times, want 1", calls)
 	}
 }

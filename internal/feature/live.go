@@ -1,9 +1,11 @@
 package feature
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/git"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/ledger"
@@ -15,7 +17,8 @@ import (
 // feature ls` and the cockpit's PR-cadence pass (grove-377): the full
 // event log (landed cars must survive sweep), the fold, the cost ledger,
 // the configured repos' checkouts, and — unless skipped — the backend's
-// open issues and gh. A nil cfg only loses the repo-rooted fields.
+// open issues, gh, and every configured host's tracked tasks (grove-398;
+// a caller clears Remote for --no-remote). A nil cfg only loses the repo-rooted fields.
 func LiveInput(cfg *config.Config, stateDir string, features map[string]*state.Feature, withPR, withQueued bool) (StatusInput, error) {
 	events, err := state.ReadEvents(stateDir, 0)
 	if err != nil {
@@ -38,6 +41,7 @@ func LiveInput(cfg *config.Config, stateDir string, features map[string]*state.F
 	in := StatusInput{
 		Features: features, Tasks: tasks, Events: events, Ledger: rows,
 		SkipQueued: !withQueued,
+		Remote:     RemoteLookup(cfg, nil),
 		Git:        git.Run,
 		RepoDir: func(name string) string {
 			if r := repo(name); r != nil {
@@ -98,4 +102,18 @@ func LiveInput(cfg *config.Config, stateDir string, features map[string]*state.F
 		}
 	}
 	return in, nil
+}
+
+// RemoteLookup asks every configured host for its `gv ls --json --no-pr`
+// rows (fleet.Fetch: the 5s per-host bound, a failing host is a
+// Result.Err) — the remote-car input of Statuses (grove-398). nil when no
+// host is configured, so a single-host setup never shells out. run nil =
+// the real ssh runner.
+func RemoteLookup(cfg *config.Config, run fleet.Runner) func() []fleet.Result {
+	if cfg == nil || len(cfg.Hosts) == 0 {
+		return nil
+	}
+	return func() []fleet.Result {
+		return fleet.Fetch(context.Background(), cfg, cfg.HostNames(), run)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/provider"
@@ -40,6 +41,9 @@ type Car struct {
 	LandedAt *time.Time `json:"landed_at,omitempty"`
 	After    []int      `json:"after,omitempty"`
 	EstUSD   float64    `json:"est_usd"`
+	// Host is the grove host running the car (grove-398): set only on a
+	// car tracked by another host's `gv ls --json`, absent for local ones.
+	Host string `json:"host,omitempty"`
 
 	created time.Time // active-car order key
 }
@@ -97,6 +101,12 @@ type StatusInput struct {
 	// failure falls back to landed-from-events alone.
 	ClosedIssues func(f *state.Feature) ([]*provider.Task, error)
 	MergedPRs    func(f *state.Feature) ([]github.MergedPR, error)
+
+	// Remote asks every configured host for its tracked tasks (grove-398)
+	// — once per Statuses call, never under SkipQueued. A failed host
+	// comes back as a Result.Err and becomes a warning; its cars fall
+	// back to queued.
+	Remote func() []fleet.Result
 }
 
 // Statuses computes Status for every open feature, keyed by slug. Lookup
@@ -111,6 +121,16 @@ func Statuses(in StatusInput) (map[string]*Status, error) {
 
 	out := map[string]*Status{}
 	var errs []error
+	var remote []fleet.Row
+	if !in.SkipQueued && in.Remote != nil && len(in.Features) > 0 {
+		for _, res := range in.Remote() {
+			if res.Err != nil {
+				errs = append(errs, fmt.Errorf("host %s: %w", res.Host, res.Err))
+				continue
+			}
+			remote = append(remote, res.Rows...)
+		}
+	}
 	for slug, f := range in.Features {
 		if f.Closed {
 			continue
@@ -142,6 +162,17 @@ func Statuses(in StatusInput) (map[string]*Status, error) {
 			active = append(active, Car{Ticket: t.Ticket, Number: issueNumber(t.Ticket), Title: t.Title,
 				State: carState(t), PR: prOf(t), created: t.Created})
 			seen[t.Ticket] = true
+		}
+		// A car another host tracks (grove-398): its real state, tagged
+		// with the host. Local wins a ticket both know — the local fold
+		// is the fresh truth after a take-back — and hosts dedup in order.
+		for _, r := range remote {
+			if r.Task == nil || r.Feature != slug || r.Done || seen[r.Ticket] || tracked(in.Tasks[r.Ticket]) {
+				continue
+			}
+			active = append(active, Car{Ticket: r.Ticket, Number: issueNumber(r.Ticket), Title: r.Title,
+				State: carState(r.Task), PR: prOf(r.Task), Host: r.Host, created: r.Created})
+			seen[r.Ticket] = true
 		}
 		sort.Slice(active, func(i, j int) bool {
 			if !active[i].created.Equal(active[j].created) {

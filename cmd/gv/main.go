@@ -414,9 +414,7 @@ func main() {
 				}
 				code, err = runRemoteOrchestratorNew(host, rest[1:])
 			case cmd == "grab":
-				if err = refuseHostFeatureGrab(rest); err == nil {
-					code, err = runRemote(host, cmd, rest)
-				}
+				code, err = runHostGrab(host, rest)
 			default:
 				code, err = runRemote(host, cmd, rest)
 			}
@@ -528,7 +526,7 @@ func main() {
 
 // grabValueFlags are grab's value-taking flags — the scanner below must
 // skip their values when looking for the ticket positional.
-var grabValueFlags = map[string]bool{"repo": true, "model": true, "profile": true, "brief": true, "feature": true}
+var grabValueFlags = map[string]bool{"repo": true, "model": true, "profile": true, "brief": true, "feature": true, "feature-branch": true}
 
 // scanGrabArgs pulls --feature, --repo, and the ticket out of a grab argv
 // without a FlagSet (the host hop passes flags through verbatim).
@@ -562,52 +560,159 @@ func scanGrabArgs(args []string) (featureVal string, featureSet bool, repo, ref 
 	return
 }
 
-// refuseHostFeatureGrab (grove-373): features live in THIS host's
-// events, so `gv grab --host` cannot ride one in v1 — an explicit
-// --feature <slug> refuses, and so does a ticket whose labels would
-// infer an open local feature. `--feature none` passes. When the ticket
-// cannot be resolved locally (repo only configured on the host), no
-// local feature can be its repo's, so the hop proceeds.
-func refuseHostFeatureGrab(args []string) error {
+// hostGrabArgs (grove-398) is the registering half of `gv grab --host H`
+// on a feature: features live in THIS host's events, so the feature is
+// resolved here — explicit --feature, or label inference exactly as a
+// local grab — and forwarded as `--feature <slug> --feature-branch
+// <branch>`, which the receiving host accepts without its own registry.
+// `--feature none` and an off-train ticket pass through unchanged. When
+// the ticket cannot be resolved locally (repo only configured on the
+// host), no local feature can be its repo's, so inference forwards
+// nothing. resolve reports the ticket's repo name, repo base, and labels.
+func hostGrabArgs(args []string, features map[string]*state.Feature, resolve func(repoFlag, ref string) (repo, base string, labels []string, ok bool)) ([]string, error) {
+	if _, fb, _ := takeFlag(args, "feature-branch"); fb {
+		return nil, fmt.Errorf("--feature-branch is internal to a forwarded grab — pass --feature <slug>")
+	}
 	featureVal, featureSet, repoFlag, ref := scanGrabArgs(args)
 	if featureSet && featureVal == feature.None {
-		return nil
+		return args, nil
 	}
+	var f *state.Feature
 	if featureSet && featureVal != "" {
-		return fmt.Errorf("--feature is not supported with --host yet: features live in this host's events — grab on this host, or drop --feature")
+		if f = state.OpenFeature(features, featureVal); f == nil {
+			return nil, fmt.Errorf("no open feature %q — `gv feature ls` lists them", featureVal)
+		}
+		if repoFlag != "" && repoFlag != f.Repo {
+			return nil, fmt.Errorf("feature %s is on repo %s, not %s — grab it with --repo %s, or pass --feature none", f.Slug, f.Repo, repoFlag, f.Repo)
+		}
+	} else if ref != "" && len(features) > 0 {
+		repo, base, labels, ok := resolve(repoFlag, ref)
+		if !ok {
+			return args, nil
+		}
+		c, err := feature.ChooseForGrab(features, "", repo, base, labels)
+		if err != nil {
+			return nil, fmt.Errorf("--host grab of %s: %w", ref, err)
+		}
+		f = c.Feature
 	}
-	if ref == "" {
-		return nil
+	if f == nil {
+		return args, nil
+	}
+	_, _, rest := takeFlag(args, "feature")
+	return append(rest, "--feature", f.Slug, "--feature-branch", f.Branch), nil
+}
+
+// grabResolver resolves a --host grab's ticket against THIS host's config
+// for hostGrabArgs' label inference; ok=false when it cannot (no config,
+// repo only on the host, unknown ticket).
+func grabResolver(cfg *config.Config) func(repoFlag, ref string) (string, string, []string, bool) {
+	return func(repoFlag, ref string) (string, string, []string, bool) {
+		if cfg == nil {
+			return "", "", nil, false
+		}
+		repoName, repo, _, task, err := resolveGrab(cfg, repoFlag, ref, false)
+		if err != nil || task == nil {
+			return "", "", nil, false
+		}
+		return repoName, repo.Base, task.Labels, true
+	}
+}
+
+// remoteRun is remote.Run, swappable so a test can assert the argv a
+// forwarded grab sends without ssh.
+var remoteRun = remote.Run
+
+// runHostGrab is `gv grab --host H`: resolve any feature here, then pass
+// the (rewritten) argv through to the host.
+func runHostGrab(host string, args []string) (int, error) {
+	cfg, err := loadCfg()
+	if err != nil {
+		return 0, err
 	}
 	features, err := state.LoadFeatures(stateDir())
 	if err != nil {
-		return err
+		return 0, err
 	}
-	open := 0
-	for _, f := range features {
-		if !f.Closed {
-			open++
+	return forwardGrab(cfg, host, args, features, grabResolver(cfg))
+}
+
+func forwardGrab(cfg *config.Config, host string, args []string, features map[string]*state.Feature, resolve func(string, string) (string, string, []string, bool)) (int, error) {
+	fwd, err := hostGrabArgs(args, features, resolve)
+	if err != nil {
+		return 0, err
+	}
+	return remoteRun(cfg, host, "grab", fwd, os.Stdout, os.Stderr)
+}
+
+// takeFlag removes every `--name v`, `--name=v`, `-name v` from a grab
+// argv and returns the last value, skipping the other grab value flags'
+// values (grabValueFlags). A lone `--` ends flag scanning.
+func takeFlag(args []string, name string) (val string, set bool, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i:]...)
+			break
 		}
+		if !strings.HasPrefix(a, "-") {
+			rest = append(rest, a)
+			continue
+		}
+		n, v, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if n != name {
+			rest = append(rest, a)
+			// Another value flag's value (`--brief "--feature x"`) is
+			// never read as a flag.
+			if grabValueFlags[n] && !hasVal && i+1 < len(args) {
+				i++
+				rest = append(rest, args[i])
+			}
+			continue
+		}
+		set = true
+		if !hasVal && i+1 < len(args) {
+			i++
+			v = args[i]
+		}
+		val = v
 	}
-	if open == 0 {
-		return nil
+	return val, set, rest
+}
+
+// checkForwardedFeature validates the receiving half of a forwarded
+// feature grab (grove-398): --feature-branch rides only with a real
+// --feature slug.
+func checkForwardedFeature(slug, branch string) error {
+	if slug == "" || slug == feature.None {
+		return fmt.Errorf("--feature-branch needs --feature <slug> (it is the forwarded half of `gv grab --host --feature`)")
 	}
-	cfg, err := loadCfg()
-	if err != nil {
-		return nil
-	}
-	repoName, repo, _, task, err := resolveGrab(cfg, repoFlag, ref, false)
-	if err != nil || task == nil {
-		return nil
-	}
-	c, err := feature.ChooseForGrab(features, "", repoName, repo.Base, task.Labels)
-	if err != nil {
-		return fmt.Errorf("--host grab of %s: %w", task.ID, err)
-	}
-	if c.Feature != nil {
-		return fmt.Errorf("%s's labels put it on feature %s (%s), and --host cannot ride a feature yet: features live in this host's events — grab on this host, or pass --feature none", task.ID, c.Feature.Slug, c.Why)
+	if branch == "" {
+		return fmt.Errorf("--feature-branch needs a branch")
 	}
 	return nil
+}
+
+// forwardedChoice is the base of a forwarded feature grab (grove-398): no
+// local registry — the branch must exist on origin, fetched now; a fetch
+// failure or a missing branch refuses rather than forking from the repo
+// base.
+func forwardedChoice(root, slug, branch string) (feature.Choice, error) {
+	if !git.HasRemote(root, "origin") {
+		return feature.Choice{}, fmt.Errorf("feature %s: %s has no origin to fetch %s from", slug, root, branch)
+	}
+	if err := git.Fetch(root, "origin", branch); err != nil {
+		return feature.Choice{}, fmt.Errorf("feature %s: fetch origin %s: %w", slug, branch, err)
+	}
+	c := feature.Choice{
+		Feature: &state.Feature{Slug: slug, Branch: branch},
+		Base:    branch, Why: "feature " + slug + ", forwarded from the registering host",
+	}
+	if _, err := feature.ForkRef(root, c); err != nil {
+		return feature.Choice{}, err
+	}
+	return c, nil
 }
 
 // runRemote resolves the host from config and passes the verb through.
@@ -1571,7 +1676,16 @@ func cmdGrab(args []string) error {
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	briefFlag := fs.String("brief", "", "ad-hoc operator instructions appended to the kickoff prompt as a final \"## Operator brief\" section")
 	featureFlag := fs.String("feature", "", "fork from this open feature's branch (`gv feature ls`); 'none' opts out of label inference")
+	// --feature-branch is the internal half of a forwarded `gv grab --host
+	// --feature` (grove-398): taken out of argv before the FlagSet sees
+	// it, so -h never advertises it.
+	featureBranch, fbSet, args := takeFlag(args, "feature-branch")
 	positionals := parseAnywhere(fs, args)
+	if fbSet {
+		if err := checkForwardedFeature(*featureFlag, featureBranch); err != nil {
+			return err
+		}
+	}
 	if len(positionals) > 1 {
 		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name] [--brief text] [--feature slug|none]")
 	}
@@ -1628,13 +1742,22 @@ func cmdGrab(args []string) error {
 	// grove-373: the base this worker forks from — an open feature's
 	// branch (--feature, or the one open feature a ticket label names),
 	// else the repo's base. Decided before any side effect.
-	features, err := state.LoadFeatures(stateDir())
-	if err != nil {
-		return err
-	}
-	choice, err := feature.ChooseForGrab(features, *featureFlag, repoName, repo.Base, task.Labels)
-	if err != nil {
-		return err
+	// A forwarded feature grab (grove-398) carries its branch from the
+	// registering host and skips this host's feature registry: the
+	// branch must be on origin, which forwardedChoice fetches and checks.
+	var choice feature.Choice
+	if fbSet {
+		if choice, err = forwardedChoice(repo.Path, *featureFlag, featureBranch); err != nil {
+			return err
+		}
+	} else {
+		features, err := state.LoadFeatures(stateDir())
+		if err != nil {
+			return err
+		}
+		if choice, err = feature.ChooseForGrab(features, *featureFlag, repoName, repo.Base, task.Labels); err != nil {
+			return err
+		}
 	}
 
 	name := task.ID + "-" + slugify(task.Title)
@@ -1662,7 +1785,7 @@ func cmdGrab(args []string) error {
 	sessionName := cockpitSessionFor(ws)
 	windowName := tmux.WorkerWindowProfile(repoShort(repoName, ws), name, profileName)
 
-	if git.HasRemote(repo.Path, "origin") {
+	if !fbSet && git.HasRemote(repo.Path, "origin") {
 		if err := git.Fetch(repo.Path, "origin", choice.Base); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: git fetch failed (%v) — branching from local %s\n", err, choice.Base)
 		}
