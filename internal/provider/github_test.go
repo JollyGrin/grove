@@ -157,3 +157,22 @@ func TestIDCandidatesCanonicalGithubID(t *testing.T) {
 		t.Errorf("canonical github id missing from candidates: %v", got)
 	}
 }
+
+func TestGitHubListLabeled(t *testing.T) {
+	var got []string
+	g := NewGitHub("/r", "grove")
+	g.run = func(dir string, args ...string) ([]byte, error) {
+		got = args
+		return []byte(`[{"number":12,"title":"T","body":"depends on #3","labels":[{"name":"trains"}]}]`), nil
+	}
+	tasks, err := g.ListLabeled("trains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(got, " "), "--label trains") || !strings.Contains(strings.Join(got, " "), "body") {
+		t.Errorf("gh args %v: want --label trains and a body field", got)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "grove-12" || tasks[0].Description != "depends on #3" || tasks[0].Labels[0] != "trains" {
+		t.Errorf("tasks = %+v", tasks[0])
+	}
+}

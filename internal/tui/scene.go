@@ -22,6 +22,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
 )
@@ -213,6 +214,7 @@ type scenePlot struct {
 	trunk     string // "┃" / "│" / ""
 	marker    string // "◆" / "⚠" hover marker, rendered in the sky row above
 	label     string // soil label, trunc-ed to plotW-1 at render time
+	group     int    // trellis: 1-based index into the frame's feats; 0 = loose
 	style     lipgloss.Style
 	markerSt  lipgloss.Style
 }
@@ -278,10 +280,12 @@ func plantStage(age time.Duration) (canopy, trunk string) {
 // buildOrchardPlots derives the merged/done orchard from the loaded events
 // window: the newest 3 EvTaskDone tickets get their own labeled tile, any
 // remainder condenses into one "♠×K" tile (leftmost, oldest-first reading).
-func buildOrchardPlots(events []state.Event) []scenePlot {
+// A ticket that is a car of an open feature stands in its trellis instead
+// (grove-379), so it is left out here.
+func buildOrchardPlots(events []state.Event, feats []featRow) []scenePlot {
 	var done []string
 	for _, ev := range events {
-		if ev.Type == state.EvTaskDone {
+		if ev.Type == state.EvTaskDone && !isFeatureCar(feats, ev.Ticket) {
 			done = append(done, ev.Ticket)
 		}
 	}
@@ -353,6 +357,135 @@ func buildTaskPlot(t *state.Task, pr *github.PR, fx fxLevel, tick uint64, celebr
 		p.label = tl + " " + age(t.Created)
 	}
 	return p
+}
+
+// --- Trellis (grove-379, feature trains Decision 5) ---
+//
+// A feature's trees stand together under a bracket labelled
+// `<slug> landed/total`. Everything here reads featRow, which assemble()
+// built — the scene only lays it out. With no open feature, feats is empty
+// and every function below is a no-op, so the scene is byte-identical.
+
+// seedGlyph is a queued car: a seed on the ground row, not yet planted.
+const seedGlyph = "."
+
+// trellisBar is the bracket's rule. Both it and seedGlyph come from the
+// scene's locked vocabulary (the soil rule and the grass tuft).
+const trellisBar = '▁'
+
+// isFeatureCar reports whether ticket is a car of any open feature.
+func isFeatureCar(feats []featRow, ticket string) bool {
+	for _, f := range feats {
+		for _, c := range f.cars {
+			if c.ticket == ticket {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// trellisPlots regroups the live task plots: each feature's cars, in rail
+// order, as one contiguous run tagged with its group — a live task keeps
+// its own plant, a landed car no longer tracked is a merged ♠, a queued car
+// is a seed. Cars in any other state without a live task have nothing to
+// draw. The tasks that belong to no feature follow, in their own order.
+func trellisPlots(loose []scenePlot, feats []featRow) []scenePlot {
+	taken := make([]bool, len(loose))
+	out := make([]scenePlot, 0, len(loose))
+	for gi, f := range feats {
+		for _, c := range f.cars {
+			if i := plotIndex(loose, c.ticket); i >= 0 {
+				if !taken[i] {
+					p := loose[i]
+					p.group = gi + 1
+					out = append(out, p)
+					taken[i] = true
+				}
+				continue
+			}
+			switch c.state {
+			case feature.CarLanded:
+				out = append(out, scenePlot{ticket: c.ticket, group: gi + 1,
+					canopy: forestGlyph, trunk: "┃", style: sForest, label: c.label + " ⬢"})
+			case feature.CarQueued:
+				out = append(out, scenePlot{ticket: c.ticket, group: gi + 1,
+					canopy: seedGlyph, style: sDim, label: c.label})
+			}
+		}
+	}
+	for i, p := range loose {
+		if !taken[i] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func plotIndex(plots []scenePlot, ticket string) int {
+	if ticket == "" {
+		return -1
+	}
+	for i, p := range plots {
+		if p.ticket == ticket {
+			return i
+		}
+	}
+	return -1
+}
+
+// paintTrellis draws each group's bracket across the columns its plots
+// took after fitting: a trellisBar rule inset one cell at each end (so two
+// neighboring features read as two brackets), carrying the label
+// `▁ <slug> n/m ▁▁▁`. Too narrow for the whole label, it keeps the tally;
+// too narrow for that, it is a bare rule. Only free cells are painted — a
+// ◆/⚠ marker or the fairy sharing the row wins.
+func paintTrellis(layouts []plotLayout, feats []featRow, pw int, g *sceneGrid) {
+	for i := 0; i < len(layouts); {
+		grp := layouts[i].plot.group
+		j := i
+		for j < len(layouts) && layouts[j].plot.group == grp {
+			j++
+		}
+		if grp > 0 && grp <= len(feats) {
+			paintBracket(g, i*pw+1, j*pw-2, feats[grp-1].trellis)
+		}
+		i = j
+	}
+}
+
+func paintBracket(g *sceneGrid, a, b int, label string) {
+	n := b - a + 1
+	if n < 1 {
+		return
+	}
+	text := []rune(label)
+	if len(text)+3 > n {
+		if k := strings.LastIndexByte(label, ' '); k >= 0 {
+			text = []rune(label[k+1:])
+		}
+	}
+	if len(text)+3 > n {
+		text = nil
+	}
+	for x := a; x <= b; x++ {
+		if g.occupied(x) {
+			continue
+		}
+		k := x - a - 2 // label cell index: ▁, space, then the text
+		switch {
+		case text != nil && (k == -1 || k == len(text)):
+			g.hold(x)
+		case text != nil && k >= 0 && k < len(text):
+			if text[k] == ' ' {
+				g.hold(x)
+			} else {
+				g.set(x, text[k], sChrome)
+			}
+		default:
+			g.set(x, trellisBar, sForest)
+		}
+	}
 }
 
 // fitPlots is the overflow ladder: drop the condensed orchard remainder,
@@ -458,6 +591,10 @@ func layoutPlots(plots []scenePlot, pw int) []plotLayout {
 type sceneGrid struct {
 	chars  []rune
 	styles []lipgloss.Style
+	// held marks cells a trellis claimed with a blank (the gaps around its
+	// label) so a lower-priority glyph can't fill them. nil until a trellis
+	// paints — a featureless scene never allocates it.
+	held []bool
 }
 
 func newSceneGrid(width int) *sceneGrid {
@@ -469,7 +606,18 @@ func newSceneGrid(width int) *sceneGrid {
 }
 
 func (g *sceneGrid) occupied(col int) bool {
-	return col >= 0 && col < len(g.chars) && g.chars[col] != ' '
+	return col >= 0 && col < len(g.chars) && (g.chars[col] != ' ' || (g.held != nil && g.held[col]))
+}
+
+// hold claims a cell for a blank that must stay blank.
+func (g *sceneGrid) hold(col int) {
+	if col < 0 || col >= len(g.chars) {
+		return
+	}
+	if g.held == nil {
+		g.held = make([]bool, len(g.chars))
+	}
+	g.held[col] = true
 }
 
 func (g *sceneGrid) set(col int, ch rune, st lipgloss.Style) {
@@ -740,7 +888,8 @@ func applyCast(layouts []plotLayout, ticketCol map[string]int, pw int, tasks []*
 // lines, each truncPad-ed to width. fx<fxCalm renders a blank scene (the
 // caller never invokes it there since sceneRows is 0 at fxOff, but staying
 // total here costs nothing).
-func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, answered map[string]time.Time, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel, focused string) []string {
+// feats is the cockpit's assembled feature rows; empty means no trellis.
+func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.Event, answered map[string]time.Time, celebrations map[string]int, tick uint64, width, rows, hour int, fx fxLevel, focused string, feats []featRow) []string {
 	if rows <= 0 {
 		return nil
 	}
@@ -757,9 +906,16 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 
 	pal := scenePalettes[timeOfDay(hour)]
 
-	plots := buildOrchardPlots(events)
+	plots := buildOrchardPlots(events, feats)
 	for _, t := range tasks {
 		plots = append(plots, buildTaskPlot(t, prs[t.Ticket], fx, tick, celebrations, pal))
+	}
+	if len(feats) > 0 {
+		orchardN := 0
+		for orchardN < len(plots) && plots[orchardN].orchard {
+			orchardN++
+		}
+		plots = append(plots[:orchardN:orchardN], trellisPlots(plots[orchardN:], feats)...)
 	}
 
 	if len(plots) == 0 {
@@ -808,9 +964,28 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 	// discipline: with more than one sky row it paints the TOPMOST one, so
 	// fireflies/moon drift strictly above the tallest canopy instead of
 	// hugging the treetops like ornaments.
+	//
+	// The trellis (grove-379) sits just above the marker row: on a row of
+	// its own with 3+ sky rows, else sharing the ambient row (2) or the
+	// marker row (1) — painted before the ambient accent, after the
+	// markers and the fairy, so it outranks only the ambient.
+	var trellisRow string
+	if len(feats) > 0 {
+		switch {
+		case topRows >= 3:
+			tg := newSceneGrid(width)
+			paintTrellis(layouts, feats, pw, tg)
+			trellisRow = tg.String()
+		case topRows == 1:
+			paintTrellis(layouts, feats, pw, skyGrid)
+		}
+	}
 	var ambientRow string
 	if topRows >= 2 {
 		ambientGrid := newSceneGrid(width)
+		if topRows == 2 && len(feats) > 0 {
+			paintTrellis(layouts, feats, pw, ambientGrid)
+		}
 		applyAmbientSky(hour, tick, ambientGrid)
 		ambientRow = ambientGrid.String()
 	} else if topRows == 1 {
@@ -826,6 +1001,8 @@ func sceneLines(tasks []*state.Task, prs map[string]*github.PR, events []state.E
 			line = ambientRow
 		case i == topRows-1: // the sky row closest to the plants carries markers/fairy
 			line = skyRow
+		case i == topRows-2 && trellisRow != "":
+			line = trellisRow
 		}
 		out = append(out, truncPad(line, width))
 	}
@@ -877,7 +1054,7 @@ func sceneHasLife(tasks []*state.Task, answered map[string]time.Time, celebratio
 // feedLen is len(feedItems(m.events)) and answered the latestAnswered map,
 // both computed once per frame in View (grove-167).
 func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityRows, sceneRows int) {
-	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
+	leftover := m.height - (len(m.board) + 4) - 5 - m.footerHeight() - m.featureLayout().height
 	if leftover < 0 {
 		leftover = 0
 	}
@@ -907,6 +1084,6 @@ func (m Model) rowBudgets(feedLen int, answered map[string]time.Time) (activityR
 // viewScene renders the scene for the row budget rowBudgets handed it.
 // answered is View's once-per-frame latestAnswered map (grove-167).
 func (m Model) viewScene(rows int, answered map[string]time.Time) string {
-	lines := sceneLines(m.scene, m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused)
+	lines := sceneLines(m.scene, m.prs, m.events, answered, m.celebrations, m.tick, m.width, rows, nowHour(), m.fx, m.focused, m.feats)
 	return strings.Join(lines, "\n")
 }

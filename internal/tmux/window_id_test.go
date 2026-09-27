@@ -195,3 +195,16 @@ func TestClaudePaneTargetRefusesSibling(t *testing.T) {
 		t.Fatalf("ClaudePane fallback = %d, want 1", got)
 	}
 }
+
+func TestMatchWindowIDExact(t *testing.T) {
+	out := "@1\tcockpit\n@7\t▶ keys-v2\n@8\t▶ keys 2\n@9\t▶ keys\n"
+	if id, ok := matchWindowIDExact(out, "▶ keys"); !ok || id != "@9" {
+		t.Fatalf("got %q %v, want @9", id, ok)
+	}
+	if _, ok := matchWindowIDExact("@7\t▶ keys-v2\n@8\t▶ keys 2\n", "▶ keys"); ok {
+		t.Fatal("prefix/glyph-extended names must not match exactly")
+	}
+	if _, ok := matchWindowIDExact(out, ""); ok {
+		t.Fatal("empty name matched")
+	}
+}

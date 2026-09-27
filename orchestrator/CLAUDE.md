@@ -37,6 +37,31 @@ gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   ticket is payload)
 gv grab DEV-X --profile P # run this worker on a model profile lane (see
                            #   Dispatch below — lanes differ in who pays)
+gv grab DEV-X --feature F # fork the worktree from feature train F's branch
+                           #   instead of the repo base, and PR back into it
+                           #   (`--feature none` opts out). A ticket whose
+                           #   label matches exactly one OPEN feature's label
+                           #   is inferred automatically with no flag needed;
+                           #   grab prints the base it chose either way.
+gv feature ls [--json]    # open feature trains (pure read): per train, its
+                           #   cars (queued/working/question/ready/landed),
+                           #   how far behind its base, its own PR into
+                           #   base (if any), and serve state
+gv feature new S --repo R # open a feature train: pushes feature/S at
+     [--base B] [--label L]#   origin/B (default main) and registers it;
+                           #   `--adopt` registers an ALREADY-pushed branch
+                           #   instead of creating one — the shape 3 live
+                           #   trains used before this existed
+gv feature close S        # mark a train closed (merged/abandoned); never
+     [--reason R]          #   deletes the branch itself
+gv feature land S [--yes] # plan (then, with --yes, run) `gv done` for every
+                           #   car whose PR is MERGED into S's branch —
+                           #   window/worktree/branch gone. It NEVER closes
+                           #   an issue itself; that needs an explicit
+                           #   `land <slug>` order from the operator (below)
+gv serve S                # run feature train S's tip from its reviewed
+                           #   `.grove/run.sh`, in tmux window `▶ S`
+gv serve stop S           # stop it
 gv answer DEV-X "..."     # relay an answer to a waiting worker
 gv nudge DEV-X "..."      # follow-up prompt to any worker
 gv audit --json           # cross-check every task vs reality (pure read):
@@ -277,6 +302,17 @@ When both merge: summary push, same summary in chat, end your turn.
    flat plan is capped. When you propose a grab with `--profile`, say which lane
    it is and why in the same line.
 
+   **Feature trains.** A ticket that belongs to an open feature train (`gv
+   feature ls --json`) is grabbed with `gv grab DEV-X --repo Y --feature
+   <slug>` — the worker forks from the train's branch and PRs back into it,
+   never into main. Say which train and why in the same line, same as
+   `--profile`. You don't have to name it yourself: a ticket whose label
+   matches exactly one open feature's label is inferred with no flag at
+   all, and grab prints the base it chose either way (`--feature none`
+   overrides an unwanted inference). This retires the hand-written train
+   block earlier trains needed in `--brief` — the kickoff template now
+   names the PR base itself, so don't paste that block again.
+
    **Dispatch-and-dismiss (fire-and-forget).** When the operator's message
    this turn explicitly asks you to close or dismiss this chat when done
    (e.g. "investigate DEV-42, add detail if needed, grab it, then close this
@@ -398,6 +434,28 @@ When both merge: summary push, same summary in chat, end your turn.
 
    Propose a handoff, never run one unasked: it untracks the task here.
 
+10. **Land a feature** — two phrases are a standing pre-authorization to
+    close tickets, the only other one besides the supervision mandate, and
+    each is scoped to exactly one feature:
+
+    - **`land <slug>`** — run `gv feature land <slug> --yes`. For every
+      ticket it reports landed (`landed: [numbers]`), `gh issue close N
+      --comment "landed in <branch> via PR #M"`; if the feature has an
+      open PR into its base, add `Closes #N` to that PR's body for each
+      landed ticket (`gh pr edit`). Report back what closed and what was
+      skipped (`land`'s own `skipped` list — still working, PR not merged
+      yet, or queued).
+    - **`keep <slug> landed`** — the same action, but standing: scoped to
+      that one feature, until its PR merges into its base or the operator
+      says stop. Watch for `pr_merged` on a task carrying that feature
+      (one `gv watch --json` Monitor, same discipline as the supervision
+      mandate — never a poll), and on each one, close and comment for
+      that ticket alone, same as above.
+
+    Neither phrase authorizes anything else the supervision mandate
+    forbids, and neither ever merges the feature branch into ITS base —
+    that stays the operator's own act, always.
+
 ## Guardrails
 
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
@@ -405,11 +463,17 @@ When both merge: summary push, same summary in chat, end your turn.
   `chat close`, or mutate the task backend (Linear, GitHub issues, task
   files) without the operator's explicit yes in this chat. Read-only commands
   (`ls`, `audit`, `sweep --json/--dry-run`) need no confirmation. The only
-  standing exception is a supervision mandate, and it covers `answer`,
-  `nudge` and `pause` only — see that section for what it never covers.
+  standing exceptions are a supervision mandate (covers `answer`, `nudge`
+  and `pause` only) and a feature's land order (duty 10; covers closing that
+  feature's own merged tickets only) — see those sections for what each
+  never covers.
 - **Never post ticket comments** (Linear or GitHub) without the operator's
   sign-off; **never move any ticket to Done or close an issue**
-  (stakeholder's call, always).
+  (stakeholder's call, always) — with exactly one exception (duty 10): under
+  a `land <slug>` or standing `keep <slug> landed` order, you may close a
+  ticket whose PR is `MERGED` into that feature's own branch, and comment
+  why. Nothing else licenses a close, and merging the feature branch into
+  its base is never yours either way.
 - **Never edit repository code.** If a worker needs hands-on help, the
   answer is `gv attach` — the operator dives in, not you.
 - Keep summaries tight: lead with what needs a human, drop what doesn't.

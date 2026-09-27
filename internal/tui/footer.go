@@ -13,9 +13,13 @@ type hint struct{ key, label string }
 // things, global is chrome. Package-level tables — the RAM rule forbids
 // rebuilding them per frame.
 var (
-	rowHints    = []hint{{"enter", "reply"}}
-	spawnHints  = []hint{{"O", "new chat"}, {")", "profiled chat"}, {"@", "remote chat"}}
-	globalHints = []hint{
+	rowHints = []hint{{"enter", "reply"}}
+	// With an open feature (grove-377) tab leads the row group: it picks
+	// which panel the row keys act on.
+	featRowHints     = []hint{{"tab", "focus"}, {"enter", "reply"}}
+	featOnlyRowHints = []hint{{"tab", "focus"}}
+	spawnHints       = []hint{{"O", "new chat"}, {")", "profiled chat"}, {"@", "remote chat"}}
+	globalHints      = []hint{
 		{"?", "help"}, {"L", "layout"}, {"$", "costs"},
 		{"*", "effects"}, {"X", "park"}, {"q", "quit"},
 	}
@@ -29,6 +33,7 @@ var (
 // least-reached-for hint, so it is the first to yield its room.)
 var keepRank = map[string]int{
 	"?": 0, "O": 1, ")": 2, "enter": 3, "L": 4, "$": 5, "*": 6, "X": 7, "q": 8, "@": 9,
+	"tab": 3, // grove-377: listed only while a feature is open; drops with enter
 }
 
 const (
@@ -42,8 +47,14 @@ func (h hint) width() int     { return len([]rune(h.key)) + 1 + len([]rune(h.lab
 
 // footerGroups picks the groups for the current fleet: with zero tasks the
 // row group is dead weight — the empty-state line already teaches gv grab —
-// so it drops entirely, regardless of width.
-func footerGroups(hasTasks bool) [][]hint {
+// so it drops entirely, regardless of width. An open feature adds tab.
+func footerGroups(hasTasks, hasFeatures bool) [][]hint {
+	if hasFeatures {
+		if hasTasks {
+			return [][]hint{featRowHints, spawnHints, globalHints}
+		}
+		return [][]hint{featOnlyRowHints, spawnHints, globalHints}
+	}
 	if hasTasks {
 		return [][]hint{rowHints, spawnHints, globalHints}
 	}
@@ -96,8 +107,8 @@ func legendLine(groups [][]hint, cut, bareFrom int) (string, int) {
 // still carries all three keys and may exceed width — the caller clamps to
 // the pane (truncate, never wrap), so a flash reservation can never evict
 // the trio, only shrink the flash.
-func footerLegend(width int, hasTasks bool) string {
-	groups := footerGroups(hasTasks)
+func footerLegend(width int, hasTasks, hasFeatures bool) string {
+	groups := footerGroups(hasTasks, hasFeatures)
 	for cut := len(keepRank); cut > minKeep; cut-- {
 		if line, w := legendLine(groups, cut, cut); w <= width {
 			return line

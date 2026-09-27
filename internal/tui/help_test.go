@@ -41,7 +41,7 @@ func TestHelpCoversEveryFooterKey(t *testing.T) {
 			documented[e.key] = true
 		}
 	}
-	for _, g := range footerGroups(true) {
+	for _, g := range footerGroups(true, true) {
 		for _, h := range g {
 			if !documented[h.key] {
 				t.Errorf("footer key %q has no help entry", h.key)

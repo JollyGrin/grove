@@ -17,7 +17,7 @@ import (
 func TestFooterLegendOneLineAlways(t *testing.T) {
 	for width := 12; width <= 220; width++ {
 		for _, hasTasks := range []bool{true, false} {
-			line := footerLegend(width, hasTasks)
+			line := footerLegend(width, hasTasks, false)
 			if strings.Contains(line, "\n") {
 				t.Fatalf("width %d tasks %v: legend contains a newline", width, hasTasks)
 			}
@@ -45,7 +45,7 @@ func TestFooterLegendDropsByPriority(t *testing.T) {
 		"layout", "costs", "effects", "park", "quit",
 	}
 	for width := 41; width <= 220; width++ {
-		line := footerLegend(width, true)
+		line := footerLegend(width, true, false)
 		gapAt := ""
 		for _, label := range prio {
 			if strings.Contains(line, label) {
@@ -63,7 +63,7 @@ func TestFooterLegendDropsByPriority(t *testing.T) {
 // At generous widths every hint shows on the single line, in canonical
 // display order, with the two group separators.
 func TestFooterLegendWideCanonical(t *testing.T) {
-	line := footerLegend(200, true)
+	line := footerLegend(200, true, false)
 	if got := strings.Count(line, "│"); got != 2 {
 		t.Errorf("width 200: %d group separators, want 2 (row│spawn│global):\n%s", got, line)
 	}
@@ -90,7 +90,7 @@ func TestFooterLegendWideCanonical(t *testing.T) {
 // Dropping a whole group drops its separator too: at widths where only the
 // spawn+global trio survives, exactly one │ remains.
 func TestFooterLegendSeparatorsFollowGroups(t *testing.T) {
-	line := footerLegend(45, true) // labeled trio (40) fits; +enter (56) doesn't
+	line := footerLegend(45, true, false) // labeled trio (40) fits; +enter (56) doesn't
 	if got := strings.Count(line, "│"); got != 1 {
 		t.Errorf("width 45: %d group separators, want 1:\n%s", got, line)
 	}
@@ -111,7 +111,7 @@ func TestFooterLegendTrioShedsLabels(t *testing.T) {
 		{20, []string{"profiled chat", "new chat"}, []string{"help"}},
 		{12, []string{"profiled chat", "new chat", "help"}, nil},
 	} {
-		line := footerLegend(tc.width, true)
+		line := footerLegend(tc.width, true, false)
 		for _, label := range tc.gone {
 			if strings.Contains(line, label) {
 				t.Errorf("width %d: label %q should have shed:\n%s", tc.width, label, line)
@@ -129,11 +129,11 @@ func TestFooterLegendTrioShedsLabels(t *testing.T) {
 // line already teaches gv grab.
 func TestFooterLegendZeroTasks(t *testing.T) {
 	for width := 12; width <= 220; width++ {
-		if line := footerLegend(width, false); strings.Contains(line, "reply") {
+		if line := footerLegend(width, false, false); strings.Contains(line, "reply") {
 			t.Errorf("width %d zero tasks: row hint present:\n%s", width, line)
 		}
 	}
-	line := footerLegend(120, false)
+	line := footerLegend(120, false, false)
 	for _, want := range []string{"new chat", "profiled chat", "help", "quit"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("zero tasks at width 120: hint %q missing:\n%s", want, line)

@@ -19,7 +19,7 @@ repo wins.
 
 | Command | Key | What |
 |---|---|---|
-| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task |
+| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373) |
 | `gv audit --json` | `report` | task-vs-reality classification |
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
@@ -30,6 +30,7 @@ repo wins.
 | `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
+| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one. Open rows add status (grove-375): `cars[]` `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}` (state `queued`/`working`/`question`/`ready`/`landed`; order landed → active → queued), `landed`, `total`, `behind_base?`, `mergeable?`, `pr?` `{number, url, state}`, `est_usd`; `--no-pr`/`--no-queued` skip the network lookups; `serve` = `{state: none\|untrusted\|stopped\|running, port?, url?, tip?, behind}` (grove-380) |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
@@ -64,8 +65,13 @@ row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
 (PR-facing) and liveness (worker-facing, beyond what the Stop hook sees)
 dimensions, folded into row fields `delivery`/`liveness`
 (`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
-full per-type data table. Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
+full per-type data table. `task_created`/`task_adopted` data carries
+`feature` + `base` only for a feature-train car. Workspace-scoped (empty ticket):
+`workspace_parked`, `orchestrator_closed`, `feature_created`
+(`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
+reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,
+window, url}`), `feature_serve_stopped` (`{slug}`), `run_script_trusted`
+(`{sha256}`, latest wins). Skip unknown types and lines
 that fail to parse (the last line may be torn mid-write).
 
 `<workspace-root>/.grove/state/sub.jsonl` (grove-288) is `gv sub`'s own

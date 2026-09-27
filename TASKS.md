@@ -9,6 +9,165 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 12: cutover (grove-383, 2026-09-27, on
+      `feature/feature-trains`). New `e2e/feature.sh` (wired into
+      `e2e/all.sh`) walks one train end to end in a single workspace:
+      `feature new` on a scratch bare origin, `--adopt` (pushes nothing),
+      grab by label (forks from the feature tip, kickoff says
+      `--base feature/<slug>`, `gv ls --json` carries `feature`/`base`),
+      `feature ls --json` status (cars, `behind_base`, `mergeable`),
+      `land --json` dry run, `land --yes` (backend task files byte-identical
+      after), `close` (branch left, label stops inferring). Grove's own
+      `.grove/run.sh`: throwaway build to `/tmp/gv-$GROVE_FEATURE`, prints
+      `GROVE_READY <path>`. `e2e/plugin.sh` teardown race fixed (wait for
+      the isolated socket, retry the rm). Merge to main PROPOSED in the PR,
+      not performed.
+- [x] feature-trains 10: serve in the cockpit — `s`, review modal,
+      `gv serve init` (grove-381, 2026-09-27, on `feature/feature-trains`).
+      `s` on the selected FEATURES row: trusted run.sh → `startServe`
+      (09's path, split out of `cmdServe`, no TTY, no stdout) and the
+      READY value lands in the status line; untrusted/changed → review
+      modal (script scrollable with ESC/bidi/control bytes rendered
+      visibly, sha256, `y` appends `run_script_trusted` for the reviewed
+      sha then serves; `esc` cancels, no event); a live `▶ <slug>` window
+      → stop confirm. Rail title shows `serve ▶ <url> (behind tip)` /
+      `stopped` / `untrusted` / `–`, fed by the 30s feature pass plus one
+      pass after each start/stop — no new poll. `gv serve init` seeds a
+      fresh cockpit orchestrator pane (`spawnOrchestratorBrief`, the
+      `gv orchestrator new --brief` launcher) with `serve.InitPrompt`;
+      refuses over an existing run.sh; records nothing. The lens (07)
+      takes `s` too (modals return to it) and its SERVE line reads the
+      same status. e2e/serve.sh drives the live cockpit, rail and lens.
+- [x] feature-trains 07: feature lens + cockpit `l` land modal + `m`
+      feature PR (grove-378, 2026-09-27, on `feature/feature-trains`).
+      `enter` on a focused feature opens `internal/tui/lens.go`'s
+      full-screen lens: TRAIN (every car, landed dimmed, est per car),
+      BRANCH (tip, behind base, feature PR, closes = landed cars), SERVE
+      (status `serve` or `no run.sh`), NEXT (pure `nextActions`: answer,
+      land, review, grab when `after` landed, rebase, feature PR). Row
+      keys hand off to the AGENTS handler with the cursor on the car's
+      task; modals return to the lens. `l` builds the land plan from the
+      fold + last PR poll (no network) and confirms before `feature.Land`
+      × `FinishTask`. All lens strings built in `assemble()`.
+- [x] feature-trains 11: docs + brains (grove-382, 2026-09-27, on
+      `feature/feature-trains`). Orchestrator seed teaches `gv feature
+      new/ls/close/land` and `gv serve` (tools block), a train ticket
+      grabbed with `--feature` or by label (duty 3 Dispatch — the
+      hand-written `--brief` train block is retired), and duty 10: `land
+      <slug>` (`gv feature land <slug> --yes` then `gh issue close` +
+      `Closes #N` on the feature PR) and standing `keep <slug> landed`
+      (same, on each `pr_merged` for that feature, until its PR merges or
+      the operator says stop) — the guardrail "never close any issue"
+      gains exactly this exception, scoped to a ticket's PR `MERGED` into
+      the feature's own branch. `.grove/orchestrator/CLAUDE.md` refreshed
+      via `gv init --only orchestrator-md`. `.claude/skills/ticket-writing`
+      "feature branch, consciously" bullet updated for the working
+      `gv feature`/`gv grab --feature` machinery; root CLAUDE.md gains a
+      "Feature trains" section. docs/plugins.md contract rows from 01/02/
+      04/05/09 verified present, no gap found.
+- [x] feature-trains 08: trellis in the scene (grove-379, 2026-09-27,
+      on `feature/feature-trains`). At fx ≥ calm a feature's plants stand
+      together, in rail order, under a `▁ <slug> landed/total ▁▁` bracket
+      (just above the marker row; shares the ambient/marker row at
+      compact/strip, markers + fairy win, ambient yields). Landed-and-done
+      cars leave the orchard for their trellis as ♠; queued cars are `.`
+      seeds. Glyphs only from the locked set (soil rule + grass tuft);
+      the label degrades to the tally, then a bare rule — never `…`.
+      Reads `featRow` (now carrying `trellis` + car tickets) built in
+      `assemble()`; no features / fx=off stay byte-identical.
+- [x] feature-trains 06: cockpit FEATURES rail panel + `TRAIN` column +
+      `tab` focus (grove-377, 2026-09-27, on `feature/feature-trains`).
+      Panel between header and AGENTS only while a feature is open
+      (title `landed/total ↓N <base> serve – est`, rail `·●◆✓⬢ ▷ base`,
+      issue labels, amber hint on the selected one); ≤3 expanded +
+      `+N more`, collapses to title+strip under 12 spare rows. Status
+      is computed in `assemble()` (live car states each refresh) merged
+      with a `featuresCmd` pass that rides the 30s PR beat / `r` / a
+      changed feature set — no new poll. Wiring shared with `gv feature
+      ls` as `feature.LiveInput`. No-feature frames pinned by goldens
+      (`internal/tui/testdata`). `enter/l/m` on a feature: 07; `s`: 10.
+- [x] feature-trains 05: `gv feature land` (grove-376, 2026-09-27, on
+      `feature/feature-trains`). `internal/feature.BuildLandPlan` walks
+      every tracked, not-done task on a slug, checks each one's PR fresh
+      (`gh pr list`, same merge check `finishTask` uses — never git
+      ancestry) and classifies it: `MERGED` lands, an unmerged PR is
+      skipped `PR open`, no PR is `working` or `no PR` (the car already
+      looks finished but has nothing to show); queued cars (reused from
+      ticket 04's `Statuses`) are skipped `queued`. `internal/feature.Land`
+      runs an injected `Finisher` per landed row — one failure is
+      recorded and the rest still run. `gv feature land <slug> [--json]
+      [--yes]`: human mode prints the plan table then `land N? [y/N]`;
+      `--json` without `--yes` is a pure dry run (no prompt, no
+      execution, `landed`/`failed` genuinely absent — echoWorkspace is
+      skipped so stdout stays one JSON object); `--json --yes` executes
+      and adds `landed`/`failed` (present as `[]`, never omitted). Never
+      a backend mutation — closing is the orchestrator's, on the
+      operator's order (Decision 8). plugins.md row, e2e/plugin.sh
+      (stub `gh`, dry run + execute + skip reasons, asserts no mutating
+      `gh` verb). Cockpit `l` modal is ticket 07.
+- [x] feature-trains 04: feature status function + `gv feature ls`
+      status fields (grove-375, 2026-09-27, on `feature/feature-trains`).
+      `internal/feature.Statuses` (inputs injected: fold, event log,
+      ledger, issue lister, git runner, PR lookup; `SkipQueued` flag)
+      returns per open feature `cars[]` (landed from events — survives
+      untrack/sweep — then active by created, then queued by number,
+      `after` from `depends on #N`), `landed/total`, `behind_base`,
+      `mergeable` (`git merge-tree --write-tree`), `pr`, `est_usd`.
+      `gv feature ls` shows `landed/total` + `↓N <base>`; `--json` adds
+      the fields flat on open rows; `--no-pr`/`--no-queued`.
+      `provider.GitHub.ListLabeled` (bodies included). plugins.md, skill,
+      e2e/plugin.sh updated. For the cockpit (ticket 06).
+- [x] feature-trains 03: kickoff templates name the PR base (grove-374,
+      2026-09-27, on `feature/feature-trains`). `kickoff.Render` gains
+      `base`/`feature` params; grab passes `choice.Base` + the feature's
+      slug (already resolved to task-base-else-repo-base by
+      `feature.ChooseForGrab`), adopt/pickup passes `storedBase` (falling
+      back to `repo.Base`) + `storedFeature`. Every template that mentions
+      a PR now says `gh pr create --base {{.Base}}` explicitly instead of
+      "against main"/"against the base branch"; when `Feature` is set, a
+      fixed paragraph warns the PR targets the train, not main, and to
+      rebase only on `origin/{{.Base}}`. manual/md_manual (no PR mention)
+      untouched. Goldens updated; new `TestRenderNamesThePRBase` covers
+      both template sets × default/pickup × with/without a feature.
+- [x] feature-trains 02: `gv grab --feature`, label inference, per-task
+      base (grove-373, 2026-09-27, on `feature/feature-trains`).
+      `gv grab --feature <slug>|none`; absent, exactly one open feature
+      whose label is on the ticket is used (two → refuse naming both).
+      Grab prints `base: <branch> (<why>)` and forks from
+      origin/<feature branch> (never a local stand-in).
+      `internal/feature.ChooseForGrab`/`ForkRef` decide; `task_created`
+      and `task_adopted` carry `feature`+`base` only when set (golden
+      test: off-train bytes unchanged); `state.Task.Feature/Base` +
+      `BaseOr` feed `gv diff`, the remove guard (`removeGuard`) and
+      sweep's preview. `--host` refuses an explicit or inferred feature.
+      `gv ls --json` rows gain `feature`/`base`; plugins.md, skill,
+      e2e/plugin.sh updated.
+- [x] feature-trains 09: serve — run.sh contract, trust, ports, `gv serve`
+      (grove-380, 2026-09-27, on `feature/feature-trains`). New
+      internal/serve: `<workspace>/.grove/run.sh` runs in window `▶ <slug>`
+      (exact-name match, `tmux.WindowIDExact`) with GROVE_WORKTREE/BRANCH/
+      PORT/FEATURE, output teed to `state/serve/<slug>.log`; gv waits
+      (`--timeout`, 60s) for `GROVE_READY <url-or-path>`. Runs a snapshot
+      of the hashed bytes only when the sha256 matches the latest
+      `run_script_trusted`; TTY asks `trust and run? [y/N]`, non-TTY
+      refuses, no bypass flag. Ports from 4100, reused per feature. Serve
+      worktree `<slug>-serve` (detached, moved to the fetched tip each
+      start) is removed by `gv feature close` — only when detached.
+      Events `feature_served`/`feature_serve_stopped`/`run_script_trusted`;
+      `gv feature ls --json` rows gain `serve {state, port, url, tip,
+      behind}`. e2e/serve.sh (isolated tmux) in all.sh; plugin.sh asserts
+      the field.
+- [x] feature-trains 01: feature events + fold + `gv feature new/ls/close`
+      (grove-372, 2026-09-27, on `feature/feature-trains`). Workspace-scoped
+      `feature_created` {slug, repo, branch, base, label} / `feature_closed`
+      {slug, reason merged|abandoned}; `state.LoadFeatures` (CLI) +
+      `Folder.Features()` (cockpit) fold a slug-keyed view in
+      internal/state/features.go — task fold untouched, tasks.json golden.
+      New internal/feature: slug rules, `new` pushes `feature/<slug>` at
+      origin/<base> via a lease-guarded ref push (no local branch), refuses
+      an existing remote branch without `--adopt`; `--adopt` pushes nothing.
+      `gv feature ls [--all] --json` (`features` key); plugins.md, the
+      plugin-authoring skill and e2e/plugin.sh cover both.
 - [x] Worker editor pane is config-gated, default off (grove-359,
       2026-09-27). `editor.enabled` (false) / `editor.command` (nvim):
       off, grab/adopt build a single-pane window (claude only, no split,

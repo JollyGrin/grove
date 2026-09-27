@@ -74,3 +74,24 @@ func RemoteHead(root, branch string) (string, error) {
 	}
 	return strings.Fields(out)[0], nil
 }
+
+// RevParse resolves ref to a full sha in root.
+func RevParse(root, ref string) (string, error) {
+	return run(root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+}
+
+// CreateRemoteBranch creates refs/heads/<branch> on origin at sha without
+// touching any local branch (`gv feature new`, grove-372). The empty
+// force-with-lease expectation makes the push refuse when the branch
+// already exists on origin, so a concurrent creator is never overwritten
+// or fast-forwarded.
+func CreateRemoteBranch(root, sha, branch string) error {
+	ref := "refs/heads/" + branch
+	_, err := run(root, "push", "--force-with-lease="+ref+":", "origin", sha+":"+ref)
+	return err
+}
+
+// Run runs git in dir and returns trimmed stdout; a non-zero exit wraps
+// *exec.ExitError. The injectable runner for callers that need an exit
+// code (feature status's merge-tree dry run).
+func Run(dir string, args ...string) (string, error) { return run(dir, args...) }
