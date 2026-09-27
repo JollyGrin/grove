@@ -9,6 +9,22 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 10: serve in the cockpit — `s`, review modal,
+      `gv serve init` (grove-381, 2026-09-27, on `feature/feature-trains`).
+      `s` on the selected FEATURES row: trusted run.sh → `startServe`
+      (09's path, split out of `cmdServe`, no TTY, no stdout) and the
+      READY value lands in the status line; untrusted/changed → review
+      modal (script scrollable with ESC/bidi/control bytes rendered
+      visibly, sha256, `y` appends `run_script_trusted` for the reviewed
+      sha then serves; `esc` cancels, no event); a live `▶ <slug>` window
+      → stop confirm. Rail title shows `serve ▶ <url> (behind tip)` /
+      `stopped` / `untrusted` / `–`, fed by the 30s feature pass plus one
+      pass after each start/stop — no new poll. `gv serve init` seeds a
+      fresh cockpit orchestrator pane (`spawnOrchestratorBrief`, the
+      `gv orchestrator new --brief` launcher) with `serve.InitPrompt`;
+      refuses over an existing run.sh; records nothing. The lens (07)
+      takes `s` too (modals return to it) and its SERVE line reads the
+      same status. e2e/serve.sh drives the live cockpit, rail and lens.
 - [x] feature-trains 07: feature lens + cockpit `l` land modal + `m`
       feature PR (grove-378, 2026-09-27, on `feature/feature-trains`).
       `enter` on a focused feature opens `internal/tui/lens.go`'s
@@ -56,7 +72,7 @@
       with a `featuresCmd` pass that rides the 30s PR beat / `r` / a
       changed feature set — no new poll. Wiring shared with `gv feature
       ls` as `feature.LiveInput`. No-feature frames pinned by goldens
-      (`internal/tui/testdata`). `enter/l/s/m` on a feature: 07/10.
+      (`internal/tui/testdata`). `enter/l/m` on a feature: 07; `s`: 10.
 - [x] feature-trains 05: `gv feature land` (grove-376, 2026-09-27, on
       `feature/feature-trains`). `internal/feature.BuildLandPlan` walks
       every tracked, not-done task on a slug, checks each one's PR fresh

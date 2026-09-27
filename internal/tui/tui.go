@@ -26,6 +26,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
+	"github.com/JollyGrin/grove/internal/serve"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/supervise"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -42,6 +43,8 @@ const (
 	modeAlmanac
 	modeLens        // one feature train full-screen (grove-378)
 	modeConfirmLand // the land plan, confirm-gated (grove-378)
+	modeServeReview // grove-381: the run.sh review modal
+	modeServeStop   // grove-381: stop a running serve? (footer confirm)
 )
 
 type refreshMsg struct {
@@ -272,6 +275,14 @@ type Model struct {
 	lensSel  int
 	landSlug string
 	landPlan feature.LandPlan
+
+	// Serve (grove-381). serves is each open feature's serve status from
+	// the last feature pass — rendered on the rail title, never derived
+	// per frame. review is the open review modal's snapshot; serveStop the
+	// slug a stop confirmation names.
+	serves    map[string]serve.Status
+	review    *serveReview
+	serveStop string
 
 	// AttachTo is consumed by main after Run returns — only used when gv
 	// runs OUTSIDE tmux, where attach replaces the process (syscall.Exec)
@@ -924,12 +935,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.featSlow = msg.statuses
 			m.featTips = msg.tips
 		}
+		if msg.serves != nil {
+			m.serves = msg.serves
+		}
 		m.assemble()
 		return m, nil
 
 	case landDoneMsg:
 		m.flash = landFlash(msg)
 		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+
+	case serveStatusMsg:
+		if msg.serves != nil {
+			m.serves = msg.serves
+			m.assemble()
+		}
+		return m, nil
+
+	case serveDoneMsg:
+		if msg.err != nil {
+			m.flash = "serve " + msg.slug + ": " + msg.err.Error()
+		} else {
+			m.flash = "▶ " + msg.slug + " ready — " + msg.ready
+		}
+		return m, serveStatusCmd(m.features)
+
+	case serveStoppedMsg:
+		switch {
+		case msg.err != nil:
+			m.flash = msg.err.Error()
+		case msg.stopped:
+			m.flash = "■ " + msg.slug + " serve stopped"
+		default:
+			m.flash = "no " + serve.Window(msg.slug) + " window — nothing to stop"
+		}
+		return m, serveStatusCmd(m.features)
 
 	case paneTailMsg:
 		m.paneTail = string(msg)
@@ -1016,6 +1056,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeConfirmLand {
 		return m.handleLandKey(k)
 	}
+	if m.mode == modeServeReview {
+		return m.handleServeReviewKey(k)
+	}
+	if m.mode == modeServeStop {
+		return m.handleServeStopKey(k)
+	}
 
 	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
 	// it intercepts everything — including the remote-row keys below and
@@ -1027,15 +1073,17 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// grove-377: with FEATURES focused the row keys have no task under
 	// them — say so instead of acting on the AGENTS cursor out of sight.
-	// enter opens the lens and l the land modal (grove-378); s arrives
-	// with ticket 10.
+	// enter opens the lens and l the land modal (grove-378); s serves the
+	// selected feature (grove-381).
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		switch k.String() {
 		case "enter":
 			return m.openLens()
+		case "s":
+			return m.serveKey(m.feats[m.featSel].slug)
 		case "l":
 			return m.openLand(m.feats[m.featSel].slug)
-		case "n", "a", "o", "p", "t", "v", "d", "s", "m":
+		case "n", "a", "o", "p", "t", "v", "d", "m":
 			m.flash = "FEATURES focused — tab to AGENTS for task keys"
 			return m, nil
 		}
@@ -1157,6 +1205,10 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.spawnProfile(profile)
+	case "s": // serve acts on a feature (grove-381); inert with none open
+		if len(m.feats) > 0 {
+			m.flash = "s serves a feature — tab to FEATURES and pick one"
+		}
 	case "tab": // FEATURES ⇄ AGENTS (grove-377); inert with no open feature
 		if len(m.feats) > 0 {
 			m.focus = 1 - m.focus

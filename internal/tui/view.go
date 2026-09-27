@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/JollyGrin/grove/internal/resource"
+	"github.com/JollyGrin/grove/internal/serve"
 )
 
 func (m Model) View() string {
@@ -34,6 +35,12 @@ func (m Model) View() string {
 	}
 	if m.mode == modeConfirmLand {
 		return m.viewLand()
+	}
+	if m.mode == modeServeReview && m.review != nil {
+		return m.viewServeReview()
+	}
+	if m.mode == modeServeStop && m.lensSlug != "" {
+		return m.viewLens() // the stop confirm rides the lens foot
 	}
 
 	// grove-167: the feed tail and the answered map are pure functions of
@@ -351,6 +358,11 @@ func (m Model) viewActivity(items []feedItem, avail int) string {
 func (m Model) viewFooter() string {
 	if m.mode == modeConfirmDone && m.detail != nil {
 		line := " " + sBlocked.Render("done "+m.detail.Ticket+"? merged-check + full cleanup ") +
+			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
+		return truncPad(line, m.width)
+	}
+	if m.mode == modeServeStop && m.serveStop != "" {
+		line := " " + sBlocked.Render("stop "+serve.Window(m.serveStop)+"? kills the serve window ") +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
 	}

@@ -122,6 +122,7 @@ const usage = `gv — grove
   gv serve <slug> [--timeout 60s]             run the workspace's reviewed .grove/run.sh on the feature tip in
                                               window "▶ <slug>"; prints its GROVE_READY url or path
   gv serve stop <slug>                        kill the "▶ <slug>" window
+  gv serve init                               a chat pane drafts .grove/run.sh (never trusted — review it with s)
   gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
                                               branch, and uncommitted changes survive; resume: gv adopt
@@ -749,6 +750,7 @@ func cmdDashboard() error {
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
+	wireServe()
 	// The cockpit's X hotkey never reaps chats (grove-203): it kills the
 	// session it is drawn in, so a warning printed after the fact would have
 	// nowhere to land — the modal names them BEFORE the keypress instead, and

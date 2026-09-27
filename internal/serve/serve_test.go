@@ -258,3 +258,18 @@ func TestWorktreeLifecycle(t *testing.T) {
 		t.Fatal("PrepareWorktree must refuse a branch worktree")
 	}
 }
+
+func TestInitPromptNamesTheContract(t *testing.T) {
+	p := InitPrompt("/ws", []string{"/ws/app", "/ws/api"})
+	for _, want := range []string{
+		"GROVE_WORKTREE", "GROVE_BRANCH", "GROVE_PORT", "GROVE_FEATURE", ReadyMarker,
+		"/ws/.grove/run.sh", "/ws/app", "/ws/api", "README", "Makefile",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("init prompt missing %q", want)
+		}
+	}
+	if p2 := InitPrompt("/ws", nil); !strings.Contains(p2, "- /ws\n") {
+		t.Errorf("no repos: prompt should fall back to the workspace root:\n%s", p2)
+	}
+}
