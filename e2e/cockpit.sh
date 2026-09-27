@@ -491,4 +491,46 @@ wait_grep 'remote spawn cancelled' || fail "esc did not cancel the arming:
 $CAP"
 [ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "a cancelled arming still reached the host"
 
-say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host, the cockpit supervises"
+# --- grove-402: the CHATS box ---
+# Read-only rows for this workspace's chats. The cockpit's own orchestrator
+# pane and the remote pane spawned above are chats ON SCREEN, so the box is
+# already up; a detached chat session is a HIDDEN row, and the header
+# counter says so.
+
+say "grove-402: the CHATS box lists the chats on screen — nothing hidden yet"
+wait_grep 'CHATS 2' || fail "the CHATS box never rendered the two chat panes on screen:
+$CAP"
+tmux capture-pane -p -t "$PANE0" > "$SCRATCH/chats-shown.cap"
+grep -q '▣ cockpit·.* @pc' "$SCRATCH/chats-shown.cap" || fail "the remote chat pane's row is missing its ▣ / @pc marker:
+$(cat "$SCRATCH/chats-shown.cap")"
+grep -q '▣ cockpit·[0-9]  ' "$SCRATCH/chats-shown.cap" || fail "the local orchestrator pane's ▣ row is missing:
+$(cat "$SCRATCH/chats-shown.cap")"
+grep -q 'hidden' "$SCRATCH/chats-shown.cap" && fail "nothing is hidden yet, the counter must not say so:
+$(cat "$SCRATCH/chats-shown.cap")" || true
+grep -q 'AGENTS' "$SCRATCH/chats-shown.cap" || fail "the CHATS box pushed AGENTS off screen:
+$(cat "$SCRATCH/chats-shown.cap")"
+
+say "a detached chat appears as a hidden row, counted in the header"
+CHAT_PANES_BEFORE=$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)
+( cd "$WS" && "$GV" orchestrator new --workspace rws > "$SCRATCH/chat-new.out" 2>&1 ) \
+  || fail "gv orchestrator new --workspace rws failed: $(cat "$SCRATCH/chat-new.out")"
+tmux has-session -t '=grove-chat-rws-1' 2>/dev/null || fail "no detached chat session grove-chat-rws-1"
+wait_grep 'CHATS 3 · 1 hidden' || fail "the CHATS header never counted the detached chat:
+$CAP"
+tmux capture-pane -p -t "$PANE0" > "$SCRATCH/chats-hidden.cap"
+grep -q '○ chat-1' "$SCRATCH/chats-hidden.cap" || fail "the detached chat's hidden row is missing:
+$(cat "$SCRATCH/chats-hidden.cap")"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq "$CHAT_PANES_BEFORE" ] \
+  || fail "a detached chat must not add a cockpit pane"
+
+say "the box is a pure read: beats pass, no event is written"
+# Whichever layer holds this cockpit's log (workspace state, or the
+# GROVE_STATE_DIR override) — count every events.jsonl under the scratch.
+count_events() { find "$SCRATCH" -name events.jsonl -exec cat {} + 2>/dev/null | wc -l; }
+EVENTS_BEFORE=$(count_events)
+[ "$EVENTS_BEFORE" -gt 0 ] || fail "no events.jsonl found under the scratch — the pure-read check would be vacuous"
+sleep 3
+EVENTS_AFTER=$(count_events)
+[ "$EVENTS_AFTER" -eq "$EVENTS_BEFORE" ] || fail "the CHATS box wrote events ($EVENTS_BEFORE → $EVENTS_AFTER)"
+
+say "PASS — cockpit: AGENTS+ACTIVITY left, stacked chats right, O/new works, @pc rows act over ssh, @ spawns on the host, the cockpit supervises, CHATS lists shown + hidden chats"

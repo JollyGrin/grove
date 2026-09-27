@@ -9,6 +9,21 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
+      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
+      one row per live chat of the workspace: `▣` on screen, `○` hidden
+      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
+      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
+      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
+      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
+      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
+      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
+      transcript read per chat and the waiting capture ride the 30s beat,
+      or the 1s beat while the box is focused (`tui.CockpitChats`,
+      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
+      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
+      and footer/help hints are the next car. The global cockpit (no
+      workspace) owns no chats and shows no box.
 - [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
       `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
       Hiding a LOCAL cockpit chat pane turns it into an ordinary detached

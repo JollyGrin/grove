@@ -770,6 +770,12 @@ func cmdDashboard() error {
 		}
 		return names
 	}
+	// grove-402: the CHATS box reads this workspace's chats on the beats
+	// the dashboard already has — a pure read, nothing stamped.
+	chatLook := liveCockpitChatLookup()
+	tui.CockpitChats = func(_ string, deep bool) []tui.ChatRow {
+		return cockpitChats(ambient.ws, deep, chatLook)
+	}
 	tui.SaveHotkeyBinding = func(digit, profile string) error {
 		// Workspace-scoped like the orchestrator block it lives in (LoadAt
 		// drops the global orchestrator section inside a workspace).

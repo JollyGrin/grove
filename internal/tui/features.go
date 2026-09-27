@@ -325,7 +325,10 @@ func landedLabel(nums []int) string {
 func (m *Model) assembleFeatures() {
 	m.feats = m.feats[:0]
 	if len(m.features) == 0 {
-		m.focus, m.featSel, m.trainW = focusAgents, 0, 0
+		if m.focus == focusFeatures {
+			m.focus = focusAgents
+		}
+		m.featSel, m.trainW = 0, 0
 		m.clampLens()
 		return
 	}
@@ -392,7 +395,7 @@ func (m Model) featureLayout() featLayout {
 	if n == 0 {
 		return featLayout{}
 	}
-	spare := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
+	spare := m.spareRows() - m.chatLayout().height
 	lay := featLayout{shown: min(n, maxExpanded), expanded: true}
 	lay.more = n - lay.shown
 	lay.height = 3 + lay.shown*3 + 1 // border+title, 3 lines each, the hint
