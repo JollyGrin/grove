@@ -382,6 +382,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// ShellQuote is shellQuote for other packages (internal/secrets' export
+// lines) — one quoting rule for every value that reaches a launch shell.
+func ShellQuote(s string) string { return shellQuote(s) }
+
 // SecretsPath is the model-profile secrets file the launch wrap
 // self-sources (grove-36 design §2.1) — never inherited from the tmux
 // server's or launching shell's environment.
@@ -398,6 +402,10 @@ var modelFlagValue = regexp.MustCompile(`--model\s+'([^']*)'`)
 // variable name, not a value), so anything outside a bare identifier is a
 // config load error rather than a shell-injection surface.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvKey reports whether s is a bare identifier by envKeyPattern —
+// also the rule for secret names, which are both a filename and an env var.
+func ValidEnvKey(s string) bool { return envKeyPattern.MatchString(s) }
 
 // modelSlot classifies a (possibly WithModel'd) claude command into the
 // opus/sonnet/haiku class it requested, so a profile can substitute its own

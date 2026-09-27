@@ -9,6 +9,18 @@
 
 ## Now (2026-07-12)
 
+- [x] gv-keys 01: `internal/secrets` — age identity + namespaced store
+      (grove-361, 2026-09-27, feature train `feature/gv-keys-secrets`).
+      Embeds `filippo.io/age` v1.3.2; per-host X25519 identity at
+      `<StateDir>/age/identity.txt` (global state dir, 0700/0600, init
+      never overwrites); one store `~/.config/grove/secrets/<ns>/` with
+      `recipients.txt` + armored `NAME.age`. `Resolve`/`Lookup` env >
+      `<label>/` > `global/` (an unreadable workspace copy errors, never
+      falls through to global); `Set` seeds `recipients.txt` with this
+      host; `AddRecipient` + `Reseal` (decrypt-all before write-any);
+      `ExportLines` via the new `config.ShellQuote`; `ErrNotRecipient`
+      unwraps to `*age.NoIdentityMatchError`. No CLI, no call sites yet.
+      Linked-in cost ≈ +182 KB release binary.
 - [x] `gv audit`: a sibling workspace's live worktree is no longer reported
       as an orphan on shared-repo hosts (grove-350, 2026-09-26). `scanOrphans`
       now unions this workspace's tasks with every other registered+alive
