@@ -97,6 +97,17 @@ CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
 "$GV" grab task-003 --feature none > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
 grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
 
+say "feature status (grove-375): a landed car, an active car, a queued car"
+# task-004 rides trains and lands (done --force: no PR to check here);
+# task-005 is an ungrabbed trains issue that depends on #2 — queued.
+mdtask task-004 "landed car" "trains"
+"$GV" grab task-004 > /dev/null || fail "task-004 grab failed"
+"$GV" done task-004 --force > "$SCRATCH/fdone.out" 2>&1 || { cat "$SCRATCH/fdone.out"; fail "done task-004 failed"; }
+printf -- '---\nid: task-005\ntitle: queued car\nstatus: todo\nlabels: [trains]\n---\n\nDepends on #2\n' > "$DUMMY/.grove/tasks/task-005.md"
+git fetch -q origin
+"$GV" feature ls --no-pr > "$SCRATCH/fls.out" || fail "feature ls failed"
+grep -E '^trains .* 1/3 +↓0 main ' "$SCRATCH/fls.out" > /dev/null || { cat "$SCRATCH/fls.out"; fail "feature ls does not show 1/3 and ↓0 main for trains"; }
+
 # --- the plugin: knows ONLY the contract + the gv path -------------------
 # Everything below the line is what a gv-<surface> sidecar would do.
 cat > "$SCRATCH/plugin.sh" <<'PLUGIN'
@@ -128,7 +139,7 @@ print(data['tasks'][0]['ticket'])
 ")"
 
 # 2b. READ: open feature trains (grove-372).
-( cd "$ROOT" && "$GV" feature ls --json > "$OUT/features.json" && "$GV" feature ls --all --json > "$OUT/features-all.json" )
+( cd "$ROOT" && "$GV" feature ls --json --no-pr > "$OUT/features.json" && "$GV" feature ls --all --json --no-pr > "$OUT/features-all.json" )
 python3 -c "
 import json
 data = json.load(open('$OUT/features.json'))
@@ -141,6 +152,18 @@ assert t['created_at'] and 'closed' not in t, t
 assert fs['live']['branch'] == 'feature/live-train' and fs['live']['label'] == 'live-train', fs
 alld = {f['slug']: f for f in json.load(open('$OUT/features-all.json'))['features']}
 assert alld['gone']['closed']['reason'] == 'abandoned' and alld['gone']['closed']['at'], alld
+# status fields (grove-375): open rows only.
+assert 'cars' not in alld['gone'] and 'landed' not in alld['gone'], alld['gone']
+cars = [(c['ticket'], c['state']) for c in t['cars']]
+assert cars == [('task-004', 'landed'), ('task-002', 'working'), ('task-005', 'queued')], cars
+assert (t['landed'], t['total']) == (1, 3), t
+landed, active, queued = t['cars']
+assert landed['landed_at'] and landed['number'] == 4 and landed['title'] == 'landed car', landed
+assert 'landed_at' not in active and 'after' not in active, active
+assert queued['after'] == [2] and queued['number'] == 5, queued
+assert all(isinstance(c['est_usd'], (int, float)) for c in t['cars']), t['cars']
+assert t['behind_base'] == 0 and t['mergeable'] is True and 'pr' not in t and 'serve' not in t, t
+assert isinstance(t['est_usd'], (int, float)), t
 "
 
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.

@@ -9,6 +9,18 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 04: feature status function + `gv feature ls`
+      status fields (grove-375, 2026-09-27, on `feature/feature-trains`).
+      `internal/feature.Statuses` (inputs injected: fold, event log,
+      ledger, issue lister, git runner, PR lookup; `SkipQueued` flag)
+      returns per open feature `cars[]` (landed from events — survives
+      untrack/sweep — then active by created, then queued by number,
+      `after` from `depends on #N`), `landed/total`, `behind_base`,
+      `mergeable` (`git merge-tree --write-tree`), `pr`, `est_usd`.
+      `gv feature ls` shows `landed/total` + `↓N <base>`; `--json` adds
+      the fields flat on open rows; `--no-pr`/`--no-queued`.
+      `provider.GitHub.ListLabeled` (bodies included). plugins.md, skill,
+      e2e/plugin.sh updated. For the cockpit (ticket 06).
 - [x] feature-trains 02: `gv grab --feature`, label inference, per-task
       base (grove-373, 2026-09-27, on `feature/feature-trains`).
       `gv grab --feature <slug>|none`; absent, exactly one open feature
