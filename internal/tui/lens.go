@@ -30,6 +30,7 @@ type lensCar struct {
 	label  string
 	title  string
 	est    string
+	host   string // "@<host>" for a car another grove host runs (grove-398), else ""
 }
 
 // lensData is the lens for one feature. branch/serve/next are plain lines.
@@ -188,6 +189,9 @@ func buildLens(f *state.Feature, st *feature.Status, tip string, merged map[stri
 	var closes []string
 	for _, c := range st.Cars {
 		lc := lensCar{ticket: c.Ticket, state: c.State, label: carLabel(c), title: c.Title, est: "–"}
+		if c.Host != "" {
+			lc.host = "@" + c.Host
+		}
 		if c.EstUSD > 0 {
 			lc.est = fmt.Sprintf("$%.2f", c.EstUSD)
 		}
@@ -563,6 +567,10 @@ func lensCarRow(c lensCar, labelW int, selected bool, w int) string {
 	}
 	if selected {
 		cursor = sSelected.Render("▸") + " "
+	}
+	if c.host != "" {
+		// A remote car's dim @host sits between est and title.
+		rest = pad(c.label, labelW) + pad(c.state, lensStateW) + pad(c.est, lensEstW) + sDim.Render(c.host) + " " + c.title
 	}
 	return cursor + carStyles[glyphState].Render(carGlyphs[glyphState]) + " " + rest
 }

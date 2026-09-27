@@ -34,7 +34,11 @@ gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   output (intercepted before the flagset) — trust
                            #   this list, not --help. for answer/nudge the flag
                            #   must come BEFORE the ticket (everything after the
-                           #   ticket is payload)
+                           #   ticket is payload). a feature grab may go to a
+                           #   host too (`--host H --feature F`, or label
+                           #   inference): THIS host resolves the train and
+                           #   forwards its branch; `gv feature ls` shows the
+                           #   car with its host
 gv grab DEV-X --profile P # run this worker on a model profile lane (see
                            #   Dispatch below — lanes differ in who pays)
 gv grab DEV-X --feature F # fork the worktree from feature train F's branch
@@ -309,7 +313,10 @@ When both merge: summary push, same summary in chat, end your turn.
    `--profile`. You don't have to name it yourself: a ticket whose label
    matches exactly one open feature's label is inferred with no flag at
    all, and grab prints the base it chose either way (`--feature none`
-   overrides an unwanted inference). This retires the hand-written train
+   overrides an unwanted inference). A train car can run on another host:
+   add `--host <host>` as usual — this host resolves the feature and
+   forwards its branch, and the car shows in `gv feature ls` with its host.
+   This retires the hand-written train
    block earlier trains needed in `--brief` — the kickoff template now
    names the PR base itself, so don't paste that block again.
 

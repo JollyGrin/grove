@@ -90,10 +90,13 @@ TRAIN_SHA="$(git ls-remote origin refs/heads/feature/trains | cut -f1)"
 mdtask() { printf -- '---\nid: %s\ntitle: %s\nstatus: todo\nlabels: [%s]\n---\n\n%s\n' "$1" "$2" "$3" "$2" > "$DUMMY/.grove/tasks/$1.md"; }
 mdtask task-002 "train car" "trains, ui"
 mdtask task-003 "two trains" "trains, live-train"
-if "$GV" grab task-002 --feature trains --host pc > "$SCRATCH/fhost.out" 2>&1; then fail "--host with --feature was not refused"; fi
-grep -q -- '--host' "$SCRATCH/fhost.out" || fail "--host refusal does not name --host"
-if "$GV" grab task-002 --host pc > "$SCRATCH/fhost2.out" 2>&1; then fail "--host with an inferred feature was not refused"; fi
-grep -q 'feature trains' "$SCRATCH/fhost2.out" || fail "inferred --host refusal does not name the feature"
+# grove-398: --host now rides a feature (e2e/feature_host.sh forwards one);
+# the resolution still happens HERE, so an ambiguous label refuses before
+# any ssh, and the internal --feature-branch is never taken from a human.
+if "$GV" grab task-003 --host pc > "$SCRATCH/fhost.out" 2>&1; then fail "--host grab matching two features succeeded"; fi
+grep -q 'trains (label trains)' "$SCRATCH/fhost.out" || fail "--host two-match refusal does not name the features: $(cat "$SCRATCH/fhost.out")"
+if "$GV" grab task-002 --host pc --feature-branch feature/trains > "$SCRATCH/fhost2.out" 2>&1; then fail "--feature-branch from the operator was accepted"; fi
+grep -q 'internal to a forwarded grab' "$SCRATCH/fhost2.out" || fail "--feature-branch refusal: $(cat "$SCRATCH/fhost2.out")"
 if "$GV" grab task-003 > "$SCRATCH/ftwo.out" 2>&1; then fail "grab matching two features succeeded"; fi
 grep -q 'trains (label trains)' "$SCRATCH/ftwo.out" && grep -q 'live (label live-train)' "$SCRATCH/ftwo.out" || fail "two-match refusal does not name both"
 if "$GV" grab task-003 --feature gone > "$SCRATCH/fgone.out" 2>&1; then fail "grab onto a closed feature succeeded"; fi
@@ -171,6 +174,7 @@ assert landed['landed_at'] and landed['number'] == 4 and landed['title'] == 'lan
 assert 'landed_at' not in active and 'after' not in active, active
 assert queued['after'] == [2] and queued['number'] == 5, queued
 assert all(isinstance(c['est_usd'], (int, float)) for c in t['cars']), t['cars']
+assert all('host' not in c for c in t['cars']), t['cars']  # grove-398: host only on a car another grove host tracks
 assert t['behind_base'] == 0 and t['mergeable'] is True and 'pr' not in t, t
 assert isinstance(t['est_usd'], (int, float)), t
 assert 'serve' not in alld['gone'], alld  # serve rides on open rows only

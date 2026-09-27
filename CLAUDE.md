@@ -44,7 +44,10 @@ A long-lived feature branch is a first-class thing: `gv feature new
 registers one already pushed by convention); `gv grab DEV-X --feature
 <slug>` forks the worktree from it and PRs back into it instead of the
 repo base — inferred automatically for a ticket carrying the feature's
-label, no flag needed. `gv feature ls [--json]` shows every open train's
+label, no flag needed. With `--host H` the registering host resolves the
+feature and forwards `--feature <slug> --feature-branch <branch>` (an
+internal flag, not in `-h`); `gv feature ls` shows a host's cars with
+`host` (`--no-remote` skips ssh). `gv feature ls [--json]` shows every open train's
 cars, how far behind base it is, and its own PR into base. `gv feature
 land <slug> [--yes]` runs `gv done` for every car whose PR merged into
 the train's branch; it never closes an issue itself — that needs an

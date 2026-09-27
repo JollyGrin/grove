@@ -9,6 +9,18 @@
 
 ## Now (2026-07-12)
 
+- [x] feature trains across hosts (grove-398, 2026-09-27). `gv feature
+      ls` (and the cockpit's PR-cadence pass, and land's queued lookup)
+      asks every configured host `gv ls --json --no-pr` (fleet.Fetch, 5s
+      per host; a failing host warns, its cars stay queued) — a host's car
+      on an open feature is active with its real state and `host` on the
+      car (additive; local wins a duplicate ticket; `--no-remote` skips
+      ssh); the lens shows a dim `@host`. `gv grab --host H` now rides a
+      feature: this host resolves it (`--feature` or label inference) and
+      forwards `--feature <slug> --feature-branch <branch>` — the receiver
+      skips its registry, fetches the branch from origin (else refuses)
+      and forks from it. `refuseHostFeatureGrab` is gone. New
+      `e2e/feature_host.sh` (fake ssh host) in `e2e/all.sh`.
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch
