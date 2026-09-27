@@ -5,6 +5,10 @@ You are picking up task {{.ID}}: {{.Title}}
 {{range .Comments}}[{{.Author}}]: {{.Body}}
 {{end}}--- END TASK ---
 
+If the operator wants to read the code alongside you, `gv editor` (run
+from this worktree) opens a side-by-side editor pane in your tmux window —
+offer it when it would help, and run it when asked.
+
 An existing branch already carries prior work on this task (a previous
 session was interrupted). Do NOT start from scratch:
 1. Read the branch state first: `git log <base>..HEAD`, the diff against

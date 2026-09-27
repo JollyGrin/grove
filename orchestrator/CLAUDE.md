@@ -67,6 +67,10 @@ gv handoff DEV-X          # move a running task to another grove host:
                            #   transcript does NOT travel — the PR body is
                            #   what carries the context.
 gv diff DEV-X [--stat]    # branch diff vs base — review without attach
+gv editor DEV-X           # open a side-by-side editor pane (editor.command,
+                           #   default nvim) in the worker's window — off by
+                           #   default (editor.enabled); run when the operator
+                           #   wants to read the code there
 gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
      --ticket DEV-X         #   see "Dispatch-and-dismiss" below for when)
 gv chat close <s>         # end ANOTHER live chat (grove-chat-<label>-<n>) —

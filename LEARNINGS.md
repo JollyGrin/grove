@@ -606,6 +606,11 @@
   scan the full ~30-line capture, not a bottom window; both markers are
   transient so the wide scan is safe. Hooks were right both times — the
   scraper is liveness garnish, hooks are truth.
+- **A local editor alias fools `gv editor`'s "already running?" check**
+  (grove-359, 2026-09-27) — detection matches the pane's foreground
+  command against `editor.command`'s binary, so a shell alias (`vi` →
+  nvim) reads as not-running and a second editor opens. Fix the alias
+  (or set `editor.command: nvim`) in your own config, not in gv.
 - **Detector reads `unknown` for a plain shell pane** — LIVE shows
   `unknown` until claude actually boots (e.g. during setup). Expected; the
   task status column carries the truth.

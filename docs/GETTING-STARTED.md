@@ -351,6 +351,7 @@ gv                             # open the cockpit (dashboard + orchestrator)
 gv grab DEV-123 --repo name    # dispatch a ticket → worker → PR
 gv ls                          # fleet table (add --json for the orchestrator)
 gv attach DEV-123              # jump into a worker's tmux window
+gv editor DEV-123              # open a side-by-side editor pane (editor.enabled is off by default)
 gv answer DEV-123 "text"       # reply to a waiting worker
 gv diff DEV-123                # review the branch diff without attaching
 gv sub "<prompt>" [path…]      # micro-task on a cheaper lane; prints only the answer
