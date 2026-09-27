@@ -34,8 +34,13 @@ green on its own?**
 - **No → feature branch, consciously.** Reserve for rewrites where a
   half-migrated state breaks the gate for everyone (#79-scale). Accept
   the taxes up front: the branch drifts from main and a human eats the
-  rebases; PRs review against a moving target; grab/diff/sentinel don't
-  know alternate bases today.
+  rebases; PRs review against a moving target. grab/diff/sentinel now
+  know alternate bases (`gv feature`, feature-trains) — open the train
+  with `gv feature new <slug>`, then label every ticket in it with the
+  feature's label so `gv grab` infers the base without a flag (`gv grab
+  DEV-X --repo Y --feature <slug>` still works explicitly). Land finished
+  cars with `gv feature land <slug>`; the operator still closes tickets
+  and merges the feature branch to its base.
 - **No stacked PRs for autonomous workers.** Stacks mean rebase churn,
   and an agent resolving mid-stack conflicts is the steering-heavy
   failure mode the train avoids.

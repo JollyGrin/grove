@@ -20,6 +20,22 @@
       task; modals return to the lens. `l` builds the land plan from the
       fold + last PR poll (no network) and confirms before `feature.Land`
       × `FinishTask`. All lens strings built in `assemble()`.
+- [x] feature-trains 11: docs + brains (grove-382, 2026-09-27, on
+      `feature/feature-trains`). Orchestrator seed teaches `gv feature
+      new/ls/close/land` and `gv serve` (tools block), a train ticket
+      grabbed with `--feature` or by label (duty 3 Dispatch — the
+      hand-written `--brief` train block is retired), and duty 10: `land
+      <slug>` (`gv feature land <slug> --yes` then `gh issue close` +
+      `Closes #N` on the feature PR) and standing `keep <slug> landed`
+      (same, on each `pr_merged` for that feature, until its PR merges or
+      the operator says stop) — the guardrail "never close any issue"
+      gains exactly this exception, scoped to a ticket's PR `MERGED` into
+      the feature's own branch. `.grove/orchestrator/CLAUDE.md` refreshed
+      via `gv init --only orchestrator-md`. `.claude/skills/ticket-writing`
+      "feature branch, consciously" bullet updated for the working
+      `gv feature`/`gv grab --feature` machinery; root CLAUDE.md gains a
+      "Feature trains" section. docs/plugins.md contract rows from 01/02/
+      04/05/09 verified present, no gap found.
 - [x] feature-trains 08: trellis in the scene (grove-379, 2026-09-27,
       on `feature/feature-trains`). At fx ≥ calm a feature's plants stand
       together, in rail order, under a `▁ <slug> landed/total ▁▁` bracket
