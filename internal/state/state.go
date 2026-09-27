@@ -151,14 +151,20 @@ type Task struct {
 	// (grove-36); empty = the operator's own Claude sub. Additive & optional:
 	// events predating the field simply lack it and fold to "".
 	ModelProfile string `json:"model_profile,omitempty"`
-	SessionID    string `json:"claude_session_id,omitempty"`
-	Agent        string `json:"agent"`
-	Sentinel     string `json:"sentinel,omitempty"` // question | blocked | done | none
-	Question     string `json:"question,omitempty"`
-	LastMessage  string `json:"last_message,omitempty"`
-	Human        string `json:"human,omitempty"`
-	Attached     bool   `json:"attached"`
-	Done         bool   `json:"done"`
+	// Feature and Base (grove-373, feature trains Decision 2): a task
+	// grabbed onto a feature train names the feature's slug and the
+	// branch it forked from (and PRs into). Both empty = the repo's own
+	// base — readers go through BaseOr. Additive & optional.
+	Feature     string `json:"feature,omitempty"`
+	Base        string `json:"base,omitempty"`
+	SessionID   string `json:"claude_session_id,omitempty"`
+	Agent       string `json:"agent"`
+	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | none
+	Question    string `json:"question,omitempty"`
+	LastMessage string `json:"last_message,omitempty"`
+	Human       string `json:"human,omitempty"`
+	Attached    bool   `json:"attached"`
+	Done        bool   `json:"done"`
 	// Paused marks a deliberately parked worker (grove-90): its tmux window
 	// was killed to free CPU, but worktree, branch, and session transcript
 	// all survive — `gv adopt` resumes the stored session and clears the
@@ -194,6 +200,16 @@ type Task struct {
 	// pane that legitimately still shows a shell while claude boots does
 	// not read as a vanished worker.
 	LiveSince time.Time `json:"-"`
+}
+
+// BaseOr is the branch this task forked from and merges back to: its own
+// Base when it rides a feature train, else the repo's base. Every reader
+// of a repo's base for a task (diff, remove guard, sweep) goes through it.
+func (t *Task) BaseOr(repoBase string) string {
+	if t.Base != "" {
+		return t.Base
+	}
+	return repoBase
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.jsonl") }
@@ -312,7 +328,8 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Title, t.URL, t.Repo = d["title"], d["url"], d["repo"]
 		t.Branch, t.Worktree = d["branch"], d["worktree"]
 		t.TmuxSession, t.TmuxWindow = d["tmux_session"], d["tmux_window"]
-		t.ModelProfile = d["model_profile"] // "" for unprofiled + pre-field events
+		t.ModelProfile = d["model_profile"]         // "" for unprofiled + pre-field events
+		t.Feature, t.Base = d["feature"], d["base"] // "" off-train + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
@@ -396,6 +413,10 @@ func fold(tasks map[string]*Task, ev Event) {
 				t.TmuxWindow = v
 			case "model_profile":
 				t.ModelProfile = v
+			case "feature":
+				t.Feature = v
+			case "base":
+				t.Base = v
 			case "session_id":
 				t.SessionID = v
 			}

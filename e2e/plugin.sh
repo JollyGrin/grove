@@ -73,6 +73,30 @@ REFS_BEFORE="$(git ls-remote origin)"
 "$GV" feature new gone --repo dummy > /dev/null && "$GV" feature close gone --reason abandoned > /dev/null || fail "feature close failed"
 git ls-remote --exit-code origin refs/heads/feature/gone > /dev/null || fail "feature close deleted the branch"
 
+say "feature grabs (grove-373): label inference, --feature none, refusals"
+# feature/trains moves one commit past main on origin, so a car's fork
+# point is observable.
+git push -q origin "$(git commit-tree -p "$MAIN_SHA" -m 'train car base' "$(git rev-parse "$MAIN_SHA^{tree}")"):refs/heads/feature/trains"
+TRAIN_SHA="$(git ls-remote origin refs/heads/feature/trains | cut -f1)"
+[ "$TRAIN_SHA" != "$MAIN_SHA" ] || fail "feature/trains did not move"
+mdtask() { printf -- '---\nid: %s\ntitle: %s\nstatus: todo\nlabels: [%s]\n---\n\n%s\n' "$1" "$2" "$3" "$2" > "$DUMMY/.grove/tasks/$1.md"; }
+mdtask task-002 "train car" "trains, ui"
+mdtask task-003 "two trains" "trains, live-train"
+if "$GV" grab task-002 --feature trains --host pc > "$SCRATCH/fhost.out" 2>&1; then fail "--host with --feature was not refused"; fi
+grep -q -- '--host' "$SCRATCH/fhost.out" || fail "--host refusal does not name --host"
+if "$GV" grab task-002 --host pc > "$SCRATCH/fhost2.out" 2>&1; then fail "--host with an inferred feature was not refused"; fi
+grep -q 'feature trains' "$SCRATCH/fhost2.out" || fail "inferred --host refusal does not name the feature"
+if "$GV" grab task-003 > "$SCRATCH/ftwo.out" 2>&1; then fail "grab matching two features succeeded"; fi
+grep -q 'trains (label trains)' "$SCRATCH/ftwo.out" && grep -q 'live (label live-train)' "$SCRATCH/ftwo.out" || fail "two-match refusal does not name both"
+if "$GV" grab task-003 --feature gone > "$SCRATCH/fgone.out" 2>&1; then fail "grab onto a closed feature succeeded"; fi
+grep -q 'gv feature ls' "$SCRATCH/fgone.out" || fail "closed-feature refusal does not name gv feature ls"
+"$GV" grab task-002 > "$SCRATCH/fgrab.out" || fail "feature grab failed"
+grep -qx 'base: feature/trains (feature trains, from label trains)' "$SCRATCH/fgrab.out" || fail "grab did not name its inferred base"
+CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
+[ "$(git -C "$CAR_WT" rev-parse HEAD)" = "$TRAIN_SHA" ] || fail "car worktree did not fork from origin/feature/trains"
+"$GV" grab task-003 --feature none > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
+grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
+
 # --- the plugin: knows ONLY the contract + the gv path -------------------
 # Everything below the line is what a gv-<surface> sidecar would do.
 cat > "$SCRATCH/plugin.sh" <<'PLUGIN'
@@ -95,6 +119,11 @@ TICKET="$(python3 -c "
 import json
 data = json.load(open('$OUT/ls.json'))
 assert data['schema_version'] == 1, data
+rows = {t['ticket']: t for t in data['tasks']}
+car = rows['task-002']
+assert (car['feature'], car['base']) == ('trains', 'feature/trains'), car
+for off in ('task-001', 'task-003'):
+    assert 'feature' not in rows[off] and 'base' not in rows[off], rows[off]
 print(data['tasks'][0]['ticket'])
 ")"
 
@@ -127,6 +156,10 @@ assert len(fc) == 3 and all(e['ticket'] == '' for e in fc), fc
 assert set(fc[0]['data']) == {'slug', 'repo', 'branch', 'base', 'label'}, fc[0]
 cl = [e for e in evs if e['type'] == 'feature_closed']
 assert len(cl) == 1 and cl[0]['data'] == {'slug': 'gone', 'reason': 'abandoned'}, cl
+tc = {e['ticket']: e['data'] for e in created}
+assert tc['task-002']['feature'] == 'trains' and tc['task-002']['base'] == 'feature/trains', tc['task-002']
+for off in ('task-001', 'task-003'):
+    assert 'feature' not in tc[off] and 'base' not in tc[off], tc[off]
 "
 
 # 4. STEER: mutations go through gv only.

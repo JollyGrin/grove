@@ -9,6 +9,19 @@
 
 ## Now (2026-07-12)
 
+- [x] feature-trains 02: `gv grab --feature`, label inference, per-task
+      base (grove-373, 2026-09-27, on `feature/feature-trains`).
+      `gv grab --feature <slug>|none`; absent, exactly one open feature
+      whose label is on the ticket is used (two → refuse naming both).
+      Grab prints `base: <branch> (<why>)` and forks from
+      origin/<feature branch> (never a local stand-in).
+      `internal/feature.ChooseForGrab`/`ForkRef` decide; `task_created`
+      and `task_adopted` carry `feature`+`base` only when set (golden
+      test: off-train bytes unchanged); `state.Task.Feature/Base` +
+      `BaseOr` feed `gv diff`, the remove guard (`removeGuard`) and
+      sweep's preview. `--host` refuses an explicit or inferred feature.
+      `gv ls --json` rows gain `feature`/`base`; plugins.md, skill,
+      e2e/plugin.sh updated.
 - [x] feature-trains 01: feature events + fold + `gv feature new/ls/close`
       (grove-372, 2026-09-27, on `feature/feature-trains`). Workspace-scoped
       `feature_created` {slug, repo, branch, base, label} / `feature_closed`
