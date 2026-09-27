@@ -30,6 +30,7 @@ repo wins.
 | `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
+| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
@@ -65,7 +66,9 @@ row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
 dimensions, folded into row fields `delivery`/`liveness`
 (`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
 full per-type data table. Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`. Skip unknown types and lines
+`workspace_parked`, `orchestrator_closed`, `feature_created`
+(`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
+reason `merged`|`abandoned`). Skip unknown types and lines
 that fail to parse (the last line may be torn mid-write).
 
 `<workspace-root>/.grove/state/sub.jsonl` (grove-288) is `gv sub`'s own

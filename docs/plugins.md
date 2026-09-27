@@ -68,6 +68,7 @@ payload under one named key.
 | `gv sub "<prompt>" [path…] --json` | `sub` | object — one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | array — usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | array — this workspace's `sub.jsonl` history, one `Record` per row (see below) |
+| `gv feature ls [--all] --json` | `features` | array — open feature trains, oldest first (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`. `--all` adds closed ones, which carry `closed: {reason, at}` (`reason` is `merged` or `abandoned`); an open row has no `closed` key. A slug re-opened after a close lists only its newest incarnation. Status fields (cars, landed/total, behind base, …) arrive additively in a later ticket |
 
 ```sh
 $ gv ls --json --no-pr --no-cost
@@ -294,7 +295,13 @@ worktree's cwd is NOT the recorded one (an orchestrator whose shell
 `session_started` keeps registering whatever id arrives, so an adopt's
 fresh pickup session still takes over. Records written before grove-250
 have no `session_id`; treat a missing one as unknown, never as foreign.
-Workspace-scoped (empty `ticket`): `workspace_parked`,
+Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+`{slug, repo, branch, base, label}` — `gv feature new` opened a feature
+train; `branch` lives on origin, `base` is what it forks from and merges
+back to, `label` the issue label that marks its tickets), `feature_closed`
+(grove-372: data `{slug, reason}`, `reason` `merged` or `abandoned`;
+nothing is deleted — a slug may be opened again later),
+`workspace_parked`,
 `orchestrator_closed` (data `{reason, ticket?}`; grove-294, additive: a
 chat ended from outside by `gv chat close` / the phone's End chat carries
 `reason: "ended"` plus `{session, workspace, session_id?}`, logged in the
