@@ -672,6 +672,27 @@
   a plain `[]workspace.Workspace`) so the audit package stays unit-testable
   without a real `$HOME/.config/grove/registry.yaml`.
 
+- **2026-09-26 · a flag injected after the command head loses to the same
+  flag already in the configured command** (grove-142). `config.WithModel`
+  built the launch command as `head + " --model 'sonnet' " + rest`, so a
+  repo whose `claude:` line already carried its own `--model` (e.g.
+  `claude --dangerously-skip-permissions --model opus`) produced `claude
+  --model 'sonnet' --dangerously-skip-permissions --model opus` — the
+  claude CLI resolves repeated `--model` flags last-wins, so the
+  pre-existing config flag silently beat the pin every time, on both
+  `gv grab --model` and `gv adopt --model` (same `WithModel` call, two
+  call sites). `gv` still reported "model pinned" — nothing checked what
+  actually ran; only the ledger's `models:` field on a finished session
+  told the truth. Fixed in PR #295: `WithModel` now strips any existing
+  `--model`/`--model=<value>` out of the configured command before
+  injecting the pin, so the pin always wins regardless of what the
+  configured command already contains. Generalizes: when a function's job
+  is "make sure X wins," appending X is not enough if the base string can
+  already contain X — strip-then-inject, or inject last, never assume the
+  base is flag-free. Add a test for the exact repro shape
+  (`WithModel("claude --flag --model opus", "sonnet")` → sonnet wins)
+  whenever this pattern shows up elsewhere.
+
 - **2026-09-05 · An unstreamed dimension gets re-derived once per
   orchestrator, badly** (grove-252). `gv watch` (grove-205) streamed hook
   events, but nothing streamed delivery (PR opened/CI failing/conflicting/
