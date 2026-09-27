@@ -346,7 +346,19 @@ agent as its first message; absent when the spawn carried none. `model`
 absent for the host default). `session_id` (grove-337, additive) is the
 Claude session id the chat runs on — minted for a fresh chat, the revived
 id for a `resume` — which is how a later revival finds the `model` to
-re-apply. New types will appear
+re-apply; `chat_hidden` / `chat_shown` (grove-401, additive: data
+`{session, pane, workspace, session_id?}` — `gv chat hide` moved a LOCAL
+cockpit chat pane off-screen into its own detached
+`grove-chat-<label>-<n>` tmux session, where it keeps running, and
+`gv chat show` joined a detached chat into its workspace's cockpit
+window. `session` is that chat session — the one the pane moved INTO on
+hide and OUT OF on show, which no longer exists once shown; `pane` is the
+tmux `%N` id, which survives both moves; `session_id` is the Claude
+session id, absent when the pane wears none. Logged in the chat's own
+workspace before the pane moves. Neither is a lifecycle event: the chat
+is the same process throughout, and `gv chat ls` simply reports it as
+`kind: chat` while hidden and `kind: cockpit` while shown — no row field
+was added or changed). New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
@@ -403,6 +415,18 @@ tmux pane, do bracketed-paste injection, and append the event for you:
 - `gv chat keys <session> <chars>` — one raw keystroke, no Enter, for the
   permission prompts and option pickers a prose box cannot drive. Same
   `writable` gate; a newline is refused (that is `send`'s job).
+- `gv chat hide [<session-id>|<%pane>]` / `gv chat show <session>`
+  (grove-401) — move a LOCAL cockpit chat pane off-screen into a detached
+  `grove-chat-<label>-<n>` session and back. The agent keeps running and
+  keeps its `session_id`; only the row's `session`, `kind` and `writable`
+  change, so **key a chat on `session_id`, never on `session`**. `hide`
+  with no argument hides the calling pane (`$TMUX_PANE`); a bare cockpit
+  session name that holds more than one chat is refused with the
+  candidates, never picked. `show` takes any detached chat of the
+  workspace, including one that was never in the cockpit, and needs the
+  workspace's cockpit running. Both refuse — non-zero, nothing moved — the
+  dashboard pane, worker windows, remote (`@host`) chat panes, and a chat
+  session an operator split into several panes.
 - `gv chat restamp <session> [<session-id>]` — operator escape hatch
   (grove-222): re-point a live chat's identity stamp, or clear it (no id)
   so the next `gv chat ls` re-derives one. For the two cases nothing can

@@ -9,6 +9,23 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
+      `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
+      Hiding a LOCAL cockpit chat pane turns it into an ordinary detached
+      `grove-chat-<label>-<n>` session (`new-session` placeholder →
+      `break-pane` → kill the placeholder), showing joins it back
+      (`join-pane`); same `%pane`, same pid, stamps travel, and the cockpit
+      window is re-tiled to `@grove_layout` by its `@N` id, never the
+      active window. `tmux.HideChatPane`/`ShowChatPane` with pure guards
+      (`hidablePane`, `showableChat`), `chat.MatchHide` (a bare cockpit
+      name holding several chats is an error, never a pick). Refused, with
+      nothing touched: the dashboard, worker windows, remote panes, an
+      already hidden/shown chat, a split chat session, a cockpit that is
+      not running. New additive events `chat_hidden` / `chat_shown`
+      (docs/plugins.md); no `--json` field changed. Opt-in: no spawn path
+      touched, nothing hides by itself. New `e2e/chat_hide.sh` in
+      `e2e/all.sh`, both tmux modes. Not yet: TUI rows/keys, remote chats,
+      the orchestrator seed (later cars).
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch

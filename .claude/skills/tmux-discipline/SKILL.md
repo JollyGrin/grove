@@ -95,6 +95,14 @@ grove worker) silently targets the **real server** unless it clears
   ("no such session") and need `tmux.ExactActive` (`-t '=grove:'` — exact
   session, active window). Getting this wrong broke every cockpit build;
   `e2e/cockpit.sh` is the tripwire — actually run it.
+- **A re-tile or join aimed at `=session:` hits the ACTIVE window**
+  (grove-401). That is the cockpit only when the caller sits in it; a verb
+  reachable from a phone, a worker window or a detached chat resolves the
+  cockpit window to its `@N` id first (`WindowIDExact(session, "cockpit")`)
+  and targets that.
+- **`display-message -p -t %N` on a missing pane prints an empty line and
+  exits 0** (grove-401) — treat an empty answer as "no such pane"; the exit
+  status will not tell you.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.

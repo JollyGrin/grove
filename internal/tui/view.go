@@ -374,9 +374,12 @@ func (m Model) viewFooter() string {
 			m.sessionName(), len(m.localTasks))
 		// grove-203: chat sessions are their OWN tmux sessions, so park
 		// leaves them running. Say so here — this modal is the last thing
-		// on screen before the dashboard dies with the session.
+		// on screen before the dashboard dies with the session. A HIDDEN
+		// chat (grove-401) is one of these sessions, so it survives too —
+		// said in so many words, because "hidden" reads like "part of the
+		// cockpit that is about to die".
 		if n := len(m.parkChats); n > 0 {
-			prompt += fmt.Sprintf("· %d chat(s) KEEP RUNNING (%s) — gv park --chats reaps them ",
+			prompt += fmt.Sprintf("· %d chat(s) KEEP RUNNING, hidden too (%s) — gv park --chats reaps them ",
 				n, strings.Join(m.parkChats, " "))
 		}
 		line := " " + sBlocked.Render(prompt) +

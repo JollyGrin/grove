@@ -310,6 +310,28 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
+  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
+  is not an error, so "did the command fail" cannot answer "does this pane
+  exist". `paneFacts` treats an empty answer as "no such pane" before
+  parsing; any new reader of a caller-supplied `%N` must do the same.
+
+- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
+  is ACTIVE, which is only the cockpit when the caller is sitting in it**
+  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
+  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
+  run from a phone, a worker window or a detached chat (`gv chat
+  hide`/`show`) must re-tile the cockpit window by its `@N` id
+  (`retileCockpit`) — the integration test keeps a worker window active
+  and asserts its layout is untouched.
+
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
+
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
