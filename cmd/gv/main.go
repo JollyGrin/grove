@@ -3037,7 +3037,6 @@ func maybeInjectEditor(session, window, editorCmd string) {
 	if err != nil || claudePane == shellPane {
 		return // lost split: claude is the first pane — don't type into it
 	}
-	_ = tmux.MarkEditorPane(shellPane)
 	_ = tmux.SendKeys(shellPane, editorCmd+" .")
 }
 

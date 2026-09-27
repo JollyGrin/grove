@@ -413,15 +413,12 @@ func TestPlanEditor(t *testing.T) {
 		want              EditorAction
 		wantPane          string
 	}{
-		{"single pane (toggle off)", "%5 1 2.1.197 e=\n", "%5", EditorSplit, ""},
-		{"idle shell beside claude", "%4 1 zsh e=\n%5 2 claude e=\n", "%5", EditorSent, "%4"},
-		{"login shell", "%4 0 -zsh e=\n%5 1 node e=\n", "%5", EditorSent, "%4"},
-		{"editor running by name", "%4 1 nvim e=\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
-		{"tagged editor under an alias name", "%4 1 hx e=1\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
-		{"tagged pane back at its shell", "%4 1 zsh e=1\n%5 2 claude e=\n", "%5", EditorSent, "%4"},
-		{"tag beats a lower idle shell", "%3 0 bash e=\n%4 1 vim e=1\n%5 2 claude e=\n", "%5", EditorRunning, "%4"},
-		{"busy pane is not reused", "%4 1 npm e=\n%5 2 claude e=\n", "%5", EditorSplit, ""},
-		{"lowest idle shell wins", "%7 3 zsh e=\n%6 1 bash e=\n%5 4 claude e=\n", "%5", EditorSent, "%6"},
+		{"single pane (toggle off)", "%5 1 2.1.197\n", "%5", EditorSplit, ""},
+		{"idle shell beside claude", "%4 1 zsh\n%5 2 claude\n", "%5", EditorSent, "%4"},
+		{"login shell", "%4 0 -zsh\n%5 1 node\n", "%5", EditorSent, "%4"},
+		{"editor running by name", "%4 1 nvim\n%5 2 claude\n", "%5", EditorRunning, "%4"},
+		{"busy pane is not reused", "%4 1 npm\n%5 2 claude\n", "%5", EditorSplit, ""},
+		{"lowest idle shell wins", "%7 3 zsh\n%6 1 bash\n%5 4 claude\n", "%5", EditorSent, "%6"},
 		{"empty", "", "", EditorSplit, ""},
 	}
 	for _, c := range cases {

@@ -1156,25 +1156,15 @@ var shells = map[string]bool{
 	"ksh": true, "tcsh": true, "csh": true, "nu": true,
 }
 
-// editorFormat is the list-panes format OpenEditor plans from. The tag is
-// last and prefixed so an unset option never shifts the fields pickPaneID
-// reads.
-const editorFormat = "#{pane_id} #{pane_index} #{pane_current_command} e=#{@grove_editor}"
-
-// planEditor parses editorFormat list-panes output and decides where an
-// on-demand editor goes. The editor pane is recognized by its
-// @grove_editor tag, not its process name — an editor command is often a
-// wrapper or alias (live: `vi` → nvim reports "nvim"), and a name miss
-// would stack a second editor beside the first. A tagged pane that idles
-// at a shell gets the editor typed in (send); tagged and busy is the
-// editor itself (running). Untagged, the lowest-index non-claude pane is
-// reused only when it idles at a shell (the editor.enabled split before
-// its first attach); a pane busy with anything else — or no pane at all —
-// means a fresh split. editorBin still matches by name, so an untagged
-// pane already running the editor is not doubled either.
+// planEditor parses list-panes "#{pane_id} #{pane_index} #{pane_current_command}"
+// output and decides where an on-demand editor goes: a non-claude pane
+// whose foreground command is editorBin means the editor already runs
+// (running); else the lowest-index non-claude pane idling at a shell gets
+// it typed in (send); else — no pane, or only panes busy with something
+// else — a fresh split.
 func planEditor(out, claudePane, editorBin string) (EditorAction, string) {
-	var tagged, free, busyEditor string
-	taggedCmd, freeIdx := "", -1
+	var free, busyEditor string
+	freeIdx := -1
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[0] == claudePane {
@@ -1185,12 +1175,6 @@ func planEditor(out, claudePane, editorBin string) (EditorAction, string) {
 			continue
 		}
 		id, cmd := fields[0], fields[2]
-		if len(fields) > 3 && fields[3] == "e=1" {
-			if tagged == "" {
-				tagged, taggedCmd = id, cmd
-			}
-			continue
-		}
 		if cmd == editorBin && busyEditor == "" {
 			busyEditor = id
 		}
@@ -1199,23 +1183,12 @@ func planEditor(out, claudePane, editorBin string) (EditorAction, string) {
 		}
 	}
 	switch {
-	case tagged != "" && shells[strings.TrimPrefix(taggedCmd, "-")]:
-		return EditorSent, tagged
-	case tagged != "":
-		return EditorRunning, tagged
 	case busyEditor != "":
 		return EditorRunning, busyEditor
 	case free != "":
 		return EditorSent, free
 	}
 	return EditorSplit, ""
-}
-
-// MarkEditorPane tags a pane as the worker's editor pane (@grove_editor),
-// the durable marker planEditor recognizes it by.
-func MarkEditorPane(pane string) error {
-	_, err := run("set-option", "-p", "-t", pane, "@grove_editor", "1")
-	return err
 }
 
 // OpenEditor puts `<editorCmd> .` beside a worker's claude pane on demand
@@ -1231,7 +1204,7 @@ func OpenEditor(session, base, workDir, editorCmd string) (EditorAction, error) 
 	if !ok {
 		return 0, fmt.Errorf("no window matching %q in session %q", base, session)
 	}
-	out, err := run("list-panes", "-t", id, "-F", editorFormat)
+	out, err := run("list-panes", "-t", id, "-F", "#{pane_id} #{pane_index} #{pane_current_command}")
 	if err != nil {
 		return 0, err
 	}
@@ -1254,6 +1227,5 @@ func OpenEditor(session, base, workDir, editorCmd string) (EditorAction, error) 
 		}
 		pane = strings.TrimSpace(split)
 	}
-	_ = MarkEditorPane(pane)
 	return action, SendKeys(pane, editorCmd+" .")
 }

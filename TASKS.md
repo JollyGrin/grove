@@ -16,8 +16,8 @@
       launching `editor.command`. New `gv editor [<ticket>]` opens the pane
       on demand (no ticket: the task whose worktree holds the cwd, scanned
       across workspaces) — reuses an idle shell pane, else splits left of
-      claude; the pane is tagged `@grove_editor` so an aliased editor isn't
-      doubled. md kickoffs + orchestrator seed mention it.
+      claude, or reports an editor already running there (by process
+      name). md kickoffs + orchestrator seed mention it.
 - [x] `gv audit`: a sibling workspace's live worktree is no longer reported
       as an orphan on shared-repo hosts (grove-350, 2026-09-26). `scanOrphans`
       now unions this workspace's tasks with every other registered+alive
