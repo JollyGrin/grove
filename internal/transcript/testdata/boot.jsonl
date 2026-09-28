@@ -1,0 +1,13 @@
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["AAAAA","BBBBB"]}}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"CLAUDE.md","type":"repo","content":"CCCCCCCCCC"},{"path":"MEMORY.md","type":"memory","content":"DDDDD"},{"path":".grove/orchestrator/CLAUDE.md","type":"brain","content":"EEEEEEEEEEEEEEE"}]}}
+{"type":"attachment","attachment":{"type":"skill_listing","content":"FFFFFFFFF","skillCount":3}}
+{"type":"attachment","attachment":{"type":"deferred_tools_delta","addedLines":["GGGGG","HHHHH"],"addedNames":["I","J","K"]}}
+{"type":"attachment","attachment":{"type":"agent_listing_delta","addedLines":["LLLLLL","MMMMMM"]}}
+{"type":"attachment","attachment":{"type":"mcp_instructions_delta","addedBlocks":["NNNNNN"]}}
+{"type":"attachment","attachment":{"type":"environment","x":"OOOOOOOOOO"}}
+{"type":"user","message":{"content":"QQQQQQQQQQ"}}
+{"type":"user","message":{"content":[{"type":"text","text":"RRRRR"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"TTTTTTTTTT"}}]}}
+{"type":"assistant","isSidechain":true,"message":{"id":"msg_side1","model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"requestId":"req_side1","timestamp":"2026-09-28T00:00:01Z"}
+{"type":"assistant","message":{"id":"msg_synth1","model":"<synthetic>","usage":{"input_tokens":50,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"requestId":"req_synth1","timestamp":"2026-09-28T00:00:02Z"}
+{"type":"assistant","message":{"id":"msg_real1","model":"claude-sonnet-5","usage":{"input_tokens":5000,"output_tokens":200,"cache_creation_input_tokens":1000,"cache_read_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":800,"ephemeral_1h_input_tokens":200}}},"requestId":"req_real1","timestamp":"2026-09-28T00:00:03Z"}
+{"type":"assistant","message":{"id":"msg_real2","model":"claude-sonnet-5","usage":{"input_tokens":9000,"output_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":9000}},"requestId":"req_real2","timestamp":"2026-09-28T00:00:04Z"}
