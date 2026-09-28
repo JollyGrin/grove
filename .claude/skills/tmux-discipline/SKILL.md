@@ -23,6 +23,19 @@ grove worker) silently targets the **real server** unless it clears
   every session and worker on the machine (2026-07-07).
 - `tapes/run.sh` snapshots the real server's session list before/after as
   a canary — copy that pattern for new scripted-tmux suites.
+- **A scratch dir is proven before it is removed** (grove-405). In
+  `D="$(cd "$(mktemp -d …)" && pwd -P)"` a failed `mktemp` prints nothing,
+  and `cd ""` STAYS PUT with exit 0 in zsh and in macOS's `/bin/bash` 3.2
+  (bash 5 errors) — so `D` is the directory you are standing in, the
+  worktree, and `rm -rf "$D"` deletes it. The harness stopped two workers
+  on exactly that line. Make the dir first and fail on it, resolve
+  second, guard the remove:
+
+  ```sh
+  D=$(mktemp -d /tmp/x.XXXXXX) || exit 1
+  D="$(cd "$D" && pwd -P)"        # /tmp → /private/tmp on macOS
+  case "$D" in /tmp/x.*|/private/tmp/x.*) rm -rf "$D" ;; esac
+  ```
 
 ## 2. Sending text to panes
 
@@ -95,6 +108,22 @@ grove worker) silently targets the **real server** unless it clears
   ("no such session") and need `tmux.ExactActive` (`-t '=grove:'` — exact
   session, active window). Getting this wrong broke every cockpit build;
   `e2e/cockpit.sh` is the tripwire — actually run it.
+- **A re-tile or join aimed at `=session:` hits the ACTIVE window**
+  (grove-401). That is the cockpit only when the caller sits in it; a verb
+  reachable from a phone, a worker window or a detached chat resolves the
+  cockpit window to its `@N` id first (`WindowIDExact(session, "cockpit")`)
+  and targets that.
+- **Moving a pane keeps its identity** (grove-401/405, tmux 3.6a):
+  `break-pane` and `join-pane` carry the `%N` id, the pid and every pane
+  user option (`@grove_…`) across sessions — so a moved pane is
+  re-found by its `%N`, never re-resolved by position, and its stamps are
+  never re-applied. Window and session options do NOT travel: the window
+  it lands in is a new one (`DisableAutoRename` it again). To take a pane
+  off-screen, move it; never shrink it — a 1-column pane is stretched
+  back by the next `select-layout` and still costs a border.
+- **`display-message -p -t %N` on a missing pane prints an empty line and
+  exits 0** (grove-401) — treat an empty answer as "no such pane"; the exit
+  status will not tell you.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.
@@ -119,6 +148,12 @@ grove worker) silently targets the **real server** unless it clears
   Durable per-pane tags live in a tmux pane **user option**
   (`set-option -p @grove_…`) rendered via a conditional
   `pane-border-format` — foreground programs can't touch those.
+- **A session user option rides `list-panes -a -F` for free — unescaped**
+  (grove-404). `#{@opt}` in a pane format falls through to the pane's
+  SESSION, so per-session state needs no tmux call of its own on a tick.
+  The value lands in the line verbatim: never store a tab or newline in
+  one (percent-escape the fields), and append the field at the END of the
+  format — empty, it simply shortens the line.
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
   and chrome layout have both changed under us — activity checks scan the
   full ~30-line capture, never a bottom window.

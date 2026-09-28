@@ -175,3 +175,22 @@ func SpawnModel(events []Event, sessionID string) string {
 	}
 	return ""
 }
+
+// EvChatHidden / EvChatShown (grove-401) record a LOCAL cockpit chat pane
+// being hidden — moved off-screen into its own detached
+// `grove-chat-<label>-<n>` session, still running — and a detached chat
+// being shown: joined into its workspace's cockpit window. Data carries
+// {session, pane, workspace, session_id?}: the chat session (the one the
+// pane moves INTO on hide, OUT OF on show), the pane's immutable %id, which
+// survives both moves, and the Claude session id when the pane wears one.
+// Ticket-less and workspace-scoped like EvOrchestratorClosed, so fold
+// ignores them and state.go stays byte-comparable.
+//
+// With `host` in Data (grove-404, additive) the chat is a REMOTE one: the
+// hide closed its local ssh-attach pane and the show opened a new one.
+// `session` is then the chat's session on that host, `pane` the local
+// attach pane (a new %id after every show), and there is no session_id.
+const (
+	EvChatHidden = "chat_hidden"
+	EvChatShown  = "chat_shown"
+)

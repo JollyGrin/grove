@@ -54,6 +54,30 @@ serve <slug>` runs the train's tip from `.grove/run.sh`, committed with
 the workspace — trust is a recorded sha256 (`run_script_trusted`); a
 changed script always re-prompts, never runs silently.
 
+## Hidden chats
+
+Opt-in, default unchanged: a chat opens as a side-by-side cockpit pane
+(`O`, `)`, digits, `gv orchestrator new`) and stays one until the
+operator hides it — nothing auto-hides, and hide/show touch no spawn
+path. Hiding a LOCAL chat moves its pane (`break-pane`) into an ordinary
+detached `grove-chat-<label>-<n>` session: the process keeps running,
+the `%pane` id and the pane's stamps are unchanged, and `gv chat
+ls|send|close`, the phone and `gv park --chats` see it as any other
+detached chat. Showing joins it back into the workspace's cockpit window
+(`join-pane`). Three routes: `!gv chat hide` inside the chat (no
+argument = `$TMUX_PANE`); the cockpit's CHATS box — between AGENTS and
+ACTIVITY, absent with zero chats, reached with `tab` — where `h`
+hides/shows (the keyboard stays on the dashboard), `enter` focuses
+(showing first), `a` replies inline to a hidden local chat and `x`
+closes after y/N; and `gv chat hide [<session-id>|<%pane>]` / `gv chat
+show <session>` from anywhere. A REMOTE chat's pane is only an ssh
+attachment, so hide closes that LOCAL pane and show (`gv chat show
+@<host>/<session>`) re-attaches — nothing is sent to the host; the
+hidden chat is remembered in the cockpit session's
+`@grove_hidden_remote` option, which dies with the session on park.
+Both log `chat_hidden` / `chat_shown` (docs/plugins.md, where the known
+limits are written down too).
+
 ## Build / test
 
 - `go build ./... && go vet ./... && go test ./...` must be green;

@@ -774,21 +774,11 @@ func spawnRemoteChat(cfg *config.Config, host, profile string) (string, error) {
 	}
 	// Pane identity (grove-199): remote panes wear "@<host> · <profile>" and a
 	// distinct border color, so a glance separates the chats running here from
-	// the ones running there. Cosmetic — a tmux too old for pane options never
-	// fails the spawn.
-	if err := tmux.SetPaneRemote(paneID, host); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not tag remote chat pane with host %q: %v\n", host, err)
-	}
-	if profile != "" {
-		if err := tmux.SetPaneProfile(paneID, profile); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not tag remote chat pane with profile %q: %v\n", profile, err)
-		}
-	}
-	if err := tmux.SetPaneRemoteBorder(paneID); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not color the remote chat pane's border: %v\n", err)
-	}
-	if err := tmux.ShowPaneBorders(tmux.Exact(session) + ":cockpit"); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not show cockpit pane borders: %v\n", err)
+	// the ones running there — plus the stamp of WHICH host session this pane
+	// shows (grove-404), without which it could not be hidden. Cosmetic — a
+	// tmux too old for pane options never fails the spawn.
+	for _, w := range tmux.TagRemotePane(paneID, tmux.Exact(session)+":cockpit", host, profile, remoteSession) {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 	return remoteChatFlash(host, profile), nil
 }

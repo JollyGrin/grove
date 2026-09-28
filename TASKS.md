@@ -9,6 +9,92 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
+      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
+      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
+      — an orchestrator may hide ITSELF when the operator asks it to get
+      out of the way (non-destructive, no second yes), while
+      hiding/showing/closing ANOTHER chat stays propose-then-act —
+      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
+      79b5290fc383; workspace brains are NOT refreshed by this car (they go
+      `stale` in `gv brains` once the train is released, and are merged
+      then by the usual `gv init --only orchestrator-md` three-way).
+      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
+      `host`; it gains the event-before-move limit. LEARNINGS: pane
+      identity across break/join, why not a 1-column shrink, the
+      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
+      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
+      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
+      usage strings only. Idea, not built: a tmux prefix binding for hide
+      (bindings are server-global — it would leak into non-grove
+      sessions).
+- [x] chat-hide 04: remote chats — hide closes the local attach pane,
+      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
+      A remote chat lives on its host and the cockpit pane is only `ssh -t
+      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
+      pane (nothing is sent to the host) and `gv chat show
+      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
+      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
+      The spawn stamps `@grove_remote_session` on the pane; an unstamped
+      legacy pane is refused, never guessed. Hidden remote chats are
+      remembered in ONE user option on the cockpit session
+      (`@grove_hidden_remote`) that rides the CHATS box's existing
+      `list-panes -a` as its last field — no file, poll, cache or ssh on
+      any tick; rows render `○ chat-N @host` with `—` for state and last
+      line. `x` on a remote row relays the existing `gv chat close --host`;
+      `a` flashes "attach to reply" (no `chat send --host` relay exists —
+      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
+- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
+      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
+      chat / shows a hidden one (the keyboard stays on the dashboard —
+      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
+      pane (showing it first when hidden), `a` opens a one-line inline
+      reply under the row for a HIDDEN chat (a shown one refuses via
+      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
+      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
+      `a` flashes "attach to reply"); task keys stay refused; every
+      global key is untouched. The keys call the functions behind the CLI
+      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
+      `closeChat`, `closeCockpitPane` — the first, second and last factored
+      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
+      `tea.Cmd` per press and one costly pass of the box on its answer.
+      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
+      renders `chat_hidden` / `chat_shown`; the footer offers the row's
+      chat keys under CHATS focus only; help gains a CHATS section. No new
+      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
+      keys through the live TUI.
+- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
+      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
+      one row per live chat of the workspace: `▣` on screen, `○` hidden
+      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
+      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
+      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
+      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
+      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
+      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
+      transcript read per chat and the waiting capture ride the 30s beat,
+      or the 1s beat while the box is focused (`tui.CockpitChats`,
+      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
+      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
+      and footer/help hints are the next car. The global cockpit (no
+      workspace) owns no chats and shows no box.
+- [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
+      `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
+      Hiding a LOCAL cockpit chat pane turns it into an ordinary detached
+      `grove-chat-<label>-<n>` session (`new-session` placeholder →
+      `break-pane` → kill the placeholder), showing joins it back
+      (`join-pane`); same `%pane`, same pid, stamps travel, and the cockpit
+      window is re-tiled to `@grove_layout` by its `@N` id, never the
+      active window. `tmux.HideChatPane`/`ShowChatPane` with pure guards
+      (`hidablePane`, `showableChat`), `chat.MatchHide` (a bare cockpit
+      name holding several chats is an error, never a pick). Refused, with
+      nothing touched: the dashboard, worker windows, remote panes, an
+      already hidden/shown chat, a split chat session, a cockpit that is
+      not running. New additive events `chat_hidden` / `chat_shown`
+      (docs/plugins.md); no `--json` field changed. Opt-in: no spawn path
+      touched, nothing hides by itself. New `e2e/chat_hide.sh` in
+      `e2e/all.sh`, both tmux modes. Not yet: TUI rows/keys, remote chats,
+      the orchestrator seed (later cars).
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch

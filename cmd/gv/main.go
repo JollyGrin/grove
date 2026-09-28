@@ -153,6 +153,12 @@ const usage = `gv — grove
   gv chat keys <s> <chars>                    raw keystroke, no Enter (option pickers / permission prompts)
   gv chat close <s> [--host H]                end a live chat (kills its claude process); the transcript
                                               stays in history, revivable with gv orchestrator new --resume
+  gv chat hide [<id>|<pane-id>]               move a LOCAL cockpit chat pane off-screen: it keeps running as
+                                              a detached grove-chat-<label>-<n>. No argument = this pane.
+                                              A REMOTE chat's pane (an ssh attachment) is closed instead —
+                                              the chat keeps running on its host, nothing is sent there
+  gv chat show <s>                            join a detached chat into its workspace's cockpit window;
+                                              @<host>/<session> re-attaches a hidden remote chat
   gv chat serve [--port 3000] [--bind ADDR]   phone UI for those chats on http://127.0.0.1:3000 — loopback by
                                               default and no auth of its own, so put it behind
                                               "tailscale serve --bg 3000". Off unless invoked; ^C stops it
@@ -767,6 +773,13 @@ func cmdDashboard() error {
 		}
 		return names
 	}
+	// grove-402: the CHATS box reads this workspace's chats on the beats
+	// the dashboard already has — a pure read, nothing stamped.
+	chatLook := liveCockpitChatLookup()
+	tui.CockpitChats = func(_ string, deep bool) []tui.ChatRow {
+		return cockpitChats(ambient.ws, deep, chatLook)
+	}
+	wireChatKeys()
 	tui.SaveHotkeyBinding = func(digit, profile string) error {
 		// Workspace-scoped like the orchestrator block it lives in (LoadAt
 		// drops the global orchestrator section inside a workspace).
@@ -1478,6 +1491,16 @@ func cmdOrchestratorClose(args []string) error {
 	if pane == "" {
 		return fmt.Errorf("no $TMUX_PANE — `gv orchestrator close` runs from inside a cockpit pane")
 	}
+	data := map[string]string{"reason": *reason}
+	if *ticket != "" {
+		data["ticket"] = *ticket
+	}
+	return closeCockpitPane(pane, data)
+}
+
+// closeCockpitPane is the guarded pane close behind `gv orchestrator close`
+// and the cockpit's `x` on a shown chat (grove-403): validate, log, kill.
+func closeCockpitPane(pane string, data map[string]string) error {
 	// Which sessions hold a dashboard to protect is a REGISTRY question,
 	// not a name-shape one (grove-199) — resolve it here, where the
 	// registry lives, and hand the answer to the guard.
@@ -1490,13 +1513,10 @@ func cmdOrchestratorClose(args []string) error {
 	if err := tmux.PaneClosable(pane, isCockpit); err != nil {
 		return err
 	}
-	// Log before the kill: kill-pane takes down this very process, so a
-	// post-kill append would never land. Ticket rides in Data (not the
-	// Event.Ticket field) so fold leaves the derived task view untouched.
-	data := map[string]string{"reason": *reason}
-	if *ticket != "" {
-		data["ticket"] = *ticket
-	}
+	// Log before the kill: kill-pane takes down the caller when it closes
+	// its own pane, so a post-kill append would never land. Ticket rides in
+	// Data (not the Event.Ticket field) so fold leaves the derived task
+	// view untouched.
 	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvOrchestratorClosed,
 		Data: data,

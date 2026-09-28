@@ -310,6 +310,97 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · `break-pane` / `join-pane` keep the pane's `%N` id, its
+  pid and its pane user options** (grove-405, tmux 3.6a, re-verified on an
+  isolated socket; grove-401 built on it): a pane stamped `@grove_model
+  opus` came back from a round trip through another session as the same
+  `%1`, same pid, same stamp. That is the whole reason a hidden chat needs
+  no new state — it is the same pane in a different session, and
+  everything that finds a chat by `%N` or by stamp keeps working. What
+  does NOT travel is anything on the window or session: the pane lands in
+  a new window (auto-rename has to be disabled again), and the session
+  `break-pane -t` needs must already exist, hence the placeholder window
+  `HideChatPane` creates and kills.
+- **2026-09-28 · Why hiding is a move and not a 1-column shrink**
+  (grove-405; rejected in the grove-401 ticket): `resize-pane -x 1` does
+  make a pane 1 column wide, but the next `select-layout main-vertical` —
+  which the cockpit runs on every spawn, close, hide and show — stretches
+  it straight back (verified: 119 → 1 → 119). It would also still cost a
+  border column per chat, and the ticket records Claude Code redrawing
+  junk at that width (not re-verified here).
+- **2026-09-28 · `D="$(cd "$(mktemp -d …)" && pwd -P)"` is the WORKTREE
+  when mktemp fails — in zsh and macOS's `/bin/bash` 3.2** (grove-405; the
+  harness stopped two workers of this train on the `rm -rf "$D"` that
+  follows): mktemp prints nothing, `cd ""` stays put and exits 0, `pwd -P`
+  answers with the cwd. bash 5.3 refuses (`cd: null directory`), so the
+  same line is safe or fatal depending on which bash `env` finds. Safe
+  form in the tmux-discipline skill. `e2e/chat.sh`, `chat_hide.sh`,
+  `brains.sh` and `supervise.sh` still carry the nested form (a follow-up,
+  not changed by a docs car).
+- **2026-09-28 · chat-hide: known limits, as shipped** (grove-405, each
+  read off the code on `feature/chat-hide`):
+  (a) `chat_hidden` / `chat_shown` are appended BEFORE the pane moves
+  (`HideChatPane` / `showChatPane` / `HideRemotePane` call `announce`
+  first — hide runs inside the pane it moves), so a tmux failure after the
+  append leaves an event for a move that did not happen; only a remote
+  show appends after its pane exists.
+  (b) There is no `gv chat send --host` relay, so a remote row has no
+  inline reply — `a` flashes "attach to reply".
+  (c) Showing a remote chat does no liveness check (that would be a dial
+  on a key press): a chat that ended on its host shows as ssh's own error
+  in the new pane.
+  (d) `@grove_hidden_remote` is read-modify-write with no lock: two
+  concurrent remote hides (or a hide racing a show) can lose a record. The
+  chat is unharmed on its host; only its hidden row is gone.
+  (e) The record lives on the cockpit SESSION, so `gv park` forgets every
+  hidden remote chat, and an attach pane spawned before grove-404 (no
+  `@grove_remote_session` stamp) cannot be hidden at all.
+  (f) The cockpit's chat keys run `chatReport()`, whose stamp-failure
+  warning is a bare `fmt.Fprintf(os.Stderr, …)` (`stampChatPane`) — inside
+  the tea loop that is a stray line on the alt screen, not a flash.
+
+- **2026-09-28 · a SESSION user option expands in `list-panes -a -F`, on
+  every pane of that session — and its value lands in the line verbatim**
+  (grove-404, tmux 3.6a): `#{@opt}` in a pane's format context falls
+  through pane → window → session options, so per-session state can ride
+  a listing that is already being run instead of costing a `show-options`
+  of its own. Two consequences. The value is repeated on each of the
+  session's panes (worker windows included), so keep it short; and it is
+  NOT escaped, so a value holding a tab or a newline splits the very line
+  that carries it — which is why `@grove_hidden_remote` is
+  `host|session|profile` records joined by `,` with every field
+  percent-escaped, not the tab/newline form the ticket sketched. Reading
+  an unset user option with `show-options -v` is an error ("invalid
+  option"); `-qv` answers with an empty line instead.
+- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
+  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
+  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
+  `gv chat show` and wrong for a cockpit key that must keep the operator
+  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
+  afterwards is needed, and the re-tile does not move focus either.
+  `TestShowChatPaneFocus` pins both behaviors.
+- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
+  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
+  is not an error, so "did the command fail" cannot answer "does this pane
+  exist". `paneFacts` treats an empty answer as "no such pane" before
+  parsing; any new reader of a caller-supplied `%N` must do the same.
+
+- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
+  is ACTIVE, which is only the cockpit when the caller is sitting in it**
+  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
+  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
+  run from a phone, a worker window or a detached chat (`gv chat
+  hide`/`show`) must re-tile the cockpit window by its `@N` id
+  (`retileCockpit`) — the integration test keeps a worker window active
+  and asserts its layout is untouched.
+
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
+
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
@@ -641,6 +732,22 @@
 
 ## Go / CLI
 
+- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
+  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
+  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
+  reproduced here): until someone finds out what the two runs share, run
+  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
+  not a red suite — do not "fix" sub.sh on the strength of it.
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
+- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
+- **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
+- **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt

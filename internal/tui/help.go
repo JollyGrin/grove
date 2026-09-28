@@ -17,7 +17,7 @@ type helpEntry struct{ key, desc string }
 var (
 	helpRow = []helpEntry{
 		{"j/k", "move the selection up/down the fleet (or the FEATURES rail, when focused)"},
-		{"tab", "focus: switch between FEATURES and AGENTS — shown while a feature train is open"},
+		{"tab", "focus: cycle FEATURES → AGENTS → CHATS — a panel with nothing in it is skipped"},
 		{"s", "serve (FEATURES focused, or in the lens): run the feature's .grove/run.sh — an untrusted or changed script opens a review first (y trust & run); a running serve offers stop"},
 		{"enter", "reply: open the task and type straight into its agent's pane"},
 		{"a", "attach: switch your tmux client to the task's window"},
@@ -43,7 +43,7 @@ var (
 		{"$", "costs: spend + account tabs — per-ticket spend, ledger, OpenRouter balance"},
 		{"*", "effects: cycle ambient effects off → calm → full (runtime only)"},
 		{"g", "gardens: the almanac — one garden per day, h/l walk days"},
-		{"X", "park: stop workers + orchestrator + cockpit (chats keep running); state stays on disk"},
+		{"X", "park: stop workers + orchestrator + cockpit (detached + hidden chats keep running); state stays on disk"},
 		{"r", "refresh PR states now (also polled every 30s)"},
 		{"R", "remote: fold every configured host's fleet in (one ssh per host per press; rows tagged @host)"},
 		{"q", "quit the cockpit — workers keep running"},
@@ -54,6 +54,12 @@ var (
 		{"m", "in the lens: open the feature PR in the browser"},
 		{"l", "land: finish every merged car of the feature — shows the plan, asks to confirm"},
 	}
+	helpChats = []helpEntry{
+		{"h", "hide / show: move the chat off-screen (it keeps running) or bring it back beside the dash"},
+		{"enter", "focus the chat's pane — a hidden chat is shown first"},
+		{"a", "reply to a HIDDEN chat without showing it: enter sends, esc cancels (a shown chat refuses: enter focuses it)"},
+		{"x", "close the chat — asks to confirm first; its transcript is kept"},
+	}
 	helpSections = []struct {
 		title   string
 		entries []helpEntry
@@ -62,6 +68,9 @@ var (
 		{"FEATURES — with a feature train focused (tab)", helpFeature},
 		{helpSpawnTitle, helpSpawn},
 		{"GLOBAL", helpGlobal},
+		// Last (grove-403): the newest section is the one a short pane trims,
+		// and its keys are in the footer whenever the box is focused.
+		{"CHATS — with the chat box focused (tab)", helpChats},
 	}
 )
 
