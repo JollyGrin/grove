@@ -641,6 +641,26 @@
 
 ## Go / CLI
 
+- **2026-09-28 · `EncodePath`-based directory matching breaks on macOS
+  unless the path is resolved through `pwd -P` first** (grove-423, `gv
+  cost --boot`'s classifier). `gv init` records `repo.Path` from the
+  process's physical cwd (Go's `os.Getwd()` calls the raw `getwd()`
+  syscall, which never carries a symlink), so on a Mac — where `/tmp` is a
+  symlink to `/private/tmp` — a repo grabbed from a scratch `/tmp/...`
+  path is stored as `/private/tmp/...`, and every worktree root derived
+  from it (`worktree.DefaultPath`) inherits that resolved form. An e2e
+  fixture built from the UNRESOLVED shell path (`$SCRATCH/repos/.worktrees
+  /dummy` where `$SCRATCH="$(mktemp -d /tmp/...)"`) still `ls`/`mkdir`s
+  fine — the kernel resolves the symlink transparently for filesystem
+  calls — but `transcript.EncodePath`'s dash-substitution is a pure STRING
+  operation, so the classifier's prefix match silently misses: the
+  fixture directory name and the code's computed worker-root prefix are
+  built from two different (if filesystem-equivalent) strings. Fixed by
+  resolving with `REPO_PATH="$(cd "$DUMMY" && pwd -P)"` before deriving
+  the worktree root for the fixture path in `e2e/dummy.sh` — same fix
+  shipping-gates already prescribes for tmux pane cwd assertions, now
+  confirmed to apply to any EncodePath-keyed fixture too.
+
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt

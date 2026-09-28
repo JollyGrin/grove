@@ -384,6 +384,40 @@ grep -q 'task-001' "$SCRATCH/ledger.out" || fail "history lost after transcript 
 grep -q 'Replace me' "$SCRATCH/ledger.out" || fail "history lost the title after transcript deletion"
 grep -q '0.02' "$SCRATCH/ledger.out" || fail "history lost the cost estimate (2k out tokens ≈ \$0.02)"
 
+# --- cost --boot (grove-423): per-workspace boot rollup ---
+
+say "cost --boot: usage error (exit 2) combined with --analyze/--ledger"
+if "$GV" cost --boot --analyze > "$SCRATCH/boot-usage.out" 2>&1; then
+  BOOT_USAGE_EXIT=0
+else
+  BOOT_USAGE_EXIT=$?
+fi
+[ "$BOOT_USAGE_EXIT" -eq 2 ] || fail "cost --boot --analyze must exit 2, got $BOOT_USAGE_EXIT"
+grep -q -- '--boot cannot be combined' "$SCRATCH/boot-usage.out" || fail "cost --boot --analyze missing the usage-error line"
+
+say "cost --boot on an empty scratch: no-sessions line, exit 0"
+"$GV" cost --boot > "$SCRATCH/boot-empty.out"
+grep -q 'no sessions' "$SCRATCH/boot-empty.out" || fail "cost --boot on an empty scratch must print a no-sessions line"
+
+say "cost --boot --json: one fixture transcript in a matching worker project dir"
+# repo.Path is recorded resolved (gv init uses the physical cwd, not the
+# shell's logical one) — on macOS /tmp is a symlink to /private/tmp, so the
+# fixture's project-dir name must be built from the SAME resolved path or
+# the classifier's prefix match never fires (tmux-discipline's "resolve
+# with pwd -P" trap, the transcript-path flavor of it).
+REPO_PATH="$(cd "$DUMMY" && pwd -P)"
+WORKER_ROOT="$(dirname "$REPO_PATH")/.worktrees/$(basename "$REPO_PATH")"
+encode_path() { printf '%s' "$1" | sed -e 's/\//-/g' -e 's/\./-/g'; }
+BOOT_DIR="$HOME/.claude/projects/$(encode_path "$WORKER_ROOT")-boot-e2e"
+mkdir -p "$BOOT_DIR"
+cat > "$BOOT_DIR/boot-e2e.jsonl" <<'JSONL'
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["hello"]}}
+{"type":"assistant","message":{"id":"msg_boot_e2e","model":"claude-sonnet-5","usage":{"input_tokens":5000,"output_tokens":200,"cache_creation_input_tokens":1000,"cache_read_input_tokens":2000}},"requestId":"req_boot_e2e","timestamp":"2026-09-28T00:00:03Z"}
+JSONL
+"$GV" cost --boot --json > "$SCRATCH/boot.json"
+jq -e '.groups | length >= 1' "$SCRATCH/boot.json" >/dev/null || fail "cost --boot --json missing groups for the fixture session"
+rm -rf "$HOME/.claude/projects"
+
 say "worktree process of a DONE task: audit reports it, sweep offers the kill (grove-156)"
 # Same discipline as the orphan-lookalike above: stubbed ps so the row is
 # fully controlled, real sleep pid so the SIGTERM lands on something we own.
