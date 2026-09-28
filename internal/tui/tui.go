@@ -79,6 +79,15 @@ type tickMsg struct{}
 // 'r' refresh, post-action refreshes) produce only a data-applying prsMsg,
 // never a prTickMsg, so they can't multiply this loop.
 type prTickMsg struct{}
+
+// featTickMsg is the feature network-pass beat (grove-428): the gh-backed
+// landed/queued/PR lookups in featuresCmd are expensive (3-4 `gh` calls per
+// open feature) and don't need the 30s PR-poll cadence, so they ride their
+// own, slower timer — one per 10min, re-armed ONLY by its own handler. The
+// 'r' key and the open-feature-set-changed pass (grove-377) still fire
+// featuresCmd ad-hoc, producing only a data-applying featuresMsg, never a
+// featTickMsg, so they can't multiply this loop.
+type featTickMsg struct{}
 type flashMsg string
 
 // remoteMsg is the one-shot answer to an R keypress (grove-178): every
@@ -328,7 +337,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
 }
 
 // --- commands ---
@@ -347,6 +356,19 @@ func tickEvery(d time.Duration) tea.Cmd {
 func prTickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return prTickMsg{} })
 }
+
+// featTickEvery arms the feature network-pass beat, decoupled from the 30s
+// PR-poll beat (grove-428): the gh-backed feature lookups are too expensive
+// to ride that cadence, so they get their own timer, re-armed only here.
+func featTickEvery(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return featTickMsg{} })
+}
+
+// featTickInterval is the feature network-pass cadence — a var, not a
+// literal, so a re-arm test can shrink it instead of blocking real minutes
+// on tea.Tick's timer (which starts counting the instant featTickEvery is
+// called, not when its Cmd is invoked).
+var featTickInterval = 10 * time.Minute
 
 // relayCmd delivers an inline reply off the update loop. PasteText settles
 // before its Enter and then verifies the submit landed (grove-144), which can
@@ -890,9 +912,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The single PR-poll beat (grove-118, grove-24 pattern): kick a poll
 		// AND re-arm ONLY this timer. Ad-hoc prsMsg deliveries (below) never
 		// re-arm, so 'r' and other ad-hoc refreshes can't multiply the loop.
-		// grove-377: the feature status pass (queued issues, feature PR)
-		// rides this beat — nil, and free, with no open feature.
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), featuresCmd(m.cfg, m.stateDir, m.features), prTickEvery(30*time.Second))
+		// grove-428: the feature network pass moved off this beat onto its
+		// own, slower featTickMsg — it was riding this 30s cadence and
+		// burning the shared gh rate-limit budget for data that barely
+		// changes tick to tick.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), prTickEvery(30*time.Second))
+
+	case featTickMsg:
+		// grove-428: the feature panel's gh-backed pass (landed/queued/PR
+		// lookups) on its own 10min beat, decoupled from the 30s PR poll.
+		// Ad-hoc featuresCmd calls (the 'r' key, the open-feature-set-changed
+		// pass in refreshMsg) never re-arm this timer, so they can't
+		// multiply the loop — same discipline as prTickMsg/tickMsg.
+		return m, tea.Batch(featuresCmd(m.cfg, m.stateDir, m.features), featTickEvery(featTickInterval))
 
 	case prsMsg:
 		// Data only — the poll loop lives on prTickMsg now (grove-118). This

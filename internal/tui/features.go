@@ -22,9 +22,11 @@ import (
 // Data discipline (cockpit RAM rule): status is computed in assemble(),
 // never in View. The local half (car states off the fold) runs on every
 // refresh; the network half (queued issues, feature PR, behind/mergeable,
-// est) runs in featuresCmd only where PR refresh already runs — the 30s
-// PR beat and `r` — plus once when the open-feature set changes. No new
-// poll, goroutine, timer or cache.
+// est) runs in featuresCmd on its own 10min beat (grove-428, decoupled
+// from the 30s PR poll to stay inside the shared gh rate-limit budget)
+// and on `r` — plus once when the open-feature set changes. No new poll,
+// goroutine, timer or cache: featTickMsg reuses the same tick-and-rearm
+// shape as prTickMsg/tickMsg, just slower.
 
 // Panel focus: tab toggles while a feature is open.
 const (
