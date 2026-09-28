@@ -154,7 +154,7 @@ const usage = `gv — grove
   gv chat close <s> [--host H]                end a live chat (kills its claude process); the transcript
                                               stays in history, revivable with gv orchestrator new --resume
   gv chat hide [<id>|<pane-id>]               move a LOCAL cockpit chat pane off-screen: it keeps running as
-                                              a detached grove-chat-<label>-<n>. No argument = this pane
+                                              a detached grove-chat-<label>-<n>. No argument = this pane.
                                               A REMOTE chat's pane (an ssh attachment) is closed instead —
                                               the chat keeps running on its host, nothing is sent there
   gv chat show <s>                            join a detached chat into its workspace's cockpit window;

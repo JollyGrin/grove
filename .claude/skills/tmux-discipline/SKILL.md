@@ -23,6 +23,19 @@ grove worker) silently targets the **real server** unless it clears
   every session and worker on the machine (2026-07-07).
 - `tapes/run.sh` snapshots the real server's session list before/after as
   a canary — copy that pattern for new scripted-tmux suites.
+- **A scratch dir is proven before it is removed** (grove-405). In
+  `D="$(cd "$(mktemp -d …)" && pwd -P)"` a failed `mktemp` prints nothing,
+  and `cd ""` STAYS PUT with exit 0 in zsh and in macOS's `/bin/bash` 3.2
+  (bash 5 errors) — so `D` is the directory you are standing in, the
+  worktree, and `rm -rf "$D"` deletes it. The harness stopped two workers
+  on exactly that line. Make the dir first and fail on it, resolve
+  second, guard the remove:
+
+  ```sh
+  D=$(mktemp -d /tmp/x.XXXXXX) || exit 1
+  D="$(cd "$D" && pwd -P)"        # /tmp → /private/tmp on macOS
+  case "$D" in /tmp/x.*|/private/tmp/x.*) rm -rf "$D" ;; esac
+  ```
 
 ## 2. Sending text to panes
 
@@ -100,6 +113,14 @@ grove worker) silently targets the **real server** unless it clears
   reachable from a phone, a worker window or a detached chat resolves the
   cockpit window to its `@N` id first (`WindowIDExact(session, "cockpit")`)
   and targets that.
+- **Moving a pane keeps its identity** (grove-401/405, tmux 3.6a):
+  `break-pane` and `join-pane` carry the `%N` id, the pid and every pane
+  user option (`@grove_…`) across sessions — so a moved pane is
+  re-found by its `%N`, never re-resolved by position, and its stamps are
+  never re-applied. Window and session options do NOT travel: the window
+  it lands in is a new one (`DisableAutoRename` it again). To take a pane
+  off-screen, move it; never shrink it — a 1-column pane is stretched
+  back by the next `select-layout` and still costs a border.
 - **`display-message -p -t %N` on a missing pane prints an empty line and
   exits 0** (grove-401) — treat an empty answer as "no such pane"; the exit
   status will not tell you.

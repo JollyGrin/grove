@@ -171,3 +171,24 @@ func TestSeedTeachesSupervisionMandate(t *testing.T) {
 			"orchestrator turn, so growth is paid on every request — tighten it", n)
 	}
 }
+
+// TestSeedTeachesChatHide guards the grove-405 chat-hide teaching: the two
+// verbs in the tools block, the one chat move an orchestrator makes without a
+// second confirmation (hiding ITSELF when the operator asks), and the opt-in
+// invariant — the seed must never tell a chat to hide by default.
+func TestSeedTeachesChatHide(t *testing.T) {
+	for _, want := range []string{"gv chat hide [<s>]", "gv chat show <s>"} {
+		if !strings.Contains(ClaudeMd, want) {
+			t.Errorf("orchestrator/CLAUDE.md is missing `%s` — restore it in the tools block", want)
+		}
+	}
+	if !strings.Contains(ClaudeMd, "Never hide yourself\n   unasked") {
+		t.Error("orchestrator/CLAUDE.md is missing the `Never hide yourself unasked` rule — " +
+			"chats are on screen by default (the chat-hide invariant); restore duty 3's " +
+			"\"Getting out of the way\" paragraph")
+	}
+	if !strings.Contains(ClaudeMd, "`chat hide`/`chat show` on another chat") {
+		t.Error("orchestrator/CLAUDE.md's Guardrails no longer list `chat hide`/`chat show` on " +
+			"another chat as propose-then-act — restore it")
+	}
+}

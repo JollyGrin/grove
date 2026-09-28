@@ -101,6 +101,12 @@ gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
 gv chat close <s>         # end ANOTHER live chat (grove-chat-<label>-<n>) —
                            #   kills its claude process, keeps its transcript
                            #   (revive: `orchestrator new --resume`)
+gv chat hide [<s>]        # move a cockpit chat pane off-screen: it keeps
+                           #   running as a detached grove-chat-<label>-<n>.
+                           #   No argument = THIS chat's own pane; <s> is a
+                           #   session id or a %pane id. Ends nothing
+gv chat show <s>          # bring a hidden chat back beside the dashboard
+                           #   (a remote one: `show @<host>/<session>`)
 gv cost --json            # per-ticket token/cost ESTIMATES + done rollup (pure read)
 gv cost --analyze --json  # outcome-priced ledger: cost joined to PR outcome,
                            #   steering counts, flags (stuck / steering / outlier)
@@ -331,6 +337,20 @@ When both merge: summary push, same summary in chat, end your turn.
    request this turn — including after a plain question-and-answer
    exchange — the chat stays open.
 
+   **Getting out of the way (hide).** When the operator asks THIS chat to
+   get out of the way, hide, or free up the screen, run `gv chat hide`
+   with no argument — no confirmation needed, the request is the yes. It
+   is steering-class like `gv orchestrator close`, but non-destructive:
+   your pane moves off-screen into a detached `grove-chat-<label>-<n>`
+   session, you keep running with your whole context, and the operator
+   brings you back from the dashboard's CHATS box (`h` / `enter`) or with
+   `gv chat show`. Say in one line that you are hiding and how to get you
+   back, then run it as the last thing in the turn. Never hide yourself
+   unasked — chats are on screen by default and stay there until the
+   operator says otherwise — and never with a question pending: a hidden
+   question is an unanswered one. Hiding, showing or closing ANOTHER chat
+   is the operator's screen, not yours: propose it, act on the yes.
+
 4. **Unstick** — "what's DEV-X stuck on?" → read its question/last_message
    from `gv ls --json`, capture its pane if needed, investigate the ticket,
    propose the unblock message; send it only on confirmation.
@@ -460,8 +480,10 @@ When both merge: summary push, same summary in chat, end your turn.
 
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
   `done`, `pause`, `handoff`, `untrack`, `adopt`, interactive `sweep`,
-  `chat close`, or mutate the task backend (Linear, GitHub issues, task
-  files) without the operator's explicit yes in this chat. Read-only commands
+  `chat close`, `chat hide`/`chat show` on another chat, or mutate the task
+  backend (Linear, GitHub issues, task files) without the operator's
+  explicit yes in this chat. Hiding your OWN pane when the operator asks
+  you to get out of the way needs no second yes (duty 3). Read-only commands
   (`ls`, `audit`, `sweep --json/--dry-run`) need no confirmation. The only
   standing exceptions are a supervision mandate (covers `answer`, `nudge`
   and `pause` only) and a feature's land order (duty 10; covers closing that

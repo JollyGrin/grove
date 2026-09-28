@@ -9,6 +9,25 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
+      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
+      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
+      — an orchestrator may hide ITSELF when the operator asks it to get
+      out of the way (non-destructive, no second yes), while
+      hiding/showing/closing ANOTHER chat stays propose-then-act —
+      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
+      79b5290fc383; workspace brains are NOT refreshed by this car (they go
+      `stale` in `gv brains` once the train is released, and are merged
+      then by the usual `gv init --only orchestrator-md` three-way).
+      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
+      `host`; it gains the event-before-move limit. LEARNINGS: pane
+      identity across break/join, why not a 1-column shrink, the
+      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
+      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
+      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
+      usage strings only. Idea, not built: a tmux prefix binding for hide
+      (bindings are server-global — it would leak into non-grove
+      sessions).
 - [x] chat-hide 04: remote chats — hide closes the local attach pane,
       show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
       A remote chat lives on its host and the cockpit pane is only `ssh -t
@@ -32,7 +51,8 @@
       pane (showing it first when hidden), `a` opens a one-line inline
       reply under the row for a HIDDEN chat (a shown one refuses via
       `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
-      are inert ("remote chats: not yet"); task keys stay refused; every
+      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
+      `a` flashes "attach to reply"); task keys stay refused; every
       global key is untouched. The keys call the functions behind the CLI
       verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
       `closeChat`, `closeCockpitPane` — the first, second and last factored
