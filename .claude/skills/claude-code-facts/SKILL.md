@@ -40,6 +40,14 @@ changes the behavior.
   `gv hooks install`). If the hooks point somewhere `gv update` does not
   write, every hook-side fix silently never ships. Check the path in
   `settings.json`.
+- **A command claude runs inherits the pane's tmux env** (grove-405,
+  verified from the Bash tool: `$TMUX` and `$TMUX_PANE` are both set; the
+  `!` prompt prefix spawns the same kind of child). Two consequences: a
+  verb can mean "this pane" with no argument (`!gv chat hide`, or an
+  orchestrator hiding itself), and every tmux call such a command makes
+  targets the REAL server unless it unsets `$TMUX` (tmux-discipline §1).
+  `$TMUX_PANE` is the pane claude was STARTED in — a `%N` id, so it stays
+  right after the pane is moved to another session.
 
 ## Sessions, resume, transcripts
 

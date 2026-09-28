@@ -367,7 +367,11 @@ chat's tmux session ON that host, `pane` is the local attach pane — which
 does NOT survive the round trip, a shown remote chat has a new `%N` — and
 `session_id` is absent: the conversation's id is known to the host's own
 log, not this one. A remote chat is in no local `gv chat ls` row either
-way; absent `host` means the local move described above). New types will appear
+way; absent `host` means the local move described above. Known limit
+(grove-405): except for a remote show, the record is appended BEFORE tmux
+acts, so a tmux failure after it leaves a `chat_hidden` / `chat_shown`
+for a move that did not happen — treat the pair as activity, and read
+where a chat IS from `gv chat ls --json`). New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
