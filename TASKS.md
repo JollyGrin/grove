@@ -27,6 +27,30 @@
       code, no CLI; `internal/transcript/testdata/boot.jsonl` is a
       hand-written fixture covering one of each attachment type plus the
       sidechain/synthetic/image edge cases.
+- [x] boot-stats 02: `gv cost --boot` — per-workspace rollup, workers AND
+      orchestrator chats (grove-423, 2026-09-28, on `feature/boot-stats`).
+      New `internal/cost/bootreport.go` (pure): `ClassifyBootDir` names one
+      `<claude-config>/projects/<name>` directory `orchestrator` when it
+      equals (or is a profile subdir of) the workspace's orchestrator
+      brain dir, `worker` when it equals (or is a ticket subdir of) one of
+      the workspace's configured repos' worktree roots
+      (`worktree.DefaultPath(repoPath, "")`) — the boundary is always
+      `base` or `base + "-"`, so a dir that merely shares a leading
+      substring without a real path separator behind it never matches.
+      `BuildBootReport` discovers every matching dir's direct `*.jsonl`
+      files (no recursion — subagent transcripts live in subdirectories),
+      decodes each via car 01's `ParseBoot`/`BootOf`, filters on
+      `--since` against an injected clock, then rolls up into `groups`
+      (one per kind+model, percentile rule: sort ascending, index
+      `min(n-1, int(n*p))`), `trend` (ISO week x kind), `top_files`
+      (est_tokens x sessions, top 10), and raw `sessions` rows. New flag
+      `gv cost --boot [--json] [--since 720h]`; `--boot` with
+      `--analyze`/`--ledger` is a usage error (exit 2). `--json` output is
+      flat (not the schema-envelope wrapper other `cost` subcommands use)
+      per the ticket's pinned contract — `schema_version` sits alongside
+      `since`/`groups`/`trend`/`top_files`/`sessions`, not nesting them
+      under a named key. `gv cost --json`/`--analyze --json` verified
+      byte-identical to pre-car-02 output on the dummy fixture.
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch

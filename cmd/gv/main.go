@@ -43,6 +43,7 @@ import (
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/tui"
 	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/wizard"
@@ -102,6 +103,10 @@ const usage = `gv — grove
   gv audit [--json]                           cross-check tasks vs reality (pure read)
   gv cost [--json] [--analyze]                per-ticket token/cost estimates (pure read)
   gv cost --ledger | --record on|off          recorded spend history · persistence toggle
+  gv cost --boot [--json] [--since 720h]      boot cost of every session here — workers AND
+                                              orchestrator chats, rolled up by kind/model
+                                              (estimates, not billing; --boot excludes
+                                              --analyze/--ledger)
   gv sub "<prompt>" [path …] [--lane L] [--model M]   micro-task on another lane; prints only the answer
        [--agentic [--start "<cmd>"] [--max-turns N]]   (read-only claude -p --bare on the lane; --start = first command)
        [--max-tokens N] [--timeout 180s] [--thinking]
@@ -2681,7 +2686,17 @@ func cmdCost(args []string) error {
 	analyze := fs.Bool("analyze", false, "outcome-priced ledger with analysis flags")
 	record := fs.String("record", "", "turn the persistent spend ledger on|off (also toggleable from the cockpit costs page)")
 	showLedger := fs.Bool("ledger", false, "print the recorded spend history (latest snapshot per ticket)")
+	boot := fs.Bool("boot", false, "boot cost of every session in this workspace — workers AND orchestrator chats (estimates, not billing)")
+	since := fs.String("since", "720h", "boot cost lookback window (with --boot)")
 	parseAnywhere(fs, args)
+
+	if *boot && (*analyze || *showLedger) {
+		fmt.Fprintln(os.Stderr, "gv cost: --boot cannot be combined with --analyze or --ledger")
+		os.Exit(2)
+	}
+	if *boot {
+		return cmdCostBoot(*asJSON, *since)
+	}
 
 	if *record != "" {
 		if *record != "on" && *record != "off" {
@@ -2753,6 +2768,120 @@ func cmdCost(args []string) error {
 		doneCount, doneUSD, doneTurns)
 	printUnpricedFooter(unpricedModels(allTots))
 	return nil
+}
+
+// cmdCostBoot is `gv cost --boot`: the impure glue that resolves this
+// workspace's Claude config dir, orchestrator brain dir, every configured
+// repo's worktree root, and the ticket each worker worktree belongs to —
+// then hands it all to cost.BuildBootReport, which does every decision
+// (classification, rollup, percentiles) as pure, table-tested logic.
+func cmdCostBoot(asJSON bool, sinceStr string) error {
+	sinceDur, err := time.ParseDuration(sinceStr)
+	if err != nil {
+		return fmt.Errorf("--since: %w", err)
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return err
+	}
+	tasks, err := state.Load(stateDir())
+	if err != nil {
+		return err
+	}
+
+	var workerRoots []string
+	for _, repo := range cfg.Repos {
+		workerRoots = append(workerRoots, worktree.DefaultPath(repo.Path, ""))
+	}
+	ticketByPath := map[string]string{}
+	for _, t := range tasks {
+		if t.Worktree == "" {
+			continue
+		}
+		ticketByPath[transcript.ProjectDirIn(cfg.ClaudeConfigDir, t.Worktree)] = t.Ticket
+	}
+
+	rep, err := cost.BuildBootReport(cost.BootWorkspace{
+		ConfigDir:       cfg.ClaudeConfigDir,
+		OrchestratorDir: orchestratorDirFor(ambient.ws, cfg),
+		WorkerRoots:     workerRoots,
+		TicketByPath:    ticketByPath,
+		SinceLabel:      sinceStr,
+		Since:           sinceDur,
+		Now:             time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+
+	if asJSON {
+		out := map[string]any{
+			"schema_version": schema.Version,
+			"since":          rep.Since,
+			"groups":         rep.Groups,
+			"trend":          rep.Trend,
+			"top_files":      rep.TopFiles,
+			"sessions":       rep.Sessions,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+
+	printBootReport(rep)
+	return nil
+}
+
+// printBootReport is the human table: one row-per-model table per kind
+// (sessions/p50/p90/cached %), the part breakdown of the single biggest
+// group, the top 5 files, then the estimates disclaimer. Every column
+// width is picked to fit 80 columns.
+func printBootReport(rep cost.BootReport) {
+	if len(rep.Sessions) == 0 {
+		fmt.Printf("no sessions found under --boot (since %s) — nothing has booted here yet\n", rep.Since)
+		return
+	}
+
+	var kinds []string
+	seen := map[string]bool{}
+	for _, g := range rep.Groups {
+		if !seen[g.Kind] {
+			seen[g.Kind] = true
+			kinds = append(kinds, g.Kind)
+		}
+	}
+	sort.Strings(kinds)
+
+	for _, kind := range kinds {
+		fmt.Printf("\n%s (since %s)\n", strings.ToUpper(kind), rep.Since)
+		fmt.Printf("%-24s %-6s %-8s %-8s %s\n", "MODEL", "N", "P50", "P90", "CACHED%")
+		for _, g := range rep.Groups {
+			if g.Kind != kind {
+				continue
+			}
+			fmt.Printf("%-24s %-6d %-8s %-8s %.0f%%\n",
+				cost.ShortModel(g.Model), g.Sessions, fmtTok(g.P50), fmtTok(g.P90), 100*g.CacheReadShare)
+		}
+	}
+
+	if len(rep.Groups) > 0 {
+		big := rep.Groups[0]
+		fmt.Printf("\nboot parts — %s · %s (biggest group, %d sessions)\n",
+			big.Kind, cost.ShortModel(big.Model), big.Sessions)
+		for _, p := range big.Parts {
+			fmt.Printf("  %-20s %8s  %4.0f%%\n", p.Name, fmtTok(p.EstTokens), 100*p.Share)
+		}
+	}
+
+	if len(rep.TopFiles) > 0 {
+		fmt.Printf("\ntop files\n")
+		n := min(len(rep.TopFiles), 5)
+		for _, f := range rep.TopFiles[:n] {
+			fmt.Printf("  %8s  %-4d sessions  %s\n", fmtTok(f.EstTokens), f.Sessions, f.Path)
+		}
+	}
+
+	fmt.Println("\nestimates — tokens by part are chars/3.6; tool_schemas_est is the remainder")
 }
 
 // costLedger prints the recorded history — reads the ledger alone, so it
