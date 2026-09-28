@@ -38,8 +38,14 @@ func TestHidablePane(t *testing.T) {
 		{"already hidden names the show verb", func(p *PaneFacts) { p.Session, p.Window = "grove-chat-x-1", "chat" }, reg, "gv chat show grove-chat-x-1"},
 		{"chat-shaped name, nil check: window rule protects", func(p *PaneFacts) { p.Session, p.Window = "grove-chat-x-1", "chat" }, nil, "not the cockpit window"},
 		{"cockpit of a label that looks like a chat", func(p *PaneFacts) { p.Session = "grove-chat-app" }, reg, ""},
-		{"remote pane", func(p *PaneFacts) { p.Remote = "groveremote" }, reg, "remote chat panes: not yet (chat-hide car: remote)"},
-		{"remote beats every other reading", func(p *PaneFacts) { p.Remote, p.Index = "groveremote", 1 }, reg, "remote chat panes: not yet"},
+		// grove-404: a remote pane is hidable when it says what it shows.
+		{"stamped remote pane", func(p *PaneFacts) { p.Remote, p.RemoteSession = "groveremote", "grove-chat-x-1" }, reg, ""},
+		{"legacy remote pane: no stamp, no guess", func(p *PaneFacts) { p.Remote = "groveremote" }, reg, "close it and re-attach with"},
+		{"legacy remote pane names the host", func(p *PaneFacts) { p.Remote = "groveremote" }, reg, "on groveremote"},
+		{"a remote tag never unprotects the dashboard", func(p *PaneFacts) { p.Remote, p.RemoteSession, p.Index = "groveremote", "grove-chat-x-1", 1 }, reg, "the dashboard"},
+		{"a remote tag never reaches a worker window", func(p *PaneFacts) {
+			p.Remote, p.RemoteSession, p.Window = "groveremote", "grove-chat-x-1", "repo · grove-1"
+		}, reg, "worker windows are never hidden"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -75,7 +81,7 @@ func TestShowableChat(t *testing.T) {
 		{"foreign session", func(c *ChatFacts) { c.Session = "work" }, reg, "not a hidden chat"},
 		{"session gone", func(c *ChatFacts) { c.Exists, c.Panes = false, nil }, reg, "no live chat session"},
 		{"operator split it", func(c *ChatFacts) { c.Panes = []string{"%4", "%9"} }, reg, "holds 2 panes"},
-		{"remote attachment", func(c *ChatFacts) { c.Remote = "groveremote" }, reg, "remote chat panes: not yet (chat-hide car: remote)"},
+		{"remote attachment", func(c *ChatFacts) { c.Remote = "groveremote" }, reg, "holds an ssh attachment to groveremote"},
 		{"cockpit not running", func(c *ChatFacts) { c.CockpitWindow = "" }, reg, "open the cockpit with `gv`, or attach with tmux attach -t '=grove-chat-x-1'"},
 	}
 	for _, c := range cases {
@@ -102,10 +108,13 @@ func TestParsePaneFacts(t *testing.T) {
 		want      PaneFacts
 		bad       bool
 	}{
-		{"local pane", "grove-x\tcockpit\t\t2\t@1", PaneFacts{Session: "grove-x", Window: "cockpit", Index: 2, WindowID: "@1"}, false},
-		{"remote pane", "grove-x\tcockpit\tgroveremote\t3\t@1\n", PaneFacts{Session: "grove-x", Window: "cockpit", Remote: "groveremote", Index: 3, WindowID: "@1"}, false},
+		{"local pane", "grove-x\tcockpit\t\t2\t\t\t@1", PaneFacts{Session: "grove-x", Window: "cockpit", Index: 2, WindowID: "@1"}, false},
+		{"local profiled pane", "grove-x\tcockpit\t\t2\t\tzai-plan\t@1", PaneFacts{Session: "grove-x", Window: "cockpit", Index: 2, Profile: "zai-plan", WindowID: "@1"}, false},
+		{"legacy remote pane", "grove-x\tcockpit\tgroveremote\t3\t\t\t@1\n", PaneFacts{Session: "grove-x", Window: "cockpit", Remote: "groveremote", Index: 3, WindowID: "@1"}, false},
+		{"stamped remote pane", "grove-x\tcockpit\tgroveremote\t3\tgrove-chat-x-1\tglm\t@1\n", PaneFacts{Session: "grove-x", Window: "cockpit", Remote: "groveremote", Index: 3, RemoteSession: "grove-chat-x-1", Profile: "glm", WindowID: "@1"}, false},
+		{"the pre-stamp five fields", "grove-x\tcockpit\t\t2\t@1", PaneFacts{}, true},
 		{"short line", "grove-x\tcockpit\t2", PaneFacts{}, true},
-		{"index not a number", "grove-x\tcockpit\t\tx\t@1", PaneFacts{}, true},
+		{"index not a number", "grove-x\tcockpit\t\tx\t\t\t@1", PaneFacts{}, true},
 		{"empty", "", PaneFacts{}, true},
 	}
 	for _, c := range cases {
@@ -381,7 +390,7 @@ func TestHideChatPaneRefusals(t *testing.T) {
 		{"worker window's second pane", workerChat, reg, "worker windows are never hidden"},
 		{"foreign session", foreign, reg, "not a grove cockpit"},
 		{"unregistered cockpit", chatA, registry(), "not a registered workspace's cockpit"},
-		{"remote pane", remote, reg, "remote chat panes: not yet (chat-hide car: remote)"},
+		{"remote pane", remote, reg, "close it and re-attach with"},
 		{"no such pane", "%999", reg, "no such pane"},
 		{"no pane id", "", reg, "no pane id"},
 	}

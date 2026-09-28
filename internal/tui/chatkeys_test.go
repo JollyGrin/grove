@@ -20,8 +20,7 @@ import (
 // AC: the key → action decision per row kind.
 func TestChatKeyAction(t *testing.T) {
 	shown, hidden, waiting, remote := chatShownRow(1), chatHiddenRow(1), chatWaitingRow(2), chatRemoteRow(2)
-	remoteHidden := chatHiddenRow(3)
-	remoteHidden.Host = "groveremote"
+	remoteHidden := chatHiddenRemoteRow(3)
 	cases := []struct {
 		key   string
 		row   ChatRow
@@ -39,14 +38,16 @@ func TestChatKeyAction(t *testing.T) {
 		{"a", waiting, actReply, ""},
 		{"x", shown, actClose, ""},
 		{"x", hidden, actClose, ""},
-		// Remote rows are inert in this car — every chat key, either kind.
-		{"h", remote, actRefuse, "remote chats: not yet"},
-		{"enter", remote, actRefuse, "remote chats: not yet"},
-		{"a", remote, actRefuse, "remote chats: not yet"},
-		{"x", remote, actRefuse, "remote chats: not yet"},
-		{"h", remoteHidden, actRefuse, "remote chats: not yet"},
-		{"a", remoteHidden, actRefuse, "remote chats: not yet"},
-		{"x", remoteHidden, actRefuse, "remote chats: not yet"},
+		// Remote rows (grove-404): h / enter / x as on a local row; a is
+		// refused either way — no relay carries a reply to a host's chat.
+		{"h", remote, actHide, ""},
+		{"enter", remote, actFocus, ""},
+		{"a", remote, actRefuse, chatsRemoteFlash},
+		{"x", remote, actClose, ""},
+		{"h", remoteHidden, actShow, ""},
+		{"enter", remoteHidden, actShowFocus, ""},
+		{"a", remoteHidden, actRefuse, chatsRemoteFlash},
+		{"x", remoteHidden, actClose, ""},
 		// Task keys are refused, never passed to the AGENTS cursor.
 		{"n", shown, actRefuse, chatsTaskKeysFlash},
 		{"d", hidden, actRefuse, chatsTaskKeysFlash},
@@ -87,9 +88,19 @@ func stubChatFuncs(t *testing.T) *chatCalls {
 	t.Helper()
 	c := &chatCalls{}
 	ph, ps, pf, pn, pp, pc := HideChat, ShowChat, FocusChat, SendChat, CloseChatPane, CloseChatSession
+	prs, prc := ShowRemoteChat, CloseRemoteChat
 	t.Cleanup(func() {
 		HideChat, ShowChat, FocusChat, SendChat, CloseChatPane, CloseChatSession = ph, ps, pf, pn, pp, pc
+		ShowRemoteChat, CloseRemoteChat = prs, prc
 	})
+	ShowRemoteChat = func(host, session string, focus bool) (string, error) {
+		c.log = append(c.log, fmt.Sprintf("show-remote %s %s focus=%v", host, session, focus))
+		return "%31", c.err
+	}
+	CloseRemoteChat = func(host, session, pane string) error {
+		c.log = append(c.log, fmt.Sprintf("close-remote %s session=%q pane=%q", host, session, pane))
+		return c.err
+	}
 	HideChat = func(pane string) (string, error) {
 		c.log = append(c.log, "hide "+pane)
 		return "grove-chat-golden-9", c.err
@@ -162,13 +173,22 @@ func TestChatKeysEmitCommands(t *testing.T) {
 		said string
 	}{
 		{"h", 0, "hide %1", "○ hid cockpit·1 as grove-chat-golden-9"},
-		{"h", 1, "show grove-chat-golden-1 focus=false", "▣ showed chat-1"},
-		{"enter", 1, "show grove-chat-golden-1 focus=true", "▣ showed chat-1"},
+		{"h", 2, "show grove-chat-golden-1 focus=false", "▣ showed chat-1"},
+		{"enter", 2, "show grove-chat-golden-1 focus=true", "▣ showed chat-1"},
 		{"enter", 0, "focus %1", "→ cockpit·1"},
+		// grove-404: a remote row runs the same keys. Hide goes through the
+		// one HideChat (the pane's stamps say it is remote); show names the
+		// host, because a hidden remote chat has no pane and no local session.
+		{"h", 1, "hide %22", "○ hid cockpit·2 @groveremote as grove-chat-golden-9"},
+		{"enter", 1, "focus %22", "→ cockpit·2 @groveremote"},
+		{"h", 3, "show-remote groveremote grove-chat-golden-3 focus=false", "▣ showed chat-3 @groveremote"},
+		{"enter", 3, "show-remote groveremote grove-chat-golden-3 focus=true", "▣ showed chat-3 @groveremote"},
 	}
 	for _, c := range cases {
 		calls := stubChatFuncs(t)
-		m := chatsFocused(t, 120, 40, c.sel, chatShownRow(1), chatHiddenRow(1))
+		// The box sorts them: shown (local 1, remote 2), then hidden (local 1,
+		// remote 3) — rows 0 to 3.
+		m := chatsFocused(t, 120, 40, c.sel, chatShownRow(1), chatHiddenRow(1), chatRemoteRow(2), chatHiddenRemoteRow(3))
 		m, cmd := chatPress(t, m, c.key)
 		if len(calls.log) != 0 {
 			t.Fatalf("%s: tmux work ran inside Update: %v", c.key, calls.log)
@@ -215,11 +235,14 @@ func TestChatKeysRefusals(t *testing.T) {
 	if cmd != nil || got.mode != modeList || got.flash != "shown — enter to focus it" {
 		t.Errorf("a on a shown row: mode=%d flash=%q cmd=%v", got.mode, got.flash, cmd != nil)
 	}
-	m.chatSel = 1
-	for _, k := range []string{"h", "enter", "a", "x"} {
-		got, cmd := chatPress(t, m, k)
-		if cmd != nil || got.mode != modeList || got.flash != "remote chats: not yet" {
-			t.Errorf("%s on a remote row: mode=%d flash=%q cmd=%v", k, got.mode, got.flash, cmd != nil)
+	// a on a remote row, shown or hidden: no relay carries a reply to a
+	// host's chat, so it is refused and nothing opens (grove-404).
+	m = chatsFocused(t, 120, 40, 0, chatShownRow(1), chatRemoteRow(2), chatHiddenRow(1), chatHiddenRemoteRow(3))
+	for _, sel := range []int{1, 3} {
+		m.chatSel = sel
+		got, cmd := chatPress(t, m, "a")
+		if cmd != nil || got.mode != modeList || got.flash != chatsRemoteFlash {
+			t.Errorf("a on remote row %d: mode=%d flash=%q cmd=%v", sel, got.mode, got.flash, cmd != nil)
 		}
 	}
 	if len(calls.log) != 0 {
@@ -234,11 +257,15 @@ func TestChatCloseNeedsY(t *testing.T) {
 		want string
 	}{
 		{0, "close-pane %1"},
-		{1, "close-session grove-chat-golden-1"},
+		{2, "close-session grove-chat-golden-1"},
+		// grove-404: a shown remote row names its pane (host and session are
+		// read off the pane's stamps); a hidden one names host + session.
+		{1, `close-remote groveremote session="" pane="%22"`},
+		{3, `close-remote groveremote session="grove-chat-golden-3" pane=""`},
 	} {
 		for _, answer := range []string{"y", "n", "Y", "enter", "esc", "x", "q", "1"} {
 			calls := stubChatFuncs(t)
-			m := chatsFocused(t, 120, 40, c.sel, chatShownRow(1), chatHiddenRow(1))
+			m := chatsFocused(t, 120, 40, c.sel, chatShownRow(1), chatHiddenRow(1), chatRemoteRow(2), chatHiddenRemoteRow(3))
 			m, cmd := chatPress(t, m, "x")
 			if cmd != nil || m.mode != modeChatClose {
 				t.Fatalf("x: mode=%d cmd=%v, want the confirm and nothing run", m.mode, cmd != nil)
@@ -625,9 +652,12 @@ func TestChatFooterHints(t *testing.T) {
 	if foot := stripANSI(m.viewFooter()); strings.Contains(foot, "a reply") {
 		t.Errorf("a shown row refuses a — the footer must not offer it: %q", foot)
 	}
-	m.chatSel = 1 // the remote row: inert, so no chat hints
-	if foot := stripANSI(m.viewFooter()); strings.Contains(foot, "hide") || strings.Contains(foot, "x close") {
-		t.Errorf("a remote row offers chat keys: %q", foot)
+	m.chatSel = 1 // the remote row: every chat key but the reply
+	if foot := stripANSI(m.viewFooter()); !strings.Contains(foot, "h hide") || !strings.Contains(foot, "x close") || strings.Contains(foot, "a reply") {
+		t.Errorf("a remote row's hints: %q", foot)
+	}
+	if hints, n := chatHints(chatHiddenRemoteRow(3)); n != 3 || hints[0].label != "show" || hints[2].key != "x" {
+		t.Errorf("a hidden remote row's hints = %v", hints[:n])
 	}
 	m.focus = focusAgents
 	plain := goldenModel(t, fxOff, 80, 24)

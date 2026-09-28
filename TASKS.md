@@ -9,6 +9,22 @@
 
 ## Now (2026-07-12)
 
+- [x] chat-hide 04: remote chats — hide closes the local attach pane,
+      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
+      A remote chat lives on its host and the cockpit pane is only `ssh -t
+      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
+      pane (nothing is sent to the host) and `gv chat show
+      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
+      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
+      The spawn stamps `@grove_remote_session` on the pane; an unstamped
+      legacy pane is refused, never guessed. Hidden remote chats are
+      remembered in ONE user option on the cockpit session
+      (`@grove_hidden_remote`) that rides the CHATS box's existing
+      `list-panes -a` as its last field — no file, poll, cache or ssh on
+      any tick; rows render `○ chat-N @host` with `—` for state and last
+      line. `x` on a remote row relays the existing `gv chat close --host`;
+      `a` flashes "attach to reply" (no `chat send --host` relay exists —
+      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
 - [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
       `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
       chat / shows a hidden one (the keyboard stays on the dashboard —

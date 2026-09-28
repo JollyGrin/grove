@@ -62,9 +62,15 @@ func feedItems(events []state.Event) []feedItem {
 			// grove-403: a chat moved off-screen or back — from the cockpit,
 			// the CLI or `!gv chat hide` inside the chat, all the same event.
 			// Workspace-level: the chat session is the row's subject.
-			it = feedItem{Glyph: "○", Text: "hid " + ev.Data["session"]}
+			// A remote chat (grove-404) is named with its host: its session
+			// name alone reads as one of this machine's.
+			subject := ev.Data["session"]
+			if host := ev.Data["host"]; host != "" {
+				subject = "@" + host + "/" + subject
+			}
+			it = feedItem{Glyph: "○", Text: "hid " + subject}
 			if ev.Type == state.EvChatShown {
-				it = feedItem{Glyph: "▣", Text: "showed " + ev.Data["session"]}
+				it = feedItem{Glyph: "▣", Text: "showed " + subject}
 			}
 			it.Time = ev.Time
 			out = append(out, it)

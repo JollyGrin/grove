@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,17 +70,56 @@ func cockpitChats(ws *workspace.Workspace, deep bool, look cockpitChatLookup) []
 		return nil
 	}
 	found := cockpitChatPanes(*ws, panes, look.isCockpit)
-	if len(found) == 0 {
+	hidden := hiddenRemoteRows(*ws, panes)
+	if len(found)+len(hidden) == 0 {
 		return nil
 	}
 	if deep {
 		deepenCockpitChats(*ws, found, look)
 	}
-	rows := make([]tui.ChatRow, len(found))
+	rows := make([]tui.ChatRow, len(found), len(found)+len(hidden))
 	for i, f := range found {
 		rows[i] = f.row
 	}
-	return rows
+	return append(rows, hidden...)
+}
+
+// hiddenRemoteRows are the workspace's hidden REMOTE chats (grove-404), read
+// off the pane list already in hand: the cockpit session's record rides
+// every one of its panes. A row is the record and nothing more — host,
+// session, profile — on the cheap pass and the costly one alike: the cockpit
+// never dials a host on a beat.
+func hiddenRemoteRows(ws workspace.Workspace, panes []tmux.LivePane) []tui.ChatRow {
+	cockpit := cockpitSessionForLabel(ws.Label)
+	for _, p := range panes {
+		if p.Session != cockpit {
+			continue
+		}
+		if p.HiddenRemote == "" {
+			return nil
+		}
+		recs := tmux.ParseHiddenRemotes(p.HiddenRemote)
+		rows := make([]tui.ChatRow, len(recs))
+		for i, r := range recs {
+			rows[i] = tui.ChatRow{Session: r.Session, Hidden: true, N: chatSessionNumber(r.Session), Host: r.Host, Model: r.Profile}
+		}
+		return rows
+	}
+	return nil
+}
+
+// chatSessionNumber is the <n> of a `grove-chat-<label>-<n>` name, 0 when
+// the name has none.
+func chatSessionNumber(session string) int {
+	i := strings.LastIndexByte(session, '-')
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(session[i+1:])
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // cockpitChatPanes classifies the server's panes with chatRecords' own
@@ -262,4 +302,11 @@ func wireChatKeys() {
 		_, err := closeChat(session)
 		return err
 	}
+	// grove-404: the remote rows. Hide needs no entry of its own — hideChat
+	// tells a remote pane from a local one by its stamps.
+	tui.ShowRemoteChat = func(host, session string, focus bool) (string, error) {
+		pane, _, err := showRemoteChat(host, session, focus)
+		return pane, err
+	}
+	tui.CloseRemoteChat = closeRemoteChat
 }

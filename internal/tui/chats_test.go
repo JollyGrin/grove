@@ -37,6 +37,13 @@ func chatRemoteRow(n int) ChatRow {
 		Created: time.Now().Add(-41 * time.Minute)}
 }
 
+// chatHiddenRemoteRow is a hidden REMOTE chat (grove-404) as the cockpit
+// reads it off its record: host, session, profile — no pane, no age, no
+// state.
+func chatHiddenRemoteRow(n int) ChatRow {
+	return ChatRow{Session: fmt.Sprintf("grove-chat-golden-%d", n), Hidden: true, N: n, Host: "groveremote", Model: "glm-4.6"}
+}
+
 // withChats delivers rows the way the beat does: a deep chatsMsg.
 func withChats(t *testing.T, m Model, rows ...ChatRow) Model {
 	t.Helper()
@@ -192,6 +199,10 @@ var chatScenarios = []struct {
 	}},
 	{"waiting", func() []ChatRow {
 		return []ChatRow{chatHiddenRow(1), chatWaitingRow(2), chatHiddenRow(3)}
+	}},
+	// grove-404: a remote chat on screen beside one that is hidden.
+	{"remote", func() []ChatRow {
+		return []ChatRow{chatShownRow(1), chatRemoteRow(2), chatHiddenRemoteRow(3)}
 	}},
 }
 
@@ -588,5 +599,50 @@ func TestShownChatsChangeNothingButTheBox(t *testing.T) {
 	cmd()
 	if len(spawned) != 1 {
 		t.Errorf("O spawned %v, want one cockpit pane through SpawnOrchestrator", spawned)
+	}
+}
+
+// grove-404: a hidden remote row is its record and nothing else — the state
+// and last-line cells say so rather than pretend.
+func TestHiddenRemoteRowCells(t *testing.T) {
+	lines := buildChatLines(nil, []ChatRow{chatRemoteRow(2), chatHiddenRemoteRow(3)})
+	shown, hidden := lines[0], lines[1]
+	if shown.kind != chatShown || shown.state != "remote" || shown.name != "cockpit·2 @groveremote" {
+		t.Errorf("shown remote line = %+v", shown)
+	}
+	if hidden.kind != chatHidden || hidden.name != "chat-3 @groveremote" || hidden.model != "glm-4.6" {
+		t.Errorf("hidden remote line = %+v", hidden)
+	}
+	if hidden.state != "—" || hidden.last != "—" || hidden.age != "" || hidden.style != "remote" {
+		t.Errorf("hidden remote line claims what the cockpit cannot know: %+v", hidden)
+	}
+	if got := chatGlyphs[hidden.kind]; got != "○" {
+		t.Errorf("hidden remote glyph = %q", got)
+	}
+	if got := chatCounter([]ChatRow{chatRemoteRow(2), chatHiddenRemoteRow(3)}); got != "CHATS 2 · 1 hidden" {
+		t.Errorf("counter = %q", got)
+	}
+}
+
+// Two hidden remote chats have no pane to tell them apart: a cheap pass must
+// not hand one the other's last-known fields, and an open modal must stay on
+// ITS chat.
+func TestHiddenRemoteRowsKeepTheirIdentity(t *testing.T) {
+	a, b := chatHiddenRemoteRow(1), chatHiddenRemoteRow(2)
+	a.Last = "only a's"
+	got := mergeChats([]ChatRow{a, b}, []ChatRow{chatHiddenRemoteRow(1), chatHiddenRemoteRow(2)}, false)
+	if got[0].Last != "only a's" || got[1].Last != "" {
+		t.Errorf("merge crossed the rows: %q / %q", got[0].Last, got[1].Last)
+	}
+	if sameChat(a, b) || !sameChat(b, chatHiddenRemoteRow(2)) {
+		t.Error("sameChat must tell hidden remote chats apart by host + session")
+	}
+	other := chatHiddenRemoteRow(2)
+	other.Host = "elsewhere"
+	if sameChat(b, other) {
+		t.Error("the same session name on another host is another chat")
+	}
+	if !sameChat(chatShownRow(1), chatShownRow(1)) || sameChat(chatShownRow(1), chatShownRow(2)) {
+		t.Error("a pane is still its own identity")
 	}
 }

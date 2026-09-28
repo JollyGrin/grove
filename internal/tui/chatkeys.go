@@ -37,6 +37,17 @@ var (
 	CloseChatPane = func(pane string) error { return fmt.Errorf("chat close not wired") }
 	// CloseChatSession is `gv chat close`.
 	CloseChatSession = func(session string) error { return fmt.Errorf("chat close not wired") }
+	// ShowRemoteChat re-attaches a hidden REMOTE chat (grove-404): a fresh
+	// local attach pane on host's session. Returns the pane's %id.
+	ShowRemoteChat = func(host, session string, focus bool) (string, error) {
+		return "", fmt.Errorf("remote chat show not wired")
+	}
+	// CloseRemoteChat ends a remote chat on its host (the `gv chat close
+	// --host` relay), then drops its local attach pane (a shown row) or its
+	// record (a hidden row, pane "").
+	CloseRemoteChat = func(host, session, pane string) error {
+		return fmt.Errorf("remote chat close not wired")
+	}
 )
 
 // chatAct is what a key does to a CHATS row.
@@ -55,7 +66,7 @@ const (
 
 const (
 	chatsTaskKeysFlash = "CHATS focused — tab to AGENTS for task keys"
-	chatsRemoteFlash   = "remote chats: not yet"
+	chatsRemoteFlash   = "remote chat: attach to reply — enter"
 	chatsShownFlash    = "shown — enter to focus it"
 )
 
@@ -71,7 +82,10 @@ func chatRowKind(r ChatRow) string {
 // refusal carries. Pure.
 func chatKeyAction(key string, r ChatRow) (chatAct, string) {
 	switch key {
-	case "h", "enter", "a", "x":
+	case "h", "enter", "x":
+	case "a":
+		// No relay carries a reply to a host's chat: it is answered in its
+		// own pane (grove-404).
 		if r.Host != "" {
 			return actRefuse, chatsRemoteFlash
 		}
@@ -128,7 +142,13 @@ func chatHideCmd(r ChatRow) tea.Cmd {
 func chatShowCmd(r ChatRow, focus bool) tea.Cmd {
 	name := chatName(r)
 	return func() tea.Msg {
-		if _, err := ShowChat(r.Session, focus); err != nil {
+		var err error
+		if r.Host != "" {
+			_, err = ShowRemoteChat(r.Host, r.Session, focus)
+		} else {
+			_, err = ShowChat(r.Session, focus)
+		}
+		if err != nil {
 			return chatErr(err)
 		}
 		return chatActedMsg{flash: "▣ showed " + name}
@@ -164,7 +184,13 @@ func chatCloseCmd(r ChatRow) tea.Cmd {
 	name := chatName(r)
 	return func() tea.Msg {
 		var err error
-		if r.Hidden {
+		if r.Host != "" {
+			session := ""
+			if r.Hidden {
+				session = r.Session // a shown row's is read off its pane
+			}
+			err = CloseRemoteChat(r.Host, session, r.Pane)
+		} else if r.Hidden {
 			err = CloseChatSession(r.Session)
 		} else {
 			err = CloseChatPane(r.Pane)
@@ -278,7 +304,7 @@ func (m *Model) holdChatTarget() {
 		return
 	}
 	for i, r := range m.chatRows {
-		if r.Pane == m.chatTarget.Pane && r.Hidden == m.chatTarget.Hidden {
+		if sameChat(r, m.chatTarget) {
 			m.chatSel, m.chatTarget = i, r
 			return
 		}
@@ -288,13 +314,26 @@ func (m *Model) holdChatTarget() {
 	m.flash = name + " is gone — nothing sent"
 }
 
+// sameChat: two rows of the same chat, in the same state. A pane is its own
+// identity; a hidden remote chat has none here, and is its host + session.
+func sameChat(a, b ChatRow) bool {
+	if a.Hidden != b.Hidden || a.Pane != b.Pane {
+		return false
+	}
+	return a.Pane != "" || (a.Host == b.Host && a.Session == b.Session)
+}
+
 // --- footer ---
 
 // chatHints is the row group while CHATS holds focus: only the keys that
 // act on THIS row. Fixed-size, built on the stack — nothing allocated.
 func chatHints(r ChatRow) ([4]hint, int) {
 	if r.Host != "" {
-		return [4]hint{}, 0
+		// A remote chat takes no reply from here — it has no `a`.
+		if r.Hidden {
+			return [4]hint{{"h", "show"}, {"enter", "show+focus"}, {"x", "close"}}, 3
+		}
+		return [4]hint{{"h", "hide"}, {"enter", "focus"}, {"x", "close"}}, 3
 	}
 	if r.Hidden {
 		return [4]hint{{"h", "show"}, {"enter", "show+focus"}, {"a", "reply"}, {"x", "close"}}, 4
@@ -354,6 +393,9 @@ func (m Model) viewChatFooter() string {
 	detail := "kills its pane and the agent in it "
 	if m.chatTarget.Hidden {
 		detail = "ends the chat, transcript kept "
+	}
+	if m.chatTarget.Host != "" {
+		detail = "ends the chat on " + m.chatTarget.Host + " "
 	}
 	head := " " + sBlocked.Render("close "+name+"? ")
 	long := sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
