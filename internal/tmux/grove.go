@@ -950,7 +950,12 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}"
+//
+// The last field (grove-404) is a SESSION option: it resolves in a pane's
+// format context like session_* does, so every pane of a cockpit carries its
+// session's hidden-remote record and the CHATS box learns it from this same
+// call. Empty — and so absent — for every session with nothing hidden.
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_hidden_remote}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -969,6 +974,10 @@ type LivePane struct {
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
 	Remote      string // @grove_remote (grove-199): the host a remote chat pane attaches to, "" for a local pane
+	// HiddenRemote is the pane's SESSION's @grove_hidden_remote (grove-404),
+	// raw — ParseHiddenRemotes reads it. The same value on every pane of a
+	// session; "" when nothing is hidden.
+	HiddenRemote string
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -1003,6 +1012,8 @@ func ParsePanes(out string) []LivePane {
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
 			Remote:      paneField(f, 10),
+
+			HiddenRemote: paneField(f, 11),
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1316,19 +1327,17 @@ type PaneFacts struct {
 	Index    int    // pane_index, honoring the user's pane-base-index
 	First    int    // the window's lowest live pane index — the dashboard slot
 	Remote   string // @grove_remote, "" for a local pane
+	// RemoteSession is @grove_remote_session (grove-404): the host session a
+	// remote pane is attached to, "" on a local pane and on a remote pane
+	// spawned before the stamp existed.
+	RemoteSession string
+	Profile       string // @grove_profile
 }
 
-// hidablePane is the pure guard for HideChatPane: nil when the pane is a
-// cockpit chat pane that may be hidden, else a refusal that says what to do
-// instead. Order matters — the most specific reading of the pane answers
-// first, so a hidden chat hears "already hidden" and not "not a cockpit".
-// A nil CockpitCheck treats every grove-named session as a cockpit
-// (CockpitCheck's rule), which leaves the window and first-pane rules to do
-// the protecting.
-func hidablePane(p PaneFacts, isCockpit CockpitCheck) error {
-	if p.Remote != "" {
-		return fmt.Errorf("remote chat panes: not yet (chat-hide car: remote) — this pane is an ssh attachment to %s; detach it with the tmux prefix + d, the chat keeps running on the host", p.Remote)
-	}
+// cockpitChatPane is the positional half of the guard: nil when the pane
+// sits where a cockpit's chat panes sit — a registered cockpit's cockpit
+// window, past the dashboard slot — whatever it is attached to.
+func cockpitChatPane(p PaneFacts, isCockpit CockpitCheck) error {
 	if strings.HasPrefix(p.Session, chatSessionMarker) && !isCockpit.cockpit(p.Session) {
 		return fmt.Errorf("%s is already hidden — bring it back with `gv chat show %s`", p.Session, p.Session)
 	}
@@ -1347,22 +1356,43 @@ func hidablePane(p PaneFacts, isCockpit CockpitCheck) error {
 	return nil
 }
 
+// hidablePane is the pure guard for HideChatPane: nil when the pane is a
+// cockpit chat pane that may be hidden, else a refusal that says what to do
+// instead. Order matters — the most specific reading of the pane answers
+// first, so a hidden chat hears "already hidden" and not "not a cockpit".
+// A nil CockpitCheck treats every grove-named session as a cockpit
+// (CockpitCheck's rule), which leaves the window and first-pane rules to do
+// the protecting.
+//
+// A REMOTE pane (grove-404) is hidable when it wears the stamp saying which
+// host session it shows. One spawned before the stamp existed is refused:
+// the session is never guessed from the pane's text.
+func hidablePane(p PaneFacts, isCockpit CockpitCheck) error {
+	if err := cockpitChatPane(p, isCockpit); err != nil {
+		return err
+	}
+	if p.Remote != "" && p.RemoteSession == "" {
+		return fmt.Errorf("this remote pane was attached before grove recorded which session on %s it shows, and that is never guessed from the pane — close it and re-attach with ssh -t <%s's ssh target> tmux attach -t '=<session>' (`gv chat ls`, run on %s, names the session), or spawn a fresh one with @", p.Remote, p.Remote, p.Remote)
+	}
+	return nil
+}
+
 // paneFactsFormat is one display-message for the whole guard. The count of
-// fields is fixed and @grove_remote is NOT last: run() trims its output, so
-// a trailing empty field would shorten the line.
-const paneFactsFormat = "#{session_name}\t#{window_name}\t#{@grove_remote}\t#{pane_index}\t#{window_id}"
+// fields is fixed and no @option is last: run() trims its output, so a
+// trailing empty field would shorten the line.
+const paneFactsFormat = "#{session_name}\t#{window_name}\t#{@grove_remote}\t#{pane_index}\t#{@grove_remote_session}\t#{@grove_profile}\t#{window_id}"
 
 // parsePaneFacts is the pure half of paneFacts; First is filled by the caller.
 func parsePaneFacts(out string) (PaneFacts, error) {
 	f := strings.Split(strings.TrimSpace(out), "\t")
-	if len(f) != 5 || f[0] == "" || f[4] == "" {
+	if len(f) != 7 || f[0] == "" || f[6] == "" {
 		return PaneFacts{}, fmt.Errorf("unexpected pane info %q", out)
 	}
 	index, err := strconv.Atoi(f[3])
 	if err != nil {
 		return PaneFacts{}, fmt.Errorf("parse pane index %q: %w", f[3], err)
 	}
-	return PaneFacts{Session: f[0], Window: f[1], Remote: f[2], Index: index, WindowID: f[4]}, nil
+	return PaneFacts{Session: f[0], Window: f[1], Remote: f[2], Index: index, RemoteSession: f[4], Profile: f[5], WindowID: f[6]}, nil
 }
 
 // paneFacts reads a pane's facts. Fails closed like PaneClosable: a window
@@ -1444,6 +1474,11 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 	if err != nil {
 		return "", err
 	}
+	if facts.Remote != "" {
+		// Moving an ssh attachment into a chat session would list it as a
+		// local chat. A remote pane is hidden by closing it (HideRemotePane).
+		return "", fmt.Errorf("pane %d is an ssh attachment to %s, not a local chat — it is hidden by closing the attachment, not by moving it", facts.Index, facts.Remote)
+	}
 	session := NextChatSession(label, SessionNames())
 	placeholder, err := run("new-session", "-d", "-s", session, "-n", hidePlaceholder, "-P", "-F", "#{window_id}")
 	if err != nil {
@@ -1502,7 +1537,7 @@ func showableChat(c ChatFacts, isCockpit CockpitCheck) error {
 		return fmt.Errorf("%s holds %d panes, not one — refusing to guess which is the chat; close the extra panes (or attach with tmux attach -t '=%s' and sort it out), then show it again", c.Session, n, c.Session)
 	}
 	if c.Remote != "" {
-		return fmt.Errorf("remote chat panes: not yet (chat-hide car: remote) — %s is an ssh attachment to %s", c.Session, c.Remote)
+		return fmt.Errorf("%s holds an ssh attachment to %s, not a local chat — refusing to join it; a hidden remote chat is shown with `gv chat show @%s/<session>`", c.Session, c.Remote, c.Remote)
 	}
 	if c.CockpitWindow == "" {
 		return fmt.Errorf("the cockpit %s is not running, so there is no window to show %s in — open the cockpit with `gv`, or attach with tmux attach -t '=%s'", c.Cockpit, c.Session, c.Session)
@@ -1618,13 +1653,17 @@ func showChatPane(session, cockpitSession string, isCockpit CockpitCheck, announ
 }
 
 // FocusChatPane makes a cockpit chat pane the active pane of its window
-// (grove-403: `enter` on a CHATS row). Guarded by PaneHidable — the panes
-// that may be hidden are exactly the cockpit's chat panes — so it can never
+// (grove-403: `enter` on a CHATS row). Guarded by cockpitChatPane — where a
+// cockpit's chat panes sit, local or remote, stamped or not — so it can never
 // move the keyboard into a worker window or a foreign session.
 func FocusChatPane(pane string, isCockpit CockpitCheck) error {
-	if _, err := PaneHidable(pane, isCockpit); err != nil {
+	p, err := paneFacts(pane)
+	if err != nil {
 		return err
 	}
-	_, err := run("select-pane", "-t", pane)
+	if err := cockpitChatPane(p, isCockpit); err != nil {
+		return err
+	}
+	_, err = run("select-pane", "-t", pane)
 	return err
 }

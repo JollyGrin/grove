@@ -42,8 +42,8 @@ const (
 // ChatRow is one live chat as CockpitChats reports it. The first block is
 // the cheap pass's; the second is filled only by a costly pass (Deep).
 type ChatRow struct {
-	Pane    string // the pane's immutable %id — the row's identity across beats
-	Session string // the tmux session it lives in: the cockpit's, or its own grove-chat-<label>-<n>
+	Pane    string // the pane's immutable %id — the row's identity across beats; "" on a hidden REMOTE chat, which has no pane here
+	Session string // the tmux session it lives in: the cockpit's, or its own grove-chat-<label>-<n> (on Host, for a hidden remote chat)
 	Hidden  bool   // kind `chat` (a detached grove-chat-<label>-<n> session) vs kind `cockpit`
 	N       int    // the chat number, or the cockpit pane's index
 	Host    string // @grove_remote: the host a remote chat pane attaches to
@@ -76,6 +76,9 @@ func chatsCmd(label string, deep bool) tea.Cmd {
 		return chatsMsg{rows: CockpitChats(label, deep), deep: deep}
 	}
 }
+
+// chatUnknown fills a cell the cockpit has no way to know.
+const chatUnknown = "—"
 
 // Row kinds index the glyph and style tables.
 const (
@@ -113,7 +116,7 @@ func mergeChats(prev, fresh []ChatRow, deep bool) []ChatRow {
 		for i := range fresh {
 			f := &fresh[i]
 			for j := range prev {
-				if prev[j].Pane != f.Pane {
+				if !sameChat(prev[j], *f) {
 					continue
 				}
 				p := prev[j]
@@ -188,6 +191,10 @@ func chatState(r ChatRow) string {
 		return "WAITING"
 	case r.Turn != "" && r.Turn != "unknown":
 		return r.Turn
+	case r.Host != "" && r.Hidden:
+		// Known only from its record (grove-404): the cockpit never dials
+		// the host to ask.
+		return chatUnknown
 	case r.Host != "":
 		return "remote"
 	case r.Busy:
@@ -237,6 +244,9 @@ func buildChatLines(dst []chatLine, rows []ChatRow) []chatLine {
 		l.last = strings.Join(strings.Fields(r.Last), " ")
 		if l.last == "" {
 			l.last = strings.Join(strings.Fields(r.Label), " ")
+		}
+		if l.last == "" && r.Host != "" && r.Hidden {
+			l.last = chatUnknown
 		}
 		dst = append(dst, l)
 	}

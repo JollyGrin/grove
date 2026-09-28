@@ -155,7 +155,10 @@ const usage = `gv — grove
                                               stays in history, revivable with gv orchestrator new --resume
   gv chat hide [<id>|<pane-id>]               move a LOCAL cockpit chat pane off-screen: it keeps running as
                                               a detached grove-chat-<label>-<n>. No argument = this pane
-  gv chat show <s>                            join a detached chat into its workspace's cockpit window
+                                              A REMOTE chat's pane (an ssh attachment) is closed instead —
+                                              the chat keeps running on its host, nothing is sent there
+  gv chat show <s>                            join a detached chat into its workspace's cockpit window;
+                                              @<host>/<session> re-attaches a hidden remote chat
   gv chat serve [--port 3000] [--bind ADDR]   phone UI for those chats on http://127.0.0.1:3000 — loopback by
                                               default and no auth of its own, so put it behind
                                               "tailscale serve --bg 3000". Off unless invoked; ^C stops it

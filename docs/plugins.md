@@ -358,7 +358,16 @@ session id, absent when the pane wears none. Logged in the chat's own
 workspace before the pane moves. Neither is a lifecycle event: the chat
 is the same process throughout, and `gv chat ls` simply reports it as
 `kind: chat` while hidden and `kind: cockpit` while shown — no row field
-was added or changed). New types will appear
+was added or changed. `host` (grove-404, additive) marks the same two
+events for a REMOTE chat — one that runs on a configured host, whose
+cockpit pane is only a local `ssh … tmux attach`. There the hide CLOSED
+that local pane and the show opened a new one; nothing was sent to the
+host and the chat never stopped. With `host` present, `session` is the
+chat's tmux session ON that host, `pane` is the local attach pane — which
+does NOT survive the round trip, a shown remote chat has a new `%N` — and
+`session_id` is absent: the conversation's id is known to the host's own
+log, not this one. A remote chat is in no local `gv chat ls` row either
+way; absent `host` means the local move described above). New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
@@ -425,8 +434,16 @@ tmux pane, do bracketed-paste injection, and append the event for you:
   candidates, never picked. `show` takes any detached chat of the
   workspace, including one that was never in the cockpit, and needs the
   workspace's cockpit running. Both refuse — non-zero, nothing moved — the
-  dashboard pane, worker windows, remote (`@host`) chat panes, and a chat
-  session an operator split into several panes.
+  dashboard pane, worker windows, and a chat session an operator split
+  into several panes. A REMOTE (`@host`) chat pane (grove-404) is an ssh
+  attachment, so `hide <%pane>` closes it rather than moving it — the chat
+  keeps running on its host, which is told nothing — and
+  `show @<host>/<session>` opens a fresh attachment in the ambient
+  workspace's cockpit. Only a chat hidden from that cockpit can be shown
+  this way (the record lives on the cockpit's tmux session and goes when
+  the workspace is parked; the chat itself stays reachable over ssh). A
+  remote pane attached before grove-404 carries no record of which
+  session it shows and is refused, never guessed.
 - `gv chat restamp <session> [<session-id>]` — operator escape hatch
   (grove-222): re-point a live chat's identity stamp, or clear it (no id)
   so the next `gv chat ls` re-derives one. For the two cases nothing can

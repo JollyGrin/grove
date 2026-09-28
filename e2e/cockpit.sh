@@ -491,6 +491,72 @@ wait_grep 'remote spawn cancelled' || fail "esc did not cancel the arming:
 $CAP"
 [ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "a cancelled arming still reached the host"
 
+# --- grove-404: hide / show a REMOTE chat ---
+# The chat lives on the host; the cockpit pane is only an ssh attachment. So
+# hide closes the LOCAL pane and tells the host nothing, and show attaches
+# again. The pane spawned by @ above is the subject.
+
+say "grove-404: the @ spawn stamped the pane with the host session it shows"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_remote_session)" = "grove-chat-rws-1" ] \
+  || fail "remote pane not stamped with its host session — it could never be hidden"
+[ -z "$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)" ] || fail "a spawn recorded a hidden chat — nothing may auto-hide"
+
+say "gv chat hide <pane> closes the local attachment and records the chat; the host hears nothing"
+SSH_LINES=$(wc -l < "$SSH_LOG")
+( cd "$WS" && "$GV" chat hide "$NEWPANE" ) > "$SCRATCH/rhide.out" 2>&1 || fail "gv chat hide on the remote pane failed:
+$(cat "$SCRATCH/rhide.out")"
+grep -q 'gv chat show @pc/grove-chat-rws-1' "$SCRATCH/rhide.out" || fail "hide did not name the way back:
+$(cat "$SCRATCH/rhide.out")"
+tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' > "$SCRATCH/rhide-panes.out"
+grep -qx "$NEWPANE" "$SCRATCH/rhide-panes.out" && fail "the attach pane is still there after the hide" || true
+[ "$(wc -l < "$SCRATCH/rhide-panes.out")" -eq "$PANES_BEFORE" ] || fail "hide closed more than the one pane"
+[ "$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)" = "pc|grove-chat-rws-1|e2e-glm" ] \
+  || fail "hidden-remote record = '$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)'"
+[ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "hiding a remote chat reached the host:
+$(tail -2 "$SSH_LOG")"
+find "$SCRATCH" -name events.jsonl -exec cat {} + > "$SCRATCH/rhide-events.out" 2>/dev/null || true
+grep '"type":"chat_hidden"' "$SCRATCH/rhide-events.out" > "$SCRATCH/rhide-ev.out" || fail "no chat_hidden event for the remote hide"
+grep -q '"host":"pc"' "$SCRATCH/rhide-ev.out" || fail "chat_hidden lacks the host:
+$(cat "$SCRATCH/rhide-ev.out")"
+grep -q '"session":"grove-chat-rws-1"' "$SCRATCH/rhide-ev.out" || fail "chat_hidden lacks the host session"
+
+say "the CHATS box lists it as a hidden @pc row — and the tick never dials the host"
+wait_grep 'chat-1 @pc' || fail "no hidden remote row in the CHATS box:
+$CAP"
+echo "$CAP" | grep -q '1 hidden' || fail "the counter does not count the hidden remote chat:
+$CAP"
+sleep 3
+[ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "the cockpit dialed the host while a remote chat was hidden:
+$(tail -2 "$SSH_LOG")"
+
+say "gv chat show @pc/<session> attaches again, tagged like a fresh spawn"
+( cd "$WS" && "$GV" chat show @pc/grove-chat-rws-1 ) > "$SCRATCH/rshow.out" 2>&1 || fail "gv chat show on the hidden remote chat failed:
+$(cat "$SCRATCH/rshow.out")"
+for _ in $(seq 1 50); do
+  [ "$(grep -c -- '-t localhost tmux attach -t =grove-chat-rws-1' "$SSH_LOG" || true)" -ge 2 ] && break
+  sleep 0.2
+done
+[ "$(grep -c -- '-t localhost tmux attach -t =grove-chat-rws-1' "$SSH_LOG" || true)" -ge 2 ] || fail "show did not attach again:
+$(cat "$SSH_LOG")"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq "$PANES_AFTER" ] || fail "show did not open exactly one pane"
+NEWPANE="$(tmux list-panes -t '=grove-rws:cockpit' -F '#{pane_id}' | tail -1)"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_remote)" = "pc" ] || fail "shown pane not tagged with its host"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_profile)" = "e2e-glm" ] || fail "shown pane lost its profile"
+[ "$(tmux show-options -pqv -t "$NEWPANE" @grove_remote_session)" = "grove-chat-rws-1" ] || fail "shown pane not stamped"
+tmux show-options -pqv -t "$NEWPANE" pane-border-style > "$SCRATCH/rshow-border.out"
+grep -q 'fg=' "$SCRATCH/rshow-border.out" || fail "shown pane has no remote border color"
+[ -z "$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)" ] || fail "the record outlived the show"
+find "$SCRATCH" -name events.jsonl -exec cat {} + > "$SCRATCH/rshow-events.out" 2>/dev/null || true
+grep '"type":"chat_shown"' "$SCRATCH/rshow-events.out" > "$SCRATCH/rshow-ev.out" || fail "no chat_shown event for the remote show"
+grep -q '"host":"pc"' "$SCRATCH/rshow-ev.out" || fail "chat_shown lacks the host"
+( cd "$WS" && "$GV" chat show @pc/grove-chat-rws-1 ) > "$SCRATCH/rshow2.out" 2>&1 && fail "showing a chat that is not hidden must refuse" || true
+grep -q 'no hidden remote chat' "$SCRATCH/rshow2.out" || fail "refusal text:
+$(cat "$SCRATCH/rshow2.out")"
+# The show moved the keyboard into the attach pane; hand it back to the dash.
+tmux select-pane -t "$PANE0"
+wait_grep '▣ cockpit·.* @pc' || fail "the shown remote chat is not back in the CHATS box as a row on screen:
+$CAP"
+
 # --- grove-402: the CHATS box ---
 # Read-only rows for this workspace's chats. The cockpit's own orchestrator
 # pane and the remote pane spawned above are chats ON SCREEN, so the box is
@@ -583,16 +649,30 @@ kill -0 "$LOCALPID" 2>/dev/null || fail "the hidden chat's process died"
 wait_grep 'hid grove-chat-rws-2' || fail "ACTIVITY has no line for the hide:
 $CAP"
 
-say "a remote row is inert"
+say "grove-404: a on a remote row is refused — no relay carries a reply to a host's chat"
 select_chat 'cockpit·[0-9] @pc' || fail "could not select the remote chat's row:
 $CAP"
-for k in h a x Enter; do
-  tmux send-keys -t "$PANE0" "$k"
-  sleep 0.3
-done
-wait_grep 'remote chats: not yet' || fail "a remote row did not refuse the chat keys:
+tmux send-keys -t "$PANE0" a
+wait_grep 'attach to reply' || fail "a on a remote row did not flash the refusal:
 $CAP"
-[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq 2 ] || fail "a chat key on a remote row moved a pane"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq 2 ] || fail "a on a remote row moved a pane"
+
+say "grove-404: h on the remote row closes the local attachment; h on its hidden row attaches again"
+SSH_LINES=$(wc -l < "$SSH_LOG")
+tmux send-keys -t "$PANE0" h
+wait_grep '○ chat-1 @pc' || fail "h did not hide the remote chat:
+$CAP"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq 1 ] || fail "h on a remote row left its attach pane open"
+[ "$(wc -l < "$SSH_LOG")" -eq "$SSH_LINES" ] || fail "h on a remote row reached the host:
+$(tail -2 "$SSH_LOG")"
+select_chat 'chat-1 @pc' || fail "could not select the hidden remote chat's row:
+$CAP"
+tmux send-keys -t "$PANE0" h
+wait_grep '▣ cockpit·[0-9] @pc' || fail "h did not show the hidden remote chat:
+$CAP"
+[ "$(tmux list-panes -t '=grove-rws:cockpit' | wc -l)" -eq 2 ] || fail "showing the remote chat did not open exactly one pane"
+[ "$(tmux display-message -p -t '=grove-rws:cockpit' -F '#{pane_id}')" = "$PANE0" ] || fail "h took the keyboard off the dashboard"
+[ -z "$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)" ] || fail "the record outlived the show"
 
 say "a replies inline to the hidden chat — delivered AND submitted, the chat stays hidden"
 select_chat 'chat-2' || fail "could not select the hidden chat's row:

@@ -70,7 +70,9 @@ full per-type data table. `task_created`/`task_adopted` data carries
 `workspace_parked`, `orchestrator_closed`, `chat_hidden` / `chat_shown`
 (`{session, pane, workspace, session_id?}` — a local cockpit chat pane
 moved into a detached `grove-chat-*` session and back; same process, same
-`session_id`, only `gv chat ls`'s `session`/`kind`/`writable` change),
+`session_id`, only `gv chat ls`'s `session`/`kind`/`writable` change;
+with `host` present it was a REMOTE chat's local ssh-attach pane closed /
+re-opened — `session` is then the chat's session on that host),
 `feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,

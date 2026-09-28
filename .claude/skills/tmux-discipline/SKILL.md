@@ -127,6 +127,12 @@ grove worker) silently targets the **real server** unless it clears
   Durable per-pane tags live in a tmux pane **user option**
   (`set-option -p @grove_…`) rendered via a conditional
   `pane-border-format` — foreground programs can't touch those.
+- **A session user option rides `list-panes -a -F` for free — unescaped**
+  (grove-404). `#{@opt}` in a pane format falls through to the pane's
+  SESSION, so per-session state needs no tmux call of its own on a tick.
+  The value lands in the line verbatim: never store a tab or newline in
+  one (percent-escape the fields), and append the field at the END of the
+  format — empty, it simply shortens the line.
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
   and chrome layout have both changed under us — activity checks scan the
   full ~30-line capture, never a bottom window.

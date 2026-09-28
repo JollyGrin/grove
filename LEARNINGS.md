@@ -310,6 +310,19 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · a SESSION user option expands in `list-panes -a -F`, on
+  every pane of that session — and its value lands in the line verbatim**
+  (grove-404, tmux 3.6a): `#{@opt}` in a pane's format context falls
+  through pane → window → session options, so per-session state can ride
+  a listing that is already being run instead of costing a `show-options`
+  of its own. Two consequences. The value is repeated on each of the
+  session's panes (worker windows included), so keep it short; and it is
+  NOT escaped, so a value holding a tab or a newline splits the very line
+  that carries it — which is why `@grove_hidden_remote` is
+  `host|session|profile` records joined by `,` with every field
+  percent-escaped, not the tab/newline form the ticket sketched. Reading
+  an unset user option with `show-options -v` is an error ("invalid
+  option"); `-qv` answers with an empty line instead.
 - **2026-09-28 · `join-pane` without `-d` hands the joined pane the
   keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
   3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
