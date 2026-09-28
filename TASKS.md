@@ -9,6 +9,24 @@
 
 ## Now (2026-07-12)
 
+- [x] boot-stats 01: boot record — decode first-request tokens + parts
+      from a transcript (grove-422, 2026-09-28, on `feature/boot-stats`).
+      New `transcript.ParseBoot` stops at the first line where
+      `type == "assistant"`, `message.usage` is present, and the line is
+      not a sidechain/API-error/`<synthetic>` turn — everything before it
+      is the boot record (`transcript.BootLine`). `cost.BootOf` classifies
+      each `attachment` line by its `attachment.type` (system prompt,
+      per-file instructions — `MEMORY.md` → `memory_index`, a
+      `.grove/orchestrator/**/CLAUDE.md` → `orchestrator_brain`, else
+      `repo_instructions` — skill listing, deferred-tools/agent-listing/MCP
+      deltas, anything else → `other` by raw JSON length) plus every
+      pre-call `user` line into `first_prompt` (text blocks only — image
+      blocks are base64 and must never be counted). `tool_schemas_est` is
+      the residual after every named part (`Chars*10/36` each), clamped at
+      0 — tool schemas are never recorded in the transcript. Pure package
+      code, no CLI; `internal/transcript/testdata/boot.jsonl` is a
+      hand-written fixture covering one of each attachment type plus the
+      sidechain/synthetic/image edge cases.
 - [x] feature trains: landed cars from GitHub + collapsed rail count
       (grove-397, 2026-09-27). On a GitHub provider a car is landed when
       its labelled issue is CLOSED and a PR from its `<ticket>-…` branch
