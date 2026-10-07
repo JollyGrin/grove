@@ -22,6 +22,7 @@ package ledger
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -118,8 +119,16 @@ func Read(stateDir string) ([]Row, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return parse(f)
+}
 
-	cr := csv.NewReader(f)
+// parse is Read's loop over any reader. CSV *parse* errors are skipped —
+// the reader has advanced past the bad line and the next row is intact.
+// Any other error (a failing underlying read) returns identically forever,
+// so it ends the loop with the rows read so far: the old `continue` spun
+// `gv cost` at 100% CPU on a persistent I/O error (grove-131).
+func parse(r io.Reader) ([]Row, error) {
+	cr := csv.NewReader(r)
 	cr.FieldsPerRecord = -1
 	var rows []Row
 	for {
@@ -128,7 +137,11 @@ func Read(stateDir string) ([]Row, error) {
 			break
 		}
 		if err != nil {
-			continue
+			var pe *csv.ParseError
+			if errors.As(err, &pe) {
+				continue
+			}
+			return rows, fmt.Errorf("ledger read: %w", err)
 		}
 		// Accept the pre-grove-14 13-column shape and the pre-grove-435
 		// 14-column one as well as the current 15-column one: older rows

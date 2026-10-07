@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -320,5 +321,68 @@ func TestEffortRoundtripAndLegacy14Columns(t *testing.T) {
 	raw, _ := os.ReadFile(Path(dir))
 	if !strings.HasPrefix(string(raw), "time,ticket,") || !strings.Contains(string(raw), ",models,effort\n") {
 		t.Errorf("header missing the effort column: %q", strings.SplitN(string(raw), "\n", 2)[0])
+	}
+}
+
+// errReader always fails the same way — the shape of a persistent I/O
+// error on the ledger file (a bad disk, a vanished mount).
+type errReader struct{ n int }
+
+func (r *errReader) Read([]byte) (int, error) {
+	r.n++
+	return 0, errors.New("disk on fire")
+}
+
+// TestParseTerminatesOnIOError is the grove-131 (item 6) regression check:
+// csv parse errors advance the reader and are skipped, but an underlying
+// read error returns identically forever — the old `continue` spun
+// `gv cost` at 100% CPU. parse must return (with the error) instead.
+func TestParseTerminatesOnIOError(t *testing.T) {
+	r := &errReader{}
+	done := make(chan struct{})
+	var rows []Row
+	var err error
+	go func() {
+		rows, err = parse(r)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("parse did not terminate on a persistent read error")
+	}
+	if err == nil {
+		t.Fatal("expected the read error to surface")
+	}
+	if rows != nil {
+		t.Errorf("rows = %+v, want none", rows)
+	}
+	if r.n > 2 {
+		t.Errorf("reader polled %d times; a persistent error should stop the loop at once", r.n)
+	}
+}
+
+// TestParseSkipsParseErrorsKeepsGoing pins the other half: a bare quote
+// mid-field is a csv.ParseError confined to its own line, and the rows
+// around it still read.
+func TestParseSkipsParseErrorsKeepsGoing(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now()
+	if err := Append(dir, row("a", at, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(dir, row("b", at, 2)); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(Path(dir))
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// header, a, bare-quote garbage, b
+	broken := strings.Join([]string{lines[0], lines[1], `x,ab"c,d`, lines[2]}, "\n") + "\n"
+	got, err := parse(strings.NewReader(broken))
+	if err != nil {
+		t.Fatalf("parse error surfaced for a csv parse error: %v", err)
+	}
+	if len(got) != 2 || got[0].Ticket != "a" || got[1].Ticket != "b" {
+		t.Fatalf("got %+v, want rows a and b", got)
 	}
 }

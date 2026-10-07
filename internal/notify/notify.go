@@ -28,9 +28,7 @@ func Desktop(title, body string) {
 	if _, err := exec.LookPath("terminal-notifier"); err != nil {
 		return
 	}
-	if len(body) > 120 {
-		body = body[:120] + "…"
-	}
+	body = capRunes(body, 120)
 	_ = exec.Command("terminal-notifier",
 		"-title", "gv: "+title, "-message", body,
 		"-group", "grove", "-sender", "com.apple.Terminal").Start()
@@ -47,9 +45,7 @@ func Push(title, body, priority, tags string) {
 	if n.NtfyBody == "title-only" {
 		body = ""
 	}
-	if len(body) > 200 {
-		body = body[:200] + "…"
-	}
+	body = capRunes(body, 200)
 	req, err := http.NewRequest(http.MethodPost, n.Ntfy, strings.NewReader(body))
 	if err != nil {
 		return
@@ -62,4 +58,15 @@ func Push(title, body, priority, tags string) {
 		return
 	}
 	_ = resp.Body.Close()
+}
+
+// capRunes truncates body to n runes with an ellipsis marker. Runes, never
+// bytes: a byte cut can split a multibyte codepoint and the desktop/phone
+// notification ends in a garbage character (grove-131).
+func capRunes(body string, n int) string {
+	r := []rune(body)
+	if len(r) <= n {
+		return body
+	}
+	return string(r[:n]) + "…"
 }

@@ -3,7 +3,9 @@
 package tmux
 
 import (
+	"crypto/rand"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -158,6 +160,21 @@ func polls(max, poll time.Duration) int {
 	return int(max / poll)
 }
 
+// relayBufferName returns a tmux buffer name unique to this call. tmux
+// buffers are server-global, so a fixed name let two concurrent relays
+// (cockpit answer + orchestrator `gv answer`) interleave load/paste/delete
+// and worker A received worker B's text (grove-131). pid + a random nonce:
+// unique across processes and across calls within one.
+func relayBufferName() string {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		// crypto/rand failing is effectively impossible; fall back to a
+		// monotonic clock so the name is still unique within this process.
+		return fmt.Sprintf("gv-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("gv-relay-%d-%x", os.Getpid(), nonce)
+}
+
 // PasteText delivers multi-line or special-character text to a pane via
 // load-buffer + a BRACKETED paste-buffer (-p), lets the receiving TUI settle,
 // then submits with a separate Enter and verifies that the submit actually
@@ -182,7 +199,8 @@ func PasteText(target, text string) (warn string, err error) {
 	if err := waitOutCompact(target, capture, func() { time.Sleep(compactPoll) }); err != nil {
 		return "", err
 	}
-	load := exec.Command("tmux", "load-buffer", "-b", "gv-relay", "-")
+	buf := relayBufferName()
+	load := exec.Command("tmux", "load-buffer", "-b", buf, "-")
 	load.Stdin = strings.NewReader(text)
 	if out, err := load.CombinedOutput(); err != nil {
 		return "", &execError{op: "load-buffer", out: string(out), err: err}
@@ -191,7 +209,7 @@ func PasteText(target, text string) (warn string, err error) {
 	// paste mode (Claude's TUI does; a plain shell does not, and tmux then
 	// sends the buffer bare). The doc comment claimed this for a year while
 	// the flag was missing.
-	if _, err := run("paste-buffer", "-d", "-p", "-b", "gv-relay", "-t", target); err != nil {
+	if _, err := run("paste-buffer", "-d", "-p", "-b", buf, "-t", target); err != nil {
 		return "", err
 	}
 	time.Sleep(pasteSettle)

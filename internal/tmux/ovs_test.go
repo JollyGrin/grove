@@ -356,3 +356,27 @@ func TestPolls(t *testing.T) {
 		}
 	}
 }
+
+// TestRelayBufferNameUnique is the grove-131 (item 4) regression check: two
+// relays in flight at once must never share a tmux buffer name, or one
+// worker receives the other's text. The name also carries the pid so two
+// processes cannot collide either.
+func TestRelayBufferNameUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		name := relayBufferName()
+		if !strings.HasPrefix(name, "gv-relay-") {
+			t.Fatalf("unexpected prefix: %q", name)
+		}
+		if strings.ContainsAny(name, " \t\n") {
+			t.Fatalf("buffer name must be a single token: %q", name)
+		}
+		if seen[name] {
+			t.Fatalf("duplicate buffer name after %d calls: %q", i, name)
+		}
+		seen[name] = true
+	}
+	if name := relayBufferName(); name == "gv-relay" {
+		t.Fatal("still the fixed server-global name")
+	}
+}

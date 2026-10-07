@@ -139,3 +139,34 @@ func TestFindByName(t *testing.T) {
 		t.Error("expected nil for missing worktree")
 	}
 }
+
+// TestParseWorktreeListSlashedBranch is the grove-131 (item 5) regression
+// check: refs/heads/feat/login is the branch "feat/login", not "login" —
+// filepath.Base swallowed everything up to the last slash, so audit's
+// orphan report named human-created slashed branches wrong.
+func TestParseWorktreeListSlashedBranch(t *testing.T) {
+	input := `worktree /home/user/.worktrees/repo/login
+branch refs/heads/feat/login
+
+worktree /home/user/.worktrees/repo/deep
+branch refs/heads/a/b/c
+
+worktree /home/user/.worktrees/repo/detached
+HEAD 0123456789abcdef0123456789abcdef01234567
+detached
+
+`
+	wts := parseWorktreeList(input)
+	if len(wts) != 3 {
+		t.Fatalf("got %d worktrees, want 3", len(wts))
+	}
+	if wts[0].Branch != "feat/login" {
+		t.Errorf("wt[0].Branch = %q, want %q", wts[0].Branch, "feat/login")
+	}
+	if wts[1].Branch != "a/b/c" {
+		t.Errorf("wt[1].Branch = %q, want %q", wts[1].Branch, "a/b/c")
+	}
+	if wts[2].Branch != "" {
+		t.Errorf("detached wt[2].Branch = %q, want empty", wts[2].Branch)
+	}
+}
