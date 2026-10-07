@@ -230,6 +230,8 @@ func (m Model) viewAgents() string {
 				ci, ciStyle = "✗", sFail
 			case "pending":
 				ci, ciStyle = "◌", sDelivery
+			case "unknown":
+				ci = "?" // token can't read checks (grove-old-145) — not "no checks"
 			}
 			if p.PreviewURL != "" {
 				preview = "⬡ up"

@@ -2530,6 +2530,8 @@ func cmdLs(args []string) error {
 				ci = "✗"
 			case "pending":
 				ci = "◌"
+			case "unknown":
+				ci = "?" // token can't read checks (grove-old-145) — not "no checks"
 			}
 			if r.PR.PreviewURL != "" {
 				preview = "⬡ up"
@@ -4074,6 +4076,28 @@ func cmdDone(args []string) error {
 	return finishTask(cfg, t, *force)
 }
 
+// mergeGateError is the `gv done` merge gate's verdict (grove-old-145). A
+// gh failure (ghErr != nil) is NOT "no PR": it says nothing about the PR,
+// so the operator is told to retry (or --force) in words distinct from the
+// genuine "no PR found for branch" refusal, which used to swallow every
+// 403/offline/timeout and funnel people to --force. --force waives every
+// case; nil means cleanup may proceed.
+func mergeGateError(ticket string, merged bool, pr *github.PR, ghErr error, force bool) error {
+	if force {
+		return nil
+	}
+	if ghErr != nil {
+		return fmt.Errorf("%s: merge check failed: %v — retry, or use --force to override", ticket, ghErr)
+	}
+	if merged {
+		return nil
+	}
+	if pr == nil {
+		return fmt.Errorf("%s: no PR found for branch — not cleaning up (use --force to override)", ticket)
+	}
+	return fmt.Errorf("%s: PR #%d is %s — not cleaning up (use --force to override)", ticket, pr.Number, pr.State)
+}
+
 func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	repo, ok := cfg.Repos[t.Repo]
 	if !ok {
@@ -4091,18 +4115,14 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		fmt.Println("→ no remote: skipping merge check (--force is the confirmation)")
 	} else {
 		merged, pr, err := github.Merged(repo.Path, t.Branch)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
-		}
 		if pr != nil {
 			outcome = ledger.Outcome(pr.State)
 		}
-		if !merged && !force {
-			prState := "no PR found"
-			if pr != nil {
-				prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
-			}
-			return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", t.Ticket, prState)
+		if gateErr := mergeGateError(t.Ticket, merged, pr, err, force); gateErr != nil {
+			return gateErr
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v (proceeding on --force)\n", err)
 		}
 	}
 

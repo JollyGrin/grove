@@ -270,6 +270,20 @@ Since grove-435 (model-fit 03) one more additive row field:
   / `task_adopted` event data, and `gv cost --ledger` rows carry an
   `effort` column (empty when unpinned).
 
+Since grove-old-145 (merge gate decoupled from CI) one more additive
+`pr.ci` value:
+
+- `pr.ci: "unknown"` — the PR was found but its checks could not be read.
+  Grove's PR lookup asks `gh` for `statusCheckRollup` + `comments`; when
+  that call fails (a GitHub App token gets 403 on the checks field) it
+  retries once without them, so the PR itself still lands in `pr` instead
+  of the row falling to `pr_known: false`. On that path `pr.ci` is
+  `"unknown"`, `pr.checks` is `0`, `pr.failing` is absent and `preview`
+  is empty — none of which mean "no checks" or "no preview". The human
+  tables render `?` in the CI column. The transition engine treats it
+  like `pending`: never `ready`, never `ci_failed`. Plugins that switch on
+  `pr.ci` should add the arm; the four prior values are unchanged.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the

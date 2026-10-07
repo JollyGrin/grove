@@ -25,7 +25,7 @@ type PR struct {
 	URL        string `json:"url"`
 	State      string `json:"state"` // OPEN | MERGED | CLOSED
 	MergedAt   string `json:"mergedAt,omitempty"`
-	CI         string `json:"ci"`      // pass | fail | pending | none
+	CI         string `json:"ci"`      // pass | fail | pending | none | unknown (CI unreadable — see PRForBranch)
 	PreviewURL string `json:"preview"` // best-effort Vercel link
 
 	// grove-251: PR facts the supervisor's transition engine needs to
@@ -52,15 +52,43 @@ func gh(dir string, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+// Field lists for `gh pr list --json`. The merge gate (Merged) asks only
+// for the identity + state fields: statusCheckRollup needs a token that
+// can read CI, and a GitHub App token gets a 403 on it that used to fail
+// the WHOLE call — so every `gv done` on a genuinely merged ticket read as
+// "no PR found" and forced --force (grove-old-145). The display path
+// (PRForBranch) still wants CI + comments, but falls back to the degraded
+// list when the full one errors, rendering CI as "unknown" instead of
+// losing the PR.
+const (
+	prStateFields    = "number,url,state,mergedAt"
+	prDegradedFields = prStateFields + ",isDraft,mergeable,mergeStateStatus"
+	prFullFields     = prDegradedFields + ",statusCheckRollup,comments"
+)
+
+// prList runs the one `gh pr list` shape every lookup here shares.
+func prList(repoDir, branch, fields string) ([]byte, error) {
+	return gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
+		"--json", fields)
+}
+
 // PRForBranch returns the PR for a head branch, or nil if none exists.
 // Comments ride along in the same call because the real *.vercel.app
 // preview links live in the Vercel bot comment — status-check targetUrls
 // are vercel.com build pages (field-tested on PR #936, twice).
+//
+// When the full query fails it is retried once without the CI + comments
+// fields: a token that cannot read checks (GitHub App token, 403 on
+// statusCheckRollup) then still yields the PR, with CI = "unknown" and no
+// preview link. Only if the degraded query fails too does the lookup error.
 func PRForBranch(repoDir, branch string) (*PR, error) {
-	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,mergedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,comments")
+	degraded := false
+	out, err := prList(repoDir, branch, prFullFields)
 	if err != nil {
-		return nil, err
+		degraded = true
+		if out, err = prList(repoDir, branch, prDegradedFields); err != nil {
+			return nil, err
+		}
 	}
 	var prs []struct {
 		Number     int    `json:"number"`
@@ -128,6 +156,10 @@ func PRForBranch(repoDir, branch string) (*PR, error) {
 	}
 	sort.Strings(failing)
 	pr.Failing = failing
+	if degraded {
+		pr.CI = "unknown"
+		return pr, nil
+	}
 	if pr.PreviewURL == "" {
 		for _, c := range p.Comments {
 			if m := vercelURLRe.FindString(c.Body); m != "" {
@@ -163,16 +195,28 @@ func PreviewURL(repoDir string, number int) string {
 }
 
 // Merged reports whether the branch's PR is merged — the only safe merge
-// check under squash-merge (git ancestry lies; see LEARNINGS.md).
+// check under squash-merge (git ancestry lies; see LEARNINGS.md). It asks
+// gh for identity + state only (prStateFields), never statusCheckRollup:
+// the gate does not look at CI, so a token that cannot read CI must not be
+// able to fail it. The returned PR carries Number/URL/State/MergedAt and
+// CI "unknown"; a nil PR with a nil error means no PR exists for branch,
+// while a non-nil error means gh itself failed — callers must keep those
+// two apart (finishTask does).
 func Merged(repoDir, branch string) (bool, *PR, error) {
-	pr, err := PRForBranch(repoDir, branch)
+	out, err := prList(repoDir, branch, prStateFields)
 	if err != nil {
 		return false, nil, err
 	}
-	if pr == nil {
+	var prs []PR
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return false, nil, fmt.Errorf("parse gh pr list: %w", err)
+	}
+	if len(prs) == 0 {
 		return false, nil, nil
 	}
-	return pr.State == "MERGED", pr, nil
+	pr := prs[0]
+	pr.CI = "unknown"
+	return pr.State == "MERGED", &pr, nil
 }
 
 // FetchAll fans PR lookups out concurrently (ls refresh path). unknown

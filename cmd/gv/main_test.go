@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
@@ -205,4 +207,55 @@ func captureStdout(t *testing.T, f func()) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// TestMergeGateError (grove-old-145): the `gv done` gate must say
+// "merge check failed" when gh itself errored — in words distinct from the
+// genuine "no PR found" refusal — because a token that can't read CI used
+// to collapse both into "no PR found" and funnel operators to --force.
+func TestMergeGateError(t *testing.T) {
+	ghErr := errors.New("gh pr list: exit status 1\nHTTP 403: Resource not accessible by integration")
+	open := &github.PR{Number: 9, State: "OPEN"}
+
+	cases := []struct {
+		name          string
+		merged        bool
+		pr            *github.PR
+		err           error
+		force         bool
+		wantNil       bool
+		want, wantNot string
+	}{
+		{name: "merged passes", merged: true, pr: &github.PR{Number: 9, State: "MERGED"}, wantNil: true},
+		{name: "gh failure is not no-PR", err: ghErr, want: "merge check failed", wantNot: "no PR found"},
+		{name: "gh failure says retry", err: ghErr, want: "retry, or use --force"},
+		{name: "no PR is not a gh failure", want: "no PR found for branch", wantNot: "merge check failed"},
+		{name: "open PR names its state", pr: open, want: "PR #9 is OPEN", wantNot: "no PR found"},
+		{name: "force waives gh failure", err: ghErr, force: true, wantNil: true},
+		{name: "force waives no PR", force: true, wantNil: true},
+		{name: "force waives open PR", pr: open, force: true, wantNil: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mergeGateError("grove-1", c.merged, c.pr, c.err, c.force)
+			if c.wantNil {
+				if got != nil {
+					t.Fatalf("got %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("got nil, want an error containing %q", c.want)
+			}
+			if !strings.Contains(got.Error(), c.want) {
+				t.Errorf("error %q does not contain %q", got, c.want)
+			}
+			if c.wantNot != "" && strings.Contains(got.Error(), c.wantNot) {
+				t.Errorf("error %q must not contain %q", got, c.wantNot)
+			}
+			if !strings.HasPrefix(got.Error(), "grove-1: ") {
+				t.Errorf("error %q should be prefixed with the ticket", got)
+			}
+		})
+	}
 }

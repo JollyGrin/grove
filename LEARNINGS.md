@@ -149,6 +149,20 @@
 
 ## Go / CLI
 
+- **2026-10-07 · One bundled `gh --json` field can take down two unrelated
+  features at once** (grove-old-145). `gh pr list --json
+  …,statusCheckRollup,comments` served both the ls/TUI CI column and the
+  `gv done` merge gate. A GitHub App token gets 403 on `statusCheckRollup`
+  (checks need a scope App tokens lack), and gh fails the WHOLE call —
+  so the CI column blanked AND every `gv done` on a merged ticket read as
+  "no PR found" and demanded `--force`, even though the gate never looks
+  at CI. Two rules fell out: (1) a gate queries only the fields its
+  decision reads — never share a `--json` list with a display path; (2)
+  "the command failed" and "the command returned nothing" are different
+  verdicts and must surface as different strings (`merge check failed`
+  vs `no PR found`), else every outage funnels operators to the override.
+  Display paths degrade instead: retry once without the privileged fields
+  and render the gap as unknown (`?`), not as absence.
 - **2026-10-07 · `--model` was never recorded on the task; only
   `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
   the `task_created`/`task_adopted` data know a worker's PROFILE, but a
