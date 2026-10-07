@@ -33,6 +33,17 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-07 · Claude Code 2.1.292 ships Anthropic's Fable 5.1 autonomy
+  block in the system prompt, so the kickoff's "ask — otherwise do not ask
+  for confirmation" line was a duplicate** (grove-433). Checked on three
+  real worker transcripts (grove-435/441/442): the `prompt_snapshot`
+  attachment carries "You are operating autonomously … asking 'Shall
+  I…?' will block the work", the "check your last paragraph" rule and the
+  "Delivering work" scope paragraphs verbatim from the migration guide.
+  The kickoff templates now state goals, constraints and verification
+  (no numbered steps, no hedge); the autonomy paragraph is NOT added to
+  the template — re-verify via the transcript before ever adding it back.
+  Rule distilled into `.claude/skills/claude-code-facts`.
 - **A session restart after compaction is a SessionStart with
   `source: "compact"`, not a new session** (grove-289). Distinguishing it
   matters for two reasons: folding it as `session_started` would flip a
@@ -47,34 +58,6 @@
   independently reproduce that against; treat it as a hypothesis to watch
   `gv cost --context`'s `compactions`/`NeverCompacted` flag for, not yet
   independently confirmed here.
-
-- **2026-09-26 · a nested `claude` fires the FULL hook set, SessionStart
-  included, each with its own session id; exempting SessionStart handed
-  it the task** (grove-339; incident on grove-317). Captured raw on Claude
-  Code 2.1.283 with `claude -p "reply OK"` run from inside another
-  session's Bash tool: SessionStart
-  (`{"session_id","transcript_path","cwd","hook_event_name","source":"startup"}`),
-  Stop (adds `prompt_id`, `permission_mode`, `stop_hook_active`,
-  `last_assistant_message`, `background_tasks`, `session_crons`) and
-  SessionEnd (`"reason":"other"`) all carry the nested session's own
-  non-empty id. So the ticket's suspect "print mode omits session_id" was
-  wrong. The hole was the grove-250 exemption: the nested SessionStart
-  re-pointed the task's `claude_session_id` at itself, its Stop then
-  passed the gate as `idle` ("OK"), and its SessionEnd as `dead`, while the
-  worker spun mid-turn. Worse, the real worker's later events were then
-  dropped as foreign. Now a SessionStart with a NEW id registers only
-  when the row is not live (setup after grab/adopt, dead, paused) or its
-  `source` is `clear`. The derived tasks.json can lag an adopt by a fold,
-  so a mismatch is re-checked with a read-only `state.Peek` fold before it
-  is dropped. The hook env carries no usable nesting marker:
-  `CLAUDE_CODE_CHILD_SESSION=1` was already set in a top-level session's
-  env too. **Second finding on the live host:** both `~/.claude` and
-  `~/.cc-work` `settings.json` point the hooks at `~/.local/bin/gv`, a
-  v0.1.3 binary from 2026-08-19, while `gv update` refreshes
-  `~/go/bin/gv` (v0.1.50). No grove-250 guard ran in production at all;
-  grove-317's `agent_status` records have no `session_id` field for that
-  reason. Hooks bake in `os.Executable()` at `gv hooks install` time, so
-  a re-install from the updated binary is the operator's fix.
 
 ## tmux / git / detector internals (verified against source)
 
