@@ -231,14 +231,14 @@ main.
 
 | # | Car | Depends on |
 |---|---|---|
-| 01 | Spike A: env-token precedence + side effects + capture + connectors (operator supplies a token) | — |
-| 02 | `internal/account` store + `gv account add/ls/use/rm/token-path/shell-init` + doctor rows | 01 |
-| 03 | launch I: resolver (Decisions 1–3), `WrapAccount` + preflight, grab/adopt, state + plugin contract, PreToolUse deny, dummy e2e | 02 |
-| 04 | launch II: cockpit pane, orchestrator new/brief, chat + web chat, chat event, `rm` in-use over chats, handoff verify prints the account | 03 |
-| 05 | Spike B: usage source | 01 |
-| 06 | `internal/claudeusage` + `gv account ls --usage --json` | 02, 05 |
-| 07 | `$` → CLAUDE tab | 06 |
-| 08 | brains: orchestrator seed duty 3, model-lanes Step 1, CLAUDE.md layout line, gv-keys 07 note | 04, 06 |
+| 01 (#468) | Spike A: env-token precedence + side effects + capture + connectors (operator supplies a token) | — |
+| 02 (#469) | `internal/account` store + `gv account add/ls/use/rm/token-path/shell-init` + doctor rows | 01 |
+| 03 (#470) | launch I: resolver (Decisions 1–3), `WrapAccount` + preflight, grab/adopt, state + plugin contract, PreToolUse deny, dummy e2e | 02 |
+| 04 (#471) | launch II: cockpit pane, orchestrator new/brief, chat + web chat, chat event, `rm` in-use over chats, handoff verify prints the account | 03 |
+| 05 (#472) | Spike B: usage source | 01 |
+| 06 (#473) | `internal/claudeusage` + `gv account ls --usage --json` | 02, 05 |
+| 07 (#474) | `$` → CLAUDE tab | 06 |
+| 08 (#475) | brains: orchestrator seed duty 3, model-lanes Step 1, CLAUDE.md layout line, gv-keys 07 note | 04, 06 |
 
 `e2e/all.sh` must pass before 03, 04 and 07 merge.
 
