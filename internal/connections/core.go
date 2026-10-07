@@ -99,6 +99,10 @@ func Core(env Env) []Connection {
 		})
 	}
 
+	// grove-169: non-default tmux options, one row each, only when set —
+	// a default-config machine prints nothing here.
+	conns = append(conns, tmuxOptionConnections(env)...)
+
 	// grove-435: the effort dial is only as real as the environment lets
 	// it be — CLAUDE_CODE_EFFORT_LEVEL and a settings maxEffortLevel both
 	// override `--effort` without a word from claude.

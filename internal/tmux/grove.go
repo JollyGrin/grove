@@ -1286,3 +1286,48 @@ func KillWindowID(id string) error {
 	_, err := run("kill-window", "-t", id)
 	return err
 }
+
+// GlobalOptions reads the named global tmux options as the sourced config
+// sets them, for `gv doctor`'s tmux-config rows (grove-169). Read-only:
+// one exec, `start-server ; show-options -g ; show-options -gw` — tmux 3.4
+// refuses more than one option name per show-options, and without the
+// start-server a serverless machine answers "error connecting" instead of
+// sourcing the config. On a machine with no server the started one exits
+// as soon as the query is served (no session keeps it alive; exit-empty is
+// the default). Both tables are listed because the four options doctor
+// cares about are split across them (base-index / renumber-windows are
+// session options, pane-base-index / allow-rename are window options).
+// Missing names are absent from the result; a failed exec yields nil.
+func GlobalOptions(names ...string) map[string]string {
+	out, err := run("start-server", ";", "show-options", "-g", ";", "show-options", "-gw")
+	if err != nil {
+		return nil
+	}
+	return parseGlobalOptions(out, names...)
+}
+
+// parseGlobalOptions is split from the exec so it can be tested against
+// canned show-options output. Each line is `name value`; the value keeps
+// everything after the first space, with one layer of surrounding
+// double quotes removed (tmux quotes values that contain spaces).
+func parseGlobalOptions(out string, names ...string) map[string]string {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	opts := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		name, value, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if name == "" || !want[name] {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+			value = value[1 : len(value)-1]
+		}
+		if _, seen := opts[name]; !seen {
+			opts[name] = value
+		}
+	}
+	return opts
+}

@@ -82,6 +82,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-10-07 · `show-options` takes ONE option name, and does not auto-start a server.** tmux 3.4: `tmux show-options -g a b c` fails with "too many arguments (need at most 1)", and on a machine with no server running `tmux show-options -g` answers "error connecting to …/default" instead of sourcing the config (only `start-server`/`new-session` boot one). The working read-only query is a single exec `tmux start-server \; show-options -g \; show-options -gw` — on a serverless machine the started server serves the query and exits (no session, `exit-empty` default); on a live one `start-server` is a no-op. `pane-base-index` and `allow-rename` live in the WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session table — one table alone misses half of them. Found implementing grove-455/#169, whose ticket text assumed both the multi-name form and the auto-start.
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
