@@ -20,6 +20,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
 )
 
@@ -53,6 +54,7 @@ const (
 	KindHooks         = "hooks"
 	KindMCPAuth       = "mcp-auth"
 	KindRemoteHost    = "remote-host"
+	KindTmuxOption    = "tmux-option"
 )
 
 // Status is one evaluated check result.
@@ -87,13 +89,16 @@ type Env struct {
 	Cfg    *config.Config
 	CfgErr error
 
-	LookPath          func(file string) (string, error)
-	Getenv            func(key string) string
-	Stat              func(name string) (os.FileInfo, error)
-	ReadFile          func(name string) ([]byte, error)
-	ReadDir           func(name string) ([]os.DirEntry, error) // nil = no listing (the memory row reads "no notes")
-	Run               func(timeout time.Duration, name string, args ...string) error
-	Output            func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
+	LookPath func(file string) (string, error)
+	Getenv   func(key string) string
+	Stat     func(name string) (os.FileInfo, error)
+	ReadFile func(name string) ([]byte, error)
+	ReadDir  func(name string) ([]os.DirEntry, error) // nil = no listing (the memory row reads "no notes")
+	Run      func(timeout time.Duration, name string, args ...string) error
+	Output   func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
+	// TmuxGlobalOptions reads the named global tmux options (grove-169);
+	// nil = unknown, which drops the tmux-config rows entirely.
+	TmuxGlobalOptions func(names ...string) map[string]string
 	HooksInstalled    func(paths []string) map[string]map[string]bool
 	HookSettingsPaths func(workers []string) []string
 	HookMismatches    func(paths []string, exe string) map[string][]hooks.Mismatch
@@ -128,6 +133,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		ReadDir:           os.ReadDir,
 		Run:               run,
 		Output:            output,
+		TmuxGlobalOptions: tmux.GlobalOptions,
 		HooksInstalled:    hooks.Installed,
 		HookSettingsPaths: hooks.SettingsPaths,
 		HookMismatches:    hooks.Mismatches,

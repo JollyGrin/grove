@@ -36,6 +36,10 @@ func Core(env Env) []Connection {
 		})
 	}
 
+	// grove-169: the operator's tmux config, right under the binary rows
+	// — rows exist only for options set away from their defaults.
+	conns = append(conns, tmuxOptionConnections(env)...)
+
 	// Desktop notifications are darwin-only and nice-to-have: warn, and
 	// the row doesn't exist elsewhere (deliberate change from the P0
 	// doctor, logged in docs/seed-manifest.md).

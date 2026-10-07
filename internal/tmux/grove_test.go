@@ -428,3 +428,53 @@ func TestPlanEditor(t *testing.T) {
 		}
 	}
 }
+
+func TestParseGlobalOptions(t *testing.T) {
+	// Canned `show-options -g ; show-options -gw` output: the session
+	// table first (with a quoted value in the mix), then the window table.
+	canned := "base-index 1\n" +
+		"renumber-windows on\n" +
+		"status-left \"[#{session_name}] \"\n" +
+		"@grove_layout vertical\n" +
+		"allow-rename on\n" +
+		"pane-base-index 1\n"
+	got := parseGlobalOptions(canned, "base-index", "pane-base-index", "renumber-windows", "allow-rename", "status-left", "nope")
+	want := map[string]string{
+		"base-index":       "1",
+		"pane-base-index":  "1",
+		"renumber-windows": "on",
+		"allow-rename":     "on",
+		"status-left":      "\"[#{session_name}] \"",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parseGlobalOptions returned %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+	if _, ok := got["nope"]; ok {
+		t.Error("a name missing from the output must be absent, not empty")
+	}
+	if _, ok := got["@grove_layout"]; ok {
+		t.Error("unrequested options must not leak into the map")
+	}
+
+	// Defaults, as a stock tmux 3.4 prints them.
+	defaults := "base-index 0\nrenumber-windows off\nallow-rename off\npane-base-index 0"
+	got = parseGlobalOptions(defaults, "base-index", "pane-base-index", "renumber-windows", "allow-rename")
+	for k, v := range map[string]string{"base-index": "0", "pane-base-index": "0", "renumber-windows": "off", "allow-rename": "off"} {
+		if got[k] != v {
+			t.Errorf("defaults: %s = %q, want %q", k, got[k], v)
+		}
+	}
+
+	// Empty / garbage output parses to nothing rather than panicking.
+	if got := parseGlobalOptions("", "base-index"); len(got) != 0 {
+		t.Errorf("empty output: got %v, want none", got)
+	}
+	if got := parseGlobalOptions("no-space-here\n\n", "no-space-here"); len(got) != 0 {
+		t.Errorf("line without a value: got %v, want none", got)
+	}
+}

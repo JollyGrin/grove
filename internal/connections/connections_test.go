@@ -688,3 +688,89 @@ func TestEffortSettingsPaths(t *testing.T) {
 		t.Errorf("checkEffortOverride = %+v, want a single warn for repo a's project scope", st)
 	}
 }
+
+// grove-169: the tmux-config rows exist only for non-default options, so
+// a stock config adds nothing to the board; a missing tmux or an absent
+// seam drops the section entirely.
+func TestTmuxOptionRows(t *testing.T) {
+	ok := func(string) (string, error) { return "/usr/bin/tmux", nil }
+	defaults := map[string]string{"base-index": "0", "pane-base-index": "0", "renumber-windows": "off", "allow-rename": "off"}
+	seam := func(m map[string]string) func(...string) map[string]string {
+		return func(names ...string) map[string]string {
+			if len(names) != 4 {
+				t.Errorf("queried %d names, want 4: %v", len(names), names)
+			}
+			return m
+		}
+	}
+
+	if got := tmuxOptionConnections(Env{LookPath: ok, TmuxGlobalOptions: seam(defaults)}); len(got) != 0 {
+		t.Errorf("default config: got %d rows, want none", len(got))
+	}
+	if got := tmuxOptionConnections(Env{LookPath: ok}); len(got) != 0 {
+		t.Errorf("nil seam: got %d rows, want none", len(got))
+	}
+	if got := tmuxOptionConnections(Env{LookPath: ok, TmuxGlobalOptions: seam(nil)}); len(got) != 0 {
+		t.Errorf("query failed (nil map): got %d rows, want none", len(got))
+	}
+	missing := func(string) (string, error) { return "", errors.New("not found") }
+	if got := tmuxOptionConnections(Env{LookPath: missing, TmuxGlobalOptions: seam(map[string]string{"allow-rename": "on"})}); len(got) != 0 {
+		t.Errorf("tmux missing: got %d rows, want none (binary row covers it)", len(got))
+	}
+
+	hostile := map[string]string{"base-index": "1", "pane-base-index": "1", "renumber-windows": "on", "allow-rename": "on"}
+	env := Env{LookPath: ok, TmuxGlobalOptions: seam(hostile)}
+	got := tmuxOptionConnections(env)
+	want := []struct {
+		id, title string
+		state     State
+		fix       bool
+	}{
+		{"tmux-option:base-index", "tmux base-index 1", StateOK, false},
+		{"tmux-option:pane-base-index", "tmux pane-base-index 1", StateOK, false},
+		{"tmux-option:renumber-windows", "tmux renumber-windows on", StateOK, false},
+		{"tmux-option:allow-rename", "tmux allow-rename on", StateWarn, true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("hostile config: got %d rows, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		c := got[i]
+		st := c.Check(env)
+		if c.ID != w.id || c.Title != w.title || st.State != w.state || c.Severity != SeverityWarn || c.Kind != KindTmuxOption {
+			t.Errorf("row %d: got {%s %q %s sev=%s kind=%s}, want {%s %q %s warn %s}", i, c.ID, c.Title, st.State, c.Severity, c.Kind, w.id, w.title, w.state, KindTmuxOption)
+		}
+		if st.Info == "" {
+			t.Errorf("row %d: info must explain the non-default value", i)
+		}
+		if (c.Fix != "") != w.fix {
+			t.Errorf("row %d: fix %q, want present=%v", i, c.Fix, w.fix)
+		}
+	}
+	if !strings.Contains(got[0].Check(env).Info, "#168") {
+		t.Errorf("info rows cite the supporting ticket, got %q", got[0].Check(env).Info)
+	}
+
+	// Only the odd one out shows — and partial output (a name the query
+	// did not return) is treated as unknown, never as non-default.
+	got = tmuxOptionConnections(Env{LookPath: ok, TmuxGlobalOptions: seam(map[string]string{"base-index": "0", "allow-rename": "on"})})
+	if len(got) != 1 || got[0].ID != "tmux-option:allow-rename" {
+		t.Fatalf("partial: got %d rows (%v), want just allow-rename", len(got), got)
+	}
+
+	// Through EvaluateAll the rows sit right under the binary rows and a
+	// warn-severity ok row stays ok (never folded).
+	env = happyEnv(testConfig())
+	env.TmuxGlobalOptions = seam(hostile)
+	results := EvaluateAll(env)
+	if results[0].Connection.ID != "binary:tmux" || results[3].Connection.ID != "tmux-option:base-index" || results[6].Connection.ID != "tmux-option:allow-rename" {
+		var ids []string
+		for _, r := range results[:8] {
+			ids = append(ids, r.Connection.ID)
+		}
+		t.Errorf("row order: %v", ids)
+	}
+	if results[3].Status.State != StateOK || results[6].Status.State != StateWarn {
+		t.Errorf("states: base-index=%s allow-rename=%s", results[3].Status.State, results[6].Status.State)
+	}
+}

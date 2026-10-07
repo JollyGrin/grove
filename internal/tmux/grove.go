@@ -1286,3 +1286,47 @@ func KillWindowID(id string) error {
 	_, err := run("kill-window", "-t", id)
 	return err
 }
+
+// GlobalOptions reads the server's global value of each named option —
+// session options (base-index, renumber-windows) and window options
+// (pane-base-index, allow-rename) alike — for `gv doctor`'s tmux-config
+// rows (grove-169). Read-only, one exec: `show-options -g` takes at most
+// ONE option name (tmux 3.4: "too many arguments (need at most 1)") and
+// lists only the session table, so both global tables are dumped in a
+// single tmux invocation (`show-options -g \; show-options -gw`) and the
+// wanted names are picked out of the lines. With no server running tmux
+// starts one, answers from the sourced config, and the sessionless server
+// exits — the operator's real socket is the point: it is their config
+// being diagnosed. Returns nil on any error (caller treats as "unknown").
+func GlobalOptions(names ...string) map[string]string {
+	out, err := run("show-options", "-g", ";", "show-options", "-gw")
+	if err != nil {
+		return nil
+	}
+	return parseGlobalOptions(out, names...)
+}
+
+// parseGlobalOptions is split from the exec so it can be tested against
+// canned show-options output. Lines are "<name> <value>"; a value may be
+// quoted (status-left "[#S] ") and is kept verbatim after the first
+// space. Only the requested names are returned; a name missing from the
+// output is absent from the map.
+func parseGlobalOptions(out string, names ...string) map[string]string {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		name, value, ok := strings.Cut(line, " ")
+		if !ok || !want[name] {
+			continue
+		}
+		if _, dup := got[name]; dup {
+			continue // first (session-table) hit wins if a name somehow repeats
+		}
+		got[name] = strings.TrimSpace(value)
+	}
+	return got
+}

@@ -82,6 +82,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **`tmux show-options` takes at most ONE option name** (tmux 3.4: `too many arguments (need at most 1)`), and `-g` alone dumps only the session table — window options (`pane-base-index`, `allow-rename`) need `-gw`. To read a mixed set in one exec, chain commands in one invocation: `tmux show-options -g \; show-options -gw` (the `;` is its own argv word) and pick names out of the lines. Reading with no server running auto-starts one from the sourced config and it exits sessionless — fine for a read, but the socket path still counts: a scratch `TMUX_TMPDIR` under a deep scratchpad dir fails with `File name too long` (Unix socket ~108-char limit); use a short `mktemp -d /tmp/…`. (grove-454, 2026-10-07)
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
