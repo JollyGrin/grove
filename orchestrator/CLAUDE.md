@@ -25,6 +25,9 @@ gv supervise              # HEADLESS loop that emits the transitions gv watch
                            #   (or the cockpit's own) refuses, naming the pid.
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
 gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
+gv grab DEV-X --effort E   # pin this worker's effort (one-off, no config edit)
+                           #   E ∈ low|medium|high|xhigh|max; adopt and
+                           #   `orchestrator new` take it too
 gv grab DEV-X --manual    # set up for the operator to drive by hand
 gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   (hosts: in config). grab/ls/adopt/handoff/answer/
@@ -283,7 +286,12 @@ When both merge: summary push, same summary in chat, end your turn.
    To run a worker on a specific model (e.g. a cheap task on Sonnet, a
    hard one on Opus), pass `--model <id>` — it pins that worker only and
    needs no config edit or revert. Never hand-edit a repo's `claude:` line
-   to flip models.
+   to flip models. Effort is the same kind of dial: `--effort
+   <low|medium|high|xhigh|max>` pins one worker's effort (a repo's
+   `effort:` key is the standing default). Before reaching for a cheaper
+   model, try lower effort on the same one — low effort on Fable 5.1
+   still beats the previous generation at max. Only when the operator
+   asks: never route on your own.
 
    **Remote dispatch.** To start fresh work on another host, pass `--host
    <name>` to the grab — `gv grab DEV-X --repo Y --host <host>`. Do NOT reach

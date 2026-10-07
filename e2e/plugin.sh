@@ -57,6 +57,8 @@ WCFG="$DUMMY/.grove/config.yaml"
 perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$WCFG"
 grep -q 'claude: echo' "$WCFG" || fail "claude stub not written"
 "$GV" grab task-001 > "$SCRATCH/grab.out"
+# grove-435: task-003 is grabbed later with an --effort pin; its `effort`
+# row field is asserted below, and its absence on the unpinned rows.
 
 say "feature trains (grove-372): open one, adopt one, close one — the operator's side"
 # A bare origin so feature new can push; added after the grab so the grab
@@ -102,7 +104,7 @@ grep -q 'gv feature ls' "$SCRATCH/fgone.out" || fail "closed-feature refusal doe
 grep -qx 'base: feature/trains (feature trains, from label trains)' "$SCRATCH/fgrab.out" || fail "grab did not name its inferred base"
 CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
 [ "$(git -C "$CAR_WT" rev-parse HEAD)" = "$TRAIN_SHA" ] || fail "car worktree did not fork from origin/feature/trains"
-"$GV" grab task-003 --feature none > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
+"$GV" grab task-003 --feature none --effort low > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
 grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
 
 say "feature status (grove-375): a landed car, an active car, a queued car"
@@ -143,6 +145,10 @@ car = rows['task-002']
 assert (car['feature'], car['base']) == ('trains', 'feature/trains'), car
 for off in ('task-001', 'task-003'):
     assert 'feature' not in rows[off] and 'base' not in rows[off], rows[off]
+# grove-435: effort is additive — present only on the pinned worker.
+assert rows['task-003'].get('effort') == 'low', rows['task-003']
+for unpinned in ('task-001', 'task-002'):
+    assert 'effort' not in rows[unpinned], rows[unpinned]
 print(data['tasks'][0]['ticket'])
 ")"
 

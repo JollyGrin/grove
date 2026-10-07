@@ -190,3 +190,15 @@ func TestSeedTeachesSupervisionMandate(t *testing.T) {
 			"orchestrator turn, so growth is paid on every request — tighten it", n)
 	}
 }
+
+// TestSeedTeachesEffort guards the grove-435 `--effort` teaching: the
+// effort dial is a one-off pin exactly like --model, and the orchestrator
+// must know it exists before it reaches for a cheaper model.
+func TestSeedTeachesEffort(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv grab DEV-X --effort E") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv grab DEV-X --effort E` — restore it in the tools block")
+	}
+	if !strings.Contains(ClaudeMd, "low|medium|high|xhigh|max") {
+		t.Error("orchestrator/CLAUDE.md no longer names the documented effort levels (low|medium|high|xhigh|max)")
+	}
+}

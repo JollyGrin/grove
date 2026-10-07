@@ -19,7 +19,7 @@ repo wins.
 
 | Command | Key | What |
 |---|---|---|
-| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373) |
+| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373); a worker pinned with `--effort` or a repo `effort:` carries `effort` (`low`\|`medium`\|`high`\|`xhigh`\|`max`), absent otherwise (grove-435) |
 | `gv audit --json` | `report` | task-vs-reality classification |
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
@@ -71,7 +71,9 @@ dimensions, folded into row fields `delivery`/`liveness`
 task's `compactions` count (`gv ls`/`gv cost --json`, omitted when 0). In
 `--type`'s known vocabulary, NOT the default set (informational). See
 docs/plugins.md for the full per-type data table. `task_created`/`task_adopted` data carries
-`feature` + `base` only for a feature-train car. Workspace-scoped (empty ticket):
+`feature` + `base` only for a feature-train car, and `effort` only when
+the worker launched with an `--effort` pin or a repo `effort:` default
+(grove-435). Workspace-scoped (empty ticket):
 `workspace_parked`, `orchestrator_closed`, `feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,

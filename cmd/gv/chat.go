@@ -56,6 +56,7 @@ type chatSpawnReq struct {
 	Label   string // the REGISTERED workspace label, resolved on the far side
 	Profile string // model profile name, "" = the host's own Claude
 	Model   string // grove-293: pin the chat to this orchestrator.models tier, "" = the host default
+	Effort  string // grove-435: pin the chat's --effort level, "" = the model's own default
 	Resume  string // grove-217: revive this Claude session id instead of starting fresh
 	Brief   string // grove-271: the chat's FIRST user message (the standing brief), text only
 	OpID    string // idempotency receipt for a relayed spawn
@@ -75,6 +76,10 @@ func chatHopArgs(r chatSpawnReq) []string {
 	// fixed place, so an op-id retry stays byte-equal to the hop it repeats.
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
+	}
+	// grove-435: --effort rides right after --model, same fixed-slot rule.
+	if r.Effort != "" {
+		args = append(args, "--effort", r.Effort)
 	}
 	if r.Resume != "" {
 		args = append(args, "--resume", r.Resume)
@@ -99,6 +104,9 @@ func chatManualRetry(r chatSpawnReq) string {
 	}
 	if r.Model != "" {
 		cmd += " --model " + remote.Quote(r.Model)
+	}
+	if r.Effort != "" {
+		cmd += " --effort " + remote.Quote(r.Effort)
 	}
 	if r.Resume != "" {
 		cmd += " --resume " + remote.Quote(r.Resume)
@@ -198,6 +206,7 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	fs := flag.NewFlagSet("orchestrator new --host", flag.ExitOnError)
 	profile := fs.String("profile", "", "open the remote chat on one of the HOST's model profiles")
 	model := fs.String("model", "", "pin the remote chat to one of the HOST's orchestrator.models tiers (default opus|sonnet|haiku)")
+	effort := fs.String("effort", "", "pin the remote chat's effort (low|medium|high|xhigh|max)")
 	label := fs.String("workspace", "", "target this workspace label on the host (default: the ambient workspace's)")
 	resume := fs.String("resume", "", "revive one of the HOST's archived chats by Claude session id")
 	brief := fs.String("brief", "", "seed the remote chat's FIRST message with this text (the standing brief)")
@@ -208,6 +217,9 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	}
 	if err := chatResumeConflict(*profile, *resume); err != nil {
 		return 0, err
+	}
+	if err := config.CheckEffort(*effort); err != nil {
+		return 0, fmt.Errorf("--effort: %w", err)
 	}
 	briefText, err := chatBriefText(*brief, flagWasSet(fs, "brief"), *briefFile)
 	if err != nil {
@@ -230,7 +242,7 @@ func runRemoteOrchestratorNew(host string, args []string) (int, error) {
 	if *resume != "" && !chat.ValidSessionID(*resume) {
 		return 0, fmt.Errorf("--resume %q is not a Claude session id — run `gv chat ls --workspace %s` on %s to list them", *resume, *label, host)
 	}
-	req := chatSpawnReq{Label: *label, Profile: *profile, Model: *model, Resume: *resume, Brief: briefText, OpID: *opID, Host: host}
+	req := chatSpawnReq{Label: *label, Profile: *profile, Model: *model, Effort: *effort, Resume: *resume, Brief: briefText, OpID: *opID, Host: host}
 	cfg, err := loadCfg()
 	if err != nil {
 		return 0, err
@@ -265,6 +277,7 @@ type chatPlan struct {
 	Cmd       string // the orchestrator launch command
 	Profile   string // resolved profile name ("" = the host's own Claude)
 	Model     string // grove-293: the pinned tier ("" = the host default)
+	Effort    string // grove-435: the pinned --effort ("" = the model's own default)
 	Runs      string // the model this chat WILL run (config.RunsModel) — its pane tag
 	Resume    string // the Claude session id being revived ("" = a fresh chat)
 	SessionID string // grove-222: the id this chat WILL run on — minted here for a
@@ -292,7 +305,12 @@ type chatPlan struct {
 // unknown one fails here like an unknown profile. It is applied to the BARE
 // launch first — PinModel puts it right after the binary token — so the
 // profile wrap reads it and exports that tier's slug.
-func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, resume, brief string, sessions []string) (chatPlan, error) {
+//
+// effort (grove-435) pins --effort on the same bare launch; an unknown
+// level fails here like an unknown model. A profile lane passes it
+// through unchanged — Claude Code, not grove, decides whether the
+// backend honours it.
+func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, effort, resume, brief string, sessions []string) (chatPlan, error) {
 	name, p, err := cfg.ResolveProfile(profile, nil)
 	if err != nil {
 		return chatPlan{}, err
@@ -300,11 +318,14 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, 
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return chatPlan{}, err
 	}
+	if err := config.CheckEffort(effort); err != nil {
+		return chatPlan{}, err
+	}
 	if resume != "" && !chat.ValidSessionID(resume) {
 		return chatPlan{}, fmt.Errorf("--resume %q is not a Claude session id", resume)
 	}
 	orchDir := orchestratorDirFor(ws, cfg)
-	launch := config.PinModel(orchestratorLaunch(cfg, ws.Root), model)
+	launch := config.WithEffort(config.PinModel(orchestratorLaunch(cfg, ws.Root), model), effort)
 	runs := chatRunsModel(cfg, launch, p)
 	// grove-222: a FRESH chat gets its id minted here and handed to claude
 	// (`--session-id <uuid>`), so the pane's identity is known before the
@@ -338,6 +359,7 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, 
 		Cmd:       launch,
 		Profile:   name,
 		Model:     model,
+		Effort:    effort,
 		Runs:      runs,
 		Resume:    resume,
 		SessionID: id,
@@ -435,7 +457,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		events, _ := state.ReadEvents(twinState, 0)
 		model = revivedModel(cfg, events, r.Resume, profile, resumeTranscriptPath(ws, profile, r.Resume))
 	}
-	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Resume, r.Brief, tmux.SessionNames())
+	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Effort, r.Resume, r.Brief, tmux.SessionNames())
 	if err != nil {
 		return err
 	}
@@ -487,6 +509,9 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	if plan.Model != "" {
 		data["model"] = plan.Model
+	}
+	if plan.Effort != "" {
+		data["effort"] = plan.Effort
 	}
 	if plan.Resume != "" {
 		data["resume"] = plan.Resume

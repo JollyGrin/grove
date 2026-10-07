@@ -244,6 +244,17 @@ chars-to-tokens conversion is the fixed **1.9 chars/token estimate**
 relative-effort signal for judging a context cap, the deny gate, or `gv
 sub` a week later, never a precise count.
 
+Since grove-435 (model-fit 03) one more additive row field:
+
+- `effort` — the Claude Code `--effort` level the worker launched with:
+  `low`, `medium`, `high`, `xhigh` or `max`. Set from `gv grab|adopt
+  --effort <level>` or, with no flag, the repo's `effort:` config key.
+  **Absent** when neither pinned it — the worker then runs Claude Code's
+  own per-model default, which grove does not know; never read an absent
+  `effort` as any particular level. The same key rides the `task_created`
+  / `task_adopted` event data, and `gv cost --ledger` rows carry an
+  `effort` column (empty when unpinned).
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the
@@ -356,7 +367,9 @@ have no `session_id`; treat a missing one as unknown, never as foreign.
 `task_created` and `task_adopted` carry optional `data.feature` and
 `data.base` (grove-373, additive): written only when the task rides a
 feature train, so an off-train grab's record is byte-identical to before;
-`task_adopted` carries the stored pair through. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+`task_adopted` carries the stored pair through. Both also carry optional
+`data.effort` (grove-435, additive): the `--effort` level the worker
+launched with, written only when pinned by flag or a repo `effort:` key. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
 `{slug, repo, branch, base, label}` — `gv feature new` opened a feature
 train; `branch` lives on origin, `base` is what it forks from and merges
 back to, `label` the issue label that marks its tickets), `feature_closed`

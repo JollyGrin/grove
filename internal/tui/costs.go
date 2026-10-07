@@ -71,7 +71,7 @@ func costsCmd(cfg *config.Config, stateDir string, tasks []*state.Task, prs map[
 					Input: tot.Input, Output: tot.Output,
 					CacheCreate: tot.CacheCreate5m + tot.CacheCreate1h,
 					CacheRead:   tot.CacheRead, Turns: tot.Turns, USD: tot.USD,
-					Models: tot.Mix(),
+					Models: tot.Mix(), Effort: t.Effort,
 				})
 			}
 		}

@@ -98,6 +98,11 @@ func Core(env Env) []Connection {
 		})
 	}
 
+	// grove-435: the effort dial is only as real as the environment lets
+	// it be — CLAUDE_CODE_EFFORT_LEVEL and a settings maxEffortLevel both
+	// override `--effort` without a word from claude.
+	conns = append(conns, effortConnection())
+
 	// The orchestrator brain's seed-drift row (grove-190): the cockpit
 	// only ever seeds an ABSENT brain, so without this row a seed
 	// improvement would silently never reach an already-seeded workspace.

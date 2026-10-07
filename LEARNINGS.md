@@ -159,6 +159,22 @@
 
 ## Go / CLI
 
+- **2026-10-07 · `--model` was never recorded on the task; only
+  `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
+  the `task_created`/`task_adopted` data know a worker's PROFILE, but a
+  `--model` pin lived only in the tmux pane's argv and was gone with the
+  window. `--effort` therefore could not "mirror `--model`" on the state
+  side — it got its own `effort` event key, `Task.Effort`, and a ledger
+  column. If `--model` ever needs to be read back (adopt keeping a pin,
+  the ledger explaining a cost), it needs the same treatment; today
+  `chat`'s `orchestrator_spawned.model` is the only recorded pin.
+- **2026-10-07 · With `claude: echo`, every flag appears TWICE in the
+  worker pane** (grove-435): once on the typed launch line
+  (`echo --effort low "$(cat …)"`) and once in echo's output, which
+  prints its args back. A "flag present exactly once" assertion must
+  grep the launch line (`grep -o 'echo [^$]*\$(cat'`) and not the whole
+  scrollback — the first cut of `e2e/dummy.sh`'s effort leg failed on a
+  correct launch for exactly this reason.
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt

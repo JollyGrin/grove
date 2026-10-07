@@ -690,3 +690,42 @@ func TestFoldFeatureAndBaseSurviveAdopt(t *testing.T) {
 		t.Errorf("train task JSON lacks feature/base: %s", s)
 	}
 }
+
+// grove-435: effort is additive like model_profile — a pinned grab
+// persists it, an unpinned grab and a pre-field event fold to "", and an
+// adopt carrying the key refreshes it.
+func TestFoldEffort(t *testing.T) {
+	dir := t.TempDir()
+	evs := []Event{
+		{Type: EvTaskCreated, Ticket: "DEV-40", Data: map[string]string{
+			"title": "pinned", "repo": "grove", "effort": "low",
+		}},
+		{Type: EvTaskCreated, Ticket: "DEV-41", Data: map[string]string{
+			"title": "plain", "repo": "grove", // no effort key at all
+		}},
+	}
+	for _, ev := range evs {
+		if err := Append(dir, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tasks["DEV-40"].Effort; got != "low" {
+		t.Errorf("pinned task Effort = %q, want low", got)
+	}
+	if got := tasks["DEV-41"].Effort; got != "" {
+		t.Errorf("unpinned task Effort = %q, want empty", got)
+	}
+	if err := Append(dir, Event{Type: EvTaskAdopted, Ticket: "DEV-41", Data: map[string]string{
+		"effort": "max",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ = Load(dir)
+	if got := tasks["DEV-41"].Effort; got != "max" {
+		t.Errorf("adopted task Effort = %q, want max", got)
+	}
+}

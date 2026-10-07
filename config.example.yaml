@@ -6,6 +6,12 @@
 #   base:          branch to fork from (default: main)
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: claude --dangerously-skip-permissions)
+#   effort:        default `--effort` for this repo's workers: low|medium|high|xhigh|max
+#                  (default: none = Claude Code's per-model default — high on
+#                  Fable 5.1/5, Opus 5, Sonnet 5, Opus 4.8/4.7; medium on
+#                  Opus 5.5 and Sonnet 5.5). `gv grab <id> --effort E` pins one
+#                  grab without a config edit; CLAUDE_CODE_EFFORT_LEVEL in the
+#                  launching env silently beats both — `gv doctor` warns.
 #   prompt:        kickoff template override (optional; embedded default otherwise)
 #                  for one-off ad-hoc instructions instead, use
 #                  `gv grab <id> --brief "<text>"` — appended as a final

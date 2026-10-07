@@ -325,7 +325,8 @@ tmux list-windows -t "$SESSION" > "$SCRATCH/windows2.out" 2>/dev/null || true
 grep -q task-001 "$SCRATCH/windows2.out" && fail "window survived untrack" || true
 
 say "re-grab after untrack (grove-146: --brief attaches an operator brief section)"
-"$GV" grab task-001 --brief "Only touch the staging config, do not deploy." >/dev/null
+# grove-435: --effort rides along so the done-path ledger row below carries it.
+"$GV" grab task-001 --brief "Only touch the staging config, do not deploy." --effort xhigh >/dev/null
 ls -d "$WT"/task-001-* >/dev/null || fail "re-grab did not recreate the worktree"
 grep -q '## Operator brief' "$PROMPT" || fail "prompt missing the Operator brief section"
 grep -q 'Only touch the staging config, do not deploy.' "$PROMPT" || fail "prompt missing the brief text"
@@ -418,6 +419,8 @@ grep -q 'Describe the change' "$LEDGER" || fail "ledger row missing description 
 grep -q ',none,' "$LEDGER" || fail "ledger row missing PR outcome (no remote → none)"
 grep -q 'sonnet' "$LEDGER" || fail "ledger row missing per-model mix (grove-14 models column)"
 grep -q 'haiku' "$LEDGER" || fail "ledger row missing the second model in the mix"
+grep -q ',effort$' "$LEDGER" || fail "ledger header missing the effort column (grove-435)"
+grep -q ',xhigh$' "$LEDGER" || fail "ledger row missing the worker's --effort pin (grove-435)"
 
 say "spend ledger: history survives transcript + worktree deletion"
 rm -rf "$HOME/.claude/projects"
@@ -477,6 +480,94 @@ grep -q '"hooks-binary:' "$SCRATCH/doctor-hooks.json" \
 ("$GV" doctor > "$SCRATCH/doctor.out") || true
 grep -q 'no such binary' "$SCRATCH/doctor.out" \
   || fail "doctor did not flag the mismatched hook binary"
+
+# --- effort dial (grove-435) ---
+# The launched command is what the pane was typed: with `claude: echo` the
+# worker pane shows `echo --effort <l> "$(cat …)"` verbatim, so the pane's
+# scrollback is the one place the flag can be asserted exactly once.
+pane_text() { # $1 = ticket → every pane of its window, scrollback joined
+  local wid
+  tmux list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' > "$SCRATCH/effort-wins.txt"
+  wid="$(grep "$1" "$SCRATCH/effort-wins.txt" | head -1 | cut -d' ' -f1)"
+  [ -n "$wid" ] || fail "no worker window for $1"
+  : > "$SCRATCH/effort-pane.txt"
+  tmux list-panes -t "$wid" -F '#{pane_id}' > "$SCRATCH/effort-panes.txt"
+  while read -r p; do tmux capture-pane -p -S - -J -t "$p" >> "$SCRATCH/effort-pane.txt"; done < "$SCRATCH/effort-panes.txt"
+  tr -d '\n' < "$SCRATCH/effort-pane.txt" > "$SCRATCH/effort-pane.flat"
+}
+launch_line() { # $1 = ticket → the typed `echo … "$(cat …` launch line (the echo stub
+  local i             # prints its args back, so the pane carries the flags twice)
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pane_text "$1"
+    grep -q -- 'echo .*\$(cat' "$SCRATCH/effort-pane.flat" && break
+    sleep 0.5
+  done
+  grep -o -- 'echo [^$]*\$(cat' "$SCRATCH/effort-pane.flat" | head -1 > "$SCRATCH/effort-launch.txt"
+  [ -s "$SCRATCH/effort-launch.txt" ] || { cat "$SCRATCH/effort-pane.flat"; fail "no launch line typed into $1's pane"; }
+}
+effort_count() { # $1 = ticket, $2 = level → how many times `--effort <level>` is on the launch line
+  launch_line "$1"
+  grep -o -- "--effort $2" "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' '
+}
+mdtask() { printf -- '---\nid: %s\ntitle: %s\nstatus: todo\nlabels: []\n---\n\n%s\n' "$1" "$2" "$2" > "$DUMMY/.grove/tasks/$1.md"; }
+
+say "effort dial: a repo effort: key is the standing default (grove-435)"
+mdtask task-002 "effort from config"
+perl -pi -e 's/^(\s*)claude: echo$/$1claude: echo\n$1effort: medium/' "$WCFG"
+grep -q 'effort: medium' "$WCFG" || fail "repo effort key not written"
+"$GV" grab task-002 > "$SCRATCH/grab-effort-cfg.out"
+grep -q '→ effort medium (repo default)' "$SCRATCH/grab-effort-cfg.out" || fail "grab did not report the repo's effort default"
+[ "$(effort_count task-002 medium)" = "1" ] || { cat "$SCRATCH/effort-pane.flat"; fail "repo effort: medium must reach the launched command exactly once"; }
+
+say "effort dial: --effort pins one worker and beats the repo key"
+mdtask task-003 "effort from flag"
+"$GV" grab task-003 --effort low > "$SCRATCH/grab-effort-flag.out"
+grep -q '→ effort low (this worker only)' "$SCRATCH/grab-effort-flag.out" || fail "grab did not report the --effort pin"
+[ "$(effort_count task-003 low)" = "1" ] || { cat "$SCRATCH/effort-pane.flat"; fail "--effort low must reach the launched command exactly once"; }
+grep -q -- '--effort medium' "$SCRATCH/effort-launch.txt" && fail "the repo's effort: medium survived the --effort low pin" || true
+[ "$(grep -o -- '--effort' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "the launch line must carry --effort exactly once"; }
+
+say "effort dial: an unknown level fails before anything exists"
+mdtask task-004 "effort typo"
+("$GV" grab task-004 --effort ultra 2>&1 || true) > "$SCRATCH/grab-effort-bad.out"
+grep -q 'unknown effort "ultra"' "$SCRATCH/grab-effort-bad.out" || fail "grab accepted an undocumented effort level"
+ls -d "$WT"/task-004-* >/dev/null 2>&1 && fail "a rejected --effort still created a worktree" || true
+
+say "effort dial: gv ls --json carries effort for pinned tasks and omits it otherwise"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-effort.json"
+python3 - "$SCRATCH/ls-effort.json" <<'PYEOF2' || fail "ls --json effort field wrong"
+import json, sys
+rows = {t['ticket']: t for t in json.load(open(sys.argv[1]))['tasks']}
+assert rows['task-002'].get('effort') == 'medium', rows['task-002']
+assert rows['task-003'].get('effort') == 'low', rows['task-003']
+assert 'task-004' not in rows, sorted(rows)
+PYEOF2
+"$GV" ls --json --no-pr --no-cost | grep -q '"effort": *"low"' || fail "ls --json missing the effort field"
+
+say "effort dial: adopt keeps the pin it was grabbed with, and --effort overrides it"
+"$GV" pause task-003 --force > "$SCRATCH/effort-pause.out"
+"$GV" adopt task-003 > "$SCRATCH/adopt-effort-keep.out"
+grep -q '→ effort low' "$SCRATCH/adopt-effort-keep.out" || fail "adopt did not keep the grabbed effort"
+"$GV" pause task-003 --force > "$SCRATCH/effort-pause2.out"
+"$GV" adopt task-003 --effort max > "$SCRATCH/adopt-effort-flag.out"
+grep -q '→ effort max' "$SCRATCH/adopt-effort-flag.out" || fail "adopt --effort did not override the stored pin"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-effort2.json"
+grep -q '"effort": *"max"' "$SCRATCH/ls-effort2.json" || fail "ls --json did not pick up the adopt-time effort"
+
+say "effort dial: doctor warns when CLAUDE_CODE_EFFORT_LEVEL would override every pin"
+("$GV" doctor --json > "$SCRATCH/doctor-effort-ok.json") || true
+grep -q '"effort-override"' "$SCRATCH/doctor-effort-ok.json" || fail "doctor --json missing the effort-override row"
+python3 - "$SCRATCH/doctor-effort-ok.json" <<'PYEOF2' || fail "effort-override row must be ok with a clean env"
+import json, sys
+row = [r for r in json.load(open(sys.argv[1]))['rows'] if r['id'] == 'effort-override'][0]
+assert row['state'] == 'ok', row
+PYEOF2
+(CLAUDE_CODE_EFFORT_LEVEL=low "$GV" doctor --json > "$SCRATCH/doctor-effort-warn.json") || true
+python3 - "$SCRATCH/doctor-effort-warn.json" <<'PYEOF2' || fail "effort-override row must warn when the env var is set"
+import json, sys
+row = [r for r in json.load(open(sys.argv[1]))['rows'] if r['id'] == 'effort-override'][0]
+assert row['state'] == 'warn' and 'CLAUDE_CODE_EFFORT_LEVEL=low' in row['info'], row
+PYEOF2
 
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null

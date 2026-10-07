@@ -93,6 +93,7 @@ func TestFullRowSet(t *testing.T) {
 		{"worker:ccwork", "error", "ok", ""},
 		{"agents-md:demo", "warn", "warn", ""},
 		{"sub:lane", "warn", "ok", ""},
+		{"effort-override", "warn", "ok", ""},
 		{"hooks:/profiles/work/settings.json", "error", "ok", ""},
 		{"grid:ccwork-plugins", "error", "ok", "grid-interim"},
 		{"grid:dev-linear-mcp", "warn", "warn", "grid-interim"},
@@ -267,7 +268,7 @@ func TestRenderHappy(t *testing.T) {
 		"\033[33m!\033[0m", // yellow warn mark present
 		"AGENTS.md in demo",
 		"→ gv init --only agents-md",
-		"12/14 passed",
+		"13/15 passed",
 		"🌳 ready to grow",
 	} {
 		if !strings.Contains(out, want) {
@@ -312,10 +313,69 @@ func TestRenderJSON(t *testing.T) {
 		t.Errorf("schema_version = %d, want %d", envelope.SchemaVersion, schema.Version)
 	}
 	decoded := envelope.Rows
-	if len(decoded) != 14 {
-		t.Errorf("got %d rows, want 14", len(decoded))
+	if len(decoded) != 15 {
+		t.Errorf("got %d rows, want 15", len(decoded))
 	}
 	if decoded[0].ID != "binary:tmux" || decoded[0].State != "ok" {
 		t.Errorf("first row: %+v", decoded[0])
+	}
+}
+
+// The effort-override row (grove-435): CLAUDE_CODE_EFFORT_LEVEL in the
+// launching env beats every `gv grab --effort` silently, and a settings
+// maxEffortLevel caps it the same way — doctor is the only place either
+// surfaces. Green when neither is set; warn naming the override otherwise.
+func TestEffortOverrideRow(t *testing.T) {
+	find := func(t *testing.T, env connections.Env) doctor.Row {
+		t.Helper()
+		for _, r := range rows(env) {
+			if r.ID == "effort-override" {
+				return r
+			}
+		}
+		t.Fatal("no effort-override row")
+		return doctor.Row{}
+	}
+
+	clean := find(t, happyEnv(testConfig()))
+	if clean.State != "ok" || clean.Severity != "warn" {
+		t.Errorf("clean env: %+v, want ok/warn", clean)
+	}
+
+	env := happyEnv(testConfig())
+	env.Getenv = func(k string) string {
+		switch k {
+		case "SHELL":
+			return "/bin/zsh"
+		case "CLAUDE_CODE_EFFORT_LEVEL":
+			return "low"
+		}
+		return ""
+	}
+	fromEnv := find(t, env)
+	if fromEnv.State != "warn" {
+		t.Errorf("env var set: state %q, want warn", fromEnv.State)
+	}
+	if !strings.Contains(fromEnv.Info, "CLAUDE_CODE_EFFORT_LEVEL=low") || !strings.Contains(fromEnv.Info, "beats every --effort") {
+		t.Errorf("info = %q, want the var, its value, and the consequence", fromEnv.Info)
+	}
+	if !strings.Contains(fromEnv.Fix, "unset CLAUDE_CODE_EFFORT_LEVEL") {
+		t.Errorf("fix = %q, want the unset remedy", fromEnv.Fix)
+	}
+
+	env = happyEnv(testConfig())
+	base := happyEnv(testConfig()).ReadFile
+	env.ReadFile = func(name string) ([]byte, error) {
+		if name == "/profiles/work/settings.json" {
+			return []byte(`{"maxEffortLevel":"medium","hooks":{}}`), nil
+		}
+		return base(name)
+	}
+	fromSettings := find(t, env)
+	if fromSettings.State != "warn" {
+		t.Errorf("maxEffortLevel set: state %q, want warn", fromSettings.State)
+	}
+	if !strings.Contains(fromSettings.Info, "maxEffortLevel=medium in /profiles/work/settings.json") {
+		t.Errorf("info = %q, want the cap and its file", fromSettings.Info)
 	}
 }

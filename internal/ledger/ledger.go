@@ -52,12 +52,13 @@ type Row struct {
 	Turns       int
 	USD         float64
 	Models      string // compact per-model mix at snapshot time, e.g. "fable 92% · haiku 8%"
+	Effort      string // the --effort the worker was launched with (grove-435); "" = model default
 }
 
 var header = []string{
 	"time", "ticket", "title", "desc", "repo", "branch", "outcome",
 	"input", "output", "cache_create", "cache_read", "turns", "est_usd",
-	"models",
+	"models", "effort",
 }
 
 // Path returns the ledger file location inside a state dir.
@@ -75,7 +76,7 @@ func Append(stateDir string, r Row) error {
 		strconv.Itoa(r.Input), strconv.Itoa(r.Output),
 		strconv.Itoa(r.CacheCreate), strconv.Itoa(r.CacheRead),
 		strconv.Itoa(r.Turns), strconv.FormatFloat(r.USD, 'f', 4, 64),
-		r.Models,
+		r.Models, r.Effort,
 	}
 	if err := w.Write(rec); err != nil {
 		return err
@@ -129,10 +130,11 @@ func Read(stateDir string) ([]Row, error) {
 		if err != nil {
 			continue
 		}
-		// Accept the pre-grove-14 13-column shape as well as the current
-		// 14-column one: older rows read back with an empty Models field
-		// rather than being dropped as malformed.
-		if (len(rec) != 13 && len(rec) != len(header)) || rec[0] == "time" {
+		// Accept the pre-grove-14 13-column shape and the pre-grove-435
+		// 14-column one as well as the current 15-column one: older rows
+		// read back with empty Models/Effort fields rather than being
+		// dropped as malformed.
+		if (len(rec) != 13 && len(rec) != 14 && len(rec) != len(header)) || rec[0] == "time" {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339, rec[0])
@@ -140,16 +142,19 @@ func Read(stateDir string) ([]Row, error) {
 			continue
 		}
 		usd, _ := strconv.ParseFloat(rec[12], 64)
-		models := ""
+		models, effort := "", ""
 		if len(rec) > 13 {
 			models = rec[13]
+		}
+		if len(rec) > 14 {
+			effort = rec[14]
 		}
 		rows = append(rows, Row{
 			Time: at, Ticket: rec[1], Title: rec[2], Desc: rec[3],
 			Repo: rec[4], Branch: rec[5], Outcome: rec[6],
 			Input: atoi(rec[7]), Output: atoi(rec[8]),
 			CacheCreate: atoi(rec[9]), CacheRead: atoi(rec[10]),
-			Turns: atoi(rec[11]), USD: usd, Models: models,
+			Turns: atoi(rec[11]), USD: usd, Models: models, Effort: effort,
 		})
 	}
 	return rows, nil
