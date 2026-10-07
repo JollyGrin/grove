@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] **grove-455** · `gv doctor` reports non-default tmux options (A/B arm C of #169): `tmux.GlobalOptions` (one exec, `start-server ; show-options -g ; show-options -gw`, parser unit-tested on canned output) + `connections.tmuxOptionConnections` behind a `TmuxGlobalOptions` Env seam — rows exist only for non-default values, so a stock machine prints nothing; `base-index`/`pane-base-index`/`renumber-windows` are ✓ info lines, `allow-rename on` is a `!` warn with a fix. Verified live against an isolated hostile-conf server.
 - [x] grove-452 — [A/B arm B] CLI/relay paper cuts (clone of #131): rune-safe `truncateLine` + notify body caps, `.env` copy reports write failure instead of lying, per-call tmux relay buffer name (pid+nonce), slashed branch names survive `parseWorktreeList`, ledger reader returns on non-parse I/O error instead of spinning. Unit test per item; gate + e2e/dummy.sh green.
 - [x] grove-451 [A/B arm C] decouple `gv done` merge gate from statusCheckRollup: `Merged` queries `number,url,state,mergedAt` only; `PRForBranch` retries without `statusCheckRollup,comments` on error and renders CI `unknown`; `finishTask` says `merge check failed … retry, or use --force` instead of `no PR found` when gh itself fails. Tests: merged verdict under CI 403, degraded display, distinct error strings.
 - [x] model-fit 02: kickoff A/B on three rote tickets × three arms
@@ -108,19 +109,6 @@
       (`orchestrator/seed_test.go` tripwire); `e2e/dummy.sh` asserts the
       launch line carries it exactly once, `e2e/plugin.sh` the row field.
       No automatic routing — the operator pins.
-- [x] model-fit 01: kickoff templates — goals and constraints, not
-      choreography (grove-433, 2026-10-07, PR #444). All four autonomous
-      templates (`md_default`, `md_pickup`, `default`, `pickup`) drop the
-      1–7 step script, the ask/do-not-ask hedge (Claude Code 2.1.292
-      injects the Fable 5.1 autonomy block itself — verified in
-      `prompt_snapshot`, see claude-code-facts), the ~3-files subagent
-      heuristic, the duplicate "never push to base" and `ALWAYS`; they
-      state the task, the contract (start verb, commit prefix, `gh pr
-      create --base`, feature paragraph), what done means, and add
-      evidence / scope / delegation / wrap-up re-grounding sentences from
-      the migration guide. STATUS lines byte-identical and last, pinned by
-      `TestRenderEndsWithStatusSentinels`; linear goldens regenerated
-      (seed-manifest row). Manual templates untouched. A/B is #434.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

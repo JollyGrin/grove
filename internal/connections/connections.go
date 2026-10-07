@@ -20,6 +20,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
 )
 
@@ -109,6 +110,12 @@ type Env struct {
 	// testable without pinning the real seed's bytes.
 	OrchestratorDir  string
 	OrchestratorSeed string
+
+	// TmuxGlobalOptions reads the named global tmux options as the
+	// sourced config sets them (grove-169); nil drops the tmux-config
+	// rows (fake envs, and the real one when tmux is not installed —
+	// the binary row already covers that).
+	TmuxGlobalOptions func(names ...string) map[string]string
 }
 
 // NewEnv builds the real-machine Env.
@@ -135,6 +142,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		GOOS:              runtime.GOOS,
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
+		TmuxGlobalOptions: tmux.GlobalOptions,
 	}
 }
 
