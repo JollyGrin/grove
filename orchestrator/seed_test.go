@@ -226,3 +226,27 @@ func TestSeedTeachesEffortFirst(t *testing.T) {
 			"grove-436 replaced it with effort-first on the default model")
 	}
 }
+
+// TestSeedTeachesLearningsReview (grove-439) guards duty 11: the
+// orchestrator knows `gv learnings --json` exists, proposes one
+// promotion or retirement per note with the target file and text, and
+// touches no memory file or skill without the operator's yes.
+func TestSeedTeachesLearningsReview(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv learnings --json") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv learnings --json` — restore it in the tools block")
+	}
+	duties := seedSection(t, "Duties")
+	for _, want := range []string{
+		"**Learnings review**",
+		"gv learnings --json",
+		"one promotion or retirement per note",
+		"target file and the exact text",
+		"Apply only on the operator's yes",
+		"Never edit a memory file or a skill unasked",
+	} {
+		if !strings.Contains(duties, want) {
+			t.Errorf("orchestrator/CLAUDE.md Duties is missing %q — the learnings-review duty "+
+				"(grove-439) has been trimmed; restore it", want)
+		}
+	}
+}

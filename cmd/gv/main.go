@@ -25,6 +25,7 @@ import (
 	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/doctor"
@@ -34,6 +35,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/kickoff"
+	"github.com/JollyGrin/grove/internal/learnings"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
@@ -163,6 +165,9 @@ const usage = `gv — grove
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
+  gv learnings [--json] [--since 14d]         read-only promotion report: recent auto-memory notes per
+                                              repo (feedback first), recent LEARNINGS.md entries, and
+                                              entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
@@ -512,6 +517,8 @@ func main() {
 		err = cmdChat(args)
 	case "mobile":
 		err = cmdMobile()
+	case "learnings":
+		err = cmdLearnings(args)
 	case "doctor":
 		err = cmdDoctor(args)
 	case "hooks":
@@ -4564,6 +4571,115 @@ func cmdDoctor(args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// --- learnings (grove-439) ---
+
+// cmdLearnings is the read side of the learnings promotion loop: per
+// configured repo, the auto-memory notes newer than --since (feedback —
+// corrections and confirmed approaches — first), the LEARNINGS.md entries
+// newer than --since, and the entries that name a skill which cites none
+// of them (promotion candidates). Pure read: it never touches a memory
+// file, LEARNINGS.md or a skill — proposing and applying a promotion is
+// the orchestrator's duty on the operator's yes. The memory directory is
+// resolved exactly as the doctor row does (autoMemoryDirectory in any
+// readable settings scope, else Claude Code's default).
+func cmdLearnings(args []string) error {
+	fs := flag.NewFlagSet("learnings", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	sinceFlag := fs.String("since", "14d", "how far back to look (14d, 2w, 48h)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: gv learnings [--json] [--since 14d]")
+	}
+	window, err := learnings.ParseSince(*sinceFlag)
+	if err != nil {
+		return err
+	}
+	cfg, cfgErr := loadCfg()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	env := connections.NewEnv(cfg, nil)
+	rep := learnings.Report{Since: time.Now().Add(-window).UTC(), Repos: []learnings.RepoReport{}}
+	names := make([]string, 0, len(cfg.Repos))
+	for n := range cfg.Repos {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r := cfg.Repos[name]
+		if r == nil || r.Path == "" {
+			continue
+		}
+		m := connections.ResolveMemory(env, r)
+		rep.Repos = append(rep.Repos, learnings.Build(learnings.RepoInput{
+			Name: name, Root: r.Path,
+			MemoryDir: m.Dir, MemorySource: m.Source, MemoryDisabled: m.Disabled,
+		}, rep.Since))
+	}
+	if *asJSON {
+		return emitJSON("report", rep)
+	}
+	renderLearnings(os.Stdout, rep)
+	return nil
+}
+
+// renderLearnings is the human view: one block per repo. Unstable —
+// plugins read --json.
+func renderLearnings(w io.Writer, rep learnings.Report) {
+	fmt.Fprintf(w, "GROVE LEARNINGS — since %s (read-only; promotions are proposed by the orchestrator, applied on your yes)\n", rep.Since.Format("2006-01-02"))
+	for _, r := range rep.Repos {
+		m := r.Memory
+		if m.Disabled == "" && len(m.Notes) == 0 && len(m.Warnings) == 0 && len(r.Entries) == 0 && len(r.Candidates) == 0 {
+			fmt.Fprintf(w, "\n== %s == nothing in the window (%d note(s) in %s)\n", r.Repo, m.Total, m.Dir)
+			continue
+		}
+		fmt.Fprintf(w, "\n== %s ==\n", r.Repo)
+		switch {
+		case m.Disabled != "":
+			fmt.Fprintf(w, "auto memory: OFF — %s\n", m.Disabled)
+		case m.Source != "":
+			fmt.Fprintf(w, "auto memory: %s (autoMemoryDirectory in %s) — %d note(s)\n", m.Dir, m.Source, m.Total)
+		default:
+			fmt.Fprintf(w, "auto memory: %s — %d note(s)\n", m.Dir, m.Total)
+		}
+		for _, wn := range m.Warnings {
+			fmt.Fprintf(w, "  ! %s\n", wn)
+		}
+		if len(m.Notes) == 0 {
+			fmt.Fprintln(w, "  no notes in the window")
+		}
+		for _, n := range m.Notes {
+			typ := n.Type
+			if typ == "" {
+				typ = "-"
+			}
+			idx := ""
+			if !n.Indexed {
+				idx = "  (not in MEMORY.md)"
+			}
+			fmt.Fprintf(w, "  %-9s %s  %s — %s%s\n", typ, n.Modified.UTC().Format("2006-01-02"), n.Name, n.Description, idx)
+		}
+		if r.LearningsFile == "" {
+			fmt.Fprintln(w, "LEARNINGS.md: none")
+			continue
+		}
+		fmt.Fprintf(w, "LEARNINGS.md: %d entries in the window\n", len(r.Entries))
+		for _, e := range r.Entries {
+			fmt.Fprintf(w, "  %s  [%s] %s\n", e.Date, e.Section, e.Fact)
+		}
+		if len(r.Candidates) == 0 {
+			fmt.Fprintln(w, "promotion candidates: none (every entry naming a skill is cited by it)")
+			continue
+		}
+		fmt.Fprintf(w, "promotion candidates (%d) — entries naming a skill that cites none of them:\n", len(r.Candidates))
+		for _, c := range r.Candidates {
+			fmt.Fprintf(w, "  → %s  %s  %s\n", c.Skill, c.Date, c.Fact)
+		}
+	}
 }
 
 // hookSettingsPaths derives every worker profile's settings.json from the

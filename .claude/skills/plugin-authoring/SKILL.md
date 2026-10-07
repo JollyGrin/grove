@@ -27,6 +27,7 @@ repo wins.
 | `gv cost --context [ticket…\|--all] --json` | `rows` | per-ticket `{ticket, report}` (grove-289): per-call context size, `growth` by source bucket (share of `ctx_tokens`, 1.9 chars/token estimate), `compactions`, `top` amplified reads, `delegation` (`gv sub` rollup) |
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |
 | `gv doctor --json` | `rows` | connection checks |
+| `gv learnings [--since 14d] --json` | `report` | learnings promotion loop, read side (grove-439): `{since, repos[]}`; per repo `memory` = `{dir, source?, disabled?, notes_total, index[], notes[], warnings?}` (notes newer than `since`, `feedback` type first: `{file, name, type?, description?, modified, modified_by, indexed, error?}`), `learnings_file?`, `entries[]` `{date, section, fact, text, tickets?, skills?}` (dated in the window), `candidates[]` `{skill, date, fact, why}` (an entry naming a skill whose SKILL.md cites neither its ticket, date nor headline — over the whole file), `skills[]`. Pure read; scratch it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` |
 | `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
 | `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |

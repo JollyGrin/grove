@@ -63,6 +63,7 @@ payload under one named key.
 | `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, last_active, writable, waiting, model, turn}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id — minted by grove at spawn and stamped on the pane before the agent boots (grove-222), so a chat grove started carries it from second zero; it is **null** only when grove cannot know it without guessing (a pane grove did not spawn, sharing a project dir with another such pane) — a null is honest, never a placeholder to fill in from the newest transcript; `label` is the transcript's first prompt that is the operator's own words — harness wrappers (a local-command caveat, a slash command's echo, a `!` escape, a task notification) are skipped and system-reminder/pasted-content wrappers stripped, so a chat that only ever ran a slash command is titled by it (`/model`) (grove-315); `created` is BIRTH (a live row's tmux pane age, an archived row's transcript mtime) and `last_active` is the transcript's mtime on every kind — the last time the chat was actually spoken to, zero (`0001-01-01T00:00:00Z`) when the row has no transcript to read, where a client falls back to `created` (grove-228). **Age and order a chat list on `last_active`, not `created`** — a cockpit pane born four days ago and steered ten seconds ago is otherwise the oldest-looking row on the list. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input. `waiting` (grove-302, additive) is "needs you": true when a live `chat` row running claude shows a modal picker (a permission prompt or a question it is blocked on) in a pane capture — the same detection as `gv chat serve`'s picker strip; always false on `cockpit`/`archived` rows, a pane at a shell, and a capture that fails. Within a workspace and kind, rows order most recently active first, chat number only breaking ties (grove-302). Over HTTP, `gv chat serve` answers `GET /api/chats` with this envelope and pushes it, byte for byte, as the `chats` event of the SSE stream `GET /api/chats/events` — once on connect, then only when it changed, with a `:` keep-alive every ~25s; the stream's first event is `version` (a JSON string, the build stamp — also `GET /api/version` → `{"version": …}` in the envelope, `dev` unstamped) (grove-307, grove-286, additive). `model` (grove-293, additive) is the model a live chat was spawned to run, as grove resolved it at spawn — a tier (`opus`), a profile's slug, a host settings.json model, or the literal `account default`; `""` on archived rows and any pane grove did not tag. The phone's new-chat sheet is `GET /api/workspaces/<label>/models` → `{"models": [{profile, model, runs}]}` in the envelope: the host default (`profile` and `model` both `""`), then one row per `orchestrator.models` tier (default `opus`/`sonnet`/`haiku`), then one per model profile; `runs` is what that spawn will actually run, and `{profile, model}` is POSTed back verbatim to `POST /api/workspaces/<label>/new` (`model` optional, absent/`""` = host default; an unknown one is a 409 with the CLI's refusal). `turn` (grove-334, additive) is what a live `chat` row is DOING, off the same pane capture as `waiting`: `running` (spinner up), `idle` (claude at its prompt), `waiting` (a modal holds the turn — including one the picker cannot read, where `waiting` stays false), `errored` (a death marker at the pane's bottom), `unknown`, or `stopped` (the pane runs no claude); `""` on `cockpit`/`archived` rows and a failed capture. `busy` only ever means "a process is alive" — badge and order on `turn`. `GET /api/workspaces` → `{"workspaces": [label…]}` in the envelope lists every registered workspace `ls` enumerates, chats or not (grove-334); `GET /api/chats/<s>/pane` → `{"pane": "…"}` is the bottom 30 lines of one fresh capture of a live chat's pane as text, read-only (404 with the reason when it has none) — the escape hatch for a modal no client can parse. The chat stream's `picker` event carries `review` (additive, omitted when empty): on AskUserQuestion's Submit page, one `question → answer` string per pick |
 | `gv chat tail <s> [--follow] [--since N]` | *(none — a stream)* | JSONL, one transcript entry per line: `{seq, role, kind, text, tool, ts}` (grove-216). `role` is `user`/`assistant`; `kind` is `text`, `tool_use`, `tool_result`, `thinking` or `meta`; a `meta` entry (grove-315) is a harness wrapper Claude Code wrote as a `user` line — never the operator's prose — with `tool` naming the wrapper (`command` for a slash command, text `/model opus`; `task-notification` for a background agent/command finishing, text its summary; `bash` for a `!` escape's command line; `bash-output` for its stdout/stderr; `local-stdout` for a local command's output; `interrupt` for Claude Code's `[Request interrupted by user…]` notice, text without the brackets — it ENDS the turn (grove-334)) and `text` its cleaned inner text; a client should render it as chrome, not as something said. A real `text` entry has system-reminder and pasted-content wrappers stripped; `tool` is the tool's NAME (a `tool_result` is paired back to the `tool_use` it answers); `ts` is null on a line that carries no timestamp. `seq` is 1-based over EMITTED entries and stable for an append-only transcript, so `--since N` resumes exactly where a client stopped; `--follow` streams appends (~250ms poll). Read on any kind — an archived transcript and a cockpit pane are readable, only writing is gated. Entries are never truncated: a 200KB `tool_result` arrives whole |
 | `gv doctor --json` | `rows` | array — connection checks; row ids are additive, e.g. `memory:<repo>` (grove-437) reports where that repo's workers' Claude Code auto memory resolves to, its note count and newest `modified` in `info`, `warn` when the surface is disabled |
+| `gv learnings [--since 14d] --json` | `report` | object — the read side of the learnings promotion loop (grove-439): `{since, repos}`, one row per configured repo — see "Since grove-439" below. Pure read: it never writes a memory file, `LEARNINGS.md` or a skill |
 | `gv hooks status --json` | `hooks` | array — one row per managed settings.json: `{path, events, mismatches}`; `events` maps each of the four hook events to whether a gv entry exists, `mismatches` (grove-348, additive, omitted when empty) lists gv entries whose command binary is not the running gv — `{event, binary, missing}` where `missing` means the binary path does not exist on disk (the hooks silently do nothing) |
 | `gv brains --json` | `brains` | array — one row per REGISTERED workspace (not just the ones behind): `{label, root, state, have, want, command, note}` (grove-236). `state` is `current` · `stale` · `unstamped` · `absent` · `missing-root`; `have` is the seed stamp found on disk (empty when unstamped, absent or missing-root) and `want` is the stamp of the seed the running binary embeds; `command` is the `gv init --only orchestrator-md` line to run **from `root`**, empty when there is nothing to run (current, or a root that is gone). Pure read — the sweep never writes, and grove never overwrites a brain |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
@@ -269,6 +270,52 @@ Since grove-435 (model-fit 03) one more additive row field:
   `effort` as any particular level. The same key rides the `task_created`
   / `task_adopted` event data, and `gv cost --ledger` rows carry an
   `effort` column (empty when unpinned).
+
+Since grove-439 (model-fit 07): `gv learnings --json`, a new read verb,
+payload key `report`:
+
+- `since` — the window's start, RFC 3339 UTC (`--since` accepts `14d`,
+  `2w`, Go durations like `48h`; default `14d`).
+- `repos[]` — one per configured repo, sorted by name: `{repo, memory,
+  learnings_file?, entries, candidates, skills}`.
+  - `memory` — the repo's Claude Code auto memory, resolved exactly as
+    the `memory:<repo>` doctor row does (grove-437): `{dir, source?,
+    disabled?, notes_total, index, notes, warnings?}`. `source` is the
+    settings.json whose `autoMemoryDirectory` relocated it (absent on
+    the default path); `disabled` names what switched the surface off
+    (absent when enabled). `notes_total` counts every note in the dir;
+    `index[]` is `MEMORY.md` as `{title, file, hook?}` lines; `notes[]`
+    is only the notes newer than `since`, **`feedback`-type first**
+    (corrections and confirmed approaches), then newest first:
+    `{file, name, type?, description?, modified, modified_by, indexed,
+    error?}` — `type` is the frontmatter `type` (`user` · `feedback` ·
+    `project` · `reference`, read flat or under `metadata:`), `modified`
+    is the frontmatter `modified` when stamped else the file's mtime
+    (`modified_by` says which), `indexed` is whether `MEMORY.md` lists
+    it, and `error` is set on a note whose frontmatter opens and never
+    closes — such a note is always listed, never dropped. `warnings[]`
+    (omitted when empty) carries those errors and any index line naming
+    a missing file.
+  - `learnings_file` — the repo's `LEARNINGS.md` path; absent when the
+    repo keeps none (then `entries` and `candidates` are `[]`).
+  - `entries[]` — `LEARNINGS.md` entries dated on/after `since`, newest
+    first: `{date, section, fact, text, tickets?, skills?}` — `fact` is
+    the bold headline after the `YYYY-MM-DD ·`, `text` the whole entry
+    with continuation lines joined, `tickets` the `grove-N` ids it
+    mentions, `skills` the names from `.claude/skills/` it mentions.
+  - `candidates[]` — promotion candidates over **every** entry in the
+    file (not just the window): `{skill, date, fact, why}` for each
+    dated entry that names a skill whose `SKILL.md` cites none of the
+    entry's ticket ids, its date, or its headline. The rule has not
+    been distilled, so the orchestrator proposes it (duty 11).
+  - `skills[]` — the skill names found under the repo's
+    `.claude/skills/` (directories holding a `SKILL.md`).
+
+The memory directory is Claude Code's own; nothing in grove is written
+to make it appear. To point the verb at a scratch directory (the e2e
+does), set `autoMemoryDirectory` in the repo's
+`.claude/settings.local.json` — the same key, read in the same scope
+order, as the doctor row. There is no grove-side env override.
 
 ## React: `gv watch`, or tail `events.jsonl`
 

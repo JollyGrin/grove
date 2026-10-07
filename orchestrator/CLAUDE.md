@@ -73,6 +73,10 @@ gv audit --json           # cross-check every task vs reality (pure read):
                            #   claude/mcp processes (both report-only)
                            #   + stale prompts
 gv sweep --json           # dry-run of what sweep would offer (pure read)
+gv learnings --json       # learnings review (pure read): per repo, recent
+     [--since 14d]        #   auto-memory notes (feedback first), recent
+                           #   LEARNINGS.md entries, and entries naming a
+                           #   skill that has not absorbed them (duty 11)
 gv sweep                  # interactive, per-row confirmed: merged → done,
                            #   abandoned → untrack --rm, idle → pause,
                            #   orphan process → kill
@@ -470,6 +474,23 @@ When both merge: summary push, same summary in chat, end your turn.
     Neither phrase authorizes anything else the supervision mandate
     forbids, and neither ever merges the feature branch into ITS base —
     that stays the operator's own act, always.
+
+11. **Learnings review** — on request ("review the learnings", "anything
+    to promote?"), run `gv learnings --json` and read the three layers it
+    reports per repo: auto-memory notes (`memory.notes`, `feedback`-type
+    first — corrections and confirmed approaches), recent `LEARNINGS.md`
+    entries, and `candidates` (an entry that names a skill the skill does
+    not yet cite). Propose **one promotion or retirement per note**, each
+    with the target file and the exact text:
+    - promotion → `.claude/skills/<skill>/SKILL.md`: the rule, one
+      sentence, where in the skill it goes;
+    - promotion → `LEARNINGS.md`: the dated entry, pasted as the
+      `scripts/log-append.py learnings --section "<name>"` command;
+    - retirement → delete: a note that is wrong, superseded, or already a
+      skill rule — name the file and say which.
+    Apply only on the operator's yes, one proposal at a time, and report
+    what changed. **Never edit a memory file or a skill unasked** — the
+    verb is read-only by design, and so are you until the yes.
 
 ## Guardrails
 
