@@ -24,6 +24,17 @@
 
 ## Now
 
+- [x] model-fit 10: price table + tier classifier for the Claude 5.5
+      family and Fable ids (grove-442, 2026-10-07). Explicit
+      `claude-opus-5-5` ($4/$20, cache reads $0.20) and `claude-sonnet-5-5`
+      ($2/$10, cache reads $0.20) rows — Opus 5.5 had been riding Opus 5's
+      prefix with derived cache reads at $0.50, 2.5× over. A Fable `--model`
+      pin on a profile lane now takes the lane's opus slot (was: sonnet);
+      `TierForModel` maps a Fable id to a configured "fable" tier and
+      otherwise stays on the host default rather than downgrading a revive
+      to opus (documented in `internal/config/models.go`). Status-bar
+      detection knows "fable". Prices verified against the claude-api skill
+      model table (cached 2026-09-25).
 - [x] model-fit 03: `--effort` as a first-class dial (grove-435,
       2026-10-07). `gv grab|adopt|orchestrator new --effort
       <low|medium|high|xhigh|max>` beside `--model`, a per-repo `effort:`
@@ -118,22 +129,6 @@
       task; modals return to the lens. `l` builds the land plan from the
       fold + last PR poll (no network) and confirms before `feature.Land`
       × `FinishTask`. All lens strings built in `assemble()`.
-- [x] feature-trains 11: docs + brains (grove-382, 2026-09-27, on
-      `feature/feature-trains`). Orchestrator seed teaches `gv feature
-      new/ls/close/land` and `gv serve` (tools block), a train ticket
-      grabbed with `--feature` or by label (duty 3 Dispatch — the
-      hand-written `--brief` train block is retired), and duty 10: `land
-      <slug>` (`gv feature land <slug> --yes` then `gh issue close` +
-      `Closes #N` on the feature PR) and standing `keep <slug> landed`
-      (same, on each `pr_merged` for that feature, until its PR merges or
-      the operator says stop) — the guardrail "never close any issue"
-      gains exactly this exception, scoped to a ticket's PR `MERGED` into
-      the feature's own branch. `.grove/orchestrator/CLAUDE.md` refreshed
-      via `gv init --only orchestrator-md`. `.claude/skills/ticket-writing`
-      "feature branch, consciously" bullet updated for the working
-      `gv feature`/`gv grab --feature` machinery; root CLAUDE.md gains a
-      "Feature trains" section. docs/plugins.md contract rows from 01/02/
-      04/05/09 verified present, no gap found.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

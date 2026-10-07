@@ -420,7 +420,10 @@ var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // opus/sonnet/haiku class it requested, so a profile can substitute its own
 // slug for that class. No --model flag (the common case — grab/orchestrator
 // launches rarely pin one) defaults to sonnet, Claude Code's own baseline
-// tier.
+// tier. A Fable pin (`fable`, `claude-fable-5-1`) takes the OPUS slot
+// (grove-442): a profile lane has no tier above opus, and the operator who
+// pinned Fable asked for the top of the lane — the old default dropped it
+// onto the lane's sonnet slug, a silent downgrade.
 func modelSlot(modeledCmd string) string {
 	m := modelFlagValue.FindStringSubmatch(modeledCmd)
 	if m == nil {
@@ -428,7 +431,7 @@ func modelSlot(modeledCmd string) string {
 	}
 	v := strings.ToLower(m[1])
 	switch {
-	case strings.Contains(v, "opus"):
+	case strings.Contains(v, "opus"), strings.Contains(v, "fable"):
 		return "opus"
 	case strings.Contains(v, "haiku"):
 		return "haiku"
@@ -468,7 +471,8 @@ func (p *ModelProfile) slugFor(slot string) string {
 // from the sourced file.
 //
 // Sets ANTHROPIC_MODEL to the slug for the class the modeled command
-// requested (opus/sonnet/haiku), plus all three ANTHROPIC_DEFAULT_*_MODEL
+// requested (opus/sonnet/haiku; a Fable pin is the lane's opus slot — see
+// modelSlot), plus all three ANTHROPIC_DEFAULT_*_MODEL
 // vars so an in-session `/model` switch still resolves to one of the
 // profile's own slugs rather than an Anthropic one.
 //
