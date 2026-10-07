@@ -24,6 +24,23 @@
 
 ## Now
 
+- [x] model-fit 05: workers get the auto-memory surface (grove-437,
+      2026-10-07, PR #449). Every autonomous kickoff (both sets, default +
+      pickup) carries one paragraph on the line between the three memory
+      surfaces — auto memory (shared by the repo's worktrees; read
+      `MEMORY.md` first) for corrections and confirmed approaches,
+      LEARNINGS.md for dated harness/tooling surprises, nothing the
+      repo/ticket/git already records; goldens regenerated, STATUS block
+      untouched. `gv doctor` gains `memory:<repo>` (warn): the worker
+      profile's resolved auto-memory dir (`connections.ResolveMemory` —
+      local > project > user `autoMemoryDirectory`/`autoMemoryEnabled`,
+      `CLAUDE_CODE_DISABLE_AUTO_MEMORY`), note count, newest `modified`.
+      Root CLAUDE.md + LEARNINGS.md preamble state the split. The
+      `autoMemoryDirectory → .grove/memory` relocation is written up in
+      the PR: recommendation is not to relocate (no scope both reaches a
+      fresh worktree and stays per-repo); a symlink is the settings-free
+      route if the operator wants it. Two headless rote runs wrote no
+      memory file — criterion reported unmet in the PR, not claimed.
 - [x] model-fit 08: compaction over discard (grove-440, 2026-10-07).
       Per-repo `autocompact: auto|100000–1000000` beside `claude:` →
       `claude --autocompact N` on grab/adopt via `config.WithAutocompact`
@@ -111,29 +128,6 @@
       a head is over it, and `scripts/log-append.py` is the append path —
       a session adds a row/entry without reading the file, and the script
       archives the oldest rows past the cap. PR left open for review.
-- [x] feature trains: landed cars from GitHub + collapsed rail count
-      (grove-397, 2026-09-27). On a GitHub provider a car is landed when
-      its labelled issue is CLOSED and a PR from its `<ticket>-…` branch
-      is MERGED into the feature branch (`landed_at` = mergedAt, `pr` =
-      that PR) — two `gh` calls riding the queued pass
-      (`StatusInput.ClosedIssues`/`MergedPRs`); events stay the fallback
-      and the union, GitHub wins a ticket both know, a ticket tracked on the
-      feature stays active. The rail collapses landed cars into one leading
-      `⬢N ▸` token, labelled `361-363` or `3 landed`; the scene and lens
-      keep every car. `e2e/github.sh` covers the lookup.
-- [x] feature-trains 12: cutover (grove-383, 2026-09-27, on
-      `feature/feature-trains`). New `e2e/feature.sh` (wired into
-      `e2e/all.sh`) walks one train end to end in a single workspace:
-      `feature new` on a scratch bare origin, `--adopt` (pushes nothing),
-      grab by label (forks from the feature tip, kickoff says
-      `--base feature/<slug>`, `gv ls --json` carries `feature`/`base`),
-      `feature ls --json` status (cars, `behind_base`, `mergeable`),
-      `land --json` dry run, `land --yes` (backend task files byte-identical
-      after), `close` (branch left, label stops inferring). Grove's own
-      `.grove/run.sh`: throwaway build to `/tmp/gv-$GROVE_FEATURE`, prints
-      `GROVE_READY <path>`. `e2e/plugin.sh` teardown race fixed (wait for
-      the isolated socket, retry the rm). Merge to main PROPOSED in the PR,
-      not performed.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
