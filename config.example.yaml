@@ -12,6 +12,14 @@
 #                  Opus 5.5 and Sonnet 5.5). `gv grab <id> --effort E` pins one
 #                  grab without a config edit; CLAUDE_CODE_EFFORT_LEVEL in the
 #                  launching env silently beats both — `gv doctor` warns.
+#   autocompact:   `--autocompact` window for this repo's workers: auto, or a
+#                  token count 100000–1000000 (default: unset = no flag,
+#                  Claude Code's own window). Recommended 150000 on Claude
+#                  lanes: a compaction re-orients in 2–10k tokens and the
+#                  SessionStart hook prints ground truth (ticket, acceptance
+#                  criteria, git log/status, PR handoff) after each one,
+#                  where a kill-and-restart takes 16–55 turns to pay back.
+#                  Leave unset on 1M-context third-party lanes (kimi).
 #   prompt:        kickoff template override (optional; embedded default otherwise)
 #                  for one-off ad-hoc instructions instead, use
 #                  `gv grab <id> --brief "<text>"` — appended as a final

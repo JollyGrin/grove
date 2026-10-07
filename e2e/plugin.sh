@@ -251,12 +251,19 @@ SS_BEFORE_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
 python3 -c "
 import json
 print(json.dumps({'session_id': 's-compact-1', 'cwd': '$WTPATH', 'hook_event_name': 'SessionStart', 'source': 'compact'}))
-" | "$GV" hook session-start
+" | "$GV" hook session-start > "$SCRATCH/compact-stdout.txt"
 [ "$(wc -l < "$EVENTS")" -eq "$((EV_BEFORE_COMPACT + 1))" ] || fail "compact session-start did not append exactly one event"
 tail -n 1 "$EVENTS" > "$SCRATCH/last-compact-event.json"
 grep -q '"type":"compaction"' "$SCRATCH/last-compact-event.json" || fail "compact session-start did not append a compaction event"
 SS_AFTER_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
 [ "$SS_AFTER_COMPACT" -eq "$SS_BEFORE_COMPACT" ] || fail "compact session-start incorrectly appended session_started"
+
+say "hook: the compact SessionStart prints a ground-truth re-orientation (grove-440)"
+[ -s "$SCRATCH/compact-stdout.txt" ] || fail "compact session-start printed nothing to stdout"
+grep -q 'Task: task-001' "$SCRATCH/compact-stdout.txt" || { cat "$SCRATCH/compact-stdout.txt"; fail "re-orientation missing the ticket id"; }
+grep -q 'git log --oneline -8' "$SCRATCH/compact-stdout.txt" || { cat "$SCRATCH/compact-stdout.txt"; fail "re-orientation missing the git log block"; }
+grep -q 'git status --short' "$SCRATCH/compact-stdout.txt" || fail "re-orientation missing the git status block"
+grep -q 'STATUS contract' "$SCRATCH/compact-stdout.txt" || fail "re-orientation missing the STATUS contract line"
 
 say "gv ls --json: the task's compactions field is now 1"
 ( cd "$DUMMY" && "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-compacted.json" )

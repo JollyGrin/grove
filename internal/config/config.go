@@ -20,7 +20,8 @@ type Repo struct {
 	Base         string   `yaml:"base"`
 	Setup        string   `yaml:"setup"`
 	Claude       string   `yaml:"claude"`
-	Effort       string   `yaml:"effort"` // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
+	Effort       string   `yaml:"effort"`      // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
+	Autocompact  string   `yaml:"autocompact"` // per-repo --autocompact window for workers (grove-440; auto or 100000–1000000 tokens); empty = no flag, Claude Code's own window
 	Prompt       string   `yaml:"prompt"`
 	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
 	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
@@ -311,6 +312,9 @@ func parse(raw []byte, src string) (*Config, error) {
 		}
 		if err := CheckEffort(r.Effort); err != nil {
 			return nil, fmt.Errorf("repo %q: effort: %w", name, err)
+		}
+		if err := CheckAutocompact(r.Autocompact); err != nil {
+			return nil, fmt.Errorf("repo %q: %w", name, err)
 		}
 		if r.Prompt != "" {
 			r.Prompt = expand(r.Prompt)

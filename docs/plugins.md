@@ -241,7 +241,10 @@ task field:
   Claude Code process fires with `source: "compact"` (a context-compaction
   restart, not a new session): `data: {session_id}`. Folds into
   `state.Task.Compactions` (below); no glyph change, no `session_started`
-  alongside it.
+  alongside it. The same hook prints a plain-text re-orientation to its
+  stdout (grove-440: ticket + acceptance criteria, `git log`/`git status`,
+  the PR body) that Claude Code adds to the worker's context — text for
+  the model, not a contract; the record's shape is unchanged.
 - `compactions` — additive `gv ls`/`gv cost --json` task field (via the
   embedded task), the running count of `compaction` events folded for the
   ticket. `omitempty`: present only when > 0.

@@ -1668,6 +1668,9 @@ func cmdGrab(args []string) error {
 	if effort != "" {
 		fmt.Printf("→ effort %s%s\n", effort, effortSource(*effortFlag))
 	}
+	if repo.Autocompact != "" {
+		fmt.Printf("→ autocompact %s (repo default)\n", repo.Autocompact)
+	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
 	}
@@ -1791,7 +1794,9 @@ func cmdGrab(args []string) error {
 	// Claude pane: (serialized setup) && claude with the prompt as argv via
 	// command substitution — single line, no send-keys mangling, and the
 	// pane returns to a shell if claude exits.
-	claudeBin := config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort)
+	// grove-440: the repo's autocompact: window rides along the same way
+	// as the model/effort pins — strip-then-inject, exactly once.
+	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact)
 	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
 	// Profile wrap applies to the composed claude+prompt command only —
 	// never to repo.Claude itself (hooks resolve the worker's config dir
@@ -3806,6 +3811,9 @@ func cmdAdopt(args []string) error {
 	if effort != "" {
 		fmt.Printf("→ effort %s\n", effort)
 	}
+	if repo.Autocompact != "" {
+		fmt.Printf("→ autocompact %s (repo default)\n", repo.Autocompact)
+	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s\n", profileName)
 	}
@@ -3955,7 +3963,7 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	claudeBin := config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort)
+	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact) // grove-440
 	secrets := config.SecretsPath()
 	// Wrap each claude limb separately: WrapProfile ends in `exec`, which
 	// replaces the shell, so a single wrap around `resume || fresh` would make
