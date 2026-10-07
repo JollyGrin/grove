@@ -1,141 +1,64 @@
-# Handoff — picking grove up from the scaffold
+# Handoff — picking grove up fresh
 
-> Written 2026-07-03 by the session that designed grove and built this
-> scaffold. You are (probably) a fresh agent in a fresh repo. This file is
-> the complete pickup path; nothing about grove lives only in someone's
-> head.
->
-> **Update 2026-07-04: Phase 0 shipped** — P0.0 rename done (binary safe
-> to run), TaskProvider seam + markdown provider + `gv init` + E2E green
-> (`e2e/dummy.sh`). The do-not-run trap below is historical; CLAUDE.md and
-> TASKS.md carry the current state. Next: the operator's live test → Phase 1 plan.
->
-> **Update 2026-07-12: grove is the live daily driver and builds itself.**
-> The real backlog is GitHub issues on this repo (`grove-N` = issue #N),
-> worked by grove workers; ~40 tickets have shipped through the loop.
-> Phase 0, most of Phase 1 (wizard/doctor/workspaces), Phase 3
-> (github-issues provider), and much of Phase 4 (cockpit) are done;
-> Phase 2 (routing) is parked. The sections below marked "historical"
-> describe the 2026-07-03 scaffold moment — still the honest origin story,
-> but read TASKS.md §Now for what's actually next. The hard-won rules are
-> distilled into `.claude/skills/` (tmux-discipline, shipping-gates,
-> claude-code-facts) — workers load them automatically; read them before
-> touching tmux, the test gate, or hook/session code.
->
-> **Update 2026-08-27: the remote train is SHIPPED and field-proven.**
-> The #176–#179 train (hosts config + `--host` ssh passthrough, `gv
-> handoff --to/--from`, one-fleet `gv ls --remote` / cockpit `R`, VPS
-> runbook) is merged to main — every code PR went through review → fix
-> round → independent verification → full gate (`e2e/all.sh`). A live
-> host exists: **groveremote**, a prepaid-host.com VPS (4 vCPU/16GB,
-> Frankfurt) reached via Tailscale SSH (`ssh dean@groveremote`), fully
-> provisioned per `docs/remote-host-setup.md` and wired into the Mac's
-> global `hosts:` config. A three-leg scratch handoff (Mac → VPS → Mac,
-> issue #187/PR #188, both closed) proved the whole loop, including
-> `adopt --sync`'s stale-worktree fast-forward. Architecture rationale:
-> `docs/remote-attach-architecture.md` (the t3code study — attach beats
-> sync); field surprises: LEARNINGS.md §Remote (global-layer host
-> config, first-run dialogs eating kickoff prompts, `capture-pane -J`).
-> **Next up:** the #184–#186 follow-up mini-train — #184 (rote: extend
-> passthrough verbs), #185 (cockpit acts on @host rows), #186
-> (idempotent relays + delivery confirmation; its comments carry live
-> evidence of five swallowed-prompt incidents from 2026-08-26/27).
+> The complete pickup path; nothing about grove lives only in someone's
+> head. The 2026-07-03 original with its dated progress updates is
+> archived at [docs/archive/HANDOFF-2026-07-03.md](docs/archive/HANDOFF-2026-07-03.md);
+> the narrative behind each era is in [docs/journal.md](docs/journal.md).
 
 ## What this repo is
 
 Grove is the generalized, OSS-ready successor to `overstory-tui` (`ovs`) —
-The operator's working Go CLI that turns Linear tickets into autonomous Claude Code
-sessions (worktree + tmux + kickoff → PR) for The Grid. Overstory was the
-solo trial run; grove is the version that drops into **any** repo or
-parent-of-repos, wizards itself into readiness, and — configured with the
-Grid *pack* — must behave **exactly** like today's hand-tuned ovs, with
-zero hardcoding. Then ovs retires and teammates adopt grove.
+the operator's Go CLI that turns tickets into autonomous Claude Code
+sessions (worktree + tmux + kickoff → PR). Overstory was the solo trial
+run; grove drops into **any** repo or parent-of-repos, wizards itself into
+readiness, and — configured with the Grid *pack* — must behave exactly
+like hand-tuned ovs with zero hardcoding. Then ovs retires and teammates
+adopt grove.
 
-## Where things stand (2026-07-03)
-
-Everything below is DONE:
-
-1. **Design corpus, reviewed.** [DESIGN.md](DESIGN.md) (founding spec) +
-   [docs/grove-connections-design.md](docs/grove-connections-design.md)
-   (wizard / doctor / drift / connections manifest / pack system / parity
-   test) + [docs/grove-learnings-design.md](docs/grove-learnings-design.md)
-   (layered memory) +
-   [docs/grove-cockpit-design.md](docs/grove-cockpit-design.md) (UX).
-   A design-reviewer pass returned APPROVE_WITH_FIXES; **all findings are
-   already applied** to the docs (record:
-   [docs/grove-readiness-review.md](docs/grove-readiness-review.md) §4).
-2. **All interview-level decisions locked.** The full table is in
-   [docs/grove-readiness-review.md](docs/grove-readiness-review.md) §5 —
-   name/binary, dedicated worker profile default, no trust gate (flagged
-   revisit-before-public), pack terminology, Grid pack in the workspace
-   marketplace, native-Go providers, LEARNINGS.md as L2, orchestrator
-   skip-permissions default, learnings grove-only, goreleaser day one.
-   **Do not relitigate these.**
-3. **Code seeded.** The entire ovs Go tree copied byte-identical (module
-   path rewritten to `github.com/JollyGrin/grove`; `cmd/ovs` →
-   `cmd/gv`). `go build ./... && go vet ./... && go test ./...` green,
-   `gofmt -l .` empty at seed time. Provenance + generalization map:
-   [docs/seed-manifest.md](docs/seed-manifest.md).
+Grove is the live daily driver and builds itself: the backlog is GitHub
+issues on this repo (`grove-N` = issue #N), worked by grove workers. A
+remote host (**groveremote**, a VPS reached via Tailscale SSH, provisioned
+per `docs/remote-host-setup.md`) is wired into the global `hosts:` config;
+`gv handoff --to/--from` has moved live tasks both ways.
 
 ## What you do first
 
-1. **Read, in order:** [CLAUDE.md](CLAUDE.md) (rules), this file,
-   [TASKS.md](TASKS.md) §Now, the three `.claude/skills/`,
-   [LEARNINGS.md](LEARNINGS.md), then [DESIGN.md](DESIGN.md) and the
-   docs/ designs as the work demands
-   ([docs/seed-manifest.md](docs/seed-manifest.md) when touching a
-   copied package). New to driving grove as an operator?
+1. **Read, in order:** [CLAUDE.md](CLAUDE.md) (rules and what to read
+   when), this file, [TASKS.md](TASKS.md) §Now, and the `.claude/skills/`
+   whose trigger matches your task. [LEARNINGS.md](LEARNINGS.md),
+   [DESIGN.md](DESIGN.md), [docs/roadmap.md](docs/roadmap.md), and the
+   `docs/` designs only as the work demands
+   ([docs/seed-manifest.md](docs/seed-manifest.md) when touching a copied
+   package). Driving grove as an operator?
    [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
-2. *(Historical — resolved by P0.0, 2026-07-04.)* ~~Do NOT run the `gv`
-   binary until the namespace rename is done.~~ The binary is safe; the
-   one remaining coexistence caution is in CLAUDE.md (`gv hooks install`
-   writes a shared settings file).
-3. **Follow the plan flow for non-trivial work:** brainstorm →
-   `docs/plans/YYYY-MM-DD-<slug>-design.md` (design-reviewer) →
-   `docs/plans/YYYY-MM-DD-<slug>.md` (plan-reviewer) → execute on a
-   short-lived branch in a worktree. The design corpus is deliberately
-   what/why; plans are yours to write.
-4. **Never edit `~/git/thegrid/overstory-tui`.** It is frozen and is
-   the operator's daily driver. It is also your reference: when a copied package
-   confuses you, diff against upstream and read its DESIGN.md/LEARNINGS.md.
+2. **Do not relitigate the locked decisions** — the table is in
+   [docs/grove-readiness-review.md](docs/grove-readiness-review.md) §5
+   (name/binary, dedicated worker profile default, no trust gate until
+   revisit-before-public, pack terminology, native-Go providers,
+   LEARNINGS.md as L2, orchestrator skip-permissions default, goreleaser
+   from day one).
+3. **`~/git/thegrid/overstory-tui` is frozen** (CLAUDE.md hard rule). It
+   is also your reference: when a copied package confuses you, diff
+   against upstream and read its DESIGN.md/LEARNINGS.md.
 
-## Traps we already know about (don't rediscover)
+## Structural traps that predate the skills and still hold
 
-The live-incident traps are distilled into `.claude/skills/` — the
-distillation is canonical, [LEARNINGS.md](LEARNINGS.md) is the dated log
-behind it. The four that have actually burned us, in one line each:
-
-- **`$TMUX` beats `TMUX_TMPDIR`** — an "isolated" tmux script run from a
-  worker pane targets the REAL server; a bare `tmux kill-server` killed
-  the whole fleet once (2026-07-07). → `.claude/skills/tmux-discipline`
-- **Never pipe the test gate** — `go test ./... | tail` reports the
-  pipe's exit status; two red runs merged to main that way in one
-  evening. → `.claude/skills/shipping-gates`
-- **Never `go install` from an unmerged branch** — hooks and live
-  sessions run `~/go/bin/gv` by absolute path; hand the operator a
-  throwaway `go build -o /tmp/gv-<ticket>` instead.
-  → `.claude/skills/shipping-gates`
-- **Claude Code behavior is documented, not guessed** — hook payloads,
-  Stop-vs-Notification, transcript/resume mechanics, per-profile worlds.
-  → `.claude/skills/claude-code-facts`
-
-Structural traps that predate the skills and still hold:
+The live-incident traps (`$TMUX` isolation, the piped gate, `go install`
+from a branch, Claude Code hook/transcript mechanics) are in the skills —
+the distillation is canonical, LEARNINGS.md + `docs/archive/` is the
+dated log behind it. Four that no skill carries:
 
 - **Both ovs and gv hooks fire on the same worker sessions** during any
-  transition window. "Not my session" must key on *task ownership in
-  this workspace's tasks.json*, NOT on workspace resolution — an
-  ovs-created worktree can resolve to a grove workspace via the `.grove/`
-  walk-up (DESIGN.md §12, design review I-6).
+  transition window. "Not my session" must key on *task ownership in this
+  workspace's tasks.json*, NOT on workspace resolution — an ovs-created
+  worktree can resolve to a grove workspace via the `.grove/` walk-up
+  (DESIGN.md §12, design review I-6).
 - **The parity gate's byte-comparison is against an empty learnings
   corpus** (docs/grove-connections-design.md §8.2) — don't chase
   byte-parity once learnings inject.
-- **A git-inited $HOME shadows parent-folder detection** — `gv init`
-  once made HOME the workspace because a dotfiles repo enclosed the cwd;
+- **A git-inited $HOME shadows parent-folder detection** — `gv init` once
+  made HOME the workspace because a dotfiles repo enclosed the cwd;
   parent-of-repos detection tests the cwd itself first.
-- **LEARNINGS.md is verified fact, not opinion** — every entry was
-  learned the hard way (many field-hit within minutes of shipping).
-  Trust it; when it invalidates a design doc, the doc gets updated and
-  the entry notes it.
 - The state/tmux/git/worktree/detect/transcript packages were copied into
   ovs from parkranger and have survived two tools — treat them as the
   most-proven code in the tree.

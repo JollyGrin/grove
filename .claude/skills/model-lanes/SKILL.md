@@ -1,6 +1,6 @@
 ---
 name: model-lanes
-description: Explicitly invoked only — do NOT load for ordinary dispatch. Use when the operator runs /model-lanes or asks to split a workload across the Claude sub, a flat-rate coding plan (z.ai GLM), and pay-per-token OpenRouter lanes. Reads live capacity on every lane, calibrates this workspace's cost-per-turn, sizes the open backlog, and proposes per-ticket routing with grab commands for approval. Early in a Claude billing week you do not need this; it earns its keep when the Claude sub runs low or a flat plan caps out.
+description: Explicitly invoked only (/model-lanes) — never for ordinary dispatch. Use when the operator asks to split a workload across the Claude sub, a flat-rate coding plan (z.ai GLM), and pay-per-token OpenRouter lanes: reads live capacity per lane, calibrates this workspace's cost-per-turn, sizes the open backlog, and proposes per-ticket routing with grab commands for approval. Earns its keep when the Claude sub runs low or a flat plan caps out.
 ---
 
 # Model lanes — capacity-aware dispatch routing
@@ -154,9 +154,8 @@ cache share  \((($cache/$tok)*100)|floor)%"'
 ```
 
 Live on the grove workspace, 2026-08-29: 16 tickets, ~1,070 turns, ~115M
-tokens → **~108k resident, 95% cache read**. It moves as work lands (the
-same query an hour later read 107k), which is exactly why you re-run it
-rather than quoting this line. Then:
+tokens → **~108k resident, 95% cache read** — it moves as work lands,
+which is why you re-run it rather than quoting this line. Then:
 
 | Lane | credits or $ per turn |
 |---|---|
@@ -265,9 +264,9 @@ windowed ceiling. Three rules:
    meter**, not about the variable in general — never strip it from a
    profile that ships with it.
 
-**OpenRouter** — see the lane reference below. This is where the backlog
-goes when the sub is low **and** the flat plan is capped, and it is the
-only lane that cannot strand work mid-ticket.
+**OpenRouter** — see the lane reference below. Where the backlog goes
+when the sub is low **and** the flat plan is capped; the only lane that
+cannot strand work mid-ticket.
 
 ## Step 5 — propose
 
@@ -290,210 +289,20 @@ gv grab <ticket> --repo <repo> --profile <p> --host <host>    # on the remote bo
 pin is clobbered when the repo's `claude:` line already carries `--model`
 (last flag wins) — check that line before promising a pin.
 
-## Lane reference — OpenRouter
+## Lane reference and probing (read on demand)
 
-Never quote a frozen model table; prices and model names turn over
-monthly. **Discover live**, ranked by this workspace's own token shape:
-
-```bash
-curl -s https://openrouter.ai/api/v1/models | python3 -c "
-import json,sys
-# weights = this workspace's fresh-input / output / cache-read shares
-W_IN, W_OUT, W_CACHE = 0.029, 0.0084, 0.963
-TOKENS_PER_TICKET = 7.29e6
-MIN_CTX = 200000
-for m in sorted(json.load(sys.stdin)['data'], key=lambda x: x['id']):
-    p = m.get('pricing') or {}
-    try:
-        i=float(p.get('prompt') or 0)*1e6; o=float(p.get('completion') or 0)*1e6
-        c=p.get('input_cache_read'); c=float(c)*1e6 if c else None
-    except (TypeError, ValueError): continue
-    if i<=0 or o<=0 or c is None: continue
-    if (m.get('context_length') or 0) < MIN_CTX: continue
-    blend=(W_IN*i + W_OUT*o + W_CACHE*c) * TOKENS_PER_TICKET/1e6
-    print(f\"{blend:7.2f}  {m['id']:44} in {i:6.2f} out {o:7.2f} cache {c:7.3f}\")
-" | sort -n | head -30
-```
-
-Substitute the workspace's own weights and tokens-per-ticket from Step 2.
-**Require a cache-read price** — a model without prompt caching costs
-~30× more at grove's 96% cache-read share, which no headline `$/Mtok`
-will warn you about.
-
-**Which tier to pick.** Not the floor. At normal volume, tokens are 1–2%
-of what a ticket costs — the rest is operator attention — so the gap
-between a $0.06/ticket lane and a $0.56/ticket lane is *noise* against a
-single steer or rescue. Sort by capability first and treat everything
-under ~$2/ticket as free. The tiers that have held up:
-
-- **~$0.06/ticket** — `qwen/qwen3.7-flash` is **verified working** on real
-  tickets (see Verified lanes below) and is the default first choice for
-  rote work. `z-ai/glm-5.3-flash` is cheapest per credit on the flat plan
-  but carries a 46% episode-level no-tool-call rate — probe it on z.ai's
-  Anthropic-native endpoint, never a generic one. `deepseek/deepseek-v4-flash`
-  (undated) is **dead** — fails Gate 0. Price is not the risk in this
-  tier; the tool protocol and the finishing loop are.
-- **~$1–2/ticket** — `moonshotai/kimi-k2.5`, `kimi-k2.7-code`,
-  `minimax/minimax-m3`. The sensible default overflow tier.
-- **~$2.40/ticket** — `z-ai/glm-5.3`. Note this costs the **same as
-  Sonnet 5** for identical token volumes; the flat plan is a subsidy, not
-  a cheap model, and there is no thrift argument for the paid GLM lane.
-
-### Verified lanes (grove workspace, Go repo with e2e, ~91k resident)
-
-Measured by real dispatch on real tickets, 2026-08-27. Re-probe when a
-slug or harness version changes; these are observations, not guarantees.
-
-| Lane | Slug | $/ticket | Verdict |
-|---|---|---:|---|
-| `qwen-flash` | `qwen/qwen3.7-flash` | 0.056 | **PASS** — verbatim spec matched character-for-character, gate green, correct scoping on a judgment call, TASKS.md row, clean sentinel. **First choice for rote.** |
-| `qwen-coder` | `qwen/qwen3-coder-next` | 0.566 | **PASS with caveat** — correct fix + real regression test, but exceeded the enumerated surface and *invented* default config values instead of stopping to ask. 7× the cost of qwen-flash. Reserve for tickets needing judgment. |
-| `deepseek-0731` | `deepseek/deepseek-v4-flash-0731` | 0.104 | **FAIL — loops.** Produced the correct diff, then could not recognise it was finished: 203 turns / 20 min / no commit, re-verifying the same file ("the change is already in place… let me verify"). Not viable unattended. |
-| — | `deepseek/deepseek-v4-flash` (undated) | 0.139 | **FAIL — Gate 0.** Zero `tool_use`; emitted native `<｜DSML｜>` markup as text. |
-
-**Pin dated slugs, never the undated alias.** `deepseek-v4-flash-0731`
-clears Gate 0; the undated `deepseek-v4-flash` does not. Same vendor, same
-family, same endpoint — the alias points wherever the provider decides.
-
-**The cheapest model won, and not by luck.** #115 was the most tightly
-specified ticket in the batch (its correct output was quoted verbatim in
-the body), and the $0.056 lane nailed it while the $0.566 lane drifted on
-a looser one. In this tier **specification quality dominates model
-choice** — which is the same claim `ticket-writing` makes about cost. Buy
-capability only for tickets you could not specify tightly.
-
-**Watch for the loop, not just the bad diff.** A cheap model's most
-expensive failure is finishing the work and failing to notice: turns climb
-with no commit, and the transcript repeats "let me verify" on a file it
-already fixed. Catch it by turn count against estimate (2× estimate with
-no commit = intervene), not by reading the diff. It is recoverable — a
-nudge naming the exact remaining steps and forbidding further
-investigation ships the work already sitting in the worktree.
-
-### The probe protocol
-
-Capability data for cheap models is stale the month it is published, and
-vendor-reported benchmarks do not predict behaviour in a specific
-harness on a specific repo. **Probing is cheaper than researching**: one
-probe on a flash lane costs ~$0.15 and answers the question for *this*
-workspace.
-
-**Gate 0 — does the model speak Anthropic tool-use on this endpoint?**
-Check this before anything else; it is binary, it costs under a cent, and
-it kills lanes that look perfect on price and benchmarks. Dispatch the
-probe, let it take **one turn**, then read the transcript:
-
-```bash
-# Claude Code's project dir encodes the cwd with BOTH rules: / -> - AND . -> -
-# /home/dean/git/grove/.grove/orchestrator -> -home-dean-git-grove--grove-orchestrator
-TD=~/.claude/projects/$(pwd | sed -e 's#/#-#g' -e 's#\.#-#g')   # or the worker's worktree
-python3 -c "
-import json,os,sys,glob
-files = glob.glob(sys.argv[1]+'/*.jsonl')
-if not files: sys.exit('no transcript under '+sys.argv[1])
-f = max(files, key=os.path.getmtime)   # newest by mtime: filenames are UUIDs, unordered
-tu=txt=0; model=None
-for l in open(f):
-    try: r=json.loads(l)
-    except: continue
-    if r.get('type')!='assistant': continue
-    model = r['message'].get('model')
-    for b in r['message'].get('content',[]):
-        tu  += b.get('type')=='tool_use'
-        txt += b.get('type')=='text'
-print(os.path.basename(f), model,'tool_use:',tu,'text:',txt)
-" "$TD"
-```
-
-Two traps in that one command, both of which fail *silently* — a wrong
-directory and a stale transcript both read as `tool_use: 0`, which is the
-kill-the-lane verdict:
-
-- **Encode `.` as well as `/`.** A one-rule `sed 's#/#-#g'` gets the
-  orchestrator's own `.grove` dir wrong and lands on a path that does not
-  exist. Grove's `transcript.EncodePath` applies both rules.
-- **Select by mtime, never `sorted(...)[-1]`.** Transcript filenames are
-  session UUIDs, so lexical order is unrelated to time; sorting can hand
-  you a weeks-old transcript from the same worktree.
-
-**`tool_use: 0` after a turn that clearly intended to act = the lane is
-dead.** Stop immediately; no prompt tuning fixes it. The model emits its
-own native tool syntax as *text* (or buries it in a thinking block), the
-harness sees no `tool_use` block, executes nothing, and ends the turn with
-no error — a silent, total failure that costs a rate-limit-free lane
-nothing to repeat forever.
-
-Verified 2026-08-27: `deepseek/deepseek-v4-flash` via OpenRouter reasoned
-about grove-115 correctly, then emitted `<｜DSML｜tool_calls>` — DeepSeek's
-native markup — inside its thinking block. 407 output tokens, 406 of them
-thinking, **zero** `tool_use` blocks, zero text blocks, $0.0018, 12
-seconds. The model was not too dumb; it was speaking the wrong protocol.
-
-This is why an **Anthropic-native endpoint beats a cheaper generic one**.
-z.ai's `api.z.ai/api/anthropic` is a real Anthropic-protocol surface and
-GLM workers merge PRs; OpenRouter's generic endpoint passes some models'
-native tool syntax straight through. Judge the *model + endpoint pair*,
-never the model alone.
-
-**You cannot tune your way out of Gate 0 from this harness.** The
-published fixes for cheap-model tool-call failure are request parameters
-Claude Code does not expose: DeepSeek V4 Flash goes from 40–50% clean tool
-calls to 100% with `tool_choice="required"` or `reasoning_effort` below
-`max` (vllm#53831), and *any* model's tool invocation collapses to 0% if
-`response_format` is sent alongside tools (arXiv:2606.25605). Claude Code
-sends `tool_choice: auto` and owns the request shape, so none of those
-knobs are reachable. Treat a Gate 0 failure as final for this harness
-regardless of what the model's docs promise under a tuned configuration.
-
-**Published tool-call reliability, cheap tiers** (independent, 2026-08;
-harness-dependent — treat as a prior for what to watch, not a verdict):
-
-| Model | Failure signal |
-|---|---|
-| Qwen3-Coder-Next | ~7% format failure — best of six |
-| Kimi K3 | Pass^3 68.5 (above Opus 4.8's 66.7), but ~190 silent parser failures/24h in production |
-| DeepSeek V4 Flash 0731 | Pass^3 58.3; 40–50% clean tool calls at `auto`+`max` |
-| GLM-5.3-Flash | **46% of episodes** hit ≥1 no-tool-call turn |
-| MiniMax M2.1 | ~23% format failure |
-| GLM-4.7 / 4.7-Flash | Pass^3 10.2; 0.0 on one real scaffold — disqualified |
-
-Two cautions on that table. Vendor-published agentic scores run inflated
-(DeepSeek 82.7 vendor → 78.7 independent; Kimi 88.3 → 85.0), and dated
-snapshots are different animals — DeepSeek V4 Flash went 35.2 → 58.3
-Pass^3 between `0423` and `0731`, so a result attributed to an undated
-alias may not describe the model you dispatch. **A sub-cent Gate 0 on the
-exact slug outranks every number above.**
-
-**Never gate completion on the worker's own claim.** Frontier models
-self-report false success 45–75% of the time in ways the transcript does
-not reveal; cheap models are worse. Completion means `gh pr view` says the
-PR exists, CI is green, and the diff is non-empty — which is already
-grove's rule, and is the one guardrail that holds across every lane.
-
-Then, only if Gate 0 passes:
-
-1. Pick the smallest, most mechanical open ticket — a verbatim
-   replacement, or one function with an exact `file:line` and the fix
-   already stated. Never probe on something interesting.
-2. Dispatch it on the candidate lane, fleet width 1, and watch it.
-3. Score in this order, because the failure modes are not equally bad:
-   - **produced a PR at all** — if not, the lane is out;
-   - **the gate passes** — build/vet/test/lint, e2e;
-   - **stayed on the enumerated surface** — invented scope is the
-     expensive failure, worse than doing too little;
-   - **did the conventions** — docs rows, learnings entries, ticket
-     hygiene.
-4. Verdict: passes 1–3 → viable for rote work on this repo. Fails only
-   on 4 → viable, but enumerate the docs rows explicitly in the kickoff.
-   Fails 2 or 3 → not viable; stop, do not tune the prompt.
-5. Record the result — model slug, endpoint, date, workspace, verdict — in
-   the workspace's learnings log. A probe you do not write down gets
-   re-run.
-
-Expected failure mode for cheap models that *do* clear Gate 0, from field
-evidence: they write the code and skip the **conventions** — clean code,
-missing status-board row. Cheap to catch, cheap to fix. Weight capability
-risk toward "forgets the gate", not "writes subtly wrong code".
+- **OpenRouter tier**: [reference/openrouter-lanes.md](reference/openrouter-lanes.md)
+  — the live discovery query (never quote a frozen model table; require a
+  cache-read price), which tier to pick (capability first; everything
+  under ~$2/ticket is noise against one steer), the verified-lane table
+  (qwen3.7-flash PASS, dated deepseek loops, undated deepseek dead), and
+  the published reliability priors. Read it whenever the proposal routes
+  anything to OpenRouter.
+- **Unverified lane**: [reference/probe-protocol.md](reference/probe-protocol.md)
+  — Gate 0 (does the model + endpoint pair speak Anthropic tool-use? one
+  turn, read the transcript, `tool_use: 0` = dead, no tuning fixes it),
+  then the five-step probe and scoring order. Read it before dispatching
+  on any lane this workspace has not recorded a verdict for.
 
 ### Cheap lanes get an enumerated brief
 
