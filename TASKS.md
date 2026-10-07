@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-439 · model-fit 07: `gv learnings [--json] [--since 14d]` — read-only promotion report: per repo, auto-memory notes newer than the window (feedback first; memory dir resolved exactly as the #437 doctor row), LEARNINGS.md entries in the window, and `candidates` (a dated entry naming a skill whose SKILL.md cites neither its ticket, date nor headline). New `internal/learnings` (fixture-dir table tests: absent/empty/index-only/mixed/malformed-not-fatal), `report` envelope documented in docs/plugins.md + plugin-authoring digest, e2e/plugin.sh reads it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` and asserts the memory dir/LEARNINGS.md/skill are byte-identical after. Orchestrator duty 11 (learnings review: one promotion or retirement per note, target file + exact text, apply only on yes) + seed tripwire.
 - [x] **grove-455** · `gv doctor` reports non-default tmux options (A/B arm C of #169): `tmux.GlobalOptions` (one exec, `start-server ; show-options -g ; show-options -gw`, parser unit-tested on canned output) + `connections.tmuxOptionConnections` behind a `TmuxGlobalOptions` Env seam — rows exist only for non-default values, so a stock machine prints nothing; `base-index`/`pane-base-index`/`renumber-windows` are ✓ info lines, `allow-rename on` is a `!` warn with a fix. Verified live against an isolated hostile-conf server.
 - [x] grove-452 — [A/B arm B] CLI/relay paper cuts (clone of #131): rune-safe `truncateLine` + notify body caps, `.env` copy reports write failure instead of lying, per-call tmux relay buffer name (pid+nonce), slashed branch names survive `parseWorktreeList`, ledger reader returns on non-parse I/O error instead of spinning. Unit test per item; gate + e2e/dummy.sh green.
 - [x] grove-451 [A/B arm C] decouple `gv done` merge gate from statusCheckRollup: `Merged` queries `number,url,state,mergedAt` only; `PRForBranch` retries without `statusCheckRollup,comments` on error and renders CI `unknown`; `finishTask` says `merge check failed … retry, or use --force` instead of `no PR found` when gh itself fails. Tests: merged verdict under CI 403, degraded display, distinct error strings.
@@ -94,21 +95,6 @@
       to opus (documented in `internal/config/models.go`). Status-bar
       detection knows "fable". Prices verified against the claude-api skill
       model table (cached 2026-09-25).
-- [x] model-fit 03: `--effort` as a first-class dial (grove-435,
-      2026-10-07). `gv grab|adopt|orchestrator new --effort
-      <low|medium|high|xhigh|max>` beside `--model`, a per-repo `effort:`
-      key as the standing default (flag wins), `config.WithEffort`
-      strip-then-inject (grove-142 lesson), the level validated before
-      anything exists. Recorded on the task (`Task.Effort`, additive
-      `effort` in `gv ls --json` and the `task_created`/`task_adopted`
-      data, a 15th `effort` ledger column — the 13/14-column rows still
-      read). Adopt keeps the grabbed pin unless told otherwise.
-      `gv doctor` row `effort-override` warns on
-      `CLAUDE_CODE_EFFORT_LEVEL` in the launching env and `maxEffortLevel`
-      in any settings scope that reaches a worker. Seed teaches the flag
-      (`orchestrator/seed_test.go` tripwire); `e2e/dummy.sh` asserts the
-      launch line carries it exactly once, `e2e/plugin.sh` the row field.
-      No automatic routing — the operator pins.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

@@ -118,6 +118,29 @@ git fetch -q origin
 "$GV" feature ls --no-pr > "$SCRATCH/fls.out" || fail "feature ls failed"
 grep -E '^trains .* 1/3 +↓0 main ' "$SCRATCH/fls.out" > /dev/null || { cat "$SCRATCH/fls.out"; fail "feature ls does not show 1/3 and ↓0 main for trains"; }
 
+say "learnings fixture (grove-439): a scratch auto memory, a LEARNINGS.md, a skill that cites nothing"
+# autoMemoryDirectory in the repo's local settings scope relocates the
+# memory dir the verb reads — the same key and scope order as the doctor
+# row (docs/plugins.md). Two notes in the window (one feedback, one
+# nested-metadata reference), one old note, one malformed note.
+MEM="$SCRATCH/mem"
+mkdir -p "$MEM" "$DUMMY/.claude/skills/dummy-skill"
+printf '{"autoMemoryDirectory":"%s"}\n' "$MEM" > "$DUMMY/.claude/settings.local.json"
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf -- '- [Routing](no-routing.md) — never route unasked\n- [Watch](gv-watch.md) — the detector\n' > "$MEM/MEMORY.md"
+printf -- '---\nname: no-routing\ndescription: never route unasked\ntype: feedback\nmodified: %s\n---\n\nbody\n' "$NOW_ISO" > "$MEM/no-routing.md"
+printf -- '---\nname: gv-watch\ndescription: the detector\nmetadata:\n  type: reference\nmodified: %s\n---\n\nbody\n' "$NOW_ISO" > "$MEM/gv-watch.md"
+printf -- '---\ntype: user\nmodified: 2020-01-01\n---\nold\n' > "$MEM/old.md"
+printf -- '---\nname: broken\ntype: feedback\n\nnever closed\n' > "$MEM/broken.md"
+printf '# dummy skill\n\nnothing cited here\n' > "$DUMMY/.claude/skills/dummy-skill/SKILL.md"
+TODAY="$(date -u +%Y-%m-%d)"
+printf -- '# learnings\n\n## Go / CLI\n\n- **%s · A fresh fact.** Found in task-9; rule for the dummy-skill skill.\n- **2020-01-01 · An old fact.** Nothing named.\n' "$TODAY" > "$DUMMY/LEARNINGS.md"
+LEARN_BEFORE="$(cat "$DUMMY/LEARNINGS.md" "$DUMMY/.claude/skills/dummy-skill/SKILL.md" | cksum)"
+MEM_BEFORE="$(cd "$MEM" && cat MEMORY.md no-routing.md gv-watch.md old.md broken.md | cksum; ls -la "$MEM")"
+# The plugin below reads these only to assert the fixture round-trips;
+# the contract itself needs none of them.
+export MEM DUMMY TODAY
+
 # --- the plugin: knows ONLY the contract + the gv path -------------------
 # Everything below the line is what a gv-<surface> sidecar would do.
 cat > "$SCRATCH/plugin.sh" <<'PLUGIN'
@@ -190,6 +213,35 @@ data = json.load(open('$OUT/cost-context.json'))
 assert data['schema_version'] == 1, data
 "
 
+# 2d. READ: gv learnings --json (grove-439) — the promotion loop's read side.
+( cd "$ROOT" && "$GV" learnings --json --since 7d > "$OUT/learnings.json" )
+python3 -c "
+import json
+data = json.load(open('$OUT/learnings.json'))
+assert data['schema_version'] == 1, data
+rep = data['report']
+assert rep['since'].endswith('Z'), rep['since']
+repos = {r['repo']: r for r in rep['repos']}
+r = repos['dummy']
+m = r['memory']
+assert m['dir'] == '$MEM' and m['source'].endswith('/.claude/settings.local.json') and 'disabled' not in m, m
+assert m['notes_total'] == 4, m
+assert [i['file'] for i in m['index']] == ['no-routing.md', 'gv-watch.md'], m['index']
+notes = [n['file'] for n in m['notes']]
+assert notes[0] == 'no-routing.md' and set(notes) == {'no-routing.md', 'gv-watch.md', 'broken.md'}, notes
+by = {n['file']: n for n in m['notes']}
+assert by['no-routing.md']['type'] == 'feedback' and by['no-routing.md']['indexed'] is True and by['no-routing.md']['modified_by'] == 'frontmatter', by
+assert by['gv-watch.md']['type'] == 'reference', by['gv-watch.md']
+assert by['broken.md']['error'] and 'type' not in by['broken.md'], by['broken.md']
+assert any('broken.md' in w for w in m['warnings']), m
+assert r['learnings_file'] == '$DUMMY/LEARNINGS.md', r
+assert [e['date'] for e in r['entries']] == ['$TODAY'], r['entries']
+e = r['entries'][0]
+assert (e['section'], e['fact'], e['skills']) == ('Go / CLI', 'A fresh fact.', ['dummy-skill']), e
+assert r['skills'] == ['dummy-skill'], r['skills']
+assert [(c['skill'], c['date']) for c in r['candidates']] == [('dummy-skill', '$TODAY')], r['candidates']
+"
+
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.
 tail -n 50 "$ROOT/.grove/state/events.jsonl" > "$OUT/events.tail"
 python3 -c "
@@ -221,6 +273,12 @@ EVENTS="$DUMMY/.grove/state/events.jsonl"
 EV_BEFORE=$(wc -l < "$EVENTS")
 "$SCRATCH/plugin.sh" "$GV" "$SCRATCH" > "$SCRATCH/plugin.out" || fail "plugin script failed"
 grep -q 'task-001' "$SCRATCH/plugin.out" || fail "plugin did not resolve the ticket"
+
+say "gv learnings mutated nothing: memory dir, LEARNINGS.md and the skill are byte-identical"
+LEARN_AFTER="$(cat "$DUMMY/LEARNINGS.md" "$DUMMY/.claude/skills/dummy-skill/SKILL.md" | cksum)"
+MEM_AFTER="$(cd "$MEM" && cat MEMORY.md no-routing.md gv-watch.md old.md broken.md | cksum; ls -la "$MEM")"
+[ "$LEARN_BEFORE" = "$LEARN_AFTER" ] || fail "gv learnings changed LEARNINGS.md or the skill"
+[ "$MEM_BEFORE" = "$MEM_AFTER" ] || fail "gv learnings changed the memory dir"
 
 say "steer landed as exactly one gv-appended, v-stamped answered event"
 [ "$(wc -l < "$EVENTS")" -eq "$((EV_BEFORE + 1))" ] || fail "expected exactly one new event"
