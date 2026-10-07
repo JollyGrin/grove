@@ -428,3 +428,37 @@ func TestPlanEditor(t *testing.T) {
 		}
 	}
 }
+
+func TestParseShowOptions(t *testing.T) {
+	// Canned `tmux show-options -g` / `-gw` output (tmux 3.4): a quoted
+	// format value, a blank trailing line, an array-style status line.
+	out := "base-index 1\n" +
+		"renumber-windows on\n" +
+		"automatic-rename-format \"#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}\"\n" +
+		"status-format[0] \"#[align=left]\"\n" +
+		"pane-base-index 0\n" +
+		"allow-rename off\n" +
+		"word-separators \"\"\n" +
+		"\n"
+	got := parseShowOptions(out)
+	want := map[string]string{
+		"base-index":              "1",
+		"renumber-windows":        "on",
+		"automatic-rename-format": "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
+		"status-format[0]":        "#[align=left]",
+		"pane-base-index":         "0",
+		"allow-rename":            "off",
+		"word-separators":         "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parseShowOptions: %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("parseShowOptions[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	if got := parseShowOptions(""); len(got) != 0 {
+		t.Errorf("parseShowOptions(\"\") = %v, want empty", got)
+	}
+}

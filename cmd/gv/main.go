@@ -987,6 +987,11 @@ func orchestratorDirFor(ws *workspace.Workspace, cfg *config.Config) string {
 	if ws != nil {
 		return filepath.Join(ws.Root, ".grove", "orchestrator")
 	}
+	if cfg == nil {
+		// No loadable config (a fresh machine running `gv doctor`): the
+		// config row carries the error; there is no brain dir to check.
+		return ""
+	}
 	return cfg.Orchestrator.Dir
 }
 

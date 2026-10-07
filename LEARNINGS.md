@@ -82,6 +82,16 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-10-07 · `tmux show-options` takes at most ONE option name, and
+  tmux 3.4 does NOT auto-start a server for it** (grove-169, live): the
+  ticket's `show-options -g a b c` dies with "too many arguments", and
+  with no server running the query fails with "error connecting" instead
+  of booting one from the sourced config. Both go away with one exec:
+  `tmux start-server \; show-options -g \; show-options -gw` —
+  start-server is a no-op against a running server, boots a sessionless
+  one otherwise (it exits once the client leaves), and listing both
+  scopes whole sidesteps the one-name limit and the fact that a window
+  option via plain `-g` only resolves on newer tmux. Parse, then pick.
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every

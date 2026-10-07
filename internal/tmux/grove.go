@@ -1286,3 +1286,51 @@ func KillWindowID(id string) error {
 	_, err := run("kill-window", "-t", id)
 	return err
 }
+
+// GlobalOptions reads the named global tmux options (session-scoped like
+// base-index as well as window-scoped like allow-rename) from the
+// operator's server, as `gv doctor`'s tmux-config rows (grove-169). The
+// result holds only names tmux reported — a missing name means tmux could
+// not be asked. Read-only: show-options never touches state. One exec,
+// three commands: tmux 3.4 does NOT auto-start a server for show-options
+// ("error connecting"), so start-server comes first — against a running
+// server it is a no-op, with none it boots one from the sourced config
+// and the sessionless server exits once the client leaves. Then both
+// scopes are listed whole and parsed, because show-options accepts at
+// most ONE option argument and a window option asked via plain -g only
+// resolves on newer tmux.
+func GlobalOptions(names ...string) map[string]string {
+	out, err := run("start-server", ";", "show-options", "-g", ";", "show-options", "-gw")
+	if err != nil {
+		return map[string]string{}
+	}
+	all := parseShowOptions(out)
+	got := map[string]string{}
+	for _, n := range names {
+		if v, ok := all[n]; ok {
+			got[n] = v
+		}
+	}
+	return got
+}
+
+// parseShowOptions is split from the exec so it can be tested against
+// canned show-options output: one `name value` per line, the value
+// double-quoted when it holds spaces (automatic-rename-format) and absent
+// for an option set to the empty string.
+func parseShowOptions(out string) map[string]string {
+	opts := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, value, _ := strings.Cut(line, " ")
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+			value = value[1 : len(value)-1]
+		}
+		opts[name] = value
+	}
+	return opts
+}

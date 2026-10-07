@@ -20,6 +20,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
 )
 
@@ -53,6 +54,7 @@ const (
 	KindHooks         = "hooks"
 	KindMCPAuth       = "mcp-auth"
 	KindRemoteHost    = "remote-host"
+	KindTmuxOption    = "tmux-option"
 )
 
 // Status is one evaluated check result.
@@ -103,6 +105,10 @@ type Env struct {
 	GOOS    string
 	Home    string
 
+	// TmuxGlobalOptions reads global tmux options from the operator's
+	// server (grove-169); nil drops the tmux-config rows entirely.
+	TmuxGlobalOptions func(names ...string) map[string]string
+
 	// OrchestratorDir is the workspace brain dir the seed-drift row
 	// checks; "" drops the row (nothing to compare). OrchestratorSeed is
 	// the embedded seed it is compared against — a seam so the row is
@@ -135,6 +141,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		GOOS:              runtime.GOOS,
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
+		TmuxGlobalOptions: tmux.GlobalOptions,
 	}
 }
 

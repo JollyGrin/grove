@@ -36,6 +36,9 @@ func Core(env Env) []Connection {
 		})
 	}
 
+	// grove-169: non-default tmux options, one row each, only when set.
+	conns = append(conns, tmuxOptionConnections(env)...)
+
 	// Desktop notifications are darwin-only and nice-to-have: warn, and
 	// the row doesn't exist elsewhere (deliberate change from the P0
 	// doctor, logged in docs/seed-manifest.md).

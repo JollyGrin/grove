@@ -688,3 +688,79 @@ func TestEffortSettingsPaths(t *testing.T) {
 		t.Errorf("checkEffortOverride = %+v, want a single warn for repo a's project scope", st)
 	}
 }
+
+// grove-169: non-default tmux options surface as rows; defaults are silent.
+func TestTmuxOptionRows(t *testing.T) {
+	withOpts := func(opts map[string]string) Env {
+		env := happyEnv(testConfig())
+		env.TmuxGlobalOptions = func(names ...string) map[string]string {
+			out := map[string]string{}
+			for _, n := range names {
+				if v, ok := opts[n]; ok {
+					out[n] = v
+				}
+			}
+			return out
+		}
+		return env
+	}
+	ids := func(results []Result) []string {
+		var out []string
+		for _, r := range results {
+			if strings.HasPrefix(r.Connection.ID, "tmux-option:") {
+				out = append(out, r.Connection.ID)
+			}
+		}
+		return out
+	}
+
+	// Default config: no rows at all — doctor stays quiet.
+	defaults := map[string]string{"base-index": "0", "pane-base-index": "0", "renumber-windows": "off", "allow-rename": "off"}
+	if got := ids(EvaluateAll(withOpts(defaults))); len(got) != 0 {
+		t.Errorf("default tmux options produced rows: %v", got)
+	}
+
+	// No reader at all (the happyEnv default): no rows.
+	if got := ids(EvaluateAll(happyEnv(testConfig()))); len(got) != 0 {
+		t.Errorf("nil TmuxGlobalOptions produced rows: %v", got)
+	}
+
+	// The grove-168 dotfiles pair + renumber-windows: info rows (ok state,
+	// the "supported" note); allow-rename on: a warn row with a fix.
+	custom := map[string]string{"base-index": "1", "pane-base-index": "1", "renumber-windows": "on", "allow-rename": "on"}
+	results := EvaluateAll(withOpts(custom))
+	wantIDs := []string{"tmux-option:base-index", "tmux-option:pane-base-index", "tmux-option:renumber-windows", "tmux-option:allow-rename"}
+	if got := ids(results); strings.Join(got, ",") != strings.Join(wantIDs, ",") {
+		t.Fatalf("rows = %v, want %v", got, wantIDs)
+	}
+	for _, id := range wantIDs[:3] {
+		r := findResult(t, results, id)
+		if r.Status.State != StateOK || r.Status.Info != tmuxOptionInfo {
+			t.Errorf("%s: status = %+v, want ok/%q", id, r.Status, tmuxOptionInfo)
+		}
+		if r.Connection.Severity != SeverityWarn || r.Connection.Kind != KindTmuxOption {
+			t.Errorf("%s: severity/kind = %s/%s", id, r.Connection.Severity, r.Connection.Kind)
+		}
+	}
+	if r := findResult(t, results, "tmux-option:base-index"); r.Connection.Title != "tmux base-index 1" {
+		t.Errorf("title = %q, want %q", r.Connection.Title, "tmux base-index 1")
+	}
+	ar := findResult(t, results, "tmux-option:allow-rename")
+	if ar.Status.State != StateWarn || !strings.Contains(ar.Status.Info, "escape sequence") || ar.Connection.Fix == "" {
+		t.Errorf("allow-rename: status = %+v fix = %q, want warn with fix", ar.Status, ar.Connection.Fix)
+	}
+
+	// Only the deviating option gets a row.
+	one := map[string]string{"base-index": "0", "pane-base-index": "0", "renumber-windows": "off", "allow-rename": "on"}
+	if got := ids(EvaluateAll(withOpts(one))); strings.Join(got, ",") != "tmux-option:allow-rename" {
+		t.Errorf("rows = %v, want only allow-rename", got)
+	}
+
+	// tmux missing: the binary row owns that; no option rows even when
+	// the reader would report something.
+	env := withOpts(custom)
+	env.LookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if got := ids(EvaluateAll(env)); len(got) != 0 {
+		t.Errorf("tmux missing still produced rows: %v", got)
+	}
+}
