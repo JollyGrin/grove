@@ -33,7 +33,10 @@ gofmt -l .                                        # must be empty
   symlink, so a tmux pane reports its cwd as `/private/tmp/…` and any
   assertion against a bare `$SCRATCH` path fails on that alone (grove-228:
   `e2e/chat.sh` read green on Linux while half of it had never run on the
-  Mac).
+  Mac). macOS `script(1)` drops a piped answer that arrives before the
+  child prompts (`printf 'y\n' | script …` read as a bare EOF, so "y"
+  became "no" — grove-380): hold the answer back,
+  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`.
 
 ## E2E: the dummy-data pattern
 

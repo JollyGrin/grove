@@ -257,11 +257,25 @@
   So the phone needed `tab`, not Enter/Space. The unboxed rule anchors on
   what the transcript never carries: the `❯` caret ON an option, plus the
   modal's chrome (`Esc to cancel` below, or the `← … ✔ Submit →` tab bar
-  above). **Knock-on, not fixed here:** `internal/tmux`'s verified-submit
-  (`inputBoxContent`/`pasteLanded`) also keys on `│` sides, so on this
-  chrome it finds no box and calls every relay landed — the grove-144
-  "delivered is not submitted" guard is a no-op until it learns the ─-rule
-  input box.
+  above). Knock-on, fixed the next day in grove-317 (§tmux below):
+  `internal/tmux`'s verified-submit (`inputBoxContent`/`pasteLanded`) also
+  keyed on `│` sides, so on this chrome it found no box and called every
+  relay landed — the grove-144 guard was a no-op until it learned the
+  `─`-rule input box.
+- **2026-09-07 · A session restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Distinguishing it
+  matters for two reasons: folding it as `session_started` would flip a
+  worker's glyph and inflate its session count for something that isn't a
+  fresh pickup, and `gv cost --context`'s compaction count depends on
+  seeing it as its own event (`state.EvCompaction`) rather than losing it
+  inside `session_started`. The ticket's research draft additionally
+  claims sessions pinned to the `[1m]` cache tier never hit Claude Code's
+  auto-compact threshold in practice — plausible (a 1h cache write keeps
+  far more of the transcript "hot" before the context window fills), but
+  this session had no live long-running `[1m]`-pinned transcript to
+  independently reproduce that against; treat it as a hypothesis to watch
+  `gv cost --context`'s `compactions`/`NeverCompacted` flag for, not yet
+  independently confirmed here.
 - **2026-09-07 · `gv cost --context`'s growth shares are a 1.9 chars/token
   estimate, not a token count** (grove-289; docs/plans/2026-09-06-token-
   diet-research.md §7 — not present in this checkout, so treat the ratio
@@ -334,14 +348,37 @@
   already carried `session_id` and the task already recorded its worker's
   (`claude_session_id`, folded from `session_started`); nothing compared
   them. Now `stop`/`notification`/`session-end` at a tracked cwd are
-  dropped when the ids differ (silent, zero writes); `session-start` is
-  exempt so an adopt's fresh pickup session can still register; a task
-  with no recorded id keeps cwd-only attribution so an unknown id never
-  makes a task unreachable. The brain rule "never `cd` into a tracked
+  dropped when the ids differ (silent, zero writes); a task with no
+  recorded id keeps cwd-only attribution so an unknown id never makes a
+  task unreachable. This fix first exempted `session-start` so an adopt's
+  fresh pickup could register — that exemption was the hole a nested
+  `claude -p` walked through, and grove-339 (above) replaced it: a new id
+  at SessionStart registers only when the row is not live or `source` is
+  `clear`. The brain rule "never `cd` into a tracked
   worktree from the orchestrator" stays as belt; this is the braces.
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-27 · `tmux kill-server` returns before the server's panes
+  are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
+  (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
+  assertion passed, then cleanup died on "rm: Directory not empty" because
+  a pane process was still writing under the scratch tree, and the suite
+  read red. Wait for the isolated socket
+  (`$TMUX_TMPDIR/tmux-$(id -u)/default`) to vanish, then retry the rm
+  once — `e2e/serve.sh`'s `cleanup()` already did; plugin.sh now does too.
+- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
+  before the child prompts** (grove-380): `e2e/serve.sh` drives the TTY
+  trust prompt with `printf 'y\n' | script -q /dev/null gv serve …`, and
+  gv read a bare EOF (the pane echoed `^Dy`) — so "y" became "no". Hold
+  the answer back (`{ sleep 1; printf 'y\n'; sleep 1; } | script …`) so
+  it lands after the prompt. Related, verified on tmux 3.6a: `new-window
+  -n <name> <argv…>` with more than one command argument execs argv
+  directly (no user shell), `-e K=V` sets the env for just that window,
+  and `-P -F '#{window_id}'` hands back the `@N` id — the serve window
+  needs none of SendKeys' quoting. Serve windows are matched by EXACT
+  name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
+  tolerance would let `▶ keys` hit a `▶ keys 2`.
 - **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
   folder-trust dialog's default is `No, exit`** (grove-333). The relay is
   paste + Enter; a modal eats the paste and takes the Enter as "confirm

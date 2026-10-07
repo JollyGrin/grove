@@ -38,29 +38,19 @@
 
 - **2026-07-29 · `paste-buffer` then `send-keys Enter` back-to-back loses
   the Enter — and "delivered" is not "submitted"** (grove-144, hit 3+
-  times in one fresh-install session): the relay pasted with
-  `paste-buffer -d` (no `-p`, despite a doc comment claiming bracketed
-  paste) and pressed Enter with zero settle. Claude's TUI can still be
-  ingesting the paste when the Enter arrives and swallows it into the
-  input, leaving an unsent `[Pasted text]` in the box — while `gv nudge`
-  printed ✓ and appended `EvAnswered`, so `gv ls` showed a stalled worker
-  as `working`. The silent success was the expensive half: the operator
-  only found out by attaching. Fixed by making the relay a
-  **deliver-then-verify** operation, not fire-and-forget: bracketed paste
-  (`-p`), a 250ms settle before Enter, then scrape the pane, retry Enter
-  once, and error out (recording nothing) if the text is still in the
-  input box. Two sub-traps found while building it: (1) `CapturePaneBottom`
-  reads the pane's bottom N **rows**, which are blank whenever the app
-  draws from the top — a verify built on it silently passed everything, so
-  the scrape takes the whole visible pane and finds the box itself
-  (bottom-most `╰`/`│` run, top border allowed to have scrolled off);
-  (2) the box wraps text at spaces *and* mid-word, so the comparison drops
-  every whitespace and box-drawing rune on both sides before matching a
-  24-rune probe. The scrape is deliberately permissive — unreadable pane or
-  no box ⇒ "landed" — because chrome changes under us and a false alarm
-  would strand a delivered answer. Regression: `pasteLanded`/`verifySubmit`
-  unit tests plus `e2e/relay.sh`, whose second leg runs a stub that
-  swallows the Enter and redraws the box.
+  times in one fresh-install session). The relay pasted with no `-p` and
+  pressed Enter with zero settle; Claude's TUI swallowed the Enter into
+  the input, leaving an unsent `[Pasted text]` while `gv nudge` printed ✓
+  and recorded `EvAnswered`. Rule (tmux-discipline §2): the relay is
+  deliver-then-verify — bracketed paste, ~250ms settle, Enter, scrape the
+  whole visible pane (never `CapturePaneBottom`), retry Enter once, then
+  fail loudly recording nothing. The box finder this shipped with keyed
+  on `╰`/`│` box-drawing runes; Claude Code v2.1.282 unboxed the input and
+  that finder silently called every relay landed until grove-317
+  (2026-09-26) taught it the `─`-rule shape — the current chrome facts
+  live in claude-code-facts §TUI chrome. Regression: `pasteLanded`/
+  `verifySubmit` unit tests plus `e2e/relay.sh` leg 2 (a stub that
+  swallows the Enter).
 - **2026-07-18 · the WINDOW side of a `session:name` target
   prefix-matches too — and worker names are prefixes of each other**
   (grove-116, reproduced on an isolated `-L` server): `repo · grove-1` is
@@ -94,14 +84,11 @@
   regression test `TestPaneTargetHelpersExactSession` now runs every
   affected helper against a scratch server.
 - **2026-07-13 · a bare `capture-pane -p` can miss text that was really
-  delivered** — it captures only the *visible* screen of the *active*
-  pane, and a pasted line the shell then executed both scrolls away
-  (command output pushes it off-screen) and hard-wraps at pane width
-  (default 80 cols splits any longish token across lines). e2e assertions
-  on pane content must capture every pane of the window with scrollback
-  (`capture-pane -p -S -` per `list-panes` pane id) and flatten newlines
-  (`tr -d '\n'`) before grepping. Field-hit: grove-75's plugin smoke test
-  asserted a delivered nudge was "missing" until captured this way.
+  delivered** (grove-75's plugin smoke test called a landed nudge
+  "missing"): it reads only the visible screen of the active pane, and
+  delivered text scrolls off and hard-wraps. Rule — capture every pane
+  with `-S -` and flatten newlines before grepping — lives in
+  tmux-discipline §4.
 - **2026-07-13 · a bare `-t <session>` target matches window names across
   ALL sessions** (grove-78, live repro) — with a session literally named
   `grove` plus a worker window `grove · grove-75-…` in a *different*
@@ -124,13 +111,9 @@
   server's session list before/after as a canary. Never run bare
   `kill-server` in any script; scope it with `env -u TMUX` + the scratch
   `TMUX_TMPDIR`.
-- **tmux window-name drift is survivable** (2026-07-02) — live windows
-  can show name variants (trailing dash), but `-t session:window` lookups
-  still hit because tmux prefix-matches targets. Don't rely on exact
-  window-name equality; re-derive + re-store on adopt.
-- **Claude's pane is resolved, never assumed** (2026-07-02) — windows lose
-  splits, panes renumber, and claude's process title is its bare version
-  string; relay/detector/editor-inject all go through `tmux.ClaudePane`.
+- **Claude's pane is resolved, never assumed** (2026-07-02) — the rule and
+  its reasons live in tmux-discipline §3; every relay/detector/editor
+  path goes through `tmux.ClaudePane`.
 
 ## Go / CLI
 
@@ -167,6 +150,7 @@
   default-on feature share a directory, the marker predicate must key on
   files only the scope's own init writes, or the default feature silently
   flips everyone into the scoped regime.
+- **2026-07-13 · the first cockpit frame renders with ZERO events — clamp
   every row budget to its data** (grove-79). Events load async, so
   `View()` always runs once against an empty feed; `viewActivity`'s
   `items[:avail]` used the rowBudgets leftover unclamped and panicked
@@ -182,8 +166,8 @@
   merged while cockpit.sh + workspace.sh were red because nothing ran
   them — `e2e/all.sh` now runs all six suites, and TUI-touching merges run
   it. Bonus field-hit: the suites' bare `capture-pane -p` lost the panic
-  reason (alt-screen closes, reason scrolls off) — they capture `-S -300`
-  now, matching the tmux-discipline rule.
+  reason (alt-screen closes, reason scrolls off) — capture with scrollback,
+  tmux-discipline §4.
 - **2026-07-04 · `yaml.Node` keeps flow style when you append** — seeding
   a config with `repos: {}` and appending via node surgery emits the whole
   map single-line (`repos: {r: {path: …}}`) because the `{}` scalar's
@@ -205,11 +189,9 @@
   inside an "ovs" session. Same class of clash made us rename the relay
   buffer (`ovs-relay` → `gv-relay`): tmux buffers are server-global, and
   a shared name would let one tool's relay clobber the other's mid-paste.
-- **2026-07-04 · `cmd | grep -q` flakes under `set -o pipefail`** —
-  grep -q exits at its first match, the producer SIGPIPEs writing the
-  rest of its output, and pipefail reports the pipeline failed even
-  though the assertion matched. E2E assertions capture to a file first,
-  then grep.
+- **2026-07-04 · `cmd | grep -q` flakes under `set -o pipefail`** — the
+  reverse of the piped-gate trap; rule in shipping-gates §The gate
+  (capture to a file first, then grep).
 - **2026-07-04 · commands typed into tmux panes resolve via PATH, not via
   the invoking binary** — the cockpit's dashboard pane ran whatever `gv`
   was first on PATH (a stale installed build), not the binary that created
@@ -220,10 +202,9 @@
   `< /dev/null`, so the wizard tried to render forms headless and
   "aborted". Use `golang.org/x/term.IsTerminal(fd)`; a non-TTY `gv init`
   must silently become `--yes`, never hang or abort.
-- **2026-07-04 · never pipe the test gate** — `go test ./... | tail` (or
-  `| grep -c FAIL`) reports the PIPE's exit status, not the tests'; two
-  red runs merged to main that way in one evening. Gates run bare and
-  check $? — filtering happens on a saved log, never inline.
+- **2026-07-04 · never pipe the test gate** — two red runs merged to main
+  in one evening because `go test ./... | tail` reports the pipe's exit
+  status. Rule in shipping-gates §The gate.
 
 ## Field notes (ovs, kept for judgment)
 
@@ -285,15 +266,10 @@
   `gv adopt --manual` is the guaranteed-fresh escape hatch — it skips the
   resume limb — then a `gv nudge` with the work order restores autonomy.
   Used to reset grove-36 onto a fresh Opus session mid-ticket.
-- **2026-07-09 · throwaway builds for operator testing** — when a change
-  needs the operator's manual verification before merge, build the branch
-  to a scratch path (`go build -o /tmp/gv-<ticket> ./cmd/gv`) and hand
-  over that command — never `go install` from an unmerged branch. The
-  installed `~/go/bin/gv` keeps running live sessions and hooks (hooks
-  reference its absolute path); a temp binary tests the exact change,
-  interrupts nothing, and is thrown away if it doesn't work. Used to
-  verify grove-36's pane tagging live before merge. This is the DEFAULT
-  handoff for "try it yourself" testing.
+- **2026-07-09 · throwaway builds for operator testing** — first used to
+  verify grove-36's pane tagging live before merge. Rule (`go build -o
+  /tmp/gv-<ticket> ./cmd/gv`, never `go install` from an unmerged branch)
+  in shipping-gates §Handing a change to the operator.
 - **2026-07-05 · a git-inited $HOME shadows parent-folder detection** —
   `git rev-parse --show-toplevel` from ~/git/unbrewed returned /Users/dev
   (dotfiles repo), so `gv init` made HOME the workspace. Parent-of-repos
