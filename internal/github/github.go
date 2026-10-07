@@ -25,7 +25,7 @@ type PR struct {
 	URL        string `json:"url"`
 	State      string `json:"state"` // OPEN | MERGED | CLOSED
 	MergedAt   string `json:"mergedAt,omitempty"`
-	CI         string `json:"ci"`      // pass | fail | pending | none
+	CI         string `json:"ci"`      // pass | fail | pending | none | unknown (CI fields unreadable, grove-451)
 	PreviewURL string `json:"preview"` // best-effort Vercel link
 
 	// grove-251: PR facts the supervisor's transition engine needs to
@@ -52,43 +52,89 @@ func gh(dir string, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// PRForBranch returns the PR for a head branch, or nil if none exists.
-// Comments ride along in the same call because the real *.vercel.app
-// preview links live in the Vercel bot comment — status-check targetUrls
-// are vercel.com build pages (field-tested on PR #936, twice).
-func PRForBranch(repoDir, branch string) (*PR, error) {
+// Field sets for `gh pr list --json`. grove-451: a token that cannot read
+// CI (a GitHub App token gets 403 on statusCheckRollup) must not break the
+// merge gate, so the gate asks only for mergeFields and the display path
+// degrades to factFields when the CI fields fail.
+const (
+	mergeFields = "number,url,state,mergedAt"
+	factFields  = mergeFields + ",isDraft,mergeable,mergeStateStatus"
+	ciFields    = "statusCheckRollup,comments"
+)
+
+// ghPR is the wire shape of one `gh pr list --json` row; fields a query
+// did not request decode to their zero values.
+type ghPR struct {
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	MergedAt   string `json:"mergedAt"`
+	IsDraft    bool   `json:"isDraft"`
+	Mergeable  string `json:"mergeable"`
+	MergeState string `json:"mergeStateStatus"`
+	Comments   []struct {
+		Body string `json:"body"`
+	} `json:"comments"`
+	StatusCheckRollup []struct {
+		Name       string `json:"name"`    // CheckRun
+		Context    string `json:"context"` // StatusContext
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		State      string `json:"state"` // StatusContext variant (Vercel uses these)
+		TargetURL  string `json:"targetUrl"`
+	} `json:"statusCheckRollup"`
+}
+
+// listHead runs `gh pr list --head branch` for the given field set and
+// decodes the first row; nil when the branch has no PR.
+func listHead(repoDir, branch, fields string) (*ghPR, error) {
 	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,mergedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,comments")
+		"--json", fields)
 	if err != nil {
 		return nil, err
 	}
-	var prs []struct {
-		Number     int    `json:"number"`
-		URL        string `json:"url"`
-		State      string `json:"state"`
-		MergedAt   string `json:"mergedAt"`
-		IsDraft    bool   `json:"isDraft"`
-		Mergeable  string `json:"mergeable"`
-		MergeState string `json:"mergeStateStatus"`
-		Comments   []struct {
-			Body string `json:"body"`
-		} `json:"comments"`
-		StatusCheckRollup []struct {
-			Name       string `json:"name"`    // CheckRun
-			Context    string `json:"context"` // StatusContext
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			State      string `json:"state"` // StatusContext variant (Vercel uses these)
-			TargetURL  string `json:"targetUrl"`
-		} `json:"statusCheckRollup"`
-	}
+	var prs []ghPR
 	if err := json.Unmarshal(out, &prs); err != nil {
 		return nil, err
 	}
 	if len(prs) == 0 {
 		return nil, nil
 	}
-	p := prs[0]
+	return &prs[0], nil
+}
+
+// PRForBranch returns the PR for a head branch, or nil if none exists.
+// Comments ride along in the same call because the real *.vercel.app
+// preview links live in the Vercel bot comment — status-check targetUrls
+// are vercel.com build pages (field-tested on PR #936, twice).
+//
+// When the full query fails (grove-451: an App token gets 403 on
+// statusCheckRollup) it retries once without the CI fields and returns
+// the PR with CI "unknown" rather than failing the whole fetch — the
+// ls/TUI CI column renders blank, the PR column still shows the number.
+func PRForBranch(repoDir, branch string) (*PR, error) {
+	p, err := listHead(repoDir, branch, factFields+","+ciFields)
+	if err != nil {
+		p2, err2 := listHead(repoDir, branch, factFields)
+		if err2 != nil {
+			return nil, err
+		}
+		if p2 == nil {
+			return nil, nil
+		}
+		pr := fromGH(p2)
+		pr.CI = "unknown"
+		return pr, nil
+	}
+	if p == nil {
+		return nil, nil
+	}
+	return fromGH(p), nil
+}
+
+// fromGH derives the CI verdict, failing-check names and preview link
+// from a decoded gh row.
+func fromGH(p *ghPR) *PR {
 	pr := &PR{
 		Number:     p.Number,
 		URL:        p.URL,
@@ -144,7 +190,7 @@ func PRForBranch(repoDir, branch string) (*PR, error) {
 	case pass > 0:
 		pr.CI = "pass"
 	}
-	return pr, nil
+	return pr
 }
 
 var vercelURLRe = regexp.MustCompile(`https://[a-zA-Z0-9.-]+\.vercel\.app[^\s)\]"]*`)
@@ -163,15 +209,20 @@ func PreviewURL(repoDir string, number int) string {
 }
 
 // Merged reports whether the branch's PR is merged — the only safe merge
-// check under squash-merge (git ancestry lies; see LEARNINGS.md).
+// check under squash-merge (git ancestry lies; see LEARNINGS.md). It asks
+// gh for the merge fields only (grove-451): the gate never looks at CI,
+// so a token that cannot read statusCheckRollup must not fail it. The
+// returned PR carries CI "unknown".
 func Merged(repoDir, branch string) (bool, *PR, error) {
-	pr, err := PRForBranch(repoDir, branch)
+	p, err := listHead(repoDir, branch, mergeFields)
 	if err != nil {
 		return false, nil, err
 	}
-	if pr == nil {
+	if p == nil {
 		return false, nil, nil
 	}
+	pr := fromGH(p)
+	pr.CI = "unknown"
 	return pr.State == "MERGED", pr, nil
 }
 

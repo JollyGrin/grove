@@ -4092,6 +4092,11 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	} else {
 		merged, pr, err := github.Merged(repo.Path, t.Branch)
 		if err != nil {
+			// grove-451: a gh failure is not "no PR" — say so, so the
+			// operator retries instead of reaching for --force.
+			if !force {
+				return fmt.Errorf("%s: merge check failed: %v — retry, or use --force to override", t.Ticket, err)
+			}
 			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
 		}
 		if pr != nil {

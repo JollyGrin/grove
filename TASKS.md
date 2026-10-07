@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-451 [A/B arm C] decouple `gv done` merge gate from statusCheckRollup: `Merged` queries `number,url,state,mergedAt` only; `PRForBranch` retries without `statusCheckRollup,comments` on error and renders CI `unknown`; `finishTask` says `merge check failed … retry, or use --force` instead of `no PR found` when gh itself fails. Tests: merged verdict under CI 403, degraded display, distinct error strings.
 - [x] model-fit 02: kickoff A/B on three rote tickets × three arms
       (#434, 2026-10-07; orchestrator-run). Old vs current template is
       cost-neutral; `--effort medium` cut est $ 3–35% with identical gate
