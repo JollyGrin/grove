@@ -73,9 +73,11 @@ func parseWorktreeList(output string) []Worktree {
 			current.Name = filepath.Base(current.Path)
 
 		case strings.HasPrefix(line, "branch "):
-			// branch refs/heads/main → main
+			// branch refs/heads/main → main; refs/heads/feat/login →
+			// feat/login (filepath.Base would truncate slashed names to
+			// "login" — grove-131 class).
 			ref := strings.TrimPrefix(line, "branch ")
-			current.Branch = filepath.Base(ref)
+			current.Branch = strings.TrimPrefix(ref, "refs/heads/")
 
 		case line == "":
 			if current.Path != "" {

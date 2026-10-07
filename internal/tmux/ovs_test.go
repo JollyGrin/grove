@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -354,5 +356,27 @@ func TestPolls(t *testing.T) {
 		if got := polls(c.max, c.poll); got != c.want {
 			t.Errorf("polls(%s, %s) = %d, want %d", c.max, c.poll, got, c.want)
 		}
+	}
+}
+
+// TestRelayBufferNameUnique is the grove-131 regression: a fixed
+// server-global "gv-relay" buffer let two concurrent relays interleave
+// load/paste/delete, so worker A received worker B's text. Every call must
+// mint a distinct name, and it must carry the pid so two gv processes on
+// one tmux server can't collide either.
+func TestRelayBufferNameUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		name := relayBufferName()
+		if seen[name] {
+			t.Fatalf("duplicate buffer name %q", name)
+		}
+		seen[name] = true
+		if !strings.HasPrefix(name, "gv-relay-") {
+			t.Fatalf("unexpected name %q", name)
+		}
+	}
+	if !strings.Contains(relayBufferName(), fmt.Sprintf("-%d-", os.Getpid())) {
+		t.Errorf("buffer name lacks pid: %q", relayBufferName())
 	}
 }

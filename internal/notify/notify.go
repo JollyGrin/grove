@@ -22,15 +22,24 @@ var Settings = config.NotifySettings
 // at most 1.5s, and only on notification-worthy events.
 var client = &http.Client{Timeout: 1500 * time.Millisecond}
 
+// capRunes truncates to n runes with an ellipsis marker — rune-safe, never
+// mid-codepoint (grove-131 class: a byte cut put a garbage char at the end
+// of desktop/phone notifications).
+func capRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 // Desktop pings via terminal-notifier, best-effort. Fired from the hook
 // itself so it works with the TUI closed.
 func Desktop(title, body string) {
 	if _, err := exec.LookPath("terminal-notifier"); err != nil {
 		return
 	}
-	if len(body) > 120 {
-		body = body[:120] + "…"
-	}
+	body = capRunes(body, 120)
 	_ = exec.Command("terminal-notifier",
 		"-title", "gv: "+title, "-message", body,
 		"-group", "grove", "-sender", "com.apple.Terminal").Start()
@@ -47,9 +56,7 @@ func Push(title, body, priority, tags string) {
 	if n.NtfyBody == "title-only" {
 		body = ""
 	}
-	if len(body) > 200 {
-		body = body[:200] + "…"
-	}
+	body = capRunes(body, 200)
 	req, err := http.NewRequest(http.MethodPost, n.Ntfy, strings.NewReader(body))
 	if err != nil {
 		return

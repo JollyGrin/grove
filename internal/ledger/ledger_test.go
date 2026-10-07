@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -320,5 +321,62 @@ func TestEffortRoundtripAndLegacy14Columns(t *testing.T) {
 	raw, _ := os.ReadFile(Path(dir))
 	if !strings.HasPrefix(string(raw), "time,ticket,") || !strings.Contains(string(raw), ",models,effort\n") {
 		t.Errorf("header missing the effort column: %q", strings.SplitN(string(raw), "\n", 2)[0])
+	}
+}
+
+// errReader fails every Read with the same non-EOF, non-parse error — the
+// shape a persistent underlying I/O failure takes.
+type errReader struct{ calls int }
+
+func (r *errReader) Read([]byte) (int, error) {
+	r.calls++
+	return 0, errors.New("disk on fire")
+}
+
+// TestReadRowsTerminatesOnIOError is the grove-131 regression: `continue`
+// on every error let a persistent I/O failure spin `gv cost` at 100% CPU.
+// A parse error still skips just the torn row.
+func TestReadRowsTerminatesOnIOError(t *testing.T) {
+	r := &errReader{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if rows, err := readRows(r); err != nil || len(rows) != 0 {
+			t.Errorf("readRows = %v, %v; want nil, nil", rows, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readRows spun on a persistent I/O error")
+	}
+	if r.calls > 5 {
+		t.Errorf("reader called %d times after a persistent error", r.calls)
+	}
+
+	// A torn row (bare quote mid-field → csv.ParseError) is skipped, not fatal, and
+	// rows after it still read back.
+	dir := t.TempDir()
+	at := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	if err := Append(dir, row("grove-1", at, 1.5)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(Path(dir), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("2026-07-18T12:00:00Z,to\"rn,x\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := Append(dir, row("grove-2", at, 2.5)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 around a torn one: %+v", len(rows), rows)
 	}
 }
