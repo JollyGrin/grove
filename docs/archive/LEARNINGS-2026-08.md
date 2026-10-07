@@ -9,28 +9,25 @@
 ## tmux / git / detector internals (verified against source)
 
 - **2026-08-31 · a pane user option is the only durable place for a chat's
-  identity** (grove-215, confirming grove-36 T1 from the other side): the
-  Claude session id is minted by claude on boot, so it cannot be passed at
-  spawn — it has to be resolved from the transcript afterwards and then
-  written somewhere that survives the agent. `set-option -p @grove_chat_session`
-  survives claude's OSC title write, re-layouts, re-attaches and detaches;
-  it is read back in the same `list-panes -F` call that reports the pane's
-  cwd and command, so the join costs zero extra tmux round-trips. A pane
-  TITLE would have been clobbered on boot, and a sidecar file would have to
-  be reconciled against panes that die without notice.
+  identity** (grove-215, confirming grove-36 T1 from the other side).
+  `set-option -p @grove_chat_session` survives claude's OSC title write,
+  re-layouts, re-attaches and detaches, and is read back in the same
+  `list-panes -F` call that reports the pane's cwd and command — zero extra
+  round-trips. A pane TITLE is clobbered on boot; a sidecar file would need
+  reconciling against panes that die without notice. Retired half: this
+  entry first said the id "is minted by claude on boot, so it cannot be
+  passed at spawn" and must be resolved from the transcript afterwards —
+  wrong; `claude --session-id <uuid>` lets grove mint it (grove-222,
+  §Claude Code behavior below; claude-code-facts §Sessions).
 - **2026-08-31 · `session_created` has one-second resolution, so two chats
-  spawned back-to-back TIE** (grove-215): the lazy join between a live chat
-  pane and its Claude session id resolves "newest unclaimed transcript
-  first", which needs the panes ordered youngest-first — and `#{session_created}`
-  is whole seconds, so `e2e/chat.sh` spawned three chats inside one second
-  and the order collapsed to whatever the input order was, handing chat 1
-  the transcript chat 3 had just written. Tie-break on the chat number
-  (`grove-chat-<label>-<n>`): `NextChatSession` hands `<n>` out in order, so
-  within one second the higher `<n>` is the younger. (A REUSED slot — n=1
-  freed by a closed chat — breaks that rule, but a reused slot is minutes
-  old and never ties.) The general lesson: any ordering read off a tmux
-  timestamp needs a deterministic tie-break, because scripted spawns are
-  always sub-second.
+  spawned back-to-back TIE** (grove-215): `#{session_created}` is whole
+  seconds, so `e2e/chat.sh`'s three chats spawned inside one second
+  collapsed to input order. Rule: any ordering read off a tmux timestamp
+  needs a deterministic tie-break (here the chat number
+  `grove-chat-<label>-<n>`, handed out in order by `NextChatSession`),
+  because scripted spawns are always sub-second. The "newest unclaimed
+  transcript first" join this ordering served was itself wrong and is
+  gone — ids are minted at spawn (grove-222).
 - **2026-08-29 · a pane grep for `STATUS: DONE` fires on every task, from
   second zero — the kickoff prompt contains all three sentinels verbatim**
   (grove-205; two false DONEs inside a minute on unbrewed-artgen #16 and
@@ -195,10 +192,13 @@
   and cached-views-never-overwrite-live. What it changed: the remote
   train's architecture is confirmed, not revised; future remote work
   starts from that doc instead of re-deriving.
-- **2026-08-26 · `gv update` is a GitHub-releases self-updater — a
-  private source install updates via `git pull --ff-only && go install
-  ./cmd/gv` over ssh** (no releases exist on a private repo; the verb
-  errors). The runbook's update path for a VPS host is the git one.
+- **2026-08-26 · `gv update` is a GitHub-releases self-updater** — at the
+  time the repo was private, had no releases, and the verb errored, so the
+  runbook's VPS path was `git pull` + a source build. Retired: a push to
+  main now auto-cuts a release within about a minute, `gv update --yes` is
+  the only refresh path on every host, and a source build via `go install`
+  stamps the binary `dev`, which `gv update` then refuses
+  (shipping-gates §Handing a change to the operator).
 - **2026-08-26 · pane-scrape verification needs `capture-pane -J` —
   narrow panes wrap text mid-word and defeat grep** — a 39-column worker
   pane wrapped every nudge across lines, so grepping the capture for a
@@ -213,9 +213,11 @@
   pickup prompt's send-keys arrived; the prompt was consumed by the
   dialogs and the task sat in `setup` indefinitely with an empty input.
   Symptom signature: `agent=setup` stuck + pane showing "Do you trust
-  this folder?". Recovery: answer both dialogs (trust defaults to Yes —
-  Enter; bypass defaults to No — needs `2` then Enter), then re-send the
-  instructions via `gv nudge`. Prevention (now in the runbook): burn the
+  this folder?". Recovery: answer both dialogs, then re-send the
+  instructions via `gv nudge`. The trust dialog's default is NOT a safe
+  Enter: on 2.1.283 it is `No, exit` and Esc also exits (grove-333) —
+  move the caret to `Yes, I trust this folder` first; the bypass dialog
+  defaults to No (`2` then Enter). Prevention (now in the runbook): burn the
   dialogs at provisioning time — after `claude` login, start claude once
   with the worker flags in the worktrees parent and accept both. Same
   family as the #186 delivery-window evidence: send-keys into a
@@ -465,7 +467,10 @@
   for text no agent ever saw. Two-sided fix: refuse to send while the pane
   shows `Compacting conversation` (an error, so no event is recorded), and
   after a verified submit scrape for POSITIVE uptake — the probe echoed
-  outside the input box, or `esc to interrupt`. Second surprise while
+  outside the input box as the transcript's `❯ <text>` line (the
+  `esc to interrupt` footer this first also accepted stopped appearing
+  mid-turn in Claude Code 2.1.283 — grove-300/grove-317; claude-code-facts
+  §TUI chrome). Second surprise while
   building it: the uptake scrape must read SCROLLBACK, not the visible
   screen. A long relayed prompt (the handoff checkpoint template) pushes
   its own head off-screen, so the visible pane holds no trace of the text

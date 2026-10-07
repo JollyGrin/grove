@@ -12,7 +12,10 @@
 > here, dated and verified; a rule that generalized graduates to a skill.
 >
 > Entry format: `- **YYYY-MM-DD · the fact** — context, what it changed.`
-> Newest first within each section. If a learning invalidates a
+> Newest first within each section. An entry is fact + rule + ticket; the
+> incident narrative behind a reshaped entry lives in the archive under
+> the same date (grove-438). An entry a later one contradicts is rewritten
+> to the current fact with a pointer, never left standing. If a learning invalidates a
 > DESIGN.md decision, update the doc and note it here. When an entry
 > generalizes into a rule, update the matching `.claude/skills/` skill
 > too — the skills are the distillation, this file is the dated log.
@@ -39,94 +42,72 @@
 
 ## Claude Code behavior (verified in ovs)
 
-- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd, so
-  every worktree shares `<config dir>/projects/<encoded main checkout>/
-  memory/` — and the one settings scope that is per-repo and private,
-  `.claude/settings.local.json`, never reaches a fresh worktree** (grove-437).
-  Verified on this machine: a worker whose cwd was a worktree was handed
-  `~/.claude/projects/-home-dean-git-grove/memory/`, none of 24 worktree
-  project dirs has a `memory/` subdir, and `.claude/` in main and in a
-  worktree hold only `skills/`. `autoMemoryDirectory` is read from any
-  scope but must be absolute or `~/` (no relative path), so relocating
-  the surface beside `.grove/` means a committed absolute path (project
-  scope) or one dir for every repo (user scope) — hence the doctor row
-  reads the default location instead. A headless `claude -p` session
-  DOES carry the auto-memory system prompt (`prompt_snapshot` has
-  "persistent file-based memory"), so headless dry runs are a valid
-  probe of whether a kickoff makes workers write memory.
-- **2026-10-07 · Claude Code 2.1.292 ships Anthropic's Fable 5.1 autonomy
-  block in the system prompt, so the kickoff's "ask — otherwise do not ask
-  for confirmation" line was a duplicate** (grove-433). Checked on three
-  real worker transcripts (grove-435/441/442): the `prompt_snapshot`
-  attachment carries "You are operating autonomously … asking 'Shall
-  I…?' will block the work", the "check your last paragraph" rule and the
-  "Delivering work" scope paragraphs verbatim from the migration guide.
-  The kickoff templates now state goals, constraints and verification
-  (no numbered steps, no hedge); the autonomy paragraph is NOT added to
-  the template — re-verify via the transcript before ever adding it back.
-  Rule distilled into `.claude/skills/claude-code-facts`.
-- **A session restart after compaction is a SessionStart with
-  `source: "compact"`, not a new session** (grove-289). Distinguishing it
-  matters for two reasons: folding it as `session_started` would flip a
-  worker's glyph and inflate its session count for something that isn't a
-  fresh pickup, and `gv cost --context`'s compaction count depends on
-  seeing it as its own event (`state.EvCompaction`) rather than losing it
-  inside `session_started`. The ticket's research draft additionally
-  claims sessions pinned to the `[1m]` cache tier never hit Claude Code's
-  auto-compact threshold in practice — plausible (a 1h cache write keeps
-  far more of the transcript "hot" before the context window fills), but
-  this session had no live long-running `[1m]`-pinned transcript to
-  independently reproduce that against; treat it as a hypothesis to watch
-  `gv cost --context`'s `compactions`/`NeverCompacted` flag for, not yet
-  independently confirmed here.
+- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
+  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
+  and `.claude/settings.local.json` never reaches a fresh worktree**
+  (grove-437). Rule: treat auto memory as one surface per repo;
+  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
+  reads the default location rather than relocating it. A headless
+  `claude -p` run carries the auto-memory system prompt, so it is a valid
+  probe of whether a kickoff makes workers write memory. Rule:
+  claude-code-facts §Profiles.
+- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
+  block itself, so a kickoff's "do not ask for confirmation" line is a
+  duplicate** (grove-433). Rule: templates state goals, constraints and
+  verification only; before ever adding the paragraph back, grep a real
+  worker transcript's `prompt_snapshot` for "operating autonomously".
+  Rule: claude-code-facts §System prompt.
+- **2026-09-07 · A restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Rule: never fold
+  it as `session_started` (that would flip the worker's glyph and inflate
+  its session count); it is its own event, `state.EvCompaction`, which
+  `gv cost --context` counts. The claim that `[1m]`-pinned sessions never
+  auto-compact is an unverified hypothesis — watch `compactions` /
+  `NeverCompacted` before relying on it. Rule: claude-code-facts §Hooks.
 
 ## tmux / git / detector internals (verified against source)
 
-- **2026-10-07 · `show-options` takes ONE option name, and does not auto-start a server.** tmux 3.4: `tmux show-options -g a b c` fails with "too many arguments (need at most 1)", and on a machine with no server running `tmux show-options -g` answers "error connecting to …/default" instead of sourcing the config (only `start-server`/`new-session` boot one). The working read-only query is a single exec `tmux start-server \; show-options -g \; show-options -gw` — on a serverless machine the started server serves the query and exits (no session, `exit-empty` default); on a live one `start-server` is a no-op. `pane-base-index` and `allow-rename` live in the WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session table — one table alone misses half of them. Found implementing grove-455/#169, whose ticket text assumed both the multi-name form and the auto-start.
-- **2026-09-27 · `tmux kill-server` returns before the server's panes
-  are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
-  (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
-  assertion passed, then cleanup died on "rm: Directory not empty" because
-  a pane process was still writing under the scratch tree, and the suite
-  read red. Wait for the isolated socket
-  (`$TMUX_TMPDIR/tmux-$(id -u)/default`) to vanish, then retry the rm
-  once — `e2e/serve.sh`'s `cleanup()` already did; plugin.sh now does too.
-
+- **2026-10-07 · `tmux show-options` takes ONE option name and never
+  auto-starts a server** (grove-455). Rule: the read-only query is a single
+  exec `tmux start-server \; show-options -g \; show-options -gw` (on a
+  serverless machine the started server answers and exits; on a live one
+  `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
+  WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
+  table — one table alone misses half. Rule: tmux-discipline §3.
+- **2026-09-27 · `tmux kill-server` returns before its panes are gone, so
+  an immediate `rm -rf "$SCRATCH"` can race** (grove-383). Rule: wait for
+  the isolated socket to vanish, then retry the rm once — copy
+  `cleanup()` from `e2e/serve.sh`. Rule: shipping-gates §The gate.
 - **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
-  before the child prompts** (grove-380): `e2e/serve.sh` drives the TTY
-  trust prompt with `printf 'y\n' | script -q /dev/null gv serve …`, and
-  gv read a bare EOF (the pane echoed `^Dy`) — so "y" became "no". Hold
-  the answer back (`{ sleep 1; printf 'y\n'; sleep 1; } | script …`) so
-  it lands after the prompt. Related, verified on tmux 3.6a: `new-window
-  -n <name> <argv…>` with more than one command argument execs argv
-  directly (no user shell), `-e K=V` sets the env for just that window,
-  and `-P -F '#{window_id}'` hands back the `@N` id — the serve window
-  needs none of SendKeys' quoting. Serve windows are matched by EXACT
-  name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
-  tolerance would let `▶ keys` hit a `▶ keys 2`.
-
+  before the child prompts** (grove-380). Rule: hold the answer back —
+  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`. Verified
+  alongside (tmux 3.6a): `new-window -n <name> <argv…>` execs argv with no
+  shell, `-e K=V` scopes env to that window, `-P -F '#{window_id}'`
+  returns the `@N` id; serve windows match by EXACT name
+  (`tmux.WindowIDExact`), never `matchesWindowName`. Rule: shipping-gates
+  §The gate.
+- **2026-09-27 · A shell alias fools `gv editor`'s already-running check**
+  (grove-359). Rule: detection matches the pane's foreground command
+  against `editor.command`'s binary, so an alias (`vi` → nvim) reads as
+  not running and a second editor opens — set `editor.command: nvim` (or
+  drop the alias) in your own config, not in gv.
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
-  lookalikes in the text. Never use it for prose — relay replies via
-  `load-buffer` + `paste-buffer` + a separate `send-keys Enter`. If a
-  reply is a single character and the pane tail looks like an option
-  picker, pass it through raw without Enter-wrapping.
+  lookalikes in the text. Rule: prose goes via `load-buffer` +
+  `paste-buffer` + a separate `send-keys Enter`; a single picker character
+  goes raw. tmux-discipline §2.
 - **`worktree.Add` uses one string for branch and dir** — fine with the
   `<id>-<slug>` no-slash branch convention; a slash would force a two-arg
   fork.
 - **Squash-merge defeats `git branch -d`** — a squash-merged branch is
-  never ancestry-merged, so `-d` refuses every time. Verify merge via
-  `gh pr view --json state,mergedAt`, then `branch -D` + remote delete.
-- **Pane detector vs CC chrome (two incidents)** — the spinner glyph
-  changed once (✢ → ✽), and current CC's bottom chrome pushes the live
-  spinner >15 lines above the pane bottom. Spinner/activity checks must
-  scan the full ~30-line capture, not a bottom window; both markers are
-  transient so the wide scan is safe. Hooks were right both times — the
-  scraper is liveness garnish, hooks are truth.
-- **A local editor alias fools `gv editor`'s "already running?" check**
-  (grove-359, 2026-09-27) — detection matches the pane's foreground
-  command against `editor.command`'s binary, so a shell alias (`vi` →
-  nvim) reads as not-running and a second editor opens. Fix the alias
-  (or set `editor.command: nvim`) in your own config, not in gv.
+  never ancestry-merged. Rule: verify via `gh pr view --json
+  state,mergedAt`, then `branch -D` + remote delete. shipping-gates
+  §Merging.
+- **Pane scraping is liveness garnish; hooks are truth** — Claude Code's
+  chrome has moved under grove three times (the spinner glyph CYCLES, a
+  taller bottom chrome, the unboxed input box). Rule: scan the full
+  capture and match a line's SHAPE (`detect.Spinning`), never one glyph or
+  a bottom window (grove-300, grove-317). Current chrome: claude-code-facts
+  §TUI chrome; rule: tmux-discipline §4.
 - **Detector reads `unknown` for a plain shell pane** — LIVE shows
   `unknown` until claude actually boots (e.g. during setup). Expected; the
   task status column carries the truth.
@@ -184,9 +165,11 @@
 - **stdlib `flag` stops at the first positional** — `gv grab <url> --repo
   x` silently ignores `--repo` without a re-parse loop (`parseAnywhere`).
   Flags-after-positionals is table stakes; stdlib doesn't give it to you.
-- **Hooks reference the absolute binary path** (`~/go/bin/<bin>`);
-  `go install` refreshes that binary in place, so rebuilds don't require
-  re-installing hooks (path unchanged).
+- **Hooks pin the absolute binary path** (`os.Executable()` at `gv hooks
+  install`), so they must point at the binary `gv update` writes
+  (`~/go/bin/gv`) or no hook-side fix ever ships — grove-339 found both
+  profiles pointing at a stale `~/.local/bin/gv`. Rule: refresh only via
+  `gv update --yes`; never `go install` (shipping-gates §Handing a change).
 - **Cost estimates: dedup + cache asymmetry** — transcript pricing follows
   ccusage's rules: dedup entries by `message.id`+`requestId`, price cache
   reads at 0.1×, 5-minute cache writes at 1.25×, 1-hour at 2×. Costs are

@@ -38,7 +38,11 @@ changes the behavior.
 - SessionStart `source` is one of `startup | resume | clear | compact`.
   **`compact` fires after an auto or manual compaction, and plain-text
   stdout from a SessionStart hook is added to Claude's context** (hooks
-  reference). Grove's receiver prints a ground-truth re-orientation on
+  reference). A `compact` SessionStart is a restart of the SAME session,
+  not a new one: never fold it as `session_started` (that flips the
+  worker's glyph and inflates its session count) — it is its own event,
+  `state.EvCompaction`, which `gv cost --context` counts (grove-289).
+  Grove's receiver prints a ground-truth re-orientation on
   that source only — ticket + acceptance criteria from the provider, `git
   log`/`git status` in the worktree, the PR body via a 5s-bounded `gh pr
   view` with a git-only fallback — never from the summary (grove-440);
@@ -175,6 +179,19 @@ changes the behavior.
   exists.
 - Plugins install at user scope, so skills load from any cwd under that
   profile; worktree placement doesn't matter.
+- **Auto memory is keyed on the git REPO, not the cwd** (grove-437,
+  verified 2026-10-07): every worktree shares
+  `<config dir>/projects/<encoded main checkout>/memory/`, so a worker's
+  notes are repo-wide, not per-worktree. `autoMemoryDirectory` is read
+  from any settings scope but must be absolute or `~/`-rooted (no
+  relative path), so relocating it beside `.grove/` means a committed
+  absolute path or one dir for every repo — grove's doctor row reads the
+  default location instead. The one per-repo private scope,
+  `.claude/settings.local.json`, never reaches a fresh worktree. A
+  headless `claude -p` session DOES carry the auto-memory system prompt
+  (`prompt_snapshot` has "persistent file-based memory"), so headless
+  dry runs are a valid probe of whether a kickoff makes workers write
+  memory.
 - Claude Code clobbers tmux pane titles on boot — see
   [tmux-discipline](../tmux-discipline/SKILL.md) §4 for the durable-tag
   pattern.

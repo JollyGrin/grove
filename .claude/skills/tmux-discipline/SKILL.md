@@ -47,7 +47,13 @@ grove worker) silently targets the **real server** unless it clears
   `CapturePaneBottom`: that helper takes the pane's bottom N *rows*, which
   are blank whenever the app draws from the top (it silently passed every
   relay until `e2e/relay.sh` caught it). Keep the check permissive —
-  unreadable pane or no recognizable box counts as landed.
+  unreadable pane or no recognizable box counts as landed — but a
+  permissive fallback needs a tripwire per chrome generation, or it
+  silently becomes the main path (grove-317: v2.1.282 unboxed the input,
+  the finder saw no box, and every relay read as landed for a month).
+  Pin each chrome generation with a real capture in
+  `internal/tmux/testdata/` and an `e2e/relay.sh` leg that fails on the
+  old finder.
 
 ## 3. Finding things: resolve, never assume
 
@@ -95,6 +101,15 @@ grove worker) silently targets the **real server** unless it clears
   ("no such session") and need `tmux.ExactActive` (`-t '=grove:'` — exact
   session, active window). Getting this wrong broke every cockpit build;
   `e2e/cockpit.sh` is the tripwire — actually run it.
+- Reading options: `show-options` takes ONE option name (`-g a b c` is
+  "too many arguments") and never auto-starts a server — on a serverless
+  machine it answers "error connecting" instead of sourcing the config.
+  The read-only query is a single exec `tmux start-server \;
+  show-options -g \; show-options -gw` (a started server with no session
+  exits on its own; on a live one `start-server` is a no-op), and the
+  tables differ: `pane-base-index`/`allow-rename` are WINDOW options
+  (`-gw`), `base-index`/`renumber-windows` session options (`-g`)
+  (grove-455, tmux 3.4).
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.
