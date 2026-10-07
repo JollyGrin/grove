@@ -25,7 +25,7 @@ type PR struct {
 	URL        string `json:"url"`
 	State      string `json:"state"` // OPEN | MERGED | CLOSED
 	MergedAt   string `json:"mergedAt,omitempty"`
-	CI         string `json:"ci"`      // pass | fail | pending | none
+	CI         string `json:"ci"`      // pass | fail | pending | none | unknown (CI unreadable)
 	PreviewURL string `json:"preview"` // best-effort Vercel link
 
 	// grove-251: PR facts the supervisor's transition engine needs to
@@ -52,15 +52,38 @@ func gh(dir string, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// PRForBranch returns the PR for a head branch, or nil if none exists.
+// prFields is what the merge gate needs: the PR's identity and state,
+// nothing a restricted token (a GitHub App token 403s on
+// statusCheckRollup) can refuse — grove-450.
+const prFields = "number,url,state,mergedAt"
+
+// prFactFields adds the draft/mergeable facts the transition engine
+// reads (grove-251); still readable with a restricted token.
+const prFactFields = prFields + ",isDraft,mergeable,mergeStateStatus"
+
+// prDisplayFields is the full display query: CI rollup plus comments.
 // Comments ride along in the same call because the real *.vercel.app
 // preview links live in the Vercel bot comment — status-check targetUrls
 // are vercel.com build pages (field-tested on PR #936, twice).
+const prDisplayFields = prFactFields + ",statusCheckRollup,comments"
+
+// PRForBranch returns the PR for a head branch, or nil if none exists.
+// It is the display path (ls/TUI/supervise): the full query first, and
+// when that fails one retry without the CI and comments fields, so a
+// token that cannot read CI degrades to CI "unknown" instead of failing
+// the whole lookup (grove-450). The merge gate is Merged, which never
+// asks for CI at all.
 func PRForBranch(repoDir, branch string) (*PR, error) {
 	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,mergedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,comments")
+		"--json", prDisplayFields)
+	degraded := false
 	if err != nil {
-		return nil, err
+		lean, leanErr := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
+			"--json", prFactFields)
+		if leanErr != nil {
+			return nil, err
+		}
+		out, degraded = lean, true
 	}
 	var prs []struct {
 		Number     int    `json:"number"`
@@ -137,6 +160,8 @@ func PRForBranch(repoDir, branch string) (*PR, error) {
 		}
 	}
 	switch {
+	case degraded:
+		pr.CI = "unknown" // CI unreadable with this token — not "none"
 	case fail > 0:
 		pr.CI = "fail"
 	case pending > 0:
@@ -163,15 +188,31 @@ func PreviewURL(repoDir string, number int) string {
 }
 
 // Merged reports whether the branch's PR is merged — the only safe merge
-// check under squash-merge (git ancestry lies; see LEARNINGS.md).
+// check under squash-merge (git ancestry lies; see LEARNINGS.md). It asks
+// gh for number,url,state,mergedAt only: the gate never looked at CI, and
+// bundling statusCheckRollup into its query was how a token that cannot
+// read CI turned every `gv done` into a --force (grove-450). The PR it
+// returns carries no CI or check facts (CI "unknown").
 func Merged(repoDir, branch string) (bool, *PR, error) {
-	pr, err := PRForBranch(repoDir, branch)
+	out, err := gh(repoDir, "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
+		"--json", prFields)
 	if err != nil {
 		return false, nil, err
 	}
-	if pr == nil {
+	var prs []struct {
+		Number   int    `json:"number"`
+		URL      string `json:"url"`
+		State    string `json:"state"`
+		MergedAt string `json:"mergedAt"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return false, nil, err
+	}
+	if len(prs) == 0 {
 		return false, nil, nil
 	}
+	p := prs[0]
+	pr := &PR{Number: p.Number, URL: p.URL, State: p.State, MergedAt: p.MergedAt, CI: "unknown"}
 	return pr.State == "MERGED", pr, nil
 }
 

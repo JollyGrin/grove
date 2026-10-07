@@ -149,6 +149,19 @@
 
 ## Go / CLI
 
+- **2026-10-07 · One bundled `--json` field can poison every caller of a
+  `gh` query** (grove-450, App-token 403 cascade). `gh pr list --json
+  a,b,c` is all-or-nothing: a token that cannot read ONE field
+  (`statusCheckRollup` under a GitHub App token → 403 "Resource not
+  accessible by integration") fails the whole call, so the one shared
+  query behind ls/TUI AND the `gv done` merge gate blanked the CI column
+  and reported every merged ticket as "no PR found" — funneling the
+  operator to `--force` for work that had genuinely merged. The gate
+  never looked at CI. Rule: a decision path gets its own minimal field
+  list (`Merged` → `number,url,state,mergedAt`); a display path that
+  bundles optional fields retries once without them and renders them
+  unknown. And a gh failure is never the same answer as "no PR" — name
+  the failure and say "retry" before "--force".
 - **2026-10-07 · `--model` was never recorded on the task; only
   `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
   the `task_created`/`task_adopted` data know a worker's PROFILE, but a

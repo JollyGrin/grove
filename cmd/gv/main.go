@@ -4074,6 +4074,28 @@ func cmdDone(args []string) error {
 	return finishTask(cfg, t, *force)
 }
 
+// mergeGate turns the merge check's verdict into finishTask's answer: nil
+// to proceed, or the error that stops cleanup. A gh failure (bad token,
+// offline, 403) is named as such with "retry" first — never conflated
+// with the genuine "no PR found", whose only way out is --force
+// (grove-450). --force overrides every verdict, as before.
+func mergeGate(ticket, branch string, merged bool, pr *github.PR, err error, force bool) error {
+	if force {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: merge check failed: %v — retry, or use --force to override", ticket, err)
+	}
+	if merged {
+		return nil
+	}
+	prState := "no PR found for branch " + branch
+	if pr != nil {
+		prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
+	}
+	return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", ticket, prState)
+}
+
 func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	repo, ok := cfg.Repos[t.Repo]
 	if !ok {
@@ -4091,18 +4113,14 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 		fmt.Println("→ no remote: skipping merge check (--force is the confirmation)")
 	} else {
 		merged, pr, err := github.Merged(repo.Path, t.Branch)
-		if err != nil {
+		if err != nil && force {
 			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
 		}
 		if pr != nil {
 			outcome = ledger.Outcome(pr.State)
 		}
-		if !merged && !force {
-			prState := "no PR found"
-			if pr != nil {
-				prState = fmt.Sprintf("PR #%d is %s", pr.Number, pr.State)
-			}
-			return fmt.Errorf("%s: %s — not cleaning up (use --force to override)", t.Ticket, prState)
+		if err := mergeGate(t.Ticket, t.Branch, merged, pr, err, force); err != nil {
+			return err
 		}
 	}
 

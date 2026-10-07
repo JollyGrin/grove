@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,5 +154,103 @@ func TestFetchAllUnknownOnTimeout(t *testing.T) {
 	}
 	if _, ok := unknown["grove-1"]; !ok {
 		t.Fatal("expected grove-1 in unknown, got none")
+	}
+}
+
+// stubGH403 puts a fake `gh` on PATH that models a GitHub App token
+// (grove-450): any `pr list` that asks for `statusCheckRollup` fails with
+// a 403, while a lean query succeeds with the given PR fixture. Every
+// invocation's argv is appended to logPath, one line per call.
+func stubGH403(t *testing.T, dir, logPath, fixture string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + logPath + "\n" +
+		"case \"$*\" in\n" +
+		"  *statusCheckRollup*) echo 'GraphQL: Resource not accessible by integration (repository.pullRequests.nodes.statusCheckRollup)' >&2; exit 1 ;;\n" +
+		"  *) cat <<'EOF2'\n" + fixture + "\nEOF2\n ;;\n" +
+		"esac\n"
+	stubGH(t, dir, script)
+}
+
+func ghCalls(t *testing.T, logPath string) []string {
+	t.Helper()
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read gh log: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// TestMergedIgnoresCIFields (grove-450): the merge gate never needed CI,
+// so it must not request `statusCheckRollup` — with an App token that
+// 403s on that field, a genuinely merged PR still reads merged instead of
+// funneling the operator to --force.
+func TestMergedIgnoresCIFields(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "gh.log")
+	stubGH403(t, dir, logPath, `[{"number":7,"url":"https://x/7","state":"MERGED","mergedAt":"2026-10-07T00:00:00Z"}]`)
+
+	merged, pr, err := Merged(dir, "some-branch")
+	if err != nil {
+		t.Fatalf("Merged: %v", err)
+	}
+	if !merged || pr == nil || pr.Number != 7 || pr.State != "MERGED" {
+		t.Fatalf("merged = %v, pr = %+v, want merged PR #7", merged, pr)
+	}
+	calls := ghCalls(t, logPath)
+	if len(calls) != 1 {
+		t.Fatalf("gh calls = %q, want exactly one lean query", calls)
+	}
+	if !strings.Contains(calls[0], "--json number,url,state,mergedAt") || strings.Contains(calls[0], "statusCheckRollup") || strings.Contains(calls[0], "comments") {
+		t.Errorf("merge gate query = %q, want --json number,url,state,mergedAt only", calls[0])
+	}
+}
+
+// TestPRForBranchDegradesWithoutCI (grove-450): the display path keeps
+// the full query, but when it fails it retries once without the CI and
+// comments fields and renders CI as unknown — one 403 on a bundled field
+// must not blank the whole PR column (or the merge gate behind it).
+func TestPRForBranchDegradesWithoutCI(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "gh.log")
+	stubGH403(t, dir, logPath, `[{"number":8,"url":"https://x/8","state":"OPEN","mergedAt":"","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}]`)
+
+	pr, err := PRForBranch(dir, "some-branch")
+	if err != nil {
+		t.Fatalf("PRForBranch: %v", err)
+	}
+	if pr == nil || pr.Number != 8 || pr.State != "OPEN" || pr.Mergeable != "MERGEABLE" {
+		t.Fatalf("pr = %+v, want the lean retry's PR #8", pr)
+	}
+	if pr.CI != "unknown" {
+		t.Errorf("CI = %q, want unknown (CI unreadable, not none)", pr.CI)
+	}
+	if pr.Checks != 0 || len(pr.Failing) != 0 {
+		t.Errorf("Checks = %d, Failing = %v, want no check facts", pr.Checks, pr.Failing)
+	}
+	calls := ghCalls(t, logPath)
+	if len(calls) != 2 {
+		t.Fatalf("gh calls = %q, want the full query then one lean retry", calls)
+	}
+	if !strings.Contains(calls[0], "statusCheckRollup,comments") {
+		t.Errorf("first call = %q, want the full query", calls[0])
+	}
+	if strings.Contains(calls[1], "statusCheckRollup") || strings.Contains(calls[1], "comments") {
+		t.Errorf("retry = %q, want no CI or comments fields", calls[1])
+	}
+}
+
+// TestPRForBranchNoRetryWhenLeanAlsoFails: a gh that is simply broken
+// (offline, bad auth) still surfaces an error — the retry is for the
+// bundled-field 403, not a way to turn every failure into "no PR".
+func TestPRForBranchNoRetryWhenLeanAlsoFails(t *testing.T) {
+	dir := t.TempDir()
+	stubGH(t, dir, "#!/bin/sh\necho boom >&2\nexit 1\n")
+	pr, err := PRForBranch(dir, "some-branch")
+	if err == nil {
+		t.Fatalf("PRForBranch = %+v, nil; want an error when both queries fail", pr)
 	}
 }

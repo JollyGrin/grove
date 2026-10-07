@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
@@ -205,4 +207,50 @@ func captureStdout(t *testing.T, f func()) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// TestMergeGateDistinguishesGHFailureFromNoPR (grove-450): a gh command
+// failure must stop `gv done` with a "merge check failed … retry" error,
+// never the "no PR found" verdict that funnels the operator to --force.
+func TestMergeGateDistinguishesGHFailureFromNoPR(t *testing.T) {
+	cases := []struct {
+		name       string
+		merged     bool
+		pr         *github.PR
+		err        error
+		force      bool
+		wantNil    bool
+		want, deny string
+	}{
+		{name: "gh failure", err: errors.New("gh pr list: exit status 1\nHTTP 403"),
+			want: "merge check failed: gh pr list: exit status 1\nHTTP 403 — retry, or use --force to override", deny: "no PR found"},
+		{name: "no PR", want: "no PR found for branch grove-1-car", deny: "merge check failed"},
+		{name: "open PR", pr: &github.PR{Number: 7, State: "OPEN"}, want: "PR #7 is OPEN", deny: "no PR found"},
+		{name: "merged", merged: true, pr: &github.PR{Number: 7, State: "MERGED"}, wantNil: true},
+		{name: "gh failure forced", err: errors.New("boom"), force: true, wantNil: true},
+		{name: "no PR forced", force: true, wantNil: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := mergeGate("grove-1", "grove-1-car", c.merged, c.pr, c.err, c.force)
+			if c.wantNil {
+				if err != nil {
+					t.Fatalf("mergeGate = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("mergeGate = nil, want an error containing %q", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("mergeGate = %q, want it to contain %q", err, c.want)
+			}
+			if c.deny != "" && strings.Contains(err.Error(), c.deny) {
+				t.Errorf("mergeGate = %q, must not contain %q", err, c.deny)
+			}
+			if !strings.HasPrefix(err.Error(), "grove-1: ") {
+				t.Errorf("mergeGate = %q, want the ticket prefix", err)
+			}
+		})
+	}
 }
