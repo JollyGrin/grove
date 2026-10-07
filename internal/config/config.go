@@ -25,6 +25,31 @@ type Repo struct {
 	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
 	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
 	LinearLabels []string `yaml:"linear_labels"`
+	// DoneGate is the Stop hook's evidence gate for `STATUS: DONE` claims
+	// (grove-441): off | warn (default: log + desktop notify, never block)
+	// | block (Claude Code `decision: block`, capped so it cannot loop).
+	// Resolved through DoneGateMode; the hook reads it tolerantly via
+	// DoneGateAt.
+	DoneGate string `yaml:"done_gate"`
+}
+
+// Done-gate modes (grove-441). DoneGateWarn is the default for one release
+// so the operator can watch what WOULD be blocked before enabling block.
+const (
+	DoneGateOff   = "off"
+	DoneGateWarn  = "warn"
+	DoneGateBlock = "block"
+)
+
+// DoneGateMode resolves a repo's done_gate value: empty = warn; any other
+// unknown value also resolves to warn (parse rejects it, the tolerant hook
+// reader does not).
+func DoneGateMode(v string) string {
+	switch v {
+	case DoneGateOff, DoneGateBlock:
+		return v
+	}
+	return DoneGateWarn
 }
 
 // ModelProfile bundles what makes a non-Anthropic, Anthropic-API-compatible
@@ -273,6 +298,9 @@ func parse(raw []byte, src string) (*Config, error) {
 		}
 		if r.Provider != "" && r.Provider != "markdown" && r.Provider != "linear" && r.Provider != "github" {
 			return nil, fmt.Errorf("repo %q: provider %q (want markdown, linear, or github)", name, r.Provider)
+		}
+		if r.DoneGate != "" && r.DoneGate != DoneGateOff && r.DoneGate != DoneGateWarn && r.DoneGate != DoneGateBlock {
+			return nil, fmt.Errorf("repo %q: done_gate %q (want off, warn, or block)", name, r.DoneGate)
 		}
 		r.Path = expand(r.Path)
 		if r.Base == "" {

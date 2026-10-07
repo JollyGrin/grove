@@ -17,6 +17,7 @@ func TestGlyph(t *testing.T) {
 		{AgentBlocked, "blocked", "⚠"},
 		{AgentBlocked, "done", "⚠"}, // sentinel never overrides a blocked agent
 		{AgentIdle, "done", "✔"},
+		{AgentIdle, "done_unverified", "✔"}, // grove-441: the label carries the "?"
 		{AgentIdle, "none", "✗"},
 		{AgentIdle, "", "✗"},
 		{AgentDead, "", "✗"},
@@ -348,5 +349,21 @@ func TestSpawnModel(t *testing.T) {
 	}
 	if got := SpawnModel(events, ""); got != "" {
 		t.Fatalf("empty id = %q", got)
+	}
+}
+
+// grove-441: an unverified DONE (block-mode evidence gate) reads as
+// "done?" — distinct from a verified done and from a stall.
+func TestLabelDoneUnverified(t *testing.T) {
+	cases := []struct{ sentinel, want string }{
+		{"done", "idle ✓"},
+		{"done_unverified", "done?"},
+		{"none", "stalled?"},
+	}
+	for _, c := range cases {
+		task := &Task{Agent: AgentIdle, Sentinel: c.sentinel}
+		if got := task.Label(); got != c.want {
+			t.Errorf("Label(idle, %q) = %q, want %q", c.sentinel, got, c.want)
+		}
 	}
 }

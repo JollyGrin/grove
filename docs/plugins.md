@@ -115,6 +115,18 @@ Since grove-205 one more additive row field:
   and handoff, which clear the sentinel. Absent on rows from older logs.
   If you can hold a stream, prefer `gv watch`.
 
+Since grove-441 one more additive `sentinel` value, `done_unverified`:
+the worker claimed `STATUS: DONE` but the Stop hook's evidence gate
+(`repos.<name>.done_gate: block`) found the worktree dirty, the branch
+unpushed, or no PR — the row's label reads `done?`. Treat it as "not
+done": `gv watch --until done` does not fire on it. The `agent_status`
+record then carries additive data `gate` (`warn` | `block`),
+`gate_reason` (`3 uncommitted files / no PR for <branch>`) and
+`gate_decision` (`block`, or `pass:warn` | `pass:capped` |
+`pass:stop_hook_active` for an unverified DONE that was let through).
+Under the default `warn` the sentinel stays `done` and only those data
+keys reveal the verdict.
+
 Since grove-191 (workspace transparency) one more additive row field:
 
 - `workspace` — the label of the workspace that owns the task. `gv ls`
@@ -301,7 +313,7 @@ gv watch [--json] [--ticket X]... [--type agent_status,notification,…]
   the whole history. This is what makes a "before" snapshot impossible to
   sample late; do not rebuild one yourself.
 - **`--until <sentinel or event type>` exits 0 exactly when that transition
-  lands** — a sentinel (`question|blocked|done|none`) as before, or
+  lands** — a sentinel (`question|blocked|done|done_unverified|none`) as before, or
   (grove-252) a bare event type: `--until pr_merged`, `--until
   worker_waiting`. One notification, no polling arithmetic. A non-zero
   exit means the wait ended some other way — exit 0 always means the

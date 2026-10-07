@@ -320,7 +320,7 @@ func hookCandidates() []hooks.Candidate {
 		if !workspace.Alive(ws) {
 			continue
 		}
-		out = append(out, hooks.Candidate{Label: ws.Label, StateDir: config.StateDirAt(ws.Root)})
+		out = append(out, hooks.Candidate{Label: ws.Label, StateDir: config.StateDirAt(ws.Root), Root: ws.Root})
 	}
 	return append(out, hooks.Candidate{Label: "", StateDir: config.StateDir()})
 }
@@ -359,7 +359,7 @@ func main() {
 	// Hook receiver: always exit 0, never break a session.
 	if cmd == "hook" {
 		if len(args) == 1 {
-			if err := hooks.Receive(hookCandidates(), args[0], os.Stdin); err != nil {
+			if err := hooks.ReceiveTo(hookCandidates(), args[0], os.Stdin, os.Stdout); err != nil {
 				fmt.Fprintln(os.Stderr, "gv hook:", err)
 			}
 		}

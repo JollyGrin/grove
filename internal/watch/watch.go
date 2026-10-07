@@ -109,9 +109,10 @@ var KnownTypes = []string{
 }
 
 // KnownSentinels is the classifier's vocabulary (internal/hooks.classify):
-// the three the kickoff prompt teaches, plus "none" for a stop with no
-// STATUS line.
-var KnownSentinels = []string{"question", "blocked", "done", "none"}
+// the three the kickoff prompt teaches, "none" for a stop with no STATUS
+// line, and (grove-441, additive) "done_unverified" for a DONE the Stop
+// hook's evidence gate found wanting in block mode.
+var KnownSentinels = []string{"question", "blocked", "done", "done_unverified", "none"}
 
 // TypeAll is the `--type` escape hatch: every record, known or not.
 const TypeAll = "all"

@@ -233,6 +233,44 @@ grep -q '"paused": *true' "$SCRATCH/ls-resumed.json" && fail "adopt did not clea
 # process on this machine. The "orphan" is a sleep we own, dressed in
 # claude-shaped args by the stub; the SIGTERM goes to its real pid.
 
+# --- Stop hook done gate (grove-441): evidence or no DONE ---
+
+say "done gate (block): a dirty worktree turns STATUS: DONE into a block decision"
+perl -pi -e 's/^(\s*)claude: echo$/$1claude: echo\n$1done_gate: block/' "$WCFG"
+grep -q 'done_gate: block' "$WCFG" || fail "done_gate not written"
+echo wip > "$WTDIR/scratch.txt"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — all wrapped up"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-block.out"
+grep -q '"decision":"block"' "$SCRATCH/gate-block.out" || fail "dirty DONE under done_gate: block did not block: $(cat "$SCRATCH/gate-block.out")"
+grep -q '1 uncommitted file' "$SCRATCH/gate-block.out" || fail "block reason does not name the dirty file count"
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" | grep -q '"sentinel":"done_unverified"' || fail "blocked DONE not recorded as done_unverified"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-gate.json"
+grep -q '"sentinel": *"done_unverified"' "$SCRATCH/ls-gate.json" || fail "gv ls --json missing done_unverified"
+
+say "done gate (block): a re-entry stop (stop_hook_active) is never blocked"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"STATUS: DONE — still claiming"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-active.out"
+[ -s "$SCRATCH/gate-active.out" ] && fail "stop_hook_active stop was blocked: $(cat "$SCRATCH/gate-active.out")" || true
+
+say "done gate (warn, the default): no block, verdict recorded"
+perl -pi -e 's/done_gate: block/done_gate: warn/' "$WCFG"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — all wrapped up"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-warn.out"
+[ -s "$SCRATCH/gate-warn.out" ] && fail "warn mode wrote a decision: $(cat "$SCRATCH/gate-warn.out")" || true
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" > "$SCRATCH/gate-warn.ev"
+grep -q '"sentinel":"done"' "$SCRATCH/gate-warn.ev" || fail "warn mode must keep the done sentinel"
+grep -q '"gate":"warn"' "$SCRATCH/gate-warn.ev" || fail "warn mode must record the gate verdict"
+grep -q '"gate_reason":"1 uncommitted file"' "$SCRATCH/gate-warn.ev" || fail "warn verdict missing the reason"
+
+say "done gate: the tolerant sentinel parser takes the LAST STATUS line and a bare STATUS: DONE"
+rm "$WTDIR/scratch.txt"
+perl -pi -e 's/^\s*done_gate: warn\n//' "$WCFG"
+grep -q done_gate "$WCFG" && fail "done_gate key not removed" || true
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"I said STATUS: DONE — too early.\\n\\n**STATUS: BLOCKED**"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-last.out"
+[ -s "$SCRATCH/gate-last.out" ] && fail "BLOCKED must never be gated" || true
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" | grep -q '"sentinel":"blocked"' || fail "last STATUS line (bold, bare BLOCKED) did not win"
+
 say "stub ps (empty table) so orphan scans are deterministic"
 STUBBIN="$SCRATCH/bin"
 mkdir -p "$STUBBIN"
