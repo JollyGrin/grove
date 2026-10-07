@@ -8,6 +8,28 @@
 
 ## Go / CLI
 
+- **2026-09-26 · A shared-repo host turns "orphan" into "every sibling
+  workspace's live worker"** (grove-350, seen on groveremote). `gv audit`'s
+  `scanOrphans` walked every repo in `cfg.Repos` and subtracted only the
+  CALLING workspace's own tasks — fine on the Mac, where repos are
+  per-workspace, but wrong on a host like groveremote where the repo table
+  lives in the GLOBAL `~/.config/grove/config.yaml` and every workspace
+  deep-merge-inherits all of it (waterhouse/unbrewed/deanlol, see
+  `waterhouse-on-groveremote` memory). A worktree another workspace is
+  actively running is then "untracked" from the auditor's point of view:
+  32 of 36 reported orphans in the `runelite` workspace were live,
+  DIRTY, worker-attached trees. Fixed by unioning the tracked set with
+  every OTHER registered+alive workspace's tasks (`workspace.ActiveWorktrees`,
+  read via `state.Peek` — same fresh-not-derived read `FindTicket` already
+  used for ticket routing) and the legacy global state dir. `scanProcesses`
+  turned out NOT to share the bug: its `reapable` set only ever keys off
+  tickets already present in the calling workspace's own tasks map, and a
+  ticket has exactly one owning workspace (grove-191 routing), so a
+  sibling's worktree can never appear there. The registry read itself
+  stays at the `cmd/gv` call site, not inside `internal/audit` — mirrors
+  `FindTicket`'s shape (registry loaded by the caller, matching logic takes
+  a plain `[]workspace.Workspace`) so the audit package stays unit-testable
+  without a real `$HOME/.config/grove/registry.yaml`.
 - **2026-09-05 · A stub tmux pane for a liveness e2e must be a redrawing
   loop, not an `echo`** (grove-253). Every prior scripted-tmux suite
   (`watch.sh`, `dummy.sh`, …) sets a repo's `claude:` to plain `echo` —
