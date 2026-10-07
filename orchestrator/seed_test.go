@@ -202,3 +202,27 @@ func TestSeedTeachesEffort(t *testing.T) {
 		t.Error("orchestrator/CLAUDE.md no longer names the documented effort levels (low|medium|high|xhigh|max)")
 	}
 }
+
+// TestSeedTeachesEffortFirst (grove-436) guards the routing doctrine in
+// duty 3 Dispatch: effort on the default model is the first lever, a
+// model/lane change the second, and whichever is proposed is named with
+// its reason in the grab line. Scoped to the Duties section so deleting
+// the paragraph cannot hide behind a mention elsewhere.
+func TestSeedTeachesEffortFirst(t *testing.T) {
+	duties := seedSection(t, "Duties")
+	for _, want := range []string{
+		"Effort first, lane second",
+		"--effort",
+		"say which setting and why in the same grab line",
+		"never route on your own",
+	} {
+		if !strings.Contains(duties, want) {
+			t.Errorf("orchestrator/CLAUDE.md duty 3 Dispatch is missing %q — the effort-first "+
+				"routing doctrine (grove-436) has been trimmed; restore it", want)
+		}
+	}
+	if strings.Contains(ClaudeMd, "a cheap task on Sonnet") {
+		t.Error("orchestrator/CLAUDE.md still teaches model-first routing (`a cheap task on Sonnet`) — " +
+			"grove-436 replaced it with effort-first on the default model")
+	}
+}

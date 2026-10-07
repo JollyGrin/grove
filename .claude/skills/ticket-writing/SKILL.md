@@ -1,6 +1,6 @@
 ---
 name: ticket-writing
-description: Use when writing, splitting, sequencing, or labeling grove tickets — sizing rules, the merge-train vs feature-branch decision, and the rote test for routing a ticket to a cheaper model. Costs are set at ticket-writing time, not at execution time.
+description: Use when writing, splitting, sequencing, or labeling grove tickets — sizing rules, the merge-train vs feature-branch decision, and the rote test for running a ticket at lower effort (or, second, on a cheaper lane). Costs are set at ticket-writing time, not at execution time.
 ---
 
 # Ticket writing
@@ -45,11 +45,10 @@ green on its own?**
   and an agent resolving mid-stack conflicts is the steering-heavy
   failure mode the train avoids.
 
-## The rote test: routing to cheaper models
+## The rote test: lower effort first, cheaper lane second
 
-A ticket may carry the `rote` label — dispatched via
-`gv grab grove-N --repo X --model claude-sonnet-5` (later: cheap
-`--profile` lanes) — only if **all three** hold at writing time:
+A ticket may carry the `rote` label only if **all three** hold at writing
+time:
 
 1. **Executable acceptance criteria** — the done-check is a command or
    test, not a judgment call.
@@ -58,15 +57,37 @@ A ticket may carry the `rote` label — dispatched via
 3. **Zero open design decisions** — if the worker could plausibly ask
    "should it work like A or B?", it is not rote.
 
-Rote tickets get only what's enumerated — a cheap model does exactly
-what the acceptance criteria list and won't infer house conventions.
-List the docs rows explicitly (TASKS.md; LEARNINGS.md if the work
-surfaced a surprise). Field-verified 2026-07-17: two Sonnet workers
-(grove-89/94) shipped clean code but skipped TASKS.md; the Fable
-worker (grove-90) added its row unprompted.
+A rote ticket is dispatched on the repo's **default model at lower
+effort**, in this order of levers:
+
+1. **Effort** (first, always): `gv grab grove-N --repo X --effort medium`
+   — `--effort low` for pure mechanical work (renames, generated code,
+   list-driven edits). Same model, same prompt cache, fewer and more
+   consolidated turns. Anthropic's guidance (claude-api skill, effort):
+   measure the most capable model at lower effort before building a
+   multi-model cascade — lower effort on the newest model often matches
+   or exceeds the previous generation at high effort, and caches are
+   model-scoped, so every model switch forfeits cache reuse. Judge the
+   saving per merged PR, not per request.
+2. **Lane** (second, for budgets only): `--model claude-sonnet-5-5` or a
+   `--profile` lane (`/model-lanes`) when the Claude subscription is
+   capped or a flat-rate plan has headroom to burn. Say which lane and
+   why in the grab line.
+
+Neither lever is pulled on the operator's behalf: the label marks the
+ticket eligible, and the operator chooses the grab.
+
+Rote tickets get only what's enumerated — a worker at low effort, like a
+cheaper model, does exactly what the acceptance criteria list and won't
+infer house conventions. List the docs rows explicitly (TASKS.md;
+LEARNINGS.md if the work surfaced a surprise). Field-verified
+2026-07-17, before `--effort` existed, with `--model` pins to the
+then-current Sonnet: two Sonnet workers (grove-89/94) shipped clean code
+but skipped TASKS.md; the Fable worker (grove-90) added its row
+unprompted.
 
 Feedback loop: two or more steers on a rote-labeled ticket means the
-label was wrong — fix the test or the ticket, not the model.
+label was wrong — fix the test or the ticket, not the dial.
 `gv cost --analyze` (steers + $/merged-PR on rote tickets) is the
-scoreboard; rote tickets that clear cleanly become the eval set for
-trying cheaper OpenRouter lanes later.
+scoreboard; rote tickets that clear cleanly at low effort become the
+eval set for trying cheaper lanes later.
