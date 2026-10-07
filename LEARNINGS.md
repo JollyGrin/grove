@@ -104,21 +104,6 @@
   name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
   tolerance would let `▶ keys` hit a `▶ keys 2`.
 
-- **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
-  folder-trust dialog's default is `No, exit`** (grove-333). The relay is
-  paste + Enter; a modal eats the paste and takes the Enter as "confirm
-  the highlighted row". A phone-spawned chat in a new directory opens on
-  the trust dialog (2.1.283: unnumbered `❯ No, exit` / `Yes, I trust this
-  folder`, footer `Enter to confirm · Esc to cancel`), so the first thing
-  typed into it killed claude. Two lessons: (1) every Enter the binary
-  presses must be aimed — gate it on a fresh capture that shows no modal;
-  (2) detectors that answer the same question must be one function
-  (`DetectPicker` needed digits and said "not waiting" while
-  `ClassifyTurn` said "waiting"; `chatweb.Waiting` is now the one answer).
-  Verified on the live dialog (isolated tmux, scratch cwd): digits do
-  nothing there, `send-keys -l $'\x1b[B'` moves the caret, and Esc
-  ("Esc to cancel") exits claude exactly like `No, exit` — so esc is not
-  a safe dismiss for it either (the phone draws no esc on a select menu).
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Never use it for prose — relay replies via
   `load-buffer` + `paste-buffer` + a separate `send-keys Enter`. If a
@@ -232,6 +217,34 @@
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-10-07 · Kickoff A/B (model-fit 02, #434): the de-choreographed
+  template is cost-neutral and slightly more disciplined; `--effort
+  medium` is the win on rote work.** Three rote tickets (#145 merge gate,
+  #131 six paper cuts, #169 doctor tmux options), each run three ways on
+  Fable 5.1 the same afternoon: A = pre-#444 template (served through a
+  `grove-old` repo entry with `prompt:` →
+  `docs/plans/2026-10-07-model-fit-train/kickoff-old.tmpl`), B = current
+  template, C = current template + `--effort medium`; B and C on cloned
+  issues (#450–#455, label `ab-test`). Every one of the nine opened a
+  PR, passed the bare gate when re-run by the orchestrator, had its DONE
+  verified by the Stop evidence gate, and took zero steers. Per ticket
+  (est $ / API calls / minutes grab→done): #145 A 2.11/17/7.3, B
+  2.45/22/5.8, C 1.70/15/5.8; #131 A 2.14/18/6.6, B 1.87/15/5.5, C
+  1.82/18/5.8; #169 A 3.10/25/8.7, B 3.41/26/10.6, C 2.20/16/7.7. A vs B
+  is a wash on cost (−13%, +15%, +10%) but B stayed inside #145's
+  enumerated surface where A also edited `internal/tui/view.go`, B reused
+  the existing test file on #131 where A added `cmd/gv/paper_cuts_test.go`,
+  and B's PR bodies carried gate evidence in every case (A: 1 of 3 on
+  #131/#169). C was the cheapest arm on all three tickets (−31%, −3%,
+  −35% vs B) with the same test counts, the same surface discipline and
+  the same gate outcomes. Decision: keep the current template; the rote
+  test's first action is `--effort medium` (ticket-writing skill,
+  #447); the lane is the second lever. Caveats: three tickets, one
+  afternoon, one model; `last_message` is capped at 2000 chars so
+  wrap-up evidence was read from PR bodies; the two generic
+  "surface drift" hits (notify.go on #131, internal/connections on #169)
+  were the same in all three arms — the tickets' line references had
+  aged, not the workers.
 - **Label→repo inference misses in practice** — real tickets carry
   type-labels (`[Feature]`), not surface-labels; treat `--repo` as the
   common path and inference as a bonus.

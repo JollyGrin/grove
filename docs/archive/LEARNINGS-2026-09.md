@@ -320,6 +320,21 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
+  folder-trust dialog's default is `No, exit`** (grove-333). The relay is
+  paste + Enter; a modal eats the paste and takes the Enter as "confirm
+  the highlighted row". A phone-spawned chat in a new directory opens on
+  the trust dialog (2.1.283: unnumbered `❯ No, exit` / `Yes, I trust this
+  folder`, footer `Enter to confirm · Esc to cancel`), so the first thing
+  typed into it killed claude. Two lessons: (1) every Enter the binary
+  presses must be aimed — gate it on a fresh capture that shows no modal;
+  (2) detectors that answer the same question must be one function
+  (`DetectPicker` needed digits and said "not waiting" while
+  `ClassifyTurn` said "waiting"; `chatweb.Waiting` is now the one answer).
+  Verified on the live dialog (isolated tmux, scratch cwd): digits do
+  nothing there, `send-keys -l $'\x1b[B'` moves the caret, and Esc
+  ("Esc to cancel") exits claude exactly like `No, exit` — so esc is not
+  a safe dismiss for it either (the phone draws no esc on a select menu).
 - **2026-09-26 · Claude Code v2.1.282 dropped the input box's sides — and
   the verified-submit guard went silent** (grove-317, third chrome change
   under us after the spinner glyph and the bottom-chrome height): the box

@@ -24,6 +24,12 @@
 
 ## Now
 
+- [x] model-fit 02: kickoff A/B on three rote tickets × three arms
+      (#434, 2026-10-07; orchestrator-run). Old vs current template is
+      cost-neutral; `--effort medium` cut est $ 3–35% with identical gate
+      outcomes. Table + decision in LEARNINGS.md §Field notes; frozen old
+      template kept at docs/plans/2026-10-07-model-fit-train/kickoff-old.tmpl
+      as the `prompt:` override example.
 - [x] grove-436: model-fit 04 — route by effort before model: rote test dispatches `--effort medium` on the default model (lane second), seed duty 3 "effort first, lane second" + tripwire, DESIGN §7 dated note superseding the tier cascade (cache-namespace reason), model-lanes economics line; `claude-sonnet-5` → `claude-sonnet-5-5` (2026-10-07)
 - [x] model-fit 05: workers get the auto-memory surface (grove-437,
       2026-10-07, PR #449). Every autonomous kickoff (both sets, default +
@@ -113,22 +119,6 @@
       the migration guide. STATUS lines byte-identical and last, pinned by
       `TestRenderEndsWithStatusSentinels`; linear goldens regenerated
       (seed-manifest row). Manual templates untouched. A/B is #434.
-- [x] Guidance-surface diet (grove-275, 2026-09-05): measured what lands in
-      every session and trimmed it without dropping a rule. Always-resident
-      bytes (root CLAUDE.md + orchestrator seed) 24,474 → 17,340 (−29%):
-      history narration, duplicated rules, and `-h`-restated flag prose
-      removed; every load-bearing phrase still guarded by
-      `orchestrator/seed_test.go`. TASKS.md/LEARNINGS.md became small
-      heads (current month) with monthly archives under `docs/archive/`
-      and the open phases in `docs/roadmap.md`; HANDOFF.md rewritten lean
-      (original archived). `model-lanes` split into procedure (17.5k) +
-      two on-demand `reference/` files; shipping-gates lost its copy of
-      the CLAUDE.md hard rules. Kickoff templates untouched (nothing
-      provably redundant). Enforcement: each head declares `<!-- head-cap:
-      N -->`; `internal/guidance.TestRepoHeadsUnderCap` fails the gate when
-      a head is over it, and `scripts/log-append.py` is the append path —
-      a session adds a row/entry without reading the file, and the script
-      archives the oldest rows past the cap. PR left open for review.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

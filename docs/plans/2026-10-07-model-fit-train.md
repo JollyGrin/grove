@@ -117,3 +117,33 @@ and [2026-09-28-boot-cost-analytics-investigation.md](2026-09-28-boot-cost-analy
 | 08 (#440) | Compaction over discard: `autocompact:` config, CLAUDE.md preservation line, SessionStart re-orientation | model-fit | PR #292 decision |
 | 09 (#441) | Stop hook: evidence gate for DONE + last-match, format-tolerant sentinel | model-fit | – |
 | 10 (#442) | Price table + tier classifier for the Claude 5.5 family and Fable ids | model-fit, rote | – |
+
+## Car 02 result (2026-10-07, orchestrator-run)
+
+Three rote tickets × three arms on Fable 5.1, same afternoon. A = pre-#444
+template via a temporary `grove-old` repo entry (`prompt:` →
+`2026-10-07-model-fit-train/kickoff-old.tmpl`), B = current template,
+C = current template + `--effort medium`. B/C ran on cloned issues
+#450–#455 (`ab-test`). All nine: PR opened, bare gate green on re-run,
+DONE verified by the Stop evidence gate, zero steers.
+
+| ticket | arm | task | PR | est $ | calls | avg ctx | min | diff | tests | outside surface |
+|---|---|---|---|---|---|---|---|---|---|---|
+| #145 merge gate | A | grove-old-145 | #459 | 2.11 | 17 | 64k | 7.3 | +311/−33 | 5 | internal/tui/view.go |
+| | B | grove-450 | #457 | 2.45 | 22 | 71k | 5.8 | +250/−30 | 4 | – |
+| | C | grove-451 | #462 | 1.70 | 15 | 61k | 5.8 | +262/−48 | 5 | – |
+| #131 paper cuts | A | grove-old-131 | #458 | 2.14 | 18 | 61k | 6.6 | +343/−44 | 8 (new test file) | notify.go* |
+| | B | grove-452 | #456 | 1.87 | 15 | 60k | 5.5 | +285/−44 | 7 | notify.go* |
+| | C | grove-453 | #463 | 1.82 | 18 | 59k | 5.8 | +288/−44 | 6 | notify.go* |
+| #169 doctor tmux | A | grove-old-169 | #460 | 3.10 | 25 | 76k | 8.7 | +275/−16 | 2 | internal/connections/* † |
+| | B | grove-454 | #461 | 3.41 | 26 | 80k | 10.6 | +295/−24 | 2 | internal/connections/* † |
+| | C | grove-455 | #464 | 2.20 | 16 | 70k | 7.7 | +303/−16 | 2 | internal/connections/* † |
+
+\* the truncation had moved to `internal/notify` since the ticket was written; all arms found it.
+† the doctor's checks live in `internal/connections` now; all arms followed the existing structure as the ticket asked.
+
+**Decision:** keep the current template (cost-neutral, better scope and
+test-placement discipline, evidence in every PR body); `--effort medium`
+is the rote test's first action (already in the skill via #447) — it was
+the cheapest arm on all three tickets with no measurable quality loss.
+Caveat: n=3, one model, one afternoon.
