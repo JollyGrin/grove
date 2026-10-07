@@ -85,6 +85,7 @@ func Core(env Env) []Connection {
 		conns = append(conns, providerConnections(env)...)
 		conns = append(conns, workerConnections(env)...)
 		conns = append(conns, agentsMdConnections(env)...)
+		conns = append(conns, memoryConnections(env)...)
 		conns = append(conns, remoteHostConnections(env)...)
 
 		conns = append(conns, Connection{

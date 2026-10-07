@@ -320,6 +320,36 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-26 · Claude Code v2.1.282 dropped the input box's sides — and
+  the verified-submit guard went silent** (grove-317, third chrome change
+  under us after the spinner glyph and the bottom-chrome height): the box
+  is now bare lines between two full-width `─` rules, first line `❯ `. The
+  box finder only knew `│` sides / `╰` bottoms, so `inputBoxContent`
+  returned "" ⇒ `pasteLanded` said landed for **every** relay (grove-144
+  guard a no-op), and `outsideInputBox` returned the whole capture ⇒
+  `consumedEvidence` found the probe inside the still-unsent box and
+  called it consumed (grove-186 warning disabled too). Nothing failed
+  loudly — the permissive "no box ⇒ landed" fallback is exactly what made
+  it invisible. Fixed by recognising the unboxed shape (bottom-most rule
+  pair within `footerSlack`, body opening with `❯`; modals don't, so they
+  stay "no box"), tried before the boxed one. Also found: the idle box
+  shows a dim placeholder that a plain capture can't tell from text, and
+  `esc to interrupt` wasn't in the v2.1.283 footer mid-turn. Checked
+  because the orchestrator nudges busy workers constantly: a relay
+  mid-turn is QUEUED and drawn above the rules (`❯ <text>` +
+  `ctrl+x ctrl+s to send now`; the box shows `Press up to edit queued
+  messages`), so it reads as landed + consumed, with no false "never
+  submitted" and no spurious uptake warning. And the idle box's dim
+  (SGR 2) ghost prompt suggestion reads as TYPED text in a plain capture:
+  a short relay (`yes`) whose 24-rune probe matched a ghost (`yes, and
+  push`) after a fast turn would fail as "never submitted" though
+  delivered. The verify capture is now `-e`, with dim runs dropped
+  (a bare Enter on a ghost-only box submits nothing, so the retry was
+  never the danger). Regression:
+  real captures in `internal/tmux/testdata/` + `e2e/relay.sh` leg 3
+  (a stub drawing the v2 chrome — verified it fails on the old finder).
+  Lesson: a permissive fallback needs a tripwire per chrome generation,
+  or it silently becomes the main path.
 - **2026-09-05 · `mktemp -d /tmp/...` is not the scratch root on macOS —
   `pwd -P` it** (grove-230, same class as grove-228's chat.sh bug):
   `e2e/brains.sh` asserted against the raw `mktemp` path, but `gv brains`

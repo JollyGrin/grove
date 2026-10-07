@@ -13,6 +13,14 @@ refactors or extensions are follow-ups to report, not changes to make. Commit
 tests only where the ticket asks or the repo keeps them for such changes.
 Delegate independent reconnaissance to subagents; keep working while they run.
 
+Your auto memory for this repo is shared by every worktree of it: read
+its `MEMORY.md` before you start, and record corrections and confirmed
+approaches there as you go — one lesson per file, a one-line summary at
+the top, and why it mattered. A verified surprise about the harness or
+the tooling that every machine needs goes to the repo's LEARNINGS.md
+instead, dated, when the repo keeps one. Don't save what the repo, the
+ticket or git already records.
+
 Done means: lint and the affected app's build pass; the work is committed
 with the ticket prefix ({{.Identifier}}: ...) per repo convention, pushed,
 and a PR is open via `gh pr create --base {{.Base}}`, filling the PR

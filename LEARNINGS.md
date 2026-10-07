@@ -5,6 +5,12 @@
 > source, so we never re-derive (or re-break) it. Every entry is
 > verified fact, not opinion.
 >
+> This is the middle of three surfaces: a correction or a confirmed
+> approach that only this machine needs stays in Claude's auto memory
+> (`~/.claude/projects/<repo>/memory/`, shared by the repo's worktrees); a
+> surprise about the harness or tooling that every machine must know lands
+> here, dated and verified; a rule that generalized graduates to a skill.
+>
 > Entry format: `- **YYYY-MM-DD · the fact** — context, what it changed.`
 > Newest first within each section. If a learning invalidates a
 > DESIGN.md decision, update the doc and note it here. When an entry
@@ -33,6 +39,21 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd, so
+  every worktree shares `<config dir>/projects/<encoded main checkout>/
+  memory/` — and the one settings scope that is per-repo and private,
+  `.claude/settings.local.json`, never reaches a fresh worktree** (grove-437).
+  Verified on this machine: a worker whose cwd was a worktree was handed
+  `~/.claude/projects/-home-dean-git-grove/memory/`, none of 24 worktree
+  project dirs has a `memory/` subdir, and `.claude/` in main and in a
+  worktree hold only `skills/`. `autoMemoryDirectory` is read from any
+  scope but must be absolute or `~/` (no relative path), so relocating
+  the surface beside `.grove/` means a committed absolute path (project
+  scope) or one dir for every repo (user scope) — hence the doctor row
+  reads the default location instead. A headless `claude -p` session
+  DOES carry the auto-memory system prompt (`prompt_snapshot` has
+  "persistent file-based memory"), so headless dry runs are a valid
+  probe of whether a kickoff makes workers write memory.
 - **2026-10-07 · Claude Code 2.1.292 ships Anthropic's Fable 5.1 autonomy
   block in the system prompt, so the kickoff's "ask — otherwise do not ask
   for confirmation" line was a duplicate** (grove-433). Checked on three
@@ -82,37 +103,6 @@
   needs none of SendKeys' quoting. Serve windows are matched by EXACT
   name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
   tolerance would let `▶ keys` hit a `▶ keys 2`.
-
-- **2026-09-26 · Claude Code v2.1.282 dropped the input box's sides — and
-  the verified-submit guard went silent** (grove-317, third chrome change
-  under us after the spinner glyph and the bottom-chrome height): the box
-  is now bare lines between two full-width `─` rules, first line `❯ `. The
-  box finder only knew `│` sides / `╰` bottoms, so `inputBoxContent`
-  returned "" ⇒ `pasteLanded` said landed for **every** relay (grove-144
-  guard a no-op), and `outsideInputBox` returned the whole capture ⇒
-  `consumedEvidence` found the probe inside the still-unsent box and
-  called it consumed (grove-186 warning disabled too). Nothing failed
-  loudly — the permissive "no box ⇒ landed" fallback is exactly what made
-  it invisible. Fixed by recognising the unboxed shape (bottom-most rule
-  pair within `footerSlack`, body opening with `❯`; modals don't, so they
-  stay "no box"), tried before the boxed one. Also found: the idle box
-  shows a dim placeholder that a plain capture can't tell from text, and
-  `esc to interrupt` wasn't in the v2.1.283 footer mid-turn. Checked
-  because the orchestrator nudges busy workers constantly: a relay
-  mid-turn is QUEUED and drawn above the rules (`❯ <text>` +
-  `ctrl+x ctrl+s to send now`; the box shows `Press up to edit queued
-  messages`), so it reads as landed + consumed, with no false "never
-  submitted" and no spurious uptake warning. And the idle box's dim
-  (SGR 2) ghost prompt suggestion reads as TYPED text in a plain capture:
-  a short relay (`yes`) whose 24-rune probe matched a ghost (`yes, and
-  push`) after a fast turn would fail as "never submitted" though
-  delivered. The verify capture is now `-e`, with dim runs dropped
-  (a bare Enter on a ghost-only box submits nothing, so the retry was
-  never the danger). Regression:
-  real captures in `internal/tmux/testdata/` + `e2e/relay.sh` leg 3
-  (a stub drawing the v2 chrome — verified it fails on the old finder).
-  Lesson: a permissive fallback needs a tripwire per chrome generation,
-  or it silently becomes the main path.
 
 - **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
   folder-trust dialog's default is `No, exit`** (grove-333). The relay is

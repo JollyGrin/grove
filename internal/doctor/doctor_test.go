@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -92,6 +93,7 @@ func TestFullRowSet(t *testing.T) {
 		{"provider:markdown:demo", "error", "ok", ""},
 		{"worker:ccwork", "error", "ok", ""},
 		{"agents-md:demo", "warn", "warn", ""},
+		{"memory:demo", "warn", "ok", ""},
 		{"sub:lane", "warn", "ok", ""},
 		{"effort-override", "warn", "ok", ""},
 		{"hooks:/profiles/work/settings.json", "error", "ok", ""},
@@ -268,7 +270,7 @@ func TestRenderHappy(t *testing.T) {
 		"\033[33m!\033[0m", // yellow warn mark present
 		"AGENTS.md in demo",
 		"→ gv init --only agents-md",
-		"13/15 passed",
+		"14/16 passed",
 		"🌳 ready to grow",
 	} {
 		if !strings.Contains(out, want) {
@@ -313,8 +315,8 @@ func TestRenderJSON(t *testing.T) {
 		t.Errorf("schema_version = %d, want %d", envelope.SchemaVersion, schema.Version)
 	}
 	decoded := envelope.Rows
-	if len(decoded) != 15 {
-		t.Errorf("got %d rows, want 15", len(decoded))
+	if len(decoded) != 16 {
+		t.Errorf("got %d rows, want 16", len(decoded))
 	}
 	if decoded[0].ID != "binary:tmux" || decoded[0].State != "ok" {
 		t.Errorf("first row: %+v", decoded[0])
@@ -377,5 +379,137 @@ func TestEffortOverrideRow(t *testing.T) {
 	}
 	if !strings.Contains(fromSettings.Info, "maxEffortLevel=medium in /profiles/work/settings.json") {
 		t.Errorf("info = %q, want the cap and its file", fromSettings.Info)
+	}
+}
+
+// fakeEntry is a minimal os.DirEntry for the memory row's ReadDir seam.
+type fakeEntry struct {
+	name  string
+	dir   bool
+	mtime time.Time
+}
+
+func (f fakeEntry) Name() string               { return f.name }
+func (f fakeEntry) IsDir() bool                { return f.dir }
+func (f fakeEntry) Type() fs.FileMode          { return 0 }
+func (f fakeEntry) Info() (fs.FileInfo, error) { return fakeInfo{f}, nil }
+
+type fakeInfo struct{ fakeEntry }
+
+func (f fakeInfo) Size() int64        { return 1 }
+func (f fakeInfo) Mode() fs.FileMode  { return 0o644 }
+func (f fakeInfo) ModTime() time.Time { return f.mtime }
+func (f fakeInfo) Sys() any           { return nil }
+
+// The auto-memory row (grove-437): per repo, where that repo's workers'
+// auto memory resolves to, how many notes it holds and the newest
+// `modified`. The directory follows Claude Code's derivation (the
+// profile's projects dir keyed on the ENCODED repo path, shared by every
+// worktree), is relocated by an autoMemoryDirectory in any readable
+// scope (local > project > user), and the row warns when the surface is
+// switched off — by settings or by CLAUDE_CODE_DISABLE_AUTO_MEMORY.
+func TestMemoryRow(t *testing.T) {
+	find := func(t *testing.T, env connections.Env) doctor.Row {
+		t.Helper()
+		for _, r := range rows(env) {
+			if r.ID == "memory:demo" {
+				return r
+			}
+		}
+		t.Fatal("no memory:demo row")
+		return doctor.Row{}
+	}
+	const defaultDir = "/profiles/work/projects/-repos-demo/memory"
+
+	// Nothing written yet: green, naming the default directory.
+	empty := find(t, happyEnv(testConfig()))
+	if empty.State != "ok" || empty.Severity != "warn" {
+		t.Errorf("fresh profile: %+v, want ok/warn", empty)
+	}
+	if !strings.Contains(empty.Info, defaultDir+" — no notes yet") {
+		t.Errorf("info = %q, want the derived default dir and 'no notes yet'", empty.Info)
+	}
+
+	// A populated directory: the index is not a note; the newest
+	// `modified` frontmatter wins over mtimes, and a note without
+	// frontmatter falls back to its mtime.
+	older := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	env := happyEnv(testConfig())
+	base := env.ReadFile
+	env.ReadDir = func(name string) ([]os.DirEntry, error) {
+		if name != defaultDir {
+			return nil, os.ErrNotExist
+		}
+		return []os.DirEntry{
+			fakeEntry{name: "MEMORY.md", mtime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)},
+			fakeEntry{name: "a-lesson.md", mtime: older},
+			fakeEntry{name: "b-lesson.md", mtime: older},
+			fakeEntry{name: "subdir", dir: true},
+		}, nil
+	}
+	env.ReadFile = func(name string) ([]byte, error) {
+		switch name {
+		case defaultDir + "/a-lesson.md":
+			return []byte("---\nname: a\ntype: feedback\nmodified: 2026-10-07T11:41:00Z\n---\n\nbody\n"), nil
+		case defaultDir + "/b-lesson.md":
+			return []byte("no frontmatter\n"), nil
+		}
+		return base(name)
+	}
+	populated := find(t, env)
+	if populated.State != "ok" {
+		t.Errorf("populated: state %q, want ok", populated.State)
+	}
+	if !strings.Contains(populated.Info, "2 note(s), newest 2026-10-07 11:41Z") {
+		t.Errorf("info = %q, want 2 notes (index excluded) and the frontmatter modified", populated.Info)
+	}
+
+	// autoMemoryDirectory in the repo's local scope beats the user scope,
+	// and ~/ expands against Home.
+	env = happyEnv(testConfig())
+	env.ReadFile = func(name string) ([]byte, error) {
+		switch name {
+		case "/repos/demo/.claude/settings.local.json":
+			return []byte(`{"autoMemoryDirectory":"~/mem/demo"}`), nil
+		case "/profiles/work/settings.json":
+			return []byte(`{"autoMemoryDirectory":"/elsewhere","hooks":{}}`), nil
+		}
+		return base(name)
+	}
+	relocated := find(t, env)
+	if relocated.State != "ok" || !strings.Contains(relocated.Info, "/home/u/mem/demo (autoMemoryDirectory in /repos/demo/.claude/settings.local.json)") {
+		t.Errorf("relocated: %+v, want the local-scope dir with its source", relocated)
+	}
+
+	// Disabled in the profile's settings: warn, naming the file.
+	env = happyEnv(testConfig())
+	env.ReadFile = func(name string) ([]byte, error) {
+		if name == "/profiles/work/settings.json" {
+			return []byte(`{"autoMemoryEnabled":false,"hooks":{}}`), nil
+		}
+		return base(name)
+	}
+	off := find(t, env)
+	if off.State != "warn" || !strings.Contains(off.Info, "autoMemoryEnabled: false in /profiles/work/settings.json") {
+		t.Errorf("disabled by settings: %+v, want warn naming the file", off)
+	}
+	if !strings.Contains(off.Fix, "autoMemoryEnabled") {
+		t.Errorf("fix = %q, want the settings remedy", off.Fix)
+	}
+
+	// Disabled by the environment: warn, naming the variable.
+	env = happyEnv(testConfig())
+	env.Getenv = func(k string) string {
+		switch k {
+		case "SHELL":
+			return "/bin/zsh"
+		case "CLAUDE_CODE_DISABLE_AUTO_MEMORY":
+			return "1"
+		}
+		return ""
+	}
+	offEnv := find(t, env)
+	if offEnv.State != "warn" || !strings.Contains(offEnv.Info, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1") {
+		t.Errorf("disabled by env: %+v, want warn naming the var", offEnv)
 	}
 }
