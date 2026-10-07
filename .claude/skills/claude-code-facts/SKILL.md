@@ -36,6 +36,19 @@ changes the behavior.
   env has no reliable nesting marker (`CLAUDE_CODE_CHILD_SESSION=1` also
   shows up at the top level).
 - SessionStart `source` is one of `startup | resume | clear | compact`.
+- **A Stop hook can refuse the stop**: print `{"decision":"block","reason":
+  "…"}` on stdout (exit 0) and Claude Code shows `reason` to the model,
+  which continues the turn instead of ending it. The re-entry Stop then
+  carries `stop_hook_active: true` — a blocking hook must pass that
+  through or it loops forever, and must bound itself besides (grove's
+  done gate: never on `stop_hook_active`, at most 2 consecutive blocks
+  per session, counter in `<state>/done-gate/<ticket>`, reset by any
+  non-DONE stop). Exit code 2 + stderr is the other block form; grove
+  uses the JSON so the exit code stays 0 on every path. Only Stop's
+  stdout is read — the other receivers print nothing (grove-441). The
+  decision/`stop_hook_active` shapes are from the hooks reference and
+  the captured 2.1.283 Stop payload; the first live `done_gate: block`
+  run is where to confirm the model actually continues.
 - **Hook commands pin an absolute binary path** (`os.Executable()` at
   `gv hooks install`). If the hooks point somewhere `gv update` does not
   write, every hook-side fix silently never ships. Check the path in

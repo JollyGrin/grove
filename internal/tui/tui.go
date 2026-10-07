@@ -24,6 +24,7 @@ import (
 	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/serve"
@@ -1826,13 +1827,11 @@ func (m Model) reviewRows() []*state.Task {
 	return append(fresh, marked...)
 }
 
-// doneBlurb extracts the agent's DONE paragraph for the review queue.
+// doneBlurb extracts the agent's DONE paragraph for the review queue —
+// one parser for every surface (hooks.ParseSentinel, grove-441).
 func doneBlurb(t *state.Task) string {
-	if i := strings.Index(t.LastMessage, "STATUS: DONE"); i >= 0 {
-		s := t.LastMessage[i:]
-		if j := strings.IndexAny(s, "—–-"); j >= 0 {
-			return strings.TrimSpace(strings.SplitN(s[j:], "\n", 2)[0])
-		}
+	if kind, text, ok := hooks.ParseSentinel(t.LastMessage); ok && kind == hooks.SentinelDone {
+		return text
 	}
 	return ""
 }

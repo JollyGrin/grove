@@ -169,7 +169,7 @@ type Task struct {
 	Effort      string `json:"effort,omitempty"`
 	SessionID   string `json:"claude_session_id,omitempty"`
 	Agent       string `json:"agent"`
-	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | none
+	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | done_unverified | none
 	Question    string `json:"question,omitempty"`
 	LastMessage string `json:"last_message,omitempty"`
 	Human       string `json:"human,omitempty"`
@@ -536,6 +536,8 @@ func (t *Task) Label() string {
 		return "dead"
 	case t.Agent == AgentIdle && t.Sentinel == "done":
 		return "idle ✓"
+	case t.Agent == AgentIdle && t.Sentinel == "done_unverified":
+		return "done?" // grove-441: DONE claimed, worktree says otherwise
 	case t.Agent == AgentIdle:
 		return "stalled?"
 	default:
@@ -552,7 +554,8 @@ func (t *Task) Label() string {
 //	● live        actively working
 //	⏸ needs you   waiting on a question / plan approval
 //	⚠ blocked     BLOCKED sentinel, needs a decision
-//	✔ done        agent reports done (PR likely following)
+//	✔ done        agent reports done (PR likely following; also an
+//	              unverified done — grove-441 — the label carries the "?")
 //	✗ stalled     dead/crashed, or idle with no STATUS sentinel
 func Glyph(agent, sentinel string) string {
 	switch {
@@ -562,7 +565,7 @@ func Glyph(agent, sentinel string) string {
 		return "⚠"
 	case agent == AgentDead:
 		return "✗"
-	case agent == AgentIdle && sentinel == "done":
+	case agent == AgentIdle && (sentinel == "done" || sentinel == "done_unverified"):
 		return "✔"
 	case agent == AgentIdle:
 		return "✗"

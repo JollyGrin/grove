@@ -24,6 +24,22 @@
 
 ## Now
 
+- [x] model-fit 09: Stop hook evidence gate + last-match sentinel
+      (grove-441, 2026-10-07, PR #446). `hooks.ParseSentinel` is the one
+      parser (hooks + TUI): LAST `STATUS:` line wins, tolerates
+      bold/underscore wrap, `—`/`–`/`-`/`:` separators and a bare
+      `STATUS: DONE`, skips the kickoff's own `<placeholder>` echo. The
+      Stop receiver checks a DONE claim against the worktree (`git
+      status`, upstream/ahead, `gh pr list` with a 5s timeout, skipped
+      without a remote): per-repo `done_gate: off|warn|block`, default
+      **warn** for one release (verdict as additive
+      `gate`/`gate_reason`/`gate_decision` data + notify, never blocks);
+      `block` prints `{"decision":"block",…}` and records sentinel
+      `done_unverified` (`gv ls` label `done?`), never on
+      `stop_hook_active`, capped at 2 consecutive per session
+      (`<state>/done-gate/<ticket>`), never when grove itself errors.
+      `e2e/dummy.sh` covers block/warn/last-match. Flip to `block` once a
+      release of warn verdicts looks right.
 - [x] model-fit 10: price table + tier classifier for the Claude 5.5
       family and Fable ids (grove-442, 2026-10-07). Explicit
       `claude-opus-5-5` ($4/$20, cache reads $0.20) and `claude-sonnet-5-5`
@@ -118,17 +134,6 @@
       refuses over an existing run.sh; records nothing. The lens (07)
       takes `s` too (modals return to it) and its SERVE line reads the
       same status. e2e/serve.sh drives the live cockpit, rail and lens.
-- [x] feature-trains 07: feature lens + cockpit `l` land modal + `m`
-      feature PR (grove-378, 2026-09-27, on `feature/feature-trains`).
-      `enter` on a focused feature opens `internal/tui/lens.go`'s
-      full-screen lens: TRAIN (every car, landed dimmed, est per car),
-      BRANCH (tip, behind base, feature PR, closes = landed cars), SERVE
-      (status `serve` or `no run.sh`), NEXT (pure `nextActions`: answer,
-      land, review, grab when `after` landed, rebase, feature PR). Row
-      keys hand off to the AGENTS handler with the cursor on the car's
-      task; modals return to the lens. `l` builds the land plan from the
-      fold + last PR poll (no network) and confirms before `feature.Land`
-      × `FinishTask`. All lens strings built in `assemble()`.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
