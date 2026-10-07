@@ -24,6 +24,22 @@
 
 ## Now
 
+- [x] model-fit 08: compaction over discard (grove-440, 2026-10-07).
+      Per-repo `autocompact: auto|100000–1000000` beside `claude:` →
+      `claude --autocompact N` on grab/adopt via `config.WithAutocompact`
+      (strip-then-inject, the grove-142 shape; default unset = no flag,
+      events untouched); `config.example.yaml` recommends 150000 on
+      Claude lanes, unset on 1M third-party lanes. The SessionStart
+      receiver prints a ground-truth re-orientation on `source: compact`
+      only (ticket + acceptance-criteria section from the provider with a
+      5s fetch timeout, `git log --oneline -8` + `git status --short`,
+      PR number/URL/body via 5s-bounded `gh pr view` with a git-only
+      upstream fallback, the STATUS contract) — never from the summary,
+      never non-zero, degrades per block on an unreadable worktree; the
+      grove-289 `compaction` event is reused unchanged. One "when
+      compacting, preserve …" line in root CLAUDE.md and the AGENTS.md
+      bootstrap template. `e2e/dummy.sh` asserts the flag exactly once /
+      absent / rejected; `e2e/plugin.sh` asserts the re-orientation.
 - [x] model-fit 09: Stop hook evidence gate + last-match sentinel
       (grove-441, 2026-10-07, PR #446). `hooks.ParseSentinel` is the one
       parser (hooks + TUI): LAST `STATUS:` line wins, tolerates
@@ -118,22 +134,6 @@
       `GROVE_READY <path>`. `e2e/plugin.sh` teardown race fixed (wait for
       the isolated socket, retry the rm). Merge to main PROPOSED in the PR,
       not performed.
-- [x] feature-trains 10: serve in the cockpit — `s`, review modal,
-      `gv serve init` (grove-381, 2026-09-27, on `feature/feature-trains`).
-      `s` on the selected FEATURES row: trusted run.sh → `startServe`
-      (09's path, split out of `cmdServe`, no TTY, no stdout) and the
-      READY value lands in the status line; untrusted/changed → review
-      modal (script scrollable with ESC/bidi/control bytes rendered
-      visibly, sha256, `y` appends `run_script_trusted` for the reviewed
-      sha then serves; `esc` cancels, no event); a live `▶ <slug>` window
-      → stop confirm. Rail title shows `serve ▶ <url> (behind tip)` /
-      `stopped` / `untrusted` / `–`, fed by the 30s feature pass plus one
-      pass after each start/stop — no new poll. `gv serve init` seeds a
-      fresh cockpit orchestrator pane (`spawnOrchestratorBrief`, the
-      `gv orchestrator new --brief` launcher) with `serve.InitPrompt`;
-      refuses over an existing run.sh; records nothing. The lens (07)
-      takes `s` too (modals return to it) and its SERVE line reads the
-      same status. e2e/serve.sh drives the live cockpit, rail and lens.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

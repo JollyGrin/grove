@@ -36,6 +36,19 @@ changes the behavior.
   env has no reliable nesting marker (`CLAUDE_CODE_CHILD_SESSION=1` also
   shows up at the top level).
 - SessionStart `source` is one of `startup | resume | clear | compact`.
+  **`compact` fires after an auto or manual compaction, and plain-text
+  stdout from a SessionStart hook is added to Claude's context** (hooks
+  reference). Grove's receiver prints a ground-truth re-orientation on
+  that source only — ticket + acceptance criteria from the provider, `git
+  log`/`git status` in the worktree, the PR body via a 5s-bounded `gh pr
+  view` with a git-only fallback — never from the summary (grove-440);
+  `startup`/`resume`/`clear` print nothing. The project-root CLAUDE.md
+  survives compaction on its own: Claude Code re-reads it from disk and
+  re-injects it after `/compact` (memory docs), so a "when compacting,
+  preserve …" line there is the advisory half and the hook is the
+  deterministic half. `claude --autocompact <auto|100k–1M tokens>` caps
+  the window (`--help`, 2.1.292); grove passes a repo's `autocompact:`
+  through on grab/adopt.
 - **A Stop hook can refuse the stop**: print `{"decision":"block","reason":
   "…"}` on stdout (exit 0) and Claude Code shows `reason` to the model,
   which continues the turn instead of ending it. The re-entry Stop then
@@ -44,8 +57,9 @@ changes the behavior.
   done gate: never on `stop_hook_active`, at most 2 consecutive blocks
   per session, counter in `<state>/done-gate/<ticket>`, reset by any
   non-DONE stop). Exit code 2 + stderr is the other block form; grove
-  uses the JSON so the exit code stays 0 on every path. Only Stop's
-  stdout is read — the other receivers print nothing (grove-441). The
+  uses the JSON so the exit code stays 0 on every path. Stop's stdout is
+  read as a decision; SessionStart's is plain context (the compact
+  re-orientation above) — the other receivers print nothing. The
   decision/`stop_hook_active` shapes are from the hooks reference and
   the captured 2.1.283 Stop payload; the first live `done_gate: block`
   run is where to confirm the model actually continues.

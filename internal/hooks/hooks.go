@@ -67,10 +67,12 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 	return ReceiveTo(candidates, event, stdin, io.Discard)
 }
 
-// ReceiveTo is Receive with the hook's stdout: the only thing ever
-// written there is the Stop done gate's block decision (grove-441) —
-// every other path stays silent, so Claude Code reads no decision and
-// the stop proceeds. The exit code is 0 on every path regardless.
+// ReceiveTo is Receive with the hook's stdout. Two paths write there:
+// the Stop done gate's block decision (grove-441) and the SessionStart
+// re-orientation after a compaction (grove-440, plain text Claude Code
+// adds to the model's context) — every other path stays silent, so
+// Claude Code reads no decision and the stop proceeds. The exit code is 0
+// on every path regardless.
 func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.Writer) error {
 	var p Payload
 	if err := json.NewDecoder(stdin).Decode(&p); err != nil {
@@ -99,11 +101,17 @@ func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.
 	case "session-start":
 		if p.Source == "compact" {
 			// A compact restart is not a new session: no glyph change, no
-			// session_started — just the compaction count (grove-289).
-			return state.Append(stateDir, state.Event{
+			// session_started — just the compaction count (grove-289), then
+			// the ground-truth re-orientation on stdout (grove-440). The
+			// event lands first so a slow lookup can never lose it.
+			err := state.Append(stateDir, state.Event{
 				Type: state.EvCompaction, Ticket: task.Ticket,
 				Data: map[string]string{"session_id": p.SessionID},
 			})
+			if _, werr := io.WriteString(stdout, reorientation(root, task, p)); werr != nil && err == nil {
+				err = werr
+			}
+			return err
 		}
 		glyphWorker(task, state.Glyph(state.AgentWorking, ""))
 		return state.Append(stateDir, state.Event{

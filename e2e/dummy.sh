@@ -565,6 +565,31 @@ grep -q '→ effort low (this worker only)' "$SCRATCH/grab-effort-flag.out" || f
 grep -q -- '--effort medium' "$SCRATCH/effort-launch.txt" && fail "the repo's effort: medium survived the --effort low pin" || true
 [ "$(grep -o -- '--effort' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "the launch line must carry --effort exactly once"; }
 
+# --- autocompact window (grove-440) ---
+say "autocompact: unset → no --autocompact on the launch line, and no event ever carries it"
+launch_line task-003
+grep -q -- '--autocompact' "$SCRATCH/effort-launch.txt" && { cat "$SCRATCH/effort-launch.txt"; fail "an unset autocompact: still put --autocompact on the launch line"; } || true
+
+say "autocompact: a repo autocompact: 150000 launches with --autocompact 150000 exactly once"
+mdtask task-010 "autocompact from config"
+perl -pi -e 's/^(\s*)effort: medium$/$1effort: medium\n$1autocompact: 150000/' "$WCFG"
+grep -q 'autocompact: 150000' "$WCFG" || fail "repo autocompact key not written"
+"$GV" grab task-010 > "$SCRATCH/grab-autocompact.out"
+grep -q '→ autocompact 150000 (repo default)' "$SCRATCH/grab-autocompact.out" || fail "grab did not report the repo's autocompact window"
+launch_line task-010
+[ "$(grep -o -- '--autocompact 150000' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "autocompact: 150000 must reach the launched command exactly once"; }
+[ "$(grep -o -- '--autocompact' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "the launch line must carry --autocompact exactly once"; }
+grep -q -- '--effort medium' "$SCRATCH/effort-launch.txt" || fail "autocompact must stack with the repo's effort: default"
+grep -q '"autocompact":' "$GROVE_STATE_DIR/events.jsonl" && fail "autocompact is a launch-only passthrough: no event may carry it" || true
+
+say "autocompact: a value claude would refuse fails at config load, before anything exists"
+perl -pi -e 's/^(\s*)autocompact: 150000$/$1autocompact: 150k/' "$WCFG"
+mdtask task-011 "autocompact typo"
+("$GV" grab task-011 2>&1 || true) > "$SCRATCH/grab-autocompact-bad.out"
+grep -q 'autocompact "150k"' "$SCRATCH/grab-autocompact-bad.out" || { cat "$SCRATCH/grab-autocompact-bad.out"; fail "grab accepted an autocompact value claude would refuse"; }
+ls -d "$WT"/task-011-* >/dev/null 2>&1 && fail "a rejected autocompact: still created a worktree" || true
+perl -pi -e 's/^(\s*)autocompact: 150k$/$1autocompact: 150000/' "$WCFG"
+
 say "effort dial: an unknown level fails before anything exists"
 mdtask task-004 "effort typo"
 ("$GV" grab task-004 --effort ultra 2>&1 || true) > "$SCRATCH/grab-effort-bad.out"

@@ -72,6 +72,9 @@ changed script always re-prompts, never runs silently.
   everything; run it before merging anything that touches the task
   lifecycle. `e2e/all.sh` runs every suite (no CI covers them) — run it
   before merging anything that touches the TUI, tmux, or the lifecycle.
+- When compacting, always preserve the list of modified files, the
+  task's acceptance criteria, the gate command above, the PR URL, and
+  the `STATUS:` line contract.
 
 ## Hard rules (provider-neutral)
 

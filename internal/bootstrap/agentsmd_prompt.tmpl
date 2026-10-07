@@ -36,6 +36,11 @@ Anything that would surprise a competent newcomer (generated files,
 implicit ordering, env vars needed, slow tests). Omit the section if you
 found none.
 
+Close the file with this one line, verbatim (it tells a coding agent
+what must survive a context compaction): "When compacting, always
+preserve the list of modified files, the task's acceptance criteria, the
+test command above, the PR URL, and the STATUS: line contract."
+
 Rules: short enough to read in one sitting — every coding agent in this
 repo loads it into every session, so each line is paid on every turn;
 every claim must be verifiable from the repo contents; terse and
