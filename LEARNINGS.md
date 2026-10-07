@@ -134,6 +134,7 @@
 
 ## Go / CLI
 
+- **2026-10-07 · App-token 403 cascade (grove-451).** One bundled `--json` field took down two unrelated features: a GitHub App token can't read `statusCheckRollup`, so the single `gh pr list` that served both the ls/TUI CI column and the `gv done` merge gate failed as a whole — CI columns went blank AND every `gv done` on a genuinely merged ticket reported "no PR found" and demanded `--force`. The gate never looked at CI; it just rode the same query. Rule: a verdict-bearing query asks only for the fields its verdict needs; display queries degrade field-by-field (retry without the privileged field, render unknown) rather than failing the fetch; and a command failure must never be reported with the words of a successful empty result.
 - **2026-10-07 · `--model` was never recorded on the task; only
   `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
   the `task_created`/`task_adopted` data know a worker's PROFILE, but a
@@ -157,29 +158,6 @@
   nothing on grab, and every car silently forks from main. Pass
   `--label <the issues' label>` whenever the slug differs from it; check
   with `gh issue view <n> --json labels` first.
-
-- **2026-09-26 · A shared-repo host turns "orphan" into "every sibling
-  workspace's live worker"** (grove-350, seen on groveremote). `gv audit`'s
-  `scanOrphans` walked every repo in `cfg.Repos` and subtracted only the
-  CALLING workspace's own tasks — fine on the Mac, where repos are
-  per-workspace, but wrong on a host like groveremote where the repo table
-  lives in the GLOBAL `~/.config/grove/config.yaml` and every workspace
-  deep-merge-inherits all of it (waterhouse/unbrewed/deanlol, see
-  `waterhouse-on-groveremote` memory). A worktree another workspace is
-  actively running is then "untracked" from the auditor's point of view:
-  32 of 36 reported orphans in the `runelite` workspace were live,
-  DIRTY, worker-attached trees. Fixed by unioning the tracked set with
-  every OTHER registered+alive workspace's tasks (`workspace.ActiveWorktrees`,
-  read via `state.Peek` — same fresh-not-derived read `FindTicket` already
-  used for ticket routing) and the legacy global state dir. `scanProcesses`
-  turned out NOT to share the bug: its `reapable` set only ever keys off
-  tickets already present in the calling workspace's own tasks map, and a
-  ticket has exactly one owning workspace (grove-191 routing), so a
-  sibling's worktree can never appear there. The registry read itself
-  stays at the `cmd/gv` call site, not inside `internal/audit` — mirrors
-  `FindTicket`'s shape (registry loaded by the caller, matching logic takes
-  a plain `[]workspace.Workspace`) so the audit package stays unit-testable
-  without a real `$HOME/.config/grove/registry.yaml`.
 
 - **2026-09-26 · a flag injected after the command head loses to the same
   flag already in the configured command** (grove-142). `config.WithModel`
