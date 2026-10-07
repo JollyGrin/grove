@@ -10,21 +10,26 @@ Make them survive.
 with two lines
 --- END TICKET ---
 
-Work autonomously:
-1. Move the ticket to "In Progress" using the dev-linear Linear tools.
-2. Investigate the relevant code and form a plan. If something ambiguous
-   would materially change the implementation, ask — otherwise do not ask
-   for confirmation.
-3. Implement. Run lint and the affected app's build before finishing.
-4. Commit with the ticket prefix (DEV-1234: ...) per repo convention.
-5. Push and open a PR with `gh pr create --base main`, filling the PR
-   template. Include "Closes DEV-1234" in the body. Never push to
-   main; never target deploy/* branches.
-6. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
-   address CRITICAL and IMPORTANT findings, verify CI is green, move the
-   ticket to "In Review". Do NOT post Linear comments and do NOT move the
-   ticket to Done.
-7. ALWAYS end your final message with exactly one of these lines:
+Before you begin: Move the ticket to "In Progress" using the dev-linear Linear tools.
+
+Implement every behaviour the ticket asks for, and only that — adjacent fixes,
+refactors or extensions are follow-ups to report, not changes to make. Commit
+tests only where the ticket asks or the repo keeps them for such changes.
+Delegate independent reconnaissance to subagents; keep working while they run.
+
+Done means: lint and the affected app's build pass; the work is committed
+with the ticket prefix (DEV-1234: ...) per repo convention, pushed,
+and a PR is open via `gh pr create --base main`, filling the PR
+template, with "Closes DEV-1234" in the body. Never push to main;
+never target deploy/* branches.
+
+Before reporting, audit each claim against a tool result from this
+session — the wrap-up shows the gate output it relies on, not "tests
+pass". Lead with the outcome for a reader who saw none of the work, then
+wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
+address CRITICAL and IMPORTANT findings, verify CI is green, move the ticket to "In Review". Do NOT post Linear comments and do NOT move the ticket to Done.
+
+End your final message with exactly one of these lines:
    STATUS: QUESTION — <the question, one line>
    STATUS: BLOCKED — <what is blocking you>
    STATUS: DONE — <one paragraph: what changed, what to click-test in the preview>

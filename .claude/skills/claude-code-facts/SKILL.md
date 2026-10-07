@@ -191,6 +191,25 @@ height, and the box itself).
   a long scratchpad path overflows the socket name) when the chrome moves
   again.
 
+## System prompt (what the harness already says, so kickoffs need not)
+
+- **Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy block into
+  the system prompt itself** — verified 2026-10-07 on three real worker
+  transcripts (grove-435/441/442): the `prompt_snapshot` attachment
+  before the first assistant line contains "You are operating
+  autonomously. The user is not watching in real time and cannot answer
+  questions mid-task, so asking 'Want me to…?' or 'Shall I…?' will block
+  the work …" plus the "check your last paragraph" and "Delivering work"
+  paragraphs from the migration guide. So a kickoff template's own
+  "do not ask for confirmation" line is a duplicate (grove-433 dropped it);
+  re-check with `grep -c 'operating autonomously'` on a worker transcript
+  if the Claude Code major version changes, and only then put the
+  paragraph back verbatim.
+- The `prompt_snapshot` attachment is the cheap way to answer "does the
+  harness already say X": `python3 -I` over the transcript, filter
+  `type == "attachment"` and `attachment.type == "prompt_snapshot"`, grep
+  the JSON — no proxy needed (docs/plans/2026-09-28-boot-cost-analytics-investigation.md).
+
 ## Costs
 
 - Transcript pricing follows ccusage's rules: dedup by

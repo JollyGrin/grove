@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -40,9 +41,12 @@ var goldenTask = &provider.Task{
 	},
 }
 
-// TestLinearGoldenParity is the extraction guarantee: for the linear
-// provider, the generalized render is byte-identical to the ovs-era output
-// (empty learnings corpus, same fixture).
+// TestLinearGoldenParity pins the linear set's full render against
+// reviewed goldens. Until grove-433 the goldens were the ovs-era output
+// (the extraction guarantee); grove-433 rewrote the autonomous templates to
+// goals and constraints (docs/seed-manifest.md records the divergence) and
+// the goldens now pin that shape — regenerate deliberately, review line by
+// line, never to make a red test green.
 func TestLinearGoldenParity(t *testing.T) {
 	for golden, mode := range map[string]Mode{
 		"golden_linear_default.txt": ModeDefault,
@@ -72,7 +76,7 @@ func TestRenderDefaultUnchanged(t *testing.T) {
 		"DEV-99: Fix the frobnicator",
 		"It frobs when it should nicate.",
 		"[dean]: see screenshot",
-		"Work autonomously:",
+		"Before you begin:",
 		`Move the ticket to "In Progress" using the dev-linear Linear tools.`,
 		sentinelContract,
 	} {
@@ -120,7 +124,7 @@ func TestRenderManualUnchanged(t *testing.T) {
 	if !strings.Contains(got, "WAIT for my instructions") {
 		t.Error("manual render missing wait instruction")
 	}
-	if strings.Contains(got, "Work autonomously") {
+	if strings.Contains(got, "Done means:") || strings.Contains(got, "STATUS: DONE") {
 		t.Error("manual render must not contain the autonomous instructions")
 	}
 }
@@ -280,5 +284,69 @@ func TestRenderNamesThePRBase(t *testing.T) {
 				t.Errorf("%s: missing feature paragraph verbatim, want:\n%s\ngot:\n%s", c.name, want, got)
 			}
 		})
+	}
+}
+
+// sentinelBlock is the STATUS contract exactly as every autonomous
+// template has carried it since the ovs era: three lines, three-space
+// indent, this order, last. The DONE placeholder differs per template set.
+const (
+	sentinelBlockMD = "   STATUS: QUESTION — <the question, one line>\n" +
+		"   STATUS: BLOCKED — <what is blocking you>\n" +
+		"   STATUS: DONE — <one paragraph: what changed and how you verified it>\n"
+	sentinelBlockLinear = "   STATUS: QUESTION — <the question, one line>\n" +
+		"   STATUS: BLOCKED — <what is blocking you>\n" +
+		"   STATUS: DONE — <one paragraph: what changed, what to click-test in the preview>\n"
+)
+
+// TestRenderEndsWithStatusSentinels (grove-433): every autonomous render —
+// both template sets, default and pickup, with and without a feature train
+// — ends with the three STATUS lines byte-identical to the pre-rewrite
+// templates, in that order, exactly once; and carries no numbered step
+// script, no "do not ask for confirmation" hedge (Claude Code injects the
+// autonomy block itself — .claude/skills/claude-code-facts), and no ALLCAPS
+// ALWAYS. The grep-level acceptance criteria of grove-433, enforced.
+func TestRenderEndsWithStatusSentinels(t *testing.T) {
+	stepLine := regexp.MustCompile(`(?m)^\s*[0-9]+\. `)
+	cases := []struct {
+		name  string
+		kind  string
+		task  *provider.Task
+		verbs provider.Verbs
+		mode  Mode
+		want  string
+	}{
+		{"linear default", "linear", testTask, linearVerbs, ModeDefault, sentinelBlockLinear},
+		{"linear pickup", "linear", testTask, linearVerbs, ModePickup, sentinelBlockLinear},
+		{"markdown default", "markdown", mdTask, mdVerbs, ModeDefault, sentinelBlockMD},
+		{"markdown pickup", "markdown", mdTask, mdVerbs, ModePickup, sentinelBlockMD},
+	}
+	for _, c := range cases {
+		for _, f := range []struct{ base, feature string }{{"main", ""}, {"feature/x", "x"}} {
+			name := c.name
+			if f.feature != "" {
+				name += "/feature"
+			}
+			t.Run(name, func(t *testing.T) {
+				got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", f.base, f.feature)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.HasSuffix(got, c.want) {
+					t.Errorf("render must END with the sentinel block, got tail:\n%s", got[max(0, len(got)-300):])
+				}
+				if n := strings.Count(got, "STATUS: DONE"); n != 1 {
+					t.Errorf("STATUS: DONE must appear exactly once, got %d", n)
+				}
+				if m := stepLine.FindString(got); m != "" {
+					t.Errorf("render carries a numbered step line %q — the template states goals, not choreography", m)
+				}
+				for _, banned := range []string{"do not ask for confirmation", "ALWAYS", "Work autonomously"} {
+					if strings.Contains(got, banned) {
+						t.Errorf("render carries dropped wording %q", banned)
+					}
+				}
+			})
+		}
 	}
 }

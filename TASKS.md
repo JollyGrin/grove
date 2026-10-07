@@ -24,6 +24,19 @@
 
 ## Now
 
+- [x] model-fit 01: kickoff templates — goals and constraints, not
+      choreography (grove-433, 2026-10-07, PR #444). All four autonomous
+      templates (`md_default`, `md_pickup`, `default`, `pickup`) drop the
+      1–7 step script, the ask/do-not-ask hedge (Claude Code 2.1.292
+      injects the Fable 5.1 autonomy block itself — verified in
+      `prompt_snapshot`, see claude-code-facts), the ~3-files subagent
+      heuristic, the duplicate "never push to base" and `ALWAYS`; they
+      state the task, the contract (start verb, commit prefix, `gh pr
+      create --base`, feature paragraph), what done means, and add
+      evidence / scope / delegation / wrap-up re-grounding sentences from
+      the migration guide. STATUS lines byte-identical and last, pinned by
+      `TestRenderEndsWithStatusSentinels`; linear goldens regenerated
+      (seed-manifest row). Manual templates untouched. A/B is #434.
 - [x] Guidance-surface diet (grove-275, 2026-09-05): measured what lands in
       every session and trimmed it without dropping a rule. Always-resident
       bytes (root CLAUDE.md + orchestrator seed) 24,474 → 17,340 (−29%):
@@ -116,17 +129,6 @@
       the label degrades to the tally, then a bare rule — never `…`.
       Reads `featRow` (now carrying `trellis` + car tickets) built in
       `assemble()`; no features / fx=off stay byte-identical.
-- [x] feature-trains 06: cockpit FEATURES rail panel + `TRAIN` column +
-      `tab` focus (grove-377, 2026-09-27, on `feature/feature-trains`).
-      Panel between header and AGENTS only while a feature is open
-      (title `landed/total ↓N <base> serve – est`, rail `·●◆✓⬢ ▷ base`,
-      issue labels, amber hint on the selected one); ≤3 expanded +
-      `+N more`, collapses to title+strip under 12 spare rows. Status
-      is computed in `assemble()` (live car states each refresh) merged
-      with a `featuresCmd` pass that rides the 30s PR beat / `r` / a
-      changed feature set — no new poll. Wiring shared with `gv feature
-      ls` as `feature.LiveInput`. No-feature frames pinned by goldens
-      (`internal/tui/testdata`). `enter/l/m` on a feature: 07; `s`: 10.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

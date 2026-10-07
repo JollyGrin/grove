@@ -7,28 +7,34 @@ You are picking up Linear ticket {{.Identifier}}: {{.Title}}
 {{end}}--- END TICKET ---
 
 An existing branch already carries prior work on this ticket (a previous
-session was interrupted). Do NOT start from scratch:
-1. Read the branch state first: `git log origin/main..HEAD`, the diff
-   against {{.Base}}, and — if a PR exists (`gh pr view`) — its
-   description, CI state, and unresolved review threads.
-2. Verify the ticket's current Linear status; move it to "In Progress"
-   via the dev-linear Linear tools only if it isn't already there or
-   further.
-3. Continue the work from where it stopped. If the branch state
-   contradicts the ticket or you cannot tell what remains, ask —
-   otherwise do not ask for confirmation.
-4. Commit with the ticket prefix ({{.Identifier}}: ...); push to the same
-   branch. Open a PR with `gh pr create --base {{.Base}}` only if none
-   exists. Never push to main; never target deploy/* branches.
+session was interrupted). Read `git log origin/main..HEAD`, the diff
+against {{.Base}} and — if a PR exists (`gh pr view`) — its description,
+CI state and unresolved review threads before changing anything, then
+continue from where it stopped. Verify the ticket's current Linear
+status; move it to "In Progress" via the dev-linear Linear tools only if
+it isn't already there or further.
+
+Implement every behaviour the ticket asks for, and only that — adjacent fixes,
+refactors or extensions are follow-ups to report, not changes to make. Commit
+tests only where the ticket asks or the repo keeps them for such changes.
+Delegate independent reconnaissance to subagents; keep working while they run.
+
+Done means: the work is committed with the ticket prefix
+({{.Identifier}}: ...) and pushed to the same branch, with a PR open —
+`gh pr create --base {{.Base}}` only if none exists. Never push to main;
+never target deploy/* branches.
 {{if .Feature}}
 This task belongs to feature `{{.Feature}}`. Your PR targets
 `{{.Base}}`, not main. If you must catch up, rebase only on
 `origin/{{.Base}}` — never on main.
-{{end}}5. Wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
-   address CRITICAL and IMPORTANT findings, verify CI is green, move the
-   ticket to "In Review". Do NOT post Linear comments and do NOT move the
-   ticket to Done.
-6. ALWAYS end your final message with exactly one of these lines:
+{{end}}
+Before reporting, audit each claim against a tool result from this
+session — the wrap-up shows the gate output it relies on, not "tests
+pass". Lead with the outcome for a reader who saw none of the work, then
+wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
+address CRITICAL and IMPORTANT findings, verify CI is green, {{.Verbs.Review}}
+
+End your final message with exactly one of these lines:
    STATUS: QUESTION — <the question, one line>
    STATUS: BLOCKED — <what is blocking you>
    STATUS: DONE — <one paragraph: what changed, what to click-test in the preview>
