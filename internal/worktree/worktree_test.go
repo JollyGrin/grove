@@ -139,3 +139,20 @@ func TestFindByName(t *testing.T) {
 		t.Error("expected nil for missing worktree")
 	}
 }
+
+func TestParseWorktreeListKeepsSlashedBranch(t *testing.T) {
+	// grove-452 item 5: filepath.Base turned refs/heads/feat/login into
+	// "login"; the audit orphan report then named a branch that doesn't
+	// exist. Only the refs/heads/ prefix comes off.
+	input := `worktree /home/user/.worktrees/repo/login
+branch refs/heads/feat/login
+
+`
+	wts := parseWorktreeList(input)
+	if len(wts) != 1 {
+		t.Fatalf("got %d worktrees, want 1", len(wts))
+	}
+	if wts[0].Branch != "feat/login" {
+		t.Errorf("Branch = %q, want %q", wts[0].Branch, "feat/login")
+	}
+}

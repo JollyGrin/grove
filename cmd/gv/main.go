@@ -1726,13 +1726,7 @@ func cmdGrab(args []string) error {
 		cleanupFailedGrab(repo.Path, wt.Path, name, promptPath)
 	}()
 
-	for _, envFile := range []string{".env", ".envrc", ".env.local"} {
-		src := filepath.Join(repo.Path, envFile)
-		if data, err := os.ReadFile(src); err == nil {
-			_ = os.WriteFile(filepath.Join(wt.Path, envFile), data, 0o600)
-			fmt.Printf("→ copied %s\n", envFile)
-		}
-	}
+	copyEnvFiles(repo.Path, wt.Path, os.Stdout)
 
 	promptMode := kickoff.ModeDefault
 	if *manual {
@@ -2612,12 +2606,37 @@ func age(t time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
+// truncateLine keeps the first line and caps it at n RUNES — a byte slice
+// could split a multibyte codepoint and end `gv ls` previews in mojibake
+// (grove-131/452).
 func truncateLine(s string, n int) string {
 	s = strings.SplitN(s, "\n", 2)[0]
-	if len(s) > n {
-		return s[:n] + "…"
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// envFiles are the untracked secret files a fresh worktree needs copied
+// from the repo root before the worker starts.
+var envFiles = []string{".env", ".envrc", ".env.local"}
+
+// copyEnvFiles copies each present env file from src to dst, reporting
+// each outcome on out. A failed WRITE is reported as such — it used to be
+// discarded and announced as "copied", leaving the worker to fail
+// mysteriously without its secrets (grove-131/452).
+func copyEnvFiles(src, dst string, out io.Writer) {
+	for _, envFile := range envFiles {
+		data, err := os.ReadFile(filepath.Join(src, envFile))
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dst, envFile), data, 0o600); err != nil {
+			fmt.Fprintf(out, "→ failed to copy %s: %v\n", envFile, err)
+			continue
+		}
+		fmt.Fprintf(out, "→ copied %s\n", envFile)
+	}
 }
 
 // --- audit ---
@@ -3839,13 +3858,7 @@ func cmdAdopt(args []string) error {
 		}
 		wtPath = wt.Path
 		freshWorktree = true
-		for _, envFile := range []string{".env", ".envrc", ".env.local"} {
-			src := filepath.Join(repo.Path, envFile)
-			if data, err := os.ReadFile(src); err == nil {
-				_ = os.WriteFile(filepath.Join(wtPath, envFile), data, 0o600)
-				fmt.Printf("→ copied %s\n", envFile)
-			}
-		}
+		copyEnvFiles(repo.Path, wtPath, os.Stdout)
 		fmt.Printf("→ worktree %s\n", wtPath)
 	} else {
 		fmt.Printf("→ reusing worktree %s\n", wtPath)
