@@ -281,7 +281,7 @@ rather than silently trimming. Then stop and wait.
 ```bash
 gv grab <ticket> --repo <repo> --profile <profile>            # a lane
 gv grab <ticket> --repo <repo> --profile <p> --model <slug>   # lane + model pin
-gv grab <ticket> --repo <repo> --model claude-sonnet-5        # Claude, cheaper tier
+gv grab <ticket> --repo <repo> --model claude-sonnet-5-5      # Claude, cheaper tier
 gv grab <ticket> --repo <repo> --profile <p> --host <host>    # on the remote box
 ```
 
@@ -342,6 +342,12 @@ that matter are **merge rate** and **steers**. A model 20× cheaper that
 halves the merge rate is a bad trade; one 2× dearer that merges everything
 is a bargain. Field evidence: a GLM-5.3 batch merged 2/4, with half the
 spend burned on tickets that produced no PR at all.
+
+Before moving a ticket off the Claude lane at all, try lower effort on
+it: `gv grab <ticket> --repo <repo> --effort medium` (`low` for mechanical
+work) keeps the default model and its prompt cache, and on the newest
+model usually matches the previous generation at high effort. A lane is
+for a budget that is actually capped, not for a cheaper request.
 
 ## Feedback loop
 

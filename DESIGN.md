@@ -432,6 +432,25 @@ The one place Grove's *binary* owns a sliver of judgment, because routing must
 be cheap, synchronous, pre-dispatch, and auditable. Everything here is behind
 an abstract `Router`; the shipped implementation is `ClaudeTiers`.
 
+> **2026-10-07 — superseded by effort-first on one model (grove-436).**
+> The Haiku/Sonnet/Opus tier cascade in §7.2–§7.4 was never built (roadmap:
+> Parked) and is no longer the plan. The dial that replaced it is
+> `--effort` (grove-435): a ticket runs on the repo's default model at
+> `low|medium|high|xhigh|max`, and a model or lane change
+> (`--model`/`--profile`) is the second lever, pulled only for lane
+> budgets. Two reasons, both from Anthropic's published guidance (the
+> `claude-api` skill's effort section): lower effort on the newest model
+> often matches or exceeds the previous generation at high effort, and
+> prompt caches are model-scoped — one model means one cache namespace,
+> while a cascade forfeits cache reuse at every tier switch. Cost is
+> judged per completed task, not per request. The baseline the dial moves
+> from is Claude Code's per-model default
+> (https://code.claude.com/docs/en/model-config): Fable 5.1 `high`, Opus
+> 5.5 and Sonnet 5.5 `medium`. The `Router` seam stays as described for
+> lanes (`openrouter`, flat-rate plans — the model-lanes skill); the
+> `claude-tiers` implementation and the §7.4 cascade are not planned.
+> Nothing routes automatically either way: the operator names the dial.
+
 ### 7.1 The Router interface
 
 - `Route(task, signals) → Plan{tier, splitStrategy, budgetHint}` — pure

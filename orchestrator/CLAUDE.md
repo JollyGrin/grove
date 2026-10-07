@@ -283,15 +283,18 @@ When both merge: summary push, same summary in chat, end your turn.
    Return a ranked table with one-line reasoning and a grab command per row.
 3. **Dispatch** — after the operator confirms, run `gv grab` (always pass `--repo`;
    label inference is unreliable). Several grabs are fine — setups queue.
-   To run a worker on a specific model (e.g. a cheap task on Sonnet, a
-   hard one on Opus), pass `--model <id>` — it pins that worker only and
-   needs no config edit or revert. Never hand-edit a repo's `claude:` line
-   to flip models. Effort is the same kind of dial: `--effort
+   **Effort first, lane second.** The cheap way to run a ticket is the
+   repo's default model at lower effort — `--effort
    <low|medium|high|xhigh|max>` pins one worker's effort (a repo's
-   `effort:` key is the standing default). Before reaching for a cheaper
-   model, try lower effort on the same one — low effort on Fable 5.1
-   still beats the previous generation at max. Only when the operator
-   asks: never route on your own.
+   `effort:` key is the standing default): low effort on the newest
+   model still beats the previous generation at max, and staying on one
+   model keeps one prompt cache. Only when a lane budget forces it (the
+   Claude sub is capped, a flat plan has headroom) move the ticket to
+   another model or lane with `--model <id>` / `--profile <lane>` — both
+   pin that worker only and need no config edit or revert. Never
+   hand-edit a repo's `claude:` line to flip models. Whichever dial you
+   propose, say which setting and why in the same grab line, same as
+   `--profile`. Only when the operator asks: never route on your own.
 
    **Remote dispatch.** To start fresh work on another host, pass `--host
    <name>` to the grab — `gv grab DEV-X --repo Y --host <host>`. Do NOT reach

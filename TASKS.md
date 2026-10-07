@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-436: model-fit 04 — route by effort before model: rote test dispatches `--effort medium` on the default model (lane second), seed duty 3 "effort first, lane second" + tripwire, DESIGN §7 dated note superseding the tier cascade (cache-namespace reason), model-lanes economics line; `claude-sonnet-5` → `claude-sonnet-5-5` (2026-10-07)
 - [x] model-fit 05: workers get the auto-memory surface (grove-437,
       2026-10-07, PR #449). Every autonomous kickoff (both sets, default +
       pickup) carries one paragraph on the line between the three memory
