@@ -24,6 +24,21 @@
 
 ## Now
 
+- [x] model-fit 03: `--effort` as a first-class dial (grove-435,
+      2026-10-07). `gv grab|adopt|orchestrator new --effort
+      <low|medium|high|xhigh|max>` beside `--model`, a per-repo `effort:`
+      key as the standing default (flag wins), `config.WithEffort`
+      strip-then-inject (grove-142 lesson), the level validated before
+      anything exists. Recorded on the task (`Task.Effort`, additive
+      `effort` in `gv ls --json` and the `task_created`/`task_adopted`
+      data, a 15th `effort` ledger column — the 13/14-column rows still
+      read). Adopt keeps the grabbed pin unless told otherwise.
+      `gv doctor` row `effort-override` warns on
+      `CLAUDE_CODE_EFFORT_LEVEL` in the launching env and `maxEffortLevel`
+      in any settings scope that reaches a worker. Seed teaches the flag
+      (`orchestrator/seed_test.go` tripwire); `e2e/dummy.sh` asserts the
+      launch line carries it exactly once, `e2e/plugin.sh` the row field.
+      No automatic routing — the operator pins.
 - [x] model-fit 01: kickoff templates — goals and constraints, not
       choreography (grove-433, 2026-10-07, PR #444). All four autonomous
       templates (`md_default`, `md_pickup`, `default`, `pickup`) drop the
@@ -119,16 +134,6 @@
       `gv feature`/`gv grab --feature` machinery; root CLAUDE.md gains a
       "Feature trains" section. docs/plugins.md contract rows from 01/02/
       04/05/09 verified present, no gap found.
-- [x] feature-trains 08: trellis in the scene (grove-379, 2026-09-27,
-      on `feature/feature-trains`). At fx ≥ calm a feature's plants stand
-      together, in rail order, under a `▁ <slug> landed/total ▁▁` bracket
-      (just above the marker row; shares the ambient/marker row at
-      compact/strip, markers + fairy win, ambient yields). Landed-and-done
-      cars leave the orchard for their trellis as ♠; queued cars are `.`
-      seeds. Glyphs only from the locked set (soil rule + grass tuft);
-      the label degrades to the tally, then a bare rule — never `…`.
-      Reads `featRow` (now carrying `trellis` + car tickets) built in
-      `assemble()`; no features / fx=off stay byte-identical.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

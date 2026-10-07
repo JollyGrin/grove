@@ -651,3 +651,40 @@ func TestSubLaneRow(t *testing.T) {
 		t.Errorf("no key = %+v, want warn", st)
 	}
 }
+
+// grove-435: the effort-override checker reads only the scopes that
+// reach a worker — each worker command's settings.json and each repo's
+// project-scope .claude/settings{,.local}.json — and ignores a file that
+// is absent or malformed.
+func TestEffortSettingsPaths(t *testing.T) {
+	cfg := &config.Config{Repos: map[string]*config.Repo{
+		"b": {Path: "/repos/b", Claude: "claude"},
+		"a": {Path: "/repos/a", Claude: "ccwork --dangerously-skip-permissions"},
+	}}
+	env := Env{
+		Cfg:               cfg,
+		Getenv:            func(string) string { return "" },
+		HookSettingsPaths: func([]string) []string { return []string{"/home/u/.claude/settings.json"} },
+		ReadFile: func(name string) ([]byte, error) {
+			switch name {
+			case "/repos/a/.claude/settings.json":
+				return []byte(`{"maxEffortLevel":"high"}`), nil
+			case "/repos/b/.claude/settings.local.json":
+				return []byte(`not json`), nil
+			}
+			return nil, os.ErrNotExist
+		},
+	}
+	want := []string{
+		"/home/u/.claude/settings.json",
+		"/repos/a/.claude/settings.json", "/repos/a/.claude/settings.local.json",
+		"/repos/b/.claude/settings.json", "/repos/b/.claude/settings.local.json",
+	}
+	if got := effortSettingsPaths(env); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("effortSettingsPaths = %v, want %v", got, want)
+	}
+	st := checkEffortOverride(env)
+	if st.State != StateWarn || st.Info != "maxEffortLevel=high in /repos/a/.claude/settings.json (caps every --effort above it)" {
+		t.Errorf("checkEffortOverride = %+v, want a single warn for repo a's project scope", st)
+	}
+}

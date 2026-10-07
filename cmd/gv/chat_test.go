@@ -85,7 +85,7 @@ func TestChatSpawnPlan(t *testing.T) {
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("default plan: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestChatSpawnPlan(t *testing.T) {
 		t.Errorf("cmd must --add-dir the twin's root, got %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", []string{"grove-chat-unbrewed-1"})
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", "", []string{"grove-chat-unbrewed-1"})
 	if err != nil {
 		t.Fatalf("profiled plan: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestChatSpawnPlan(t *testing.T) {
 
 	// A profile the HOST doesn't have is a hard error — decided before any
 	// dir or session exists.
-	if _, err := chatSpawnPlan(cfg, ws, "nope", "", "", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
+	if _, err := chatSpawnPlan(cfg, ws, "nope", "", "", "", "", nil); err == nil || !strings.Contains(err.Error(), "unknown model profile") {
 		t.Fatalf("unknown profile = %v, want an unknown-model-profile error", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 	}
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "aaaa1111", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "aaaa1111", "", nil)
 	if err != nil {
 		t.Fatalf("resume plan: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 		t.Errorf("a revival resumes one NAMED conversation, never --continue: %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "bbbb2222", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "bbbb2222", "", nil)
 	if err != nil {
 		t.Fatalf("profiled resume plan: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestChatSpawnPlanResume(t *testing.T) {
 
 	// The id reaches a shell command line, so a malformed one never gets
 	// past the plan — belt to internal/chat's braces.
-	if _, err := chatSpawnPlan(cfg, ws, "", "", "a; rm -rf /", "", nil); err == nil {
+	if _, err := chatSpawnPlan(cfg, ws, "", "", "", "a; rm -rf /", "", nil); err == nil {
 		t.Error("a shell-hostile --resume id must be refused before anything is created")
 	}
 }
@@ -637,7 +637,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 	orchDir := filepath.Join("/w/unbrewed", ".grove", "orchestrator")
 	brief := "watch grove-1 and grove-2\n"
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", brief, nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", brief, nil)
 	if err != nil {
 		t.Fatalf("briefed plan: %v", err)
 	}
@@ -658,7 +658,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 
 	// Profiled: the prompt argv sits inside the wrap, ahead of its closing
 	// paren — outside it, the shell would swallow the prompt.
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", brief, nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", brief, nil)
 	if err != nil {
 		t.Fatalf("profiled briefed plan: %v", err)
 	}
@@ -671,7 +671,7 @@ func TestChatSpawnPlanBrief(t *testing.T) {
 	}
 
 	// No brief, no argv, no path.
-	plan, err = chatSpawnPlan(cfg, ws, "", "", "", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("unbriefed plan: %v", err)
 	}
@@ -712,7 +712,7 @@ func TestChatSpawnPlanModel(t *testing.T) {
 	}
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
 
-	plan, err := chatSpawnPlan(cfg, ws, "", "opus", "", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "opus", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("pinned plan: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestChatSpawnPlanModel(t *testing.T) {
 		t.Errorf("pinned plan = cmd %q model %q runs %q", plan.Cmd, plan.Model, plan.Runs)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "opus", "", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "opus", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("pinned profiled plan: %v", err)
 	}
@@ -731,7 +731,7 @@ func TestChatSpawnPlanModel(t *testing.T) {
 		t.Errorf("--model must sit inside the wrap's exec: %q", plan.Cmd)
 	}
 
-	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", nil)
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +739,7 @@ func TestChatSpawnPlanModel(t *testing.T) {
 		t.Errorf("unpinned profile runs %q, want its sonnet slug", plan.Runs)
 	}
 
-	if _, err := chatSpawnPlan(cfg, ws, "", "opsu", "", "", nil); err == nil || !strings.Contains(err.Error(), `unknown model "opsu"`) {
+	if _, err := chatSpawnPlan(cfg, ws, "", "opsu", "", "", "", nil); err == nil || !strings.Contains(err.Error(), `unknown model "opsu"`) {
 		t.Fatalf("unknown tier = %v", err)
 	}
 }
@@ -850,11 +850,57 @@ func TestRevivedModel(t *testing.T) {
 
 	// The re-applied tier reaches the argv exactly like an explicit pin.
 	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
-	plan, err := chatSpawnPlan(cfg, ws, "", "haiku", "aaaa1111", "", nil)
+	plan, err := chatSpawnPlan(cfg, ws, "", "haiku", "", "aaaa1111", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(plan.Cmd, "--model 'haiku'") || !strings.Contains(plan.Cmd, "--resume aaaa1111") || plan.Runs != "haiku" {
 		t.Fatalf("revived plan = cmd %q runs %q", plan.Cmd, plan.Runs)
+	}
+}
+
+// grove-435: --effort rides the chat spawn path exactly like --model —
+// pinned on the bare launch before the profile wrap, at a fixed slot in
+// the hop argv and the by-hand retry, and refused when it is not a
+// documented level.
+func TestChatSpawnPlanEffort(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions --effort high"
+	cfg.ModelProfiles = map[string]*config.ModelProfile{
+		"openrouter-glm": {
+			BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
+			Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-4.6", Haiku: "z-ai/glm-4.5-air",
+		},
+	}
+	ws := &workspace.Workspace{Root: "/w/unbrewed", Label: "unbrewed", Scope: workspace.ScopeRepo}
+
+	plan, err := chatSpawnPlan(cfg, ws, "", "opus", "low", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(plan.Cmd, "claude --effort low --model 'opus' --dangerously-skip-permissions ") || strings.Count(plan.Cmd, "--effort") != 1 {
+		t.Errorf("plan.Cmd = %q, want the pin to replace the hand-written --effort high exactly once", plan.Cmd)
+	}
+	if plan.Effort != "low" {
+		t.Errorf("plan.Effort = %q, want low", plan.Effort)
+	}
+	plan, err = chatSpawnPlan(cfg, ws, "openrouter-glm", "", "xhigh", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.Cmd, "exec claude --effort xhigh --dangerously-skip-permissions") {
+		t.Errorf("profiled plan.Cmd = %q, want --effort passed through inside the wrap unchanged", plan.Cmd)
+	}
+	if _, err := chatSpawnPlan(cfg, ws, "", "", "ultra", "", "", nil); err == nil || !strings.Contains(err.Error(), `unknown effort "ultra"`) {
+		t.Errorf("effort ultra: err = %v, want the documented-set refusal", err)
+	}
+
+	req := chatSpawnReq{Label: "unbrewed", OpID: "deadbeef", Host: "groveremote", Profile: "glm", Model: "opus", Effort: "low", Brief: "hi"}
+	j := strings.Join(chatHopArgs(req), " ")
+	if !strings.Contains(j, "--profile glm --model opus --effort low --brief hi") {
+		t.Errorf("chatHopArgs = %q, want --effort right after --model, before the brief", j)
+	}
+	if m := chatManualRetry(req); !strings.Contains(m, "--model opus --effort low") {
+		t.Errorf("chatManualRetry = %q", m)
 	}
 }

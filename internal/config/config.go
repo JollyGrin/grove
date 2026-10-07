@@ -20,6 +20,7 @@ type Repo struct {
 	Base         string   `yaml:"base"`
 	Setup        string   `yaml:"setup"`
 	Claude       string   `yaml:"claude"`
+	Effort       string   `yaml:"effort"` // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
 	Prompt       string   `yaml:"prompt"`
 	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
 	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
@@ -279,6 +280,9 @@ func parse(raw []byte, src string) (*Config, error) {
 		}
 		if r.Claude == "" {
 			r.Claude = "claude --dangerously-skip-permissions"
+		}
+		if err := CheckEffort(r.Effort); err != nil {
+			return nil, fmt.Errorf("repo %q: effort: %w", name, err)
 		}
 		if r.Prompt != "" {
 			r.Prompt = expand(r.Prompt)

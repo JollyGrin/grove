@@ -284,3 +284,41 @@ func TestModelDeltaSpend(t *testing.T) {
 		t.Errorf("total = %v, want 5.0", total)
 	}
 }
+
+// grove-435: the effort column rides at the end of the row and reads back;
+// a pre-grove-435 14-column row (models, no effort) still parses with an
+// empty Effort rather than being dropped.
+func TestEffortRoundtripAndLegacy14Columns(t *testing.T) {
+	dir := t.TempDir()
+	r := row("task-eff", time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), 1.0)
+	r.Models, r.Effort = "fable 100%", "low"
+	if err := Append(dir, r); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "2026-07-01T00:00:00Z,task-old,Old title,old desc,dummy,old-branch,merged,100,200,300,400,5,1.2500,fable 90% · haiku 10%\n"
+	f, err := os.OpenFile(Path(dir), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (14-column row dropped?)", len(got))
+	}
+	if got[0].Effort != "low" || got[0].Models != "fable 100%" {
+		t.Errorf("effort roundtrip = %+v, want effort low", got[0])
+	}
+	if got[1].Ticket != "task-old" || got[1].Effort != "" || got[1].Models != "fable 90% · haiku 10%" {
+		t.Errorf("legacy 14-column row mis-parsed: %+v", got[1])
+	}
+	raw, _ := os.ReadFile(Path(dir))
+	if !strings.HasPrefix(string(raw), "time,ticket,") || !strings.Contains(string(raw), ",models,effort\n") {
+		t.Errorf("header missing the effort column: %q", strings.SplitN(string(raw), "\n", 2)[0])
+	}
+}

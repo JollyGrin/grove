@@ -160,8 +160,13 @@ type Task struct {
 	// grabbed onto a feature train names the feature's slug and the
 	// branch it forked from (and PRs into). Both empty = the repo's own
 	// base — readers go through BaseOr. Additive & optional.
-	Feature     string `json:"feature,omitempty"`
-	Base        string `json:"base,omitempty"`
+	Feature string `json:"feature,omitempty"`
+	Base    string `json:"base,omitempty"`
+	// Effort (grove-435) is the `--effort` level this worker was launched
+	// with (low|medium|high|xhigh|max): the grab/adopt flag, else the
+	// repo's `effort:` default. Empty = Claude Code's own default for the
+	// model. Additive & optional.
+	Effort      string `json:"effort,omitempty"`
 	SessionID   string `json:"claude_session_id,omitempty"`
 	Agent       string `json:"agent"`
 	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | none
@@ -340,6 +345,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.TmuxSession, t.TmuxWindow = d["tmux_session"], d["tmux_window"]
 		t.ModelProfile = d["model_profile"]         // "" for unprofiled + pre-field events
 		t.Feature, t.Base = d["feature"], d["base"] // "" off-train + pre-field events
+		t.Effort = d["effort"]                      // "" unpinned + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
@@ -430,6 +436,8 @@ func fold(tasks map[string]*Task, ev Event) {
 				t.Feature = v
 			case "base":
 				t.Base = v
+			case "effort":
+				t.Effort = v
 			case "session_id":
 				t.SessionID = v
 			}

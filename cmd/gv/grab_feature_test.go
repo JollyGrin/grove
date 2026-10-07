@@ -39,7 +39,7 @@ func appendedLine(t *testing.T, data map[string]string) string {
 func TestTaskCreatedGolden(t *testing.T) {
 	task := &provider.Task{ID: "grove-9", Title: "car", URL: "https://x/9"}
 	args := func(c feature.Choice, profile string) map[string]string {
-		return taskCreatedData(task, "grove", "grove-9-car", "/wt/grove-9-car", "grove-ws", "grove · grove-9-car", profile, c)
+		return taskCreatedData(task, "grove", "grove-9-car", "/wt/grove-9-car", "grove-ws", "grove · grove-9-car", profile, "", c)
 	}
 	const head = `{"time":"2026-09-27T12:00:00Z","type":"task_created","ticket":"grove-9","data":{`
 	const tail = `"repo":"grove","title":"car","tmux_session":"grove-ws","tmux_window":"grove · grove-9-car","url":"https://x/9","worktree":"/wt/grove-9-car"},"v":`
