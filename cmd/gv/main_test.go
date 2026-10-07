@@ -3,8 +3,10 @@ package main
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
@@ -205,4 +207,59 @@ func captureStdout(t *testing.T, f func()) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestTruncateLineRuneSafe(t *testing.T) {
+	// grove-452 item 1: a byte slice could split a multibyte rune and end
+	// a `gv ls` question preview in mojibake.
+	s := strings.Repeat("日", 20) // 3 bytes per rune
+	got := truncateLine(s, 5)
+	if !utf8.ValidString(got) {
+		t.Fatalf("invalid UTF-8: %q", got)
+	}
+	if want := strings.Repeat("日", 5) + "…"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := truncateLine("ab\ncd", 10); got != "ab" {
+		t.Fatalf("first line: got %q", got)
+	}
+	if got := truncateLine("short", 10); got != "short" {
+		t.Fatalf("under cap altered: %q", got)
+	}
+}
+
+func TestCopyEnvFilesReportsWriteFailure(t *testing.T) {
+	// grove-452 item 3: a discarded WriteFile error was announced as
+	// "copied .env"; the worker then ran without secrets.
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+	var out strings.Builder
+	copyEnvFiles(src, ro, &out)
+	if strings.Contains(out.String(), "→ copied .env") {
+		t.Fatalf("write failed but was reported as copied:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "→ failed to copy .env") {
+		t.Fatalf("write failure not reported:\n%s", out.String())
+	}
+
+	// And the happy path still announces the copy.
+	dst := t.TempDir()
+	out.Reset()
+	copyEnvFiles(src, dst, &out)
+	if !strings.Contains(out.String(), "→ copied .env") {
+		t.Fatalf("successful copy not reported:\n%s", out.String())
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, ".env")); err != nil || string(data) != "SECRET=1\n" {
+		t.Fatalf("copied content = %q, %v", data, err)
+	}
 }

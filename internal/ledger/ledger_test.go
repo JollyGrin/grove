@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -320,5 +321,63 @@ func TestEffortRoundtripAndLegacy14Columns(t *testing.T) {
 	raw, _ := os.ReadFile(Path(dir))
 	if !strings.HasPrefix(string(raw), "time,ticket,") || !strings.Contains(string(raw), ",models,effort\n") {
 		t.Errorf("header missing the effort column: %q", strings.SplitN(string(raw), "\n", 2)[0])
+	}
+}
+
+// errReader fails every Read with the same non-EOF error — the shape of a
+// persistent underlying I/O fault.
+type errReader struct{ n int }
+
+func (e *errReader) Read([]byte) (int, error) {
+	e.n++
+	return 0, errors.New("disk on fire")
+}
+
+func TestReadTerminatesOnIOError(t *testing.T) {
+	// grove-452 item 6: `continue` on a non-parse error re-read the same
+	// failure forever (gv cost at 100% CPU). The reader must return.
+	er := &errReader{}
+	done := make(chan struct{})
+	var rows []Row
+	var err error
+	go func() {
+		rows, err = readFrom(er)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readFrom spun on a persistent I/O error instead of returning")
+	}
+	if err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Fatalf("err = %v, want the underlying I/O error", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
+	}
+	if er.n > 2 {
+		t.Fatalf("reader called %d times, want it to give up on the first error", er.n)
+	}
+}
+
+func TestReadSkipsParseErrorsOnly(t *testing.T) {
+	// A true CSV parse error (bare quote mid-field) is still skipped: the
+	// reader advances past it and one torn line never hides later rows.
+	dir := t.TempDir()
+	if err := Append(dir, row("a", time.Now(), 1)); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(Path(dir), os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString(`bad "quote,x` + "\n")
+	f.Close()
+	if err := Append(dir, row("b", time.Now(), 2)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Ticket != "a" || got[1].Ticket != "b" {
+		t.Fatalf("got %+v, want rows a and b", got)
 	}
 }

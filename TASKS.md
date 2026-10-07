@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-452 — [A/B arm B] CLI/relay paper cuts (clone of #131): rune-safe `truncateLine` + notify body caps, `.env` copy reports write failure instead of lying, per-call tmux relay buffer name (pid+nonce), slashed branch names survive `parseWorktreeList`, ledger reader returns on non-parse I/O error instead of spinning. Unit test per item; gate + e2e/dummy.sh green.
 - [x] grove-451 [A/B arm C] decouple `gv done` merge gate from statusCheckRollup: `Merged` queries `number,url,state,mergedAt` only; `PRForBranch` retries without `statusCheckRollup,comments` on error and renders CI `unknown`; `finishTask` says `merge check failed … retry, or use --force` instead of `no PR found` when gh itself fails. Tests: merged verdict under CI 403, degraded display, distinct error strings.
 - [x] model-fit 02: kickoff A/B on three rote tickets × three arms
       (#434, 2026-10-07; orchestrator-run). Old vs current template is

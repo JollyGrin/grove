@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -354,5 +356,25 @@ func TestPolls(t *testing.T) {
 		if got := polls(c.max, c.poll); got != c.want {
 			t.Errorf("polls(%s, %s) = %d, want %d", c.max, c.poll, got, c.want)
 		}
+	}
+}
+
+func TestRelayBufferNameUniquePerCall(t *testing.T) {
+	// grove-452 item 4: tmux buffers are server-global, so a fixed
+	// "gv-relay" name let two concurrent relays swap their texts. Every
+	// call must get its own name, scoped to this process.
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		n := relayBufferName()
+		if !strings.HasPrefix(n, "gv-relay-") {
+			t.Fatalf("name %q lacks the gv-relay- prefix", n)
+		}
+		if !strings.Contains(n, strconv.Itoa(os.Getpid())) {
+			t.Fatalf("name %q does not carry this pid", n)
+		}
+		if seen[n] {
+			t.Fatalf("name %q repeated", n)
+		}
+		seen[n] = true
 	}
 }
