@@ -196,6 +196,32 @@ changes the behavior.
   [tmux-discipline](../tmux-discipline/SKILL.md) §4 for the durable-tag
   pattern.
 
+## Accounts: subscription tokens (docs-verified 2026-10-07)
+
+Sources and quotes: docs/plans/2026-10-07-claude-accounts-design.md
+§Mechanism, §Sources. Not yet exercised against a second live
+subscription.
+
+- `claude setup-token` = the `/login` browser flow, then prints a
+  **one-year** OAuth token and saves it nowhere. `CLAUDE_CODE_OAUTH_TOKEN`
+  is auth source **5**, the stored `/login` is **7**, so the env token wins.
+  Sources 1–4 (cloud-provider vars, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_API_KEY`, `apiKeyHelper`) beat it, so a model-profile wrap
+  silently overrides a token.
+- A token session **can only make model requests**: no claude.ai
+  connectors, no Remote Control. Locally configured MCP servers still
+  work. `--bare` ignores the token. `/login` inside a token session
+  switches that session to the login.
+- Session history, settings and the login are per `CLAUDE_CONFIG_DIR`,
+  never per account. One config dir plus per-launch tokens = one shared
+  history across subscriptions. The docs' own multi-account recipe
+  (one dir per account) splits history.
+- Statusline stdin carries `rate_limits.{five_hour,seven_day}.
+  {used_percentage,resets_at}` for Pro/Max, only after the session's
+  first API response, and a window disappears once its `resets_at` passes.
+  This is the documented way to read 5h/weekly usage. `/api/oauth/usage`
+  (what `/usage` calls) appears only in the binary: undocumented.
+
 ## TUI chrome (what pane scrapers see)
 
 Scraping is garnish, hooks are truth — but the relay's verified submit
