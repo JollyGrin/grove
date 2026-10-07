@@ -32,9 +32,10 @@ func derive(input, output float64) Rates {
 	}
 }
 
-// defaultRates: current Anthropic pricing (claude-api reference, cached
-// 2026-06-24; claude-opus-5/claude-sonnet-5/fable-5.1/mythos-5.1 refreshed
-// from https://platform.claude.com/docs/en/about-claude/models/overview,
+// defaultRates: current Anthropic pricing (claude-api skill model table,
+// cached 2026-09-25, checked 2026-10-07 for grove-442; claude-opus-5/
+// claude-sonnet-5/fable-5.1/mythos-5.1 refreshed from
+// https://platform.claude.com/docs/en/about-claude/models/overview,
 // fetched 2026-09-04). Explicit per minor version — Opus 4.0/4.1 were
 // $15/$75 while 4.5+ is $5/$25, so every priced version is its own key.
 // rateFor's prefix match only ever strips a trailing "-<suffix>" (a dated
@@ -44,12 +45,20 @@ func derive(input, output float64) Rates {
 // their cache-read rate is 2.5% of input, not the 10% every other model
 // uses, so collapsing them onto claude-fable-5 (grove-249) silently
 // mispriced cache reads even though input/output looked identical.
+// Opus 5.5 / Sonnet 5.5 (grove-442) are explicit for the same reason: both
+// read cache at $0.20/MTok (5% of Opus 5.5's $4 input, 10% of Sonnet 5.5's
+// $2 — the latter only coincidentally what derive would compute), and the
+// prefix fallback would have billed Opus 5.5 at Opus 5's $5/$25 with cache
+// reads at $0.50, 2.5× the real rate. Cache writes follow the published
+// multipliers (5m = 1.25× input, 1h = 2× input; claude-api skill
+// prompt-caching reference, checked 2026-10-07).
 // Overridable via config `cost.pricing`.
 var defaultRates = map[string]Rates{
 	"claude-fable-5":    derive(10, 50),
 	"claude-mythos-5":   derive(10, 50),
 	"claude-fable-5-1":  {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite5m: 12.5, CacheWrite1h: 20},
 	"claude-mythos-5-1": {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite5m: 12.5, CacheWrite1h: 20},
+	"claude-opus-5-5":   {Input: 4, Output: 20, CacheRead: 0.20, CacheWrite5m: 5, CacheWrite1h: 8},
 	"claude-opus-5":     derive(5, 25),
 	"claude-opus-4-8":   derive(5, 25),
 	"claude-opus-4-7":   derive(5, 25),
@@ -58,6 +67,7 @@ var defaultRates = map[string]Rates{
 	"claude-opus-4-1":   derive(15, 75),
 	"claude-opus-4-0":   derive(15, 75),
 	"claude-opus-4":     derive(15, 75),
+	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheRead: 0.20, CacheWrite5m: 2.5, CacheWrite1h: 4},
 	"claude-sonnet-5":   derive(2, 10),
 	"claude-sonnet-4-6": derive(3, 15),
 	"claude-sonnet-4-5": derive(3, 15),

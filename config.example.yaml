@@ -132,7 +132,7 @@ notify:
 cost:
   # stuck_turns: 30      # turns with no delivery movement before a stuck flag
   # pricing:             # per-model USD/MTok overrides (estimates only)
-  #   claude-sonnet-5: {input: 3, output: 15}
+  #   claude-sonnet-5-5: {input: 2, output: 10, cache_read: 0.20}
   #   z-ai/glm-5.2: {input: 0.42, output: 1.32}     # OpenRouter metered $, not an effort-estimate
   # Persistent spend ledger (<state>/ledger.csv): record snapshots so cost
   # history survives Claude Code transcript pruning (~30 days) and worktree

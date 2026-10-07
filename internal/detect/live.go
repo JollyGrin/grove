@@ -286,7 +286,7 @@ func classifyPaneOutput(output string) (AgentStatus, bool) {
 
 	// 5. Claude UI elements → idle
 	//    "claude" branding anywhere in output + prompt/hint indicators at bottom
-	//    Also detect model names (opus, sonnet, haiku) and "ctx:" in status bar
+	//    Also detect model names (fable, opus, sonnet, haiku) and "ctx:" in status bar
 	hasPrompt := strings.Contains(raw5, "❯") ||
 		strings.Contains(bot10, "type a message") ||
 		strings.Contains(bot10, "type your message")
@@ -295,6 +295,7 @@ func classifyPaneOutput(output string) (AgentStatus, bool) {
 
 	// Model name or context indicator in status bar → Claude session
 	hasModelBar := strings.Contains(bot5, "ctx:") ||
+		strings.Contains(bot5, "fable") ||
 		strings.Contains(bot5, "opus") ||
 		strings.Contains(bot5, "sonnet") ||
 		strings.Contains(bot5, "haiku")

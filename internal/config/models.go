@@ -118,6 +118,17 @@ func RunsModel(launch string, p *ModelProfile, settingsModel string) string {
 // contains, case-insensitively. Anything else — no tier named, or more
 // than one — is ambiguous and answers "", so a caller leaves the model to
 // the host default rather than guess.
+//
+// Fable (grove-442): a Fable id (claude-fable-5-1) names the "fable" tier —
+// Claude Code's own alias for its top model, accepted by `--model fable` —
+// and so maps to it exactly when the operator lists "fable" in
+// orchestrator.models. With the built-in tier list it answers "" (host
+// default), deliberately NOT "opus": re-pinning a revived Fable chat onto
+// opus would be a silent downgrade, and the lane downgrade is the
+// operator's call, so the picker's default rows stay opus/sonnet/haiku
+// until a Fable row is added on purpose. (modelSlot, the profile-lane
+// counterpart, does map Fable onto the opus slot — a third-party lane has
+// no tier above it, and there "sonnet" would have been the downgrade.)
 func (c *Config) TierForModel(id string) string {
 	id = strings.ToLower(strings.TrimSpace(id))
 	if id == "" {
