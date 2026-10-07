@@ -350,3 +350,68 @@ func TestRenderEndsWithStatusSentinels(t *testing.T) {
 		}
 	}
 }
+
+// memoryParagraph is the grove-437 auto-memory paragraph every autonomous
+// template carries, verbatim: where the line between the three memory
+// surfaces is (auto memory for corrections and confirmed approaches,
+// LEARNINGS.md for dated harness/tooling surprises, nothing the repo
+// already records). The file format itself is Claude Code's own system
+// prompt's job, so the paragraph names it in one clause and no more. The
+// linear set says "ticket" where the generic set says "task".
+func memoryParagraph(noun string) string {
+	return "Your auto memory for this repo is shared by every worktree of it: read\n" +
+		"its `MEMORY.md` before you start, and record corrections and confirmed\n" +
+		"approaches there as you go — one lesson per file, a one-line summary at\n" +
+		"the top, and why it mattered. A verified surprise about the harness or\n" +
+		"the tooling that every machine needs goes to the repo's LEARNINGS.md\n" +
+		"instead, dated, when the repo keeps one. Don't save what the repo, the\n" +
+		noun + " or git already records.\n"
+}
+
+// TestRenderMemoryParagraph (grove-437): every autonomous render — both
+// sets, default and pickup — carries the memory paragraph exactly once,
+// before the Done/STATUS tail; the manual prompts (wait for instructions)
+// carry none of it.
+func TestRenderMemoryParagraph(t *testing.T) {
+	cases := []struct {
+		name  string
+		kind  string
+		task  *provider.Task
+		verbs provider.Verbs
+		mode  Mode
+		noun  string
+	}{
+		{"linear default", "linear", testTask, linearVerbs, ModeDefault, "ticket"},
+		{"linear pickup", "linear", testTask, linearVerbs, ModePickup, "ticket"},
+		{"markdown default", "markdown", mdTask, mdVerbs, ModeDefault, "task"},
+		{"markdown pickup", "markdown", mdTask, mdVerbs, ModePickup, "task"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "main", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := memoryParagraph(c.noun)
+			if n := strings.Count(got, want); n != 1 {
+				t.Errorf("memory paragraph must appear exactly once, got %d:\n%s", n, got)
+			}
+			if strings.Index(got, want) > strings.Index(got, "STATUS: DONE") {
+				t.Error("memory paragraph must come before the STATUS block")
+			}
+		})
+	}
+	for _, c := range []struct {
+		kind  string
+		task  *provider.Task
+		verbs provider.Verbs
+	}{{"linear", testTask, linearVerbs}, {"markdown", mdTask, mdVerbs}} {
+		got, err := Render(c.task, c.verbs, c.kind, "", ModeManual, "", "main", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, "auto memory") {
+			t.Errorf("%s manual render must not carry the memory paragraph", c.kind)
+		}
+	}
+}

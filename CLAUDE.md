@@ -22,6 +22,13 @@ a first-run wizard, and a layered learnings system. OSS-ready successor to
   `internal/guidance` test enforces the cap). Looking for a past row or
   entry? `grep -r <term> TASKS.md LEARNINGS.md docs/archive/` — pull a
   file in only for a specific lookup, never as a default read.
+- **Three memory surfaces, one line between them.** Auto memory
+  (`~/.claude/projects/<repo>/memory/`, machine-local, shared by every
+  worktree of this repo) holds Claude-written working notes: corrections
+  and confirmed approaches, one lesson per file. [LEARNINGS.md](LEARNINGS.md)
+  (git, every machine) holds dated, verified surprises about the harness
+  and tooling. `.claude/skills/` holds the rules that generalized. A note
+  moves up when it proves out; nothing lives in two places.
 - Read only as the task needs: [DESIGN.md](DESIGN.md) (founding what/why),
   `docs/*-design.md` (deep designs), [docs/roadmap.md](docs/roadmap.md)
   (open phases), [docs/seed-manifest.md](docs/seed-manifest.md) (when

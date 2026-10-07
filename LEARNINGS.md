@@ -5,6 +5,12 @@
 > source, so we never re-derive (or re-break) it. Every entry is
 > verified fact, not opinion.
 >
+> This is the middle of three surfaces: a correction or a confirmed
+> approach that only this machine needs stays in Claude's auto memory
+> (`~/.claude/projects/<repo>/memory/`, shared by the repo's worktrees); a
+> surprise about the harness or tooling that every machine must know lands
+> here, dated and verified; a rule that generalized graduates to a skill.
+>
 > Entry format: `- **YYYY-MM-DD · the fact** — context, what it changed.`
 > Newest first within each section. If a learning invalidates a
 > DESIGN.md decision, update the doc and note it here. When an entry

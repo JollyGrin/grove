@@ -91,6 +91,7 @@ type Env struct {
 	Getenv            func(key string) string
 	Stat              func(name string) (os.FileInfo, error)
 	ReadFile          func(name string) ([]byte, error)
+	ReadDir           func(name string) ([]os.DirEntry, error) // nil = no listing (the memory row reads "no notes")
 	Run               func(timeout time.Duration, name string, args ...string) error
 	Output            func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
 	HooksInstalled    func(paths []string) map[string]map[string]bool
@@ -124,6 +125,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Getenv:            os.Getenv,
 		Stat:              os.Stat,
 		ReadFile:          os.ReadFile,
+		ReadDir:           os.ReadDir,
 		Run:               run,
 		Output:            output,
 		HooksInstalled:    hooks.Installed,
