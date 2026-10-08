@@ -169,6 +169,10 @@ const usage = `gv — grove
                                               repo (feedback first), recent LEARNINGS.md entries, and
                                               entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
+  gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init
+                                              Claude subscription accounts: add stores a ` + "`claude setup-token`" + `
+                                              token read from stdin; use sets the default; shell-init prints
+                                              the ~/.bashrc function (eval "$(gv account shell-init)")
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
@@ -210,6 +214,9 @@ func stateDir() string { return ambient.stateDir }
 var ambientLabelExempt = map[string]bool{
 	"version": true, "--version": true, "help": true, "-h": true, "--help": true,
 	"init": true, "workspaces": true, "doctor": true, "update": true,
+	// account: the shell function asks token-path from any cwd; a broken
+	// label there must not flip `claude` to the login.
+	"account": true,
 }
 
 // requireValidAmbientLabel applies the registry's ValidateLabel rule to
@@ -523,6 +530,8 @@ func main() {
 		err = cmdDoctor(args)
 	case "hooks":
 		err = cmdHooks(args)
+	case "account":
+		err = cmdAccount(args)
 	case "run-setup":
 		err = cmdRunSetup(args)
 	case "help", "-h", "--help":

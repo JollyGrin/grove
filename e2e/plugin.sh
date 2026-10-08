@@ -331,6 +331,25 @@ say "gv watch --replay --type compaction --json prints the compaction event"
 ( cd "$DUMMY" && "$GV" watch --replay --type compaction --until compaction --json > "$SCRATCH/watch-compaction.json" )
 grep -q '"type":"compaction"' "$SCRATCH/watch-compaction.json" || fail "gv watch did not print the compaction event"
 
+say "gv account ls --json (claude-accounts): the accounts envelope, login row first, no token value"
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+"$GV" account use alt > /dev/null || fail "account use alt failed"
+"$GV" account ls --json > "$SCRATCH/accounts.json" || fail "account ls --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts.json" "$SCRATCH/acct-add.out" && fail "a token value reached account output"
+python3 -c "
+import json
+data = json.load(open('$SCRATCH/accounts.json'))
+assert data['schema_version'] == 1, data
+rows = data['accounts']
+assert [r['name'] for r in rows] == ['login', 'alt'], rows
+login, alt = rows
+assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0, login
+assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 0 and alt['token_age_days'] == 0, alt
+assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors'}, alt
+"
+"$GV" account use login > /dev/null || fail "account use login failed"
+"$GV" account rm alt > /dev/null || fail "account rm alt failed"
+
 say "feature land (grove-376): plan, dry run, execute, skip reasons"
 # task-002 is the only active (not-done) car on trains; a stub gh answers
 # its PR lookup MERGED, so it lands. task-005 is still queued (no task at

@@ -729,3 +729,25 @@ func TestFoldEffort(t *testing.T) {
 		t.Errorf("adopted task Effort = %q, want max", got)
 	}
 }
+
+// claude-accounts: account is additive like effort — the read side folds
+// a pinned create, a pre-field event to "", and an adopt's key.
+func TestFoldAccount(t *testing.T) {
+	dir := t.TempDir()
+	for _, ev := range []Event{
+		{Type: EvTaskCreated, Ticket: "DEV-50", Data: map[string]string{"title": "pinned", "account": "alt"}},
+		{Type: EvTaskCreated, Ticket: "DEV-51", Data: map[string]string{"title": "plain"}},
+		{Type: EvTaskAdopted, Ticket: "DEV-51", Data: map[string]string{"account": "max"}},
+	} {
+		if err := Append(dir, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := tasks["DEV-50"].Account, tasks["DEV-51"].Account; a != "alt" || b != "max" {
+		t.Errorf("Account = %q, %q; want alt, max", a, b)
+	}
+}
