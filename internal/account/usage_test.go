@@ -3,51 +3,68 @@ package account
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
 
 func TestUsage(t *testing.T) {
-	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	future5h := now.Add(2*time.Hour + 10*time.Minute)
-	future7d := now.Add(3 * 24 * time.Hour)
-	seen := now.Add(-3 * time.Minute)
-	sec := func(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC) // a Sunday
+	sec := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
+	seenAt := func(ago time.Duration) string { return `"seen_at":"` + now.Add(-ago).Format(time.RFC3339) + `"` }
+	in2h10 := sec(2*time.Hour + 10*time.Minute)
+	in3d := sec(3 * 24 * time.Hour)
 	file := func(body string) *string { return &body }
 
 	tests := []struct {
 		name     string
 		file     *string // nil = no file
 		wantHint string
-		want5h   *UsageWindow
-		want7d   *UsageWindow
+		want5h   string // the window's --json
+		want7d   string
 		wantText string
 	}{
 		{
-			name: "fresh data",
-			file: file(`{"five_hour":{"used_percentage":42,"resets_at":` + sec(future5h) + `},` +
-				`"seven_day":{"used_percentage":61.4,"resets_at":` + sec(future7d) + `},"seen_at":"` + seen.Format(time.RFC3339) + `"}`),
-			want5h:   &UsageWindow{Name: FiveHour, UsedPercentage: 42, ResetsAt: &future5h},
-			want7d:   &UsageWindow{Name: SevenDay, UsedPercentage: 61.4, ResetsAt: &future7d},
-			wantText: "5h 42% (resets 14:10) · 7d 61% (resets Wed) · as of 3m",
+			name:     "fresh data is live",
+			file:     file(`{"five_hour":{"used_percentage":42,"resets_at":` + in2h10 + `},"seven_day":{"used_percentage":61.4,"resets_at":` + in3d + `},` + seenAt(3*time.Minute) + `}`),
+			want5h:   `{"state":"live","used_percentage":42,"resets_at":"2026-10-11T14:10:00Z"}`,
+			want7d:   `{"state":"live","used_percentage":61.4,"resets_at":"2026-10-14T12:00:00Z"}`,
+			wantText: "5h 42% (resets 14:10) · 7d 61% (resets Wed 12:00) · as of 3m",
 		},
 		{
-			name: "stale resets_at reads as reset, never the old percentage",
-			file: file(`{"five_hour":{"used_percentage":97,"resets_at":` + sec(now.Add(-time.Minute)) + `},` +
-				`"seven_day":{"used_percentage":61,"resets_at":` + sec(future7d) + `},"seen_at":"` + now.Add(-5*time.Hour).Format(time.RFC3339) + `"}`),
-			want5h:   &UsageWindow{Name: FiveHour, Reset: true},
-			want7d:   &UsageWindow{Name: SevenDay, UsedPercentage: 61, ResetsAt: &future7d},
-			wantText: "5h 0% (reset) · 7d 61% (resets Wed) · as of 5h00m",
+			name:     "a reset tomorrow names the day",
+			file:     file(`{"five_hour":{"used_percentage":5,"resets_at":` + sec(14*time.Hour) + `},"seven_day":{"used_percentage":9,"resets_at":` + in3d + `},` + seenAt(0) + `}`),
+			want5h:   `{"state":"live","used_percentage":5,"resets_at":"2026-10-12T02:00:00Z"}`,
+			want7d:   `{"state":"live","used_percentage":9,"resets_at":"2026-10-14T12:00:00Z"}`,
+			wantText: "5h 5% (resets tomorrow 02:00) · 7d 9% (resets Wed 12:00) · as of 0m",
 		},
 		{
-			name:     "window recorded absent (Claude Code dropped it on reset) reads as reset",
-			file:     file(`{"seven_day":{"used_percentage":10,"resets_at":` + sec(future7d) + `},"seen_at":"` + seen.Format(time.RFC3339) + `"}`),
-			want5h:   &UsageWindow{Name: FiveHour, Reset: true},
-			want7d:   &UsageWindow{Name: SevenDay, UsedPercentage: 10, ResetsAt: &future7d},
-			wantText: "5h 0% (reset) · 7d 10% (resets Wed) · as of 3m",
+			name:     "a past resets_at is reset at 0, never the old percentage",
+			file:     file(`{"five_hour":{"used_percentage":97,"resets_at":` + sec(-time.Minute) + `},"seven_day":{"used_percentage":61,"resets_at":` + in3d + `},` + seenAt(5*time.Hour) + `}`),
+			want5h:   `{"state":"reset","used_percentage":0}`,
+			want7d:   `{"state":"live","used_percentage":61,"resets_at":"2026-10-14T12:00:00Z"}`,
+			wantText: "5h 0% (reset) · 7d 61% (resets Wed 12:00) · as of 5h00m",
+		},
+		{
+			name:     "a window the payload never carried is unknown, not 0% reset",
+			file:     file(`{"seven_day":{"used_percentage":10,"resets_at":` + in3d + `},` + seenAt(3*time.Minute) + `}`),
+			want5h:   `{"state":"unknown"}`,
+			want7d:   `{"state":"live","used_percentage":10,"resets_at":"2026-10-14T12:00:00Z"}`,
+			wantText: "5h — no data · 7d 10% (resets Wed 12:00) · as of 3m",
+		},
+		{
+			name:     "no used_percentage is unknown, never 0",
+			file:     file(`{"five_hour":{"resets_at":` + sec(-time.Hour) + `},"seven_day":{"resets_at":` + in3d + `},` + seenAt(time.Minute) + `}`),
+			want5h:   `{"state":"unknown"}`,
+			want7d:   `{"state":"unknown"}`,
+			wantText: "5h — no data · 7d — no data · as of 1m",
+		},
+		{
+			name:     "no resets_at is live while young, stale once older than the window",
+			file:     file(`{"five_hour":{"used_percentage":30},"seven_day":{"used_percentage":50},` + seenAt(6*time.Hour) + `}`),
+			want5h:   `{"state":"live","used_percentage":30,"stale":true}`,
+			want7d:   `{"state":"live","used_percentage":50}`,
+			wantText: "5h 30% (stale, reset time unknown) · 7d 50% (reset time unknown) · as of 6h00m",
 		},
 		{
 			name:     "missing file is no data with a hint",
@@ -62,7 +79,19 @@ func TestUsage(t *testing.T) {
 		},
 		{
 			name:     "non-numeric percentage is corrupt",
-			file:     file(`{"five_hour":{"used_percentage":"lots"},"seen_at":"` + seen.Format(time.RFC3339) + `"}`),
+			file:     file(`{"five_hour":{"used_percentage":"lots"},` + seenAt(0) + `}`),
+			wantHint: HintCorrupt,
+			wantText: "no data — " + HintCorrupt,
+		},
+		{
+			name:     "out-of-range resets_at is corrupt",
+			file:     file(`{"five_hour":{"used_percentage":1,"resets_at":1e300},` + seenAt(0) + `}`),
+			wantHint: HintCorrupt,
+			wantText: "no data — " + HintCorrupt,
+		},
+		{
+			name:     "negative resets_at is corrupt",
+			file:     file(`{"five_hour":{"used_percentage":1,"resets_at":-5},` + seenAt(0) + `}`),
 			wantHint: HintCorrupt,
 			wantText: "no data — " + HintCorrupt,
 		},
@@ -80,7 +109,7 @@ func TestUsage(t *testing.T) {
 				if err := os.MkdirAll(s.UsageDir(), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(s.UsageDir(), "alt.json"), []byte(*tc.file), 0o600); err != nil {
+				if err := os.WriteFile(s.UsagePath("alt"), []byte(*tc.file), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -93,8 +122,12 @@ func TestUsage(t *testing.T) {
 					t.Errorf("no-data usage carries numbers: %+v", u)
 				}
 			} else {
-				checkWindow(t, u.FiveHour, tc.want5h)
-				checkWindow(t, u.SevenDay, tc.want7d)
+				if got := jsonOf(t, u.FiveHour); got != tc.want5h {
+					t.Errorf("five_hour = %s, want %s", got, tc.want5h)
+				}
+				if got := jsonOf(t, u.SevenDay); got != tc.want7d {
+					t.Errorf("seven_day = %s, want %s", got, tc.want7d)
+				}
 				if u.SeenAt == nil {
 					t.Error("seen_at missing")
 				}
@@ -106,30 +139,39 @@ func TestUsage(t *testing.T) {
 	}
 }
 
-func checkWindow(t *testing.T, got, want *UsageWindow) {
+func jsonOf(t *testing.T, v any) string {
 	t.Helper()
-	if got == nil || want == nil {
-		if got != want {
-			t.Errorf("window = %+v, want %+v", got, want)
-		}
-		return
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.Name != want.Name || got.UsedPercentage != want.UsedPercentage || got.Reset != want.Reset ||
-		(got.ResetsAt == nil) != (want.ResetsAt == nil) ||
-		(got.ResetsAt != nil && !got.ResetsAt.Equal(*want.ResetsAt)) {
-		t.Errorf("window = %+v (resets %v), want %+v (resets %v)", got, got.ResetsAt, want, want.ResetsAt)
+	return string(b)
+}
+
+// No data is only a hint in the --json contract.
+func TestUsageNoDataJSON(t *testing.T) {
+	if got, want := jsonOf(t, Usage{Hint: HintNoSession}), `{"hint":"no session on this account yet"}`; got != want {
+		t.Errorf("json = %s, want %s", got, want)
 	}
 }
 
-// A reset window's JSON has 0% and no resets_at; no-data JSON only a hint.
-func TestUsageJSON(t *testing.T) {
-	seen := time.Date(2026, 10, 11, 11, 57, 0, 0, time.UTC)
-	b, _ := json.Marshal(Usage{FiveHour: &UsageWindow{Name: FiveHour, Reset: true}, SevenDay: &UsageWindow{Name: SevenDay, UsedPercentage: 3}, SeenAt: &seen})
-	if got, want := string(b), `{"five_hour":{"used_percentage":0},"seven_day":{"used_percentage":3},"seen_at":"2026-10-11T11:57:00Z"}`; got != want {
-		t.Errorf("json = %s, want %s", got, want)
+// The reader decodes exactly what the record type the shim writes encodes.
+func TestUsageRecordRoundTrip(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	rec := UsageRecord{FiveHour: &RecordedWindow{UsedPercentage: "42.5", ResetsAt: json.Number(strconv.FormatInt(now.Add(time.Hour).Unix(), 10))}, SeenAt: now}
+	b, _ := json.Marshal(rec)
+	if err := os.MkdirAll(s.UsageDir(), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	b, _ = json.Marshal(Usage{Hint: HintNoSession})
-	if !strings.HasPrefix(string(b), `{"hint":`) || strings.Contains(string(b), "five_hour") {
-		t.Errorf("no-data json = %s", b)
+	if err := os.WriteFile(s.UsagePath("alt"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUsageRecord(s.UsagePath("alt"))
+	if err != nil || *got.FiveHour != *rec.FiveHour || got.SevenDay != nil || !got.SeenAt.Equal(now) {
+		t.Fatalf("ReadUsageRecord = %+v, %v", got, err)
+	}
+	if u := s.Usage("alt", now); u.FiveHour.State != StateLive || *u.FiveHour.UsedPercentage != 42.5 || u.SevenDay.State != StateUnknown {
+		t.Errorf("Usage = %+v", u)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -192,12 +193,14 @@ func TestAccountLsUsage(t *testing.T) {
 			Name  string `json:"name"`
 			Usage *struct {
 				FiveHour *struct {
-					UsedPercentage float64 `json:"used_percentage"`
-					ResetsAt       *string `json:"resets_at"`
+					State          string   `json:"state"`
+					UsedPercentage *float64 `json:"used_percentage"`
+					ResetsAt       *string  `json:"resets_at"`
 				} `json:"five_hour"`
 				SevenDay *struct {
-					UsedPercentage float64 `json:"used_percentage"`
-					ResetsAt       *string `json:"resets_at"`
+					State          string   `json:"state"`
+					UsedPercentage *float64 `json:"used_percentage"`
+					ResetsAt       *string  `json:"resets_at"`
 				} `json:"seven_day"`
 				SeenAt *string `json:"seen_at"`
 				Hint   string  `json:"hint"`
@@ -214,13 +217,16 @@ func TestAccountLsUsage(t *testing.T) {
 	if login == nil || login.Hint != account.HintNoSession || login.FiveHour != nil || login.SeenAt != nil {
 		t.Errorf("login usage, want the no-session hint only:\n%s", out)
 	}
-	if alt == nil || alt.Hint != "" || alt.SeenAt == nil || alt.FiveHour == nil || alt.FiveHour.UsedPercentage != 42 ||
-		alt.FiveHour.ResetsAt == nil || alt.SevenDay == nil || alt.SevenDay.UsedPercentage != 0 || alt.SevenDay.ResetsAt != nil {
+	// The file never carried seven_day: unknown, with no percentage at all.
+	if alt == nil || alt.Hint != "" || alt.SeenAt == nil || alt.FiveHour == nil || alt.FiveHour.State != "live" ||
+		alt.FiveHour.UsedPercentage == nil || *alt.FiveHour.UsedPercentage != 42 || alt.FiveHour.ResetsAt == nil ||
+		alt.SevenDay == nil || alt.SevenDay.State != "unknown" || alt.SevenDay.UsedPercentage != nil || alt.SevenDay.ResetsAt != nil {
 		t.Errorf("alt usage:\n%s", out)
 	}
+	// The reset clock and the age depend on the wall clock: match shapes.
 	out, _ = sb.gvStdout(t, "account", "ls", "--usage")
-	if !strings.Contains(out, "5h 42% (resets ") || !strings.Contains(out, "7d 0% (reset)") ||
-		!strings.Contains(out, "as of 3m") || !strings.Contains(out, "no data — "+account.HintNoSession) {
+	text := regexp.MustCompile(`5h 42% \(resets (tomorrow )?\d\d:\d\d\) · 7d — no data · as of \d+m`)
+	if !text.MatchString(out) || !strings.Contains(out, "no data — "+account.HintNoSession) {
 		t.Errorf("ls --usage text:\n%s", out)
 	}
 	// Plain ls carries no usage.

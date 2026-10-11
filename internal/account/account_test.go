@@ -150,6 +150,14 @@ func TestRemove(t *testing.T) {
 	if err := s.Use("alt"); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(s.UsageDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"alt", "max"} {
+		if err := os.WriteFile(s.UsagePath(n), []byte(`{"five_hour":{"used_percentage":90},"seen_at":"2026-10-11T00:00:00Z"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := s.Remove("nosuch"); err == nil {
 		t.Fatal("Remove(nosuch) = nil")
 	}
@@ -163,13 +171,21 @@ func TestRemove(t *testing.T) {
 	if a, _ := s.Active(); a != "" {
 		t.Fatalf("Active after removing it = %q, want login", a)
 	}
-	for _, f := range []string{"alt.token", "alt.minted"} {
+	for _, f := range []string{"alt.token", "alt.minted", "usage/alt.json"} {
 		if _, err := os.Stat(filepath.Join(s.Dir, f)); err == nil {
 			t.Errorf("%s survived rm", f)
 		}
 	}
+	if _, err := os.Stat(s.UsagePath("max")); err != nil {
+		t.Errorf("rm alt took max's usage: %v", err)
+	}
 	if names := s.Names(); strings.Join(names, ",") != "login,max" {
 		t.Fatalf("Names = %v", names)
+	}
+	// A re-added name starts with no data, not the old subscription's numbers.
+	mustAdd(t, s, "alt", sentinel, now)
+	if u := s.Usage("alt", now); u.Hint != HintNoSession {
+		t.Errorf("re-added alt usage = %+v, want no data", u)
 	}
 }
 

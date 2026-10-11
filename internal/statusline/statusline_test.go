@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/JollyGrin/grove/internal/account"
 )
 
 // fixture is the "Full JSON schema" example from
@@ -88,7 +90,7 @@ func TestCaptureUnchangedDoesNotRewrite(t *testing.T) {
 	if wrote, _ := Capture(fixture(t), path, later); !wrote {
 		t.Fatal("unchanged reading never refreshed seen_at")
 	}
-	if u, _ := ReadUsage(path); !u.SeenAt.Equal(later) {
+	if u, _ := account.ReadUsageRecord(path); !u.SeenAt.Equal(later) {
 		t.Errorf("seen_at = %v, want the last sighting %v", u.SeenAt, later)
 	}
 	// A changed value rewrites at once; a dropped window (reset passed)
@@ -101,7 +103,7 @@ func TestCaptureUnchangedDoesNotRewrite(t *testing.T) {
 	if wrote, _ := Capture([]byte(dropped), path, later.Add(2*time.Second)); !wrote {
 		t.Fatal("dropped five_hour window did not rewrite")
 	}
-	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay == nil {
+	if u, _ := account.ReadUsageRecord(path); u.FiveHour != nil || u.SevenDay == nil {
 		t.Errorf("after drop: %+v, want seven_day only", u)
 	}
 }
@@ -117,7 +119,7 @@ func TestCaptureRecordsResets(t *testing.T) {
 	if wrote, _ := Capture([]byte(`{"rate_limits":{}}`), path, t0.Add(time.Second)); !wrote {
 		t.Fatal("empty rate_limits not recorded")
 	}
-	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay != nil || !u.SeenAt.Equal(t0.Add(time.Second)) {
+	if u, _ := account.ReadUsageRecord(path); u.FiveHour != nil || u.SevenDay != nil || !u.SeenAt.Equal(t0.Add(time.Second)) {
 		t.Fatalf("after reset: %+v, want no windows, seen_at updated", u)
 	}
 
@@ -135,14 +137,14 @@ func TestCaptureRecordsResets(t *testing.T) {
 	if wrote, _ := Capture(noLimits, path, afterFive); !wrote {
 		t.Fatal("expired five_hour not dropped")
 	}
-	u, _ := ReadUsage(path)
+	u, _ := account.ReadUsageRecord(path)
 	if u.FiveHour != nil || u.SevenDay == nil || !u.SeenAt.Equal(t0.Add(2*time.Second)) {
 		t.Fatalf("after five_hour reset: %+v", u)
 	}
 	if wrote, _ := Capture(noLimits, path, time.Unix(1738857600, 0)); !wrote {
 		t.Fatal("expired seven_day not dropped")
 	}
-	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay != nil {
+	if u, _ := account.ReadUsageRecord(path); u.FiveHour != nil || u.SevenDay != nil {
 		t.Fatalf("after both resets: %+v, want no windows", u)
 	}
 }

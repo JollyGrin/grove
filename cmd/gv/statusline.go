@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/statusline"
 )
@@ -24,7 +25,7 @@ func cmdStatusline(args []string) error {
 	if len(args) == 0 {
 		wrap, _ := config.StatuslineWrapFrom(config.PathAt(""))
 		os.Exit(statusline.Run(os.Stdin, os.Stdout, os.Stderr, wrap,
-			statusline.UsageDir(config.StateDirPath()), os.Getenv("GROVE_ACCOUNT"), time.Now()))
+			account.Open(config.StateDirPath()).UsageDir(), os.Getenv("GROVE_ACCOUNT"), time.Now()))
 	}
 	if len(args) != 1 {
 		return errors.New(statuslineUsage)

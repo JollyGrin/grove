@@ -372,13 +372,30 @@ login, alt = rows
 assert login['usage'] == {'hint': 'no session on this account yet'}, login
 u = alt['usage']
 assert set(u) == {'five_hour', 'seven_day', 'seen_at'}, u
-assert u['five_hour']['used_percentage'] == 42 and 'resets_at' in u['five_hour'], u
-assert u['seven_day'] == {'used_percentage': 0}, u
+assert u['five_hour']['state'] == 'live' and u['five_hour']['used_percentage'] == 42 and 'resets_at' in u['five_hour'], u
+assert u['seven_day'] == {'state': 'reset', 'used_percentage': 0}, u
 assert u['seen_at'] == '2026-01-01T00:00:00Z', u
+"
+printf '{"seven_day":{"used_percentage":61},"seen_at":"2026-01-01T00:00:00Z"}\n' > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+u = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]['usage']
+assert u['five_hour'] == {'state': 'unknown'}, u
+assert u['seven_day'] == {'state': 'live', 'used_percentage': 61, 'stale': True}, u
 "
 "$GV" account use login > /dev/null || fail "account use login failed"
 if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
 grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
+[ -e "$ACCT_DIR/usage/alt.json" ] && fail "account rm left alt's usage record"
+printf 'tok\n' | "$GV" account add alt > /dev/null || fail "account re-add failed"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+alt = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]
+assert alt['name'] == 'alt' and alt['usage'] == {'hint': 'no session on this account yet'}, alt
+"
 "$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
 
 say "feature land (grove-376): plan, dry run, execute, skip reasons"
