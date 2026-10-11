@@ -74,6 +74,11 @@ type Verified struct {
 	PRNumber   int    // 0 = no PR
 	PRURL      string
 	PRBody     string
+	// AccountOnHost answers "does the receiving host have the task's
+	// pinned account?" — "yes", "no", or "" (nothing pinned, a release, or
+	// the host's accounts could not be read). Only "yes" earns a re-pin
+	// hint: one naming an account the host lacks would just refuse there.
+	AccountOnHost string
 }
 
 // Runner is the side-effect seam. Every method maps to an existing gv
@@ -306,14 +311,17 @@ func Plan(info *Info, v *Verified, o Options) string {
 		fmt.Fprintf(&b, "  then      ssh %s -- gv adopt %s --repo %s --branch %s --sync\n", o.Host, info.Ticket, info.Repo, info.Branch)
 	}
 	fmt.Fprintf(&b, "  note      the session transcript stays here; the PR body is the carrier\n")
-	fmt.Fprintf(&b, "  account   %s\n", accountNote(info, o))
+	fmt.Fprintf(&b, "  account   %s\n", accountNote(info, v, o))
 	return b.String()
 }
 
 // accountNote says what happens to the task's claude account: nothing
 // travels, and the adopting host runs on its own active account — so a
 // pin dropped by the handoff is visible, never silent.
-func accountNote(info *Info, o Options) string {
+//
+// The task is live on the host once the adopt lands, so a re-pin there is
+// pause-then-adopt — offered only when the host has the account.
+func accountNote(info *Info, v *Verified, o Options) string {
 	there := o.Host + " resolves its own active account"
 	if o.Release {
 		there = "the calling host resolves its own active account"
@@ -321,7 +329,17 @@ func accountNote(info *Info, o Options) string {
 	if info.Account == "" {
 		return "none pinned — " + there
 	}
-	return fmt.Sprintf("%s pinned here — NOT carried; %s (to re-pin there: gv adopt %s --account <name>)", info.Account, there, info.Ticket)
+	note := fmt.Sprintf("%s pinned here — NOT carried; %s", info.Account, there)
+	if o.Release {
+		return note
+	}
+	switch v.AccountOnHost {
+	case "yes":
+		return fmt.Sprintf("%s (to keep %s, on %s: gv pause %s && gv adopt %s --account %s)", note, info.Account, o.Host, info.Ticket, info.Ticket, info.Account)
+	case "no":
+		return fmt.Sprintf("%s (%s has no account %s)", note, o.Host, info.Account)
+	}
+	return fmt.Sprintf("%s (could not read %s's accounts)", note, o.Host)
 }
 
 // FollowLine is the closing line of a successful handoff. The follow

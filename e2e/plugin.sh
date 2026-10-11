@@ -386,9 +386,16 @@ assert u['seven_day'] == {'state': 'live', 'used_percentage': 61, 'stale': True}
 "
 say "chat spawn (claude-accounts 04): orchestrator_spawned carries account only when pinned"
 # The orchestrator is stubbed so no real claude ever boots on the scratch
-# token; the chat runs in the isolated tmux server.
+# token; the chat runs in the isolated tmux server. The pane must read as
+# a LIVE claude (rm's in-use check skips a pinned pane whose claude has
+# exited), and tmux reports a shebang script as its interpreter — so the
+# stub is a copy of the bash BINARY named claude, running a script that
+# ignores claude's flags and stays up.
 grep -q '^orchestrator:' "$WCFG" && fail "workspace config grew an orchestrator: block — move the stub"
-printf 'orchestrator:\n  claude: echo grove-471-chat\n' >> "$WCFG"
+mkdir -p "$SCRATCH/chatbin"
+cp "$(command -v bash)" "$SCRATCH/chatbin/claude"
+printf 'echo grove-471-chat\nsleep 600\n' > "$SCRATCH/chatbin/stub.sh"
+printf 'orchestrator:\n  claude: %s %s\n' "$SCRATCH/chatbin/claude" "$SCRATCH/chatbin/stub.sh" >> "$WCFG"
 "$GV" workspaces --json > "$SCRATCH/workspaces-label.json"
 WSLABEL="$(python3 -c "import json; print(json.load(open('$SCRATCH/workspaces-label.json'))['workspaces'][0]['label'])")"
 ( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" --account alt > "$SCRATCH/chat-pinned.out" ) || fail "orchestrator new --account alt failed"

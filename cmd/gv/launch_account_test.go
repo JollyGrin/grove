@@ -155,7 +155,7 @@ func TestChatSitesNoAccountsGolden(t *testing.T) {
 		t.Errorf("orchestrator new line changed:\n got %s\nwant %s", got, want)
 	}
 	ws := &workspace.Workspace{Label: "w", Root: "/w"}
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "", nil, acct)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "", nil, fixedAccount(acct))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestChatSitesActiveAccountWrapped(t *testing.T) {
 	}
 
 	ws := &workspace.Workspace{Label: "w", Root: "/w"}
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "brief", nil, acct)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "brief", nil, fixedAccount(acct))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestChatSitesConfigDirUnwrapped(t *testing.T) {
 		t.Errorf("cockpit first pane wrapped under claude_config_dir:\n got %s", got)
 	}
 	ws := &workspace.Workspace{Label: "w", Root: "/w"}
-	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "", nil, acct)
+	plan, err := chatSpawnPlan(cfg, ws, "", "", "", "", "", nil, fixedAccount(acct))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,13 +270,16 @@ func TestOrchestratorNewAccountWithProfileErrors(t *testing.T) {
 }
 
 // TestAccountRmLiveChats: rm's in-use check names live chats pinned to
-// the account alongside tasks; an unpinned pane never blocks.
+// the account alongside tasks; an unpinned pane, or a pinned one whose
+// claude has exited, never blocks.
 func TestAccountRmLiveChats(t *testing.T) {
 	panes := []tmux.LivePane{
-		{Session: "grove-chat-w-2", Pane: "%9", Account: "alt"},
-		{Session: "grove-w", Pane: "%3", Account: "alt"},
-		{Session: "grove-chat-w-1", Pane: "%7"},
-		{Session: "grove-chat-w-3", Pane: "%8", Account: "other"},
+		{Session: "grove-chat-w-2", Pane: "%9", Command: "claude", Account: "alt"},
+		{Session: "grove-w", Pane: "%3", Command: "2.1.283", Account: "alt"},
+		{Session: "grove-chat-w-1", Pane: "%7", Command: "claude"},
+		{Session: "grove-chat-w-3", Pane: "%8", Command: "claude", Account: "other"},
+		// claude exited: the tag outlives it, the pane is back at a shell.
+		{Session: "grove-chat-w-4", Pane: "%6", Command: "bash", Account: "alt"},
 	}
 	chats := liveChatsPinned(panes, "alt")
 	if want := []string{"grove-chat-w-2 (%9)", "grove-w (%3)"}; strings.Join(chats, ";") != strings.Join(want, ";") {
@@ -291,5 +294,102 @@ func TestAccountRmLiveChats(t *testing.T) {
 	}
 	if err := accountInUse("alt", nil, nil); err != nil {
 		t.Errorf("nothing pinned must not refuse: %v", err)
+	}
+}
+
+// fixedAccount is a chat account resolver that answers acct whatever the
+// profile.
+func fixedAccount(acct account.Resolved) func(string) (account.Resolved, error) {
+	return func(string) (account.Resolved, error) { return acct, nil }
+}
+
+// TestCockpitFirstPaneRefusal (review 1): an active account that cannot
+// resolve never stops the cockpit — its first pane prints the refusal and
+// the fix instead of launching claude, and never falls back to the login.
+func TestCockpitFirstPaneRefusal(t *testing.T) {
+	tok := activeAlt(t)
+	cfg := orchCfg()
+	if err := os.Chmod(tok, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := cockpitFirstPane(cfg, "/w")
+	if strings.Contains(got, "claude --") || strings.Contains(got, "exec") || strings.Contains(got, "||") {
+		t.Fatalf("refused first pane still launches claude: %s", got)
+	}
+	for _, want := range []string{"gv: orchestrator not started", "not 0600", "fix: gv account use login (or re-add the token: gv account add alt)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal pane lacks %q: %s", want, got)
+		}
+	}
+	if err := os.Chmod(tok, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ok := cockpitFirstPane(cfg, "/w")
+	if !strings.Contains(ok, "account alt (active)") || !strings.HasSuffix(ok, orchestratorCmd(cfg, "/w", account.Resolved{Name: "alt", TokenPath: tok})) {
+		t.Errorf("healthy first pane = %s", ok)
+	}
+	t.Setenv("GROVE_STATE_DIR", t.TempDir())
+	if got := cockpitFirstPane(cfg, "/w"); got != cockpitGolden {
+		t.Errorf("no-accounts first pane changed:\n got %s\nwant %s", got, cockpitGolden)
+	}
+}
+
+// TestFirstPaneServes (review 6): `--account login` on a freshly built
+// cockpit whose first pane is already on the login spawns nothing more;
+// on an active token account, or with any other account, it does.
+func TestFirstPaneServes(t *testing.T) {
+	t.Setenv("GROVE_STATE_DIR", t.TempDir())
+	cfg := orchCfg()
+	if !firstPaneServes(cfg, "", account.Resolved{}) || !firstPaneServes(cfg, "login", account.Resolved{}) {
+		t.Error("with no accounts the first pane already is the login")
+	}
+	activeAlt(t)
+	if firstPaneServes(cfg, "login", account.Resolved{}) {
+		t.Error("--account login while the first pane runs alt must get its own pane")
+	}
+	if firstPaneServes(cfg, "alt", account.Resolved{Name: "alt", Pin: "alt"}) {
+		t.Error("an explicit token account gets its own (pinned) pane")
+	}
+}
+
+// TestRevivedChatKeepsPin (review 2): a revival re-applies the recorded
+// pin over whatever is active now; a pin that is gone refuses with the
+// chat's own override, and `--account login` strips it.
+func TestRevivedChatKeepsPin(t *testing.T) {
+	tok := activeAlt(t)
+	s := account.Open(os.Getenv("GROVE_STATE_DIR"))
+	if _, err := s.Add("main", strings.NewReader("tok\n"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Use("main"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := orchCfg()
+	acct, err := resolveChatPin("", "alt", "override: X", "", cfg)
+	if err != nil || acct.Name != "alt" || acct.Pin != "alt" || acct.TokenPath != tok {
+		t.Fatalf("revived pin = %+v, %v; want alt kept, not active main", acct, err)
+	}
+	if _, err := resolveChatPin("", "gone", "override: gv orchestrator new --resume x", "", cfg); err == nil || !strings.Contains(err.Error(), "gv orchestrator new --resume x") {
+		t.Fatalf("gone pin = %v; want a refusal with the chat override", err)
+	}
+	if acct, err := resolveChatPin("login", "alt", "", "", cfg); err != nil || acct != (account.Resolved{}) {
+		t.Fatalf("--account login on a revive = %+v, %v; want the pin stripped", acct, err)
+	}
+}
+
+// TestAccountListed (review 4): handoff's re-pin hint keys off the
+// target's `gv account ls --json` — yes, no, or unknown, never a guess.
+func TestAccountListed(t *testing.T) {
+	env := []byte(`{"schema_version":1,"accounts":[{"name":"login"},{"name":"alt"}]}`)
+	if got := accountListed(env, "alt"); got != "yes" {
+		t.Errorf("listed = %q, want yes", got)
+	}
+	if got := accountListed(env, "work"); got != "no" {
+		t.Errorf("unlisted = %q, want no", got)
+	}
+	for _, bad := range []string{"", "gv: unknown command", `{"tasks":[]}`} {
+		if got := accountListed([]byte(bad), "alt"); got != "" {
+			t.Errorf("accountListed(%q) = %q, want unknown", bad, got)
+		}
 	}
 }

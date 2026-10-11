@@ -161,6 +161,19 @@ func ReadEvents(stateDir string, limit int) ([]Event, error) {
 // chat ran on. "" when no event names the id or the last one carried no
 // model (the host default, or a spawn older than the field).
 func SpawnModel(events []Event, sessionID string) string {
+	return spawnField(events, sessionID, "model")
+}
+
+// SpawnAccount is SpawnModel for the claude account (claude-accounts): the
+// account the last spawn of sessionID was explicitly pinned to, so a
+// revival re-applies it. "" when it was unpinned or no event names it.
+func SpawnAccount(events []Event, sessionID string) string {
+	return spawnField(events, sessionID, "account")
+}
+
+// spawnField reads one data key off the last orchestrator_spawned event
+// whose session_id or resume names sessionID.
+func spawnField(events []Event, sessionID, key string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -170,7 +183,7 @@ func SpawnModel(events []Event, sessionID string) string {
 			continue
 		}
 		if ev.Data["session_id"] == sessionID || ev.Data["resume"] == sessionID {
-			return ev.Data["model"]
+			return ev.Data[key]
 		}
 	}
 	return ""

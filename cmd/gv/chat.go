@@ -319,11 +319,17 @@ type chatPlan struct {
 // through unchanged — Claude Code, not grove, decides whether the
 // backend honours it.
 //
-// acct (claude-accounts) is resolved by the caller (the store is not
-// pure); wrapWorker applies the profile's wrap or the account's, never
-// both, LAST like the profile wrap always was.
-func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, effort, resume, brief string, sessions []string, acct account.Resolved) (chatPlan, error) {
+// acct (claude-accounts) resolves the chat's account from the profile
+// resolved here — the caller owns the store, which is not pure. A profile
+// resolves to no account (the resolver skips the active one and refuses
+// an explicit one). wrapWorker applies the profile's wrap or the
+// account's, never both, LAST like the profile wrap always was.
+func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, effort, resume, brief string, sessions []string, acct func(profileName string) (account.Resolved, error)) (chatPlan, error) {
 	name, p, err := cfg.ResolveProfile(profile, nil)
+	if err != nil {
+		return chatPlan{}, err
+	}
+	resolved, err := acct(name)
 	if err != nil {
 		return chatPlan{}, err
 	}
@@ -377,11 +383,10 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, 
 		SessionID: id,
 		Brief:     brief,
 		BriefPath: briefPath,
-		Account:   acct,
+		Account:   resolved,
 	}
 	if p != nil {
 		plan.Dir = filepath.Join(orchDir, name)
-		plan.Account = account.Resolved{}
 	}
 	plan.Cmd = wrapWorker(launch, p, plan.Account)
 	return plan, nil
@@ -466,22 +471,24 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	// grove-337: a revival keeps the model it ran on unless --model says
 	// otherwise — reviving a haiku chat must not silently run it on opus.
-	model := r.Model
-	if r.Resume != "" && model == "" {
+	model, pinned := r.Model, ""
+	if r.Resume != "" {
 		events, _ := state.ReadEvents(twinState, 0)
-		model = revivedModel(cfg, events, r.Resume, profile, resumeTranscriptPath(ws, profile, r.Resume))
+		if model == "" {
+			model = revivedModel(cfg, events, r.Resume, profile, resumeTranscriptPath(ws, profile, r.Resume))
+		}
+		// claude-accounts: a revival keeps the account its chat was
+		// explicitly pinned to, as it keeps the model (grove-337).
+		pinned = state.SpawnAccount(events, r.Resume)
 	}
 	// claude-accounts: resolved against the TWIN's config (its
-	// claude_config_dir, its orchestrator command) and preflighted before
-	// a dir, a session or an event exists. A profile skips the active
-	// account and refuses an explicit one.
-	profileName, _, err := cfg.ResolveProfile(profile, nil)
-	if err != nil {
-		return err
-	}
-	acct, err := resolveChatAccount(r.Account, profileName, cfg)
-	if err != nil {
-		return err
+	// claude_config_dir, its orchestrator command) once chatSpawnPlan has
+	// the profile, and preflighted before a dir, a session or an event
+	// exists. A profile skips the active account and refuses an explicit
+	// one; a revived pin that is gone or expired refuses, never a login.
+	override := fmt.Sprintf("override: gv orchestrator new --workspace %s --resume %s --account <name|login> (login strips the pin)", label, r.Resume)
+	acct := func(profileName string) (account.Resolved, error) {
+		return resolveChatPin(r.Account, pinned, override, profileName, cfg)
 	}
 	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Effort, r.Resume, r.Brief, tmux.SessionNames(), acct)
 	if err != nil {
@@ -526,13 +533,7 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	// back as the row's `model` (the phone's chat subtitle). Best-effort,
 	// like the stamp above.
 	tagChatSessionModel(plan.Session, plan.Runs)
-	if plan.Account.Pin != "" {
-		if pane, err := tmux.ChatSessionPane(plan.Session); err == nil {
-			tagChatPaneAccount(pane, plan.Account.Pin)
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not tag %s with account %q: %v\n", plan.Session, plan.Account.Pin, err)
-		}
-	}
+	tagChatSessionAccount(plan.Session, plan.Account.Pin)
 	data := map[string]string{"workspace": label, "session": plan.Session}
 	if r.OpID != "" {
 		data["op_id"] = r.OpID

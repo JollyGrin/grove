@@ -1084,12 +1084,6 @@ func seedOrchestratorDir(orchDir string) error {
 func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	session := cockpitSessionFor(ws)
 	orchDir := orchestratorDirFor(ws, cfg)
-	// claude-accounts: the first pane runs on the active account, resolved
-	// and preflighted before anything is built — a bad token refuses here.
-	acct, err := resolveChatAccount("", "", cfg)
-	if err != nil {
-		return err
-	}
 	if err := seedOrchestratorDir(orchDir); err != nil {
 		return err
 	}
@@ -1140,14 +1134,10 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SendKeys(dashPane, dash); err != nil {
 		return err
 	}
-	// A token account loses claude.ai connectors and Remote Control: the
-	// pane says so above claude, since the operator is attaching, not
-	// reading this process's stdout.
-	firstPane := orchestratorCmd(cfg, root, acct)
-	if line := chatAccountLine(acct); line != "" {
-		firstPane = "printf '%s\\n' " + remote.Quote(line) + "; " + firstPane
-	}
-	if _, err := tmux.SpawnPane(session, orchDir, firstPane); err != nil {
+	// claude-accounts: only this pane needs the active account, and an
+	// account it cannot resolve prints its refusal there — the operator
+	// is attaching, not reading this process's stdout.
+	if _, err := tmux.SpawnPane(session, orchDir, cockpitFirstPane(cfg, root)); err != nil {
 		return err
 	}
 	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
@@ -1305,10 +1295,12 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (st
 }
 
 // spawnOrchestratorAccountBrief is spawnOrchestratorBrief with `gv
-// orchestrator new --account` (claude-accounts): the flag, else the
-// active account, resolved and preflighted before anything is built. Like
-// a brief, an explicit account needs a pane of its own — the cockpit's
-// first pane runs the active one.
+// orchestrator new --account` (claude-accounts). An explicit account is
+// resolved and preflighted before anything is built; the active one only
+// once the cockpit exists, since a cockpit always builds (its first pane
+// shows an active-account refusal itself). Like a brief, an explicit
+// account needs a pane of its own — unless it is the login the first
+// pane already runs.
 func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model, effort string) (string, error) {
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return "", err
@@ -1316,9 +1308,12 @@ func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model
 	if err := config.CheckEffort(effort); err != nil {
 		return "", err
 	}
-	acct, err := resolveChatAccount(accountFlag, "", cfg)
-	if err != nil {
-		return "", err
+	var acct account.Resolved
+	if accountFlag != "" {
+		var err error
+		if acct, err = resolveChatAccount(accountFlag, "", cfg); err != nil {
+			return "", err
+		}
 	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
@@ -1335,8 +1330,14 @@ func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model
 		// place in it. An unbriefed spawn is done here — it built the
 		// pane that was asked for — and a briefed one falls through to a
 		// pane of its own, exactly as the profiled twin does.
-		if brief == "" && model == "" && accountFlag == "" {
+		if brief == "" && model == "" && effort == "" && firstPaneServes(cfg, accountFlag, acct) {
 			return "cockpit built — gv attaches", nil
+		}
+	}
+	if accountFlag == "" {
+		var err error
+		if acct, err = resolveChatAccount("", "", cfg); err != nil {
+			return "", err
 		}
 	}
 	root := ""
@@ -1371,6 +1372,21 @@ func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model
 		msg += " " + line
 	}
 	return msg, nil
+}
+
+// firstPaneServes reports whether the cockpit's just-built first pane
+// already runs the account a spawn with no brief, model or effort asked
+// for: no --account, or `--account login` while the first pane is on the
+// login too — a second identical pane would only duplicate it.
+func firstPaneServes(cfg *config.Config, accountFlag string, acct account.Resolved) bool {
+	if accountFlag == "" {
+		return true
+	}
+	if acct.Name != "" {
+		return false
+	}
+	first, err := resolveChatAccount("", "", cfg)
+	return err == nil && first.Name == ""
 }
 
 // mintedOrchestratorLaunch is grove-222 applied to a cockpit pane: mint the

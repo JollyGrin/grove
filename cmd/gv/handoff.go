@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -71,7 +73,7 @@ func cmdHandoff(args []string) error {
 		if err != nil {
 			return err
 		}
-		r := &localHandoff{cfg: cfg}
+		r := &localHandoff{cfg: cfg, host: *to}
 		o := handoff.Options{
 			Task: positionals[0], Host: *to, Rm: *rm, Yes: *yes,
 			NoCheckpoint: *noCheckpoint, Timeout: *timeout,
@@ -206,6 +208,9 @@ func handoffFrom(cfg *config.Config, task, host, as string, rm, yes, noCheckpoin
 type localHandoff struct {
 	cfg *config.Config
 	t   *state.Task
+	// host is the --to target ("" for a release): verify asks it whether
+	// it has the task's pinned account.
+	host string
 }
 
 func (l *localHandoff) Lookup(task string) (*handoff.Info, error) {
@@ -264,7 +269,50 @@ func (l *localHandoff) Verify(info *handoff.Info) (*handoff.Verified, error) {
 	if v.PRNumber, v.PRURL, v.PRBody, err = github.OpenPRBody(repo.Path, info.Branch); err != nil {
 		return nil, err
 	}
+	if info.Account != "" && l.host != "" {
+		v.AccountOnHost = remoteHasAccount(l.cfg, l.host, info.Account)
+	}
 	return v, nil
+}
+
+// remoteHasAccount asks host's `gv account ls --json` whether it has
+// account name: "yes", "no", or "" when it can't tell (ssh failed, an
+// older gv, unparseable output). Account names are public; the listing
+// carries no token. Not through remote.Run: `account` is deliberately
+// not a --host verb (pushing tokens to hosts is gv-keys 08), and no
+// stdin, so the confirm prompt that follows keeps the terminal.
+func remoteHasAccount(cfg *config.Config, host, name string) string {
+	h, err := cfg.Host(host)
+	if err != nil {
+		return ""
+	}
+	argv := remote.Argv(h, "account", []string{"ls", "--json"})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	if err != nil {
+		return ""
+	}
+	return accountListed(out, name)
+}
+
+// accountListed reads a `gv account ls --json` envelope: "yes" when name
+// is a row, "no" when it is not, "" when the output is not the envelope.
+func accountListed(out []byte, name string) string {
+	var env struct {
+		Accounts []struct {
+			Name string `json:"name"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil || env.Accounts == nil {
+		return ""
+	}
+	for _, a := range env.Accounts {
+		if a.Name == name {
+			return "yes"
+		}
+	}
+	return "no"
 }
 
 func (l *localHandoff) Confirm(string) (bool, error) {
