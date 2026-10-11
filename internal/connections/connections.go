@@ -116,6 +116,10 @@ type Env struct {
 	// rows (fake envs, and the real one when tmux is not installed —
 	// the binary row already covers that).
 	TmuxGlobalOptions func(names ...string) map[string]string
+
+	// AccountsStateDir is the grove state dir holding accounts/ (the
+	// claude-accounts rows); "" drops those rows (fake envs).
+	AccountsStateDir string
 }
 
 // NewEnv builds the real-machine Env.
@@ -143,6 +147,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
 		TmuxGlobalOptions: tmux.GlobalOptions,
+		AccountsStateDir:  config.StateDir(),
 	}
 }
 

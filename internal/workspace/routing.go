@@ -20,11 +20,11 @@ import (
 // fallback `gv done 7` uses (same shape as cmd/gv's shortRefRe).
 var shortRefRe = regexp.MustCompile(`^#?(\d+)$`)
 
-// stateDir is the state path for a workspace root, creation-free: unlike
+// StateDir is the state path for a workspace root, creation-free: unlike
 // config.StateDirAt it never MkdirAlls, so read-only scans leave no empty
 // .grove/state/ behind in a workspace that has never run a verb. The
 // GROVE_STATE_DIR override wins for both shapes (test isolation).
-func stateDir(root string) string {
+func StateDir(root string) string {
 	if override := os.Getenv("GROVE_STATE_DIR"); override != "" {
 		return override
 	}
@@ -68,7 +68,7 @@ func FindTicket(list []Workspace, ref string, includeDone bool) []Workspace {
 		if !Alive(ws) {
 			continue
 		}
-		if tasks, err := state.Peek(stateDir(ws.Root)); err == nil && owns(tasks) {
+		if tasks, err := state.Peek(StateDir(ws.Root)); err == nil && owns(tasks) {
 			owners = append(owners, ws)
 		}
 	}
@@ -88,7 +88,7 @@ func ActiveWorktrees(list []Workspace) []string {
 		if !Alive(ws) {
 			continue
 		}
-		tasks, err := state.Peek(stateDir(ws.Root))
+		tasks, err := state.Peek(StateDir(ws.Root))
 		if err != nil {
 			continue
 		}

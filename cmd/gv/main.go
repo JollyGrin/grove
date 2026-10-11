@@ -169,6 +169,10 @@ const usage = `gv — grove
                                               repo (feedback first), recent LEARNINGS.md entries, and
                                               entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
+  gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init
+                                              Claude subscription accounts: add stores a ` + "`claude setup-token`" + `
+                                              token read from stdin; use sets the default; shell-init prints
+                                              the ~/.bashrc function (eval "$(gv account shell-init)")
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
@@ -331,6 +335,17 @@ func hookCandidates() []hooks.Candidate {
 }
 
 func main() {
+	// `gv account` runs before the ambient workspace resolves: the shell
+	// function asks `token-path` from any cwd, so it must be read-only
+	// (resolveAmbient creates .grove/state) and a broken workspace label
+	// must not make it fail.
+	if len(os.Args) >= 2 && os.Args[1] == "account" {
+		if err := cmdAccount(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	resolveAmbient()
 	if len(os.Args) < 2 {
 		// Bare gv: inside a workspace -> its cockpit; outside with a

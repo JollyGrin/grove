@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-469 · claude-accounts 02: `internal/account` store + `gv account add/ls/use/rm/token-path/shell-init` + doctor rows (2026-10-08). Store under `<state dir>/accounts/` (dir 0700, `<name>.token` 0600 written atomically, `<name>.minted` = add date, `active` = bare name; names `^[a-z][a-z0-9-]{0,31}$`, `login` reserved); every token reader goes through `Store.TokenSource` (the gv-keys 07 seam). `add` reads stdin only (echo off at a TTY); `ls --json` = `accounts` envelope documented in docs/plugins.md + asserted in e2e/plugin.sh; `rm` refuses while a non-done task's new read-side `Task.Account` names it (`--force`); `account` is exempt from the ambient-label check so shell `claude` never flips to login on a broken label. Conditional doctor rows (token not 0600, active missing, shell-init absent, token ≥330d). Tests: ZZZSENTINEL absent from every output/error; the shell-init function run under bash with the test binary as `gv` and a fake `claude`. No launch path changes (car 03).
 - [x] model-fit 06: LEARNINGS.md retirement pass (grove-438, 2026-10-07): 12 audited entries resolved by truth (1 deleted, 10 rewritten to the current fact + pointer, grove-79's lost headline restored), head §Claude Code + §tmux reshaped to fact + rule + ticket with narratives moved to `docs/archive/LEARNINGS-2026-{09,10}.md`, four generalized rules moved into tmux-discipline / shipping-gates / claude-code-facts, the four duplicated rules given one home each.
 - [x] grove-439 · model-fit 07: `gv learnings [--json] [--since 14d]` — read-only promotion report: per repo, auto-memory notes newer than the window (feedback first; memory dir resolved exactly as the #437 doctor row), LEARNINGS.md entries in the window, and `candidates` (a dated entry naming a skill whose SKILL.md cites neither its ticket, date nor headline). New `internal/learnings` (fixture-dir table tests: absent/empty/index-only/mixed/malformed-not-fatal), `report` envelope documented in docs/plugins.md + plugin-authoring digest, e2e/plugin.sh reads it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` and asserts the memory dir/LEARNINGS.md/skill are byte-identical after. Orchestrator duty 11 (learnings review: one promotion or retirement per note, target file + exact text, apply only on yes) + seed tripwire.
 - [x] **grove-455** · `gv doctor` reports non-default tmux options (A/B arm C of #169): `tmux.GlobalOptions` (one exec, `start-server ; show-options -g ; show-options -gw`, parser unit-tested on canned output) + `connections.tmuxOptionConnections` behind a `TmuxGlobalOptions` Env seam — rows exist only for non-default values, so a stock machine prints nothing; `base-index`/`pane-base-index`/`renumber-windows` are ✓ info lines, `allow-rename on` is a `!` warn with a fix. Verified live against an isolated hostile-conf server.
@@ -85,17 +86,6 @@
       (`<state>/done-gate/<ticket>`), never when grove itself errors.
       `e2e/dummy.sh` covers block/warn/last-match. Flip to `block` once a
       release of warn verdicts looks right.
-- [x] model-fit 10: price table + tier classifier for the Claude 5.5
-      family and Fable ids (grove-442, 2026-10-07). Explicit
-      `claude-opus-5-5` ($4/$20, cache reads $0.20) and `claude-sonnet-5-5`
-      ($2/$10, cache reads $0.20) rows — Opus 5.5 had been riding Opus 5's
-      prefix with derived cache reads at $0.50, 2.5× over. A Fable `--model`
-      pin on a profile lane now takes the lane's opus slot (was: sonnet);
-      `TierForModel` maps a Fable id to a configured "fable" tier and
-      otherwise stays on the host default rather than downgrading a revive
-      to opus (documented in `internal/config/models.go`). Status-bar
-      detection knows "fable". Prices verified against the claude-api skill
-      model table (cached 2026-09-25).
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
