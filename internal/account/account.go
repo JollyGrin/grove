@@ -393,6 +393,7 @@ type Row struct {
 	Pinned       int    `json:"pinned"`
 	Connectors   bool   `json:"connectors"`
 	Expired      bool   `json:"expired"`
+	Usage        *Usage `json:"usage,omitempty"` // only with --usage
 }
 
 // Rows builds the listing: the implicit login row first (with its email,

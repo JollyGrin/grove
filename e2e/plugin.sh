@@ -358,6 +358,24 @@ assert login['active'] is False and login['connectors'] is True and login['token
 assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 1 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
 assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
 "
+say "gv account ls --usage --json (grove-473): recorded usage, a reset window, a no-data hint, no token value"
+ACCT_DIR=$(dirname "$("$GV" account token-path)") || fail "account token-path failed"
+mkdir -p "$ACCT_DIR/usage"
+printf '{"five_hour":{"used_percentage":42,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":1000},"seen_at":"2026-01-01T00:00:00Z"}\n' \
+  "$(( $(date +%s) + 7200 ))" > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts-usage.json" && fail "a token value reached account ls --usage output"
+python3 -c "
+import json
+rows = json.load(open('$SCRATCH/accounts-usage.json'))['accounts']
+login, alt = rows
+assert login['usage'] == {'hint': 'no session on this account yet'}, login
+u = alt['usage']
+assert set(u) == {'five_hour', 'seven_day', 'seen_at'}, u
+assert u['five_hour']['used_percentage'] == 42 and 'resets_at' in u['five_hour'], u
+assert u['seven_day'] == {'used_percentage': 0}, u
+assert u['seen_at'] == '2026-01-01T00:00:00Z', u
+"
 "$GV" account use login > /dev/null || fail "account use login failed"
 if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
 grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"

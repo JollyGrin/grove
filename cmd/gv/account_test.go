@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/JollyGrin/grove/internal/account"
 )
 
 // gvAsTestBinaryEnv makes the test binary act as `gv` (TestMain below),
@@ -76,6 +81,8 @@ func TestAccountSentinelNeverPrinted(t *testing.T) {
 	runs := [][]string{
 		{"account", "ls"},
 		{"account", "ls", "--json"},
+		{"account", "ls", "--usage"},
+		{"account", "ls", "--usage", "--json"},
 		{"account", "token-path"},
 		{"account", "shell-init"},
 		{"account", "use", "alt"},
@@ -153,6 +160,80 @@ func TestAccountLsJSON(t *testing.T) {
 	}
 	if out, err := sb.gv(t, "", "account", "use", "alt"); err == nil || !strings.Contains(out, "EXPIRED") {
 		t.Errorf("use of an expired account: err=%v\n%s", err, out)
+	}
+}
+
+// ls --usage attaches each account's recorded usage, or a no-data hint,
+// and never a token value — even one planted in a usage file's place.
+func TestAccountLsUsage(t *testing.T) {
+	sb := newAccountSandbox(t)
+	if out, err := sb.gv(t, accountSentinel+"\n", "account", "add", "alt"); err != nil {
+		t.Fatalf("add: %v\n%s", err, out)
+	}
+	usageDir := filepath.Join(sb.state, "accounts", "usage")
+	if err := os.MkdirAll(usageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resets := time.Now().Add(2 * time.Hour).Unix()
+	body := fmt.Sprintf(`{"five_hour":{"used_percentage":42,"resets_at":%d},"seen_at":%q}`,
+		resets, time.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(usageDir, "alt.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := sb.gvStdout(t, "account", "ls", "--usage", "--json")
+	if err != nil {
+		t.Fatalf("ls --usage --json: %v\n%s", err, out)
+	}
+	if strings.Contains(out, accountSentinel) {
+		t.Fatalf("ls --usage --json printed the token:\n%s", out)
+	}
+	var doc struct {
+		Accounts []struct {
+			Name  string `json:"name"`
+			Usage *struct {
+				FiveHour *struct {
+					UsedPercentage float64 `json:"used_percentage"`
+					ResetsAt       *string `json:"resets_at"`
+				} `json:"five_hour"`
+				SevenDay *struct {
+					UsedPercentage float64 `json:"used_percentage"`
+					ResetsAt       *string `json:"resets_at"`
+				} `json:"seven_day"`
+				SeenAt *string `json:"seen_at"`
+				Hint   string  `json:"hint"`
+			} `json:"usage"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(doc.Accounts) != 2 {
+		t.Fatalf("rows: %s", out)
+	}
+	login, alt := doc.Accounts[0].Usage, doc.Accounts[1].Usage
+	if login == nil || login.Hint != account.HintNoSession || login.FiveHour != nil || login.SeenAt != nil {
+		t.Errorf("login usage, want the no-session hint only:\n%s", out)
+	}
+	if alt == nil || alt.Hint != "" || alt.SeenAt == nil || alt.FiveHour == nil || alt.FiveHour.UsedPercentage != 42 ||
+		alt.FiveHour.ResetsAt == nil || alt.SevenDay == nil || alt.SevenDay.UsedPercentage != 0 || alt.SevenDay.ResetsAt != nil {
+		t.Errorf("alt usage:\n%s", out)
+	}
+	out, _ = sb.gvStdout(t, "account", "ls", "--usage")
+	if !strings.Contains(out, "5h 42% (resets ") || !strings.Contains(out, "7d 0% (reset)") ||
+		!strings.Contains(out, "as of 3m") || !strings.Contains(out, "no data — "+account.HintNoSession) {
+		t.Errorf("ls --usage text:\n%s", out)
+	}
+	// Plain ls carries no usage.
+	if out, _ := sb.gvStdout(t, "account", "ls", "--json"); strings.Contains(out, `"usage"`) {
+		t.Errorf("ls --json without --usage carries usage:\n%s", out)
+	}
+	// A usage file holding a token-shaped value is corrupt, never echoed.
+	if err := os.WriteFile(filepath.Join(usageDir, "alt.json"), []byte(accountSentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = sb.gvStdout(t, "account", "ls", "--usage", "--json")
+	if err != nil || strings.Contains(out, accountSentinel) || !strings.Contains(out, "usage file unreadable") {
+		t.Errorf("corrupt usage file: err=%v\n%s", err, out)
 	}
 }
 
