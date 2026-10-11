@@ -27,7 +27,7 @@ import (
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
-const accountUsage = "usage: gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init"
+const accountUsage = "usage: gv account add <name> | ls [--usage] [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init"
 
 func accountStore() account.Store { return account.Open(config.StateDirPath()) }
 
@@ -53,14 +53,18 @@ func cmdAccount(args []string) error {
 		}
 		return accountAdd(s, rest[0])
 	case "ls":
-		jsonOut := false
+		jsonOut, withUsage := false, false
 		for _, a := range rest {
-			if a != "--json" {
-				return errors.New("usage: gv account ls [--json]")
+			switch a {
+			case "--json":
+				jsonOut = true
+			case "--usage":
+				withUsage = true
+			default:
+				return errors.New("usage: gv account ls [--usage] [--json]")
 			}
-			jsonOut = true
 		}
-		return accountLs(s, jsonOut)
+		return accountLs(s, jsonOut, withUsage)
 	case "use":
 		if len(rest) != 1 {
 			return errors.New("usage: gv account use <name|login>")
@@ -137,11 +141,20 @@ func accountAdd(s account.Store, name string) error {
 	return nil
 }
 
-func accountLs(s account.Store, jsonOut bool) error {
+// accountLs is `gv account ls`; withUsage attaches each account's last
+// recorded 5h/7d usage (local files only, design §Decision 8).
+func accountLs(s account.Store, jsonOut, withUsage bool) error {
 	home, _ := os.UserHomeDir()
-	rows, err := s.Rows(home, time.Now(), accountTasks())
+	now := time.Now()
+	rows, err := s.Rows(home, now, accountTasks())
 	if err != nil {
 		return err
+	}
+	if withUsage {
+		for i := range rows {
+			u := s.Usage(rows[i].Name, now)
+			rows[i].Usage = &u
+		}
 	}
 	if jsonOut {
 		return emitJSON("accounts", rows)
@@ -171,10 +184,12 @@ func accountLs(s account.Store, jsonOut bool) error {
 			line += fmt.Sprintf(" · %d pinned", r.Pinned)
 		}
 		if !r.Connectors {
-			fmt.Println(line + "  " + dim(account.ConnectorsNote))
-			continue
+			line += "  " + dim(account.ConnectorsNote)
 		}
 		fmt.Println(line)
+		if r.Usage != nil {
+			fmt.Printf("  %-*s  %s\n", width, "", account.UsageText(*r.Usage, now, time.Local))
+		}
 	}
 	return nil
 }
