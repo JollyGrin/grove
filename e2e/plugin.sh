@@ -104,7 +104,10 @@ grep -q 'gv feature ls' "$SCRATCH/fgone.out" || fail "closed-feature refusal doe
 grep -qx 'base: feature/trains (feature trains, from label trains)' "$SCRATCH/fgrab.out" || fail "grab did not name its inferred base"
 CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
 [ "$(git -C "$CAR_WT" rev-parse HEAD)" = "$TRAIN_SHA" ] || fail "car worktree did not fork from origin/feature/trains"
-"$GV" grab task-003 --feature none --effort low > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
+# claude-accounts 03: task-003 also rides an explicit --account pin; its
+# `account` row field and event key are asserted below.
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+"$GV" grab task-003 --feature none --effort low --account alt > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
 grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
 
 say "feature status (grove-375): a landed car, an active car, a queued car"
@@ -172,6 +175,11 @@ for off in ('task-001', 'task-003'):
 assert rows['task-003'].get('effort') == 'low', rows['task-003']
 for unpinned in ('task-001', 'task-002'):
     assert 'effort' not in rows[unpinned], rows[unpinned]
+# claude-accounts 03: account is additive — a name, only on the pinned worker.
+assert rows['task-003'].get('account') == 'alt', rows['task-003']
+for unpinned in ('task-001', 'task-002'):
+    assert 'account' not in rows[unpinned], rows[unpinned]
+assert 'ZZZSENTINEL' not in open('$OUT/ls.json').read(), 'token value in gv ls --json'
 print(data['tasks'][0]['ticket'])
 ")"
 
@@ -259,6 +267,9 @@ tc = {e['ticket']: e['data'] for e in created}
 assert tc['task-002']['feature'] == 'trains' and tc['task-002']['base'] == 'feature/trains', tc['task-002']
 for off in ('task-001', 'task-003'):
     assert 'feature' not in tc[off] and 'base' not in tc[off], tc[off]
+assert tc['task-003'].get('account') == 'alt', tc['task-003']
+assert 'account' not in tc['task-001'], tc['task-001']
+assert 'ZZZSENTINEL' not in open('$OUT/events.tail').read(), 'token value in events.jsonl'
 "
 
 # 4. STEER: mutations go through gv only.
@@ -332,7 +343,7 @@ say "gv watch --replay --type compaction --json prints the compaction event"
 grep -q '"type":"compaction"' "$SCRATCH/watch-compaction.json" || fail "gv watch did not print the compaction event"
 
 say "gv account ls --json (claude-accounts): the accounts envelope, login row first, no token value"
-printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+# alt was added above for task-003's --account pin, so it counts 1 pinned.
 "$GV" account use alt > /dev/null || fail "account use alt failed"
 "$GV" account ls --json > "$SCRATCH/accounts.json" || fail "account ls --json failed"
 grep -q ZZZSENTINEL "$SCRATCH/accounts.json" "$SCRATCH/acct-add.out" && fail "a token value reached account output"
@@ -344,11 +355,13 @@ rows = data['accounts']
 assert [r['name'] for r in rows] == ['login', 'alt'], rows
 login, alt = rows
 assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0 and login['expired'] is False, login
-assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 0 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
+assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 1 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
 assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
 "
 "$GV" account use login > /dev/null || fail "account use login failed"
-"$GV" account rm alt > /dev/null || fail "account rm alt failed"
+if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
+grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
 
 say "feature land (grove-376): plan, dry run, execute, skip reasons"
 # task-002 is the only active (not-done) car on trains; a stub gh answers

@@ -272,6 +272,16 @@ Since grove-435 (model-fit 03) one more additive row field:
   / `task_adopted` event data, and `gv cost --ledger` rows carry an
   `effort` column (empty when unpinned).
 
+Since grove-470 (claude-accounts 03) one more additive row field:
+
+- `account` — the subscription account (`gv account ls`) the worker was
+  explicitly pinned to with `gv grab|adopt --account <name>`. A name,
+  never a token value. **Absent** when unpinned — the worker then ran on
+  whichever account was active at launch, or the interactive login, which
+  grove does not record; never read an absent `account` as `login`. `gv
+  adopt --account login` strips a pin. The same key rides the
+  `task_created` / `task_adopted` event data.
+
 Since grove-439 (model-fit 07): `gv learnings --json`, a new read verb,
 payload key `report`:
 
@@ -432,7 +442,11 @@ have no `session_id`; treat a missing one as unknown, never as foreign.
 feature train, so an off-train grab's record is byte-identical to before;
 `task_adopted` carries the stored pair through. Both also carry optional
 `data.effort` (grove-435, additive): the `--effort` level the worker
-launched with, written only when pinned by flag or a repo `effort:` key. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+launched with, written only when pinned by flag or a repo `effort:` key.
+Both also carry optional `data.account` (grove-470, additive): the account
+name an explicit `--account` pinned the worker to — never a token value;
+on `task_adopted` an empty `account` is a pin stripped by `--account
+login`. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
 `{slug, repo, branch, base, label}` — `gv feature new` opened a feature
 train; `branch` lives on origin, `base` is what it forks from and merges
 back to, `label` the issue label that marks its tickets), `feature_closed`

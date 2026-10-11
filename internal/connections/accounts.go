@@ -9,6 +9,7 @@ package connections
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +27,10 @@ var shellRCFiles = []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".
 // but the usage shim not in ~/.claude/settings.json, the shim installed
 // with no statusline.wrap recorded (a blank status line, flagged with or
 // without accounts), a token 330+ days
-// old; a ✗ error row for a token past its one-year life. Empty
+// old; a ✗ error row for a token past its one-year life or a non-done
+// task pinned to a missing account (its adopt refuses; only checked while
+// the store holds an account, so a machine without accounts never folds
+// tasks here). Empty
 // AccountsStateDir (fake envs) drops the section.
 func accountConnections(env Env, now time.Time) []Connection {
 	if env.AccountsStateDir == "" {
@@ -69,6 +73,29 @@ func accountConnections(env Env, now time.Time) []Connection {
 			row("account-active-missing", "active account exists",
 				"gv account use login   # or: gv account add "+active,
 				"active names "+active+", which is not configured — shell claude falls back to the login")
+		}
+	}
+	if len(accts) > 0 && env.AccountTasks != nil {
+		pinned := map[string][]string{}
+		for _, t := range env.AccountTasks() {
+			if t != nil && !t.Done && t.Account != "" {
+				pinned[t.Account] = append(pinned[t.Account], t.Ticket)
+			}
+		}
+		names := make([]string, 0, len(pinned))
+		for n := range pinned {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if _, err := s.TokenSource(n); err == nil {
+				continue
+			}
+			tickets := pinned[n]
+			sort.Strings(tickets)
+			failRow("account-pin-missing:"+n, "pinned account "+n+" exists",
+				"gv account add "+n+"   # or adopt with --account login to strip the pin",
+				fmt.Sprintf("task(s) %s pin account %s, which is not configured — their adopt refuses", strings.Join(tickets, ", "), n))
 		}
 	}
 	if len(accts) > 0 && !shellInitInstalled(env) {
