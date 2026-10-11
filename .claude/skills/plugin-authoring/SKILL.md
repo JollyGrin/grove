@@ -76,7 +76,9 @@ docs/plugins.md for the full per-type data table. `task_created`/`task_adopted` 
 the worker launched with an `--effort` pin or a repo `effort:` default
 (grove-435), and `account` only when pinned by `--account` (an adopt
 writes `""` when `--account login` strips the pin; grove-470). Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`, `feature_created`
+`workspace_parked`, `orchestrator_closed`, `orchestrator_spawned` (a
+detached chat; its data carries `account` only when pinned by
+`orchestrator new --account`, grove-471), `feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,
 window, url}`), `feature_serve_stopped` (`{slug}`), `run_script_trusted`

@@ -506,6 +506,9 @@ function openModelSheet(label, add, opts) {
     var kind = o.profile ? 'model profile' : o.model ? 'Claude tier' : 'the operator’s own Claude';
     b.append(h('div', 'title', title));
     b.append(h('div', 'meta', 'runs ' + (o.runs || 'account default') + ' · ' + kind));
+    // claude-accounts: a token account only makes model requests — say so
+    // before the chat is opened, never after.
+    if (o.account) b.append(h('div', 'meta', 'account ' + o.account + ' — no claude.ai connectors, no Remote Control'));
     b.onclick = function () { closeSheet(); spawnChat(label, o.profile || '', o.model || '', add); };
     panel.append(b);
   });

@@ -358,9 +358,30 @@ assert login['active'] is False and login['connectors'] is True and login['token
 assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 1 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
 assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
 "
+say "chat spawn (claude-accounts 04): orchestrator_spawned carries account only when pinned"
+# The orchestrator is stubbed so no real claude ever boots on the scratch
+# token; the chat runs in the isolated tmux server.
+grep -q '^orchestrator:' "$WCFG" && fail "workspace config grew an orchestrator: block — move the stub"
+printf 'orchestrator:\n  claude: echo grove-471-chat\n' >> "$WCFG"
+"$GV" workspaces --json > "$SCRATCH/workspaces-label.json"
+WSLABEL="$(python3 -c "import json; print(json.load(open('$SCRATCH/workspaces-label.json'))['workspaces'][0]['label'])")"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" --account alt > "$SCRATCH/chat-pinned.out" ) || fail "orchestrator new --account alt failed"
+grep -q 'account alt (pinned to this chat) — a token session: no claude.ai connectors, no Remote Control' "$SCRATCH/chat-pinned.out" || fail "pinned chat did not say what a token session loses"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" > "$SCRATCH/chat-active.out" ) || fail "orchestrator new (active alt) failed"
+grep -q 'account alt (active)' "$SCRATCH/chat-active.out" || fail "active-account chat did not name its account"
+grep -q ZZZSENTINEL "$SCRATCH/chat-pinned.out" "$SCRATCH/chat-active.out" "$DUMMY/.grove/state/events.jsonl" && fail "a token value reached chat output or events"
+python3 -c "
+import json
+spawns = [e for e in map(json.loads, open('$DUMMY/.grove/state/events.jsonl')) if e.get('type') == 'orchestrator_spawned']
+assert len(spawns) == 2, spawns
+pinned, active = spawns
+assert pinned['data'].get('account') == 'alt', pinned
+assert 'account' not in active['data'], active
+"
 "$GV" account use login > /dev/null || fail "account use login failed"
 if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
 grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"
+grep -q 'live chat(s) grove-chat-' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinned live chat"
 "$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
 
 say "feature land (grove-376): plan, dry run, execute, skip reasons"

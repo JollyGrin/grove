@@ -38,6 +38,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/remote"
@@ -61,6 +62,10 @@ type chatSpawnReq struct {
 	Brief   string // grove-271: the chat's FIRST user message (the standing brief), text only
 	OpID    string // idempotency receipt for a relayed spawn
 	Host    string // the alias the caller knows the SPAWNING machine by
+	// Account is `--account` (claude-accounts), "" = the spawning machine's
+	// active account. Local only: it never rides a --host hop, because a
+	// remote resolves its own store.
+	Account string
 }
 
 // chatHopArgs builds the receiving half's argv (after the `orchestrator`
@@ -184,8 +189,8 @@ func chatBriefPath(orchDir, sessionID string) string {
 // worker kickoff's exact shape (main.go's `claude "$(cat <path>)"`): one
 // positional prompt, read by the shell at launch, so no amount of
 // newlines, quotes or backticks in the text can be mangled on the way in.
-// It must be appended to the BARE launch, before wrapOrchestratorLaunch:
-// the profile wrap ends in `exec <cmd> )`, and anything after that is the
+// It must be appended to the BARE launch, before wrapWorker: the profile
+// or account wrap ends in `exec <cmd> )`, and anything after that is the
 // shell's argument, not claude's.
 func chatBriefArg(path string) string {
 	return fmt.Sprintf(` "$(cat %q)"`, path)
@@ -285,6 +290,9 @@ type chatPlan struct {
 	// at creation instead of guessed at later.
 	Brief     string // grove-271: the standing brief's text ("" = none)
 	BriefPath string // where Brief must be written before the launch runs ("" = none)
+	// Account is the chat's resolved account (claude-accounts); its Pin is
+	// what the spawn event and the pane tag record.
+	Account account.Resolved
 }
 
 // chatSpawnPlan resolves the profile against the TWIN's config (its claude
@@ -310,7 +318,11 @@ type chatPlan struct {
 // level fails here like an unknown model. A profile lane passes it
 // through unchanged — Claude Code, not grove, decides whether the
 // backend honours it.
-func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, effort, resume, brief string, sessions []string) (chatPlan, error) {
+//
+// acct (claude-accounts) is resolved by the caller (the store is not
+// pure); wrapWorker applies the profile's wrap or the account's, never
+// both, LAST like the profile wrap always was.
+func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, effort, resume, brief string, sessions []string, acct account.Resolved) (chatPlan, error) {
 	name, p, err := cfg.ResolveProfile(profile, nil)
 	if err != nil {
 		return chatPlan{}, err
@@ -365,11 +377,13 @@ func chatSpawnPlan(cfg *config.Config, ws *workspace.Workspace, profile, model, 
 		SessionID: id,
 		Brief:     brief,
 		BriefPath: briefPath,
+		Account:   acct,
 	}
 	if p != nil {
 		plan.Dir = filepath.Join(orchDir, name)
-		plan.Cmd = wrapOrchestratorLaunch(launch, p)
+		plan.Account = account.Resolved{}
 	}
+	plan.Cmd = wrapWorker(launch, p, plan.Account)
 	return plan, nil
 }
 
@@ -457,7 +471,19 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 		events, _ := state.ReadEvents(twinState, 0)
 		model = revivedModel(cfg, events, r.Resume, profile, resumeTranscriptPath(ws, profile, r.Resume))
 	}
-	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Effort, r.Resume, r.Brief, tmux.SessionNames())
+	// claude-accounts: resolved against the TWIN's config (its
+	// claude_config_dir, its orchestrator command) and preflighted before
+	// a dir, a session or an event exists. A profile skips the active
+	// account and refuses an explicit one.
+	profileName, _, err := cfg.ResolveProfile(profile, nil)
+	if err != nil {
+		return err
+	}
+	acct, err := resolveChatAccount(r.Account, profileName, cfg)
+	if err != nil {
+		return err
+	}
+	plan, err := chatSpawnPlan(cfg, ws, profile, model, r.Effort, r.Resume, r.Brief, tmux.SessionNames(), acct)
 	if err != nil {
 		return err
 	}
@@ -500,6 +526,13 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	// back as the row's `model` (the phone's chat subtitle). Best-effort,
 	// like the stamp above.
 	tagChatSessionModel(plan.Session, plan.Runs)
+	if plan.Account.Pin != "" {
+		if pane, err := tmux.ChatSessionPane(plan.Session); err == nil {
+			tagChatPaneAccount(pane, plan.Account.Pin)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not tag %s with account %q: %v\n", plan.Session, plan.Account.Pin, err)
+		}
+	}
 	data := map[string]string{"workspace": label, "session": plan.Session}
 	if r.OpID != "" {
 		data["op_id"] = r.OpID
@@ -524,6 +557,10 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	if plan.BriefPath != "" {
 		data["brief"] = plan.BriefPath
 	}
+	// claude-accounts: the name only, and only when explicitly pinned.
+	if plan.Account.Pin != "" {
+		data["account"] = plan.Account.Pin
+	}
 	// The receipt lands after the session exists: a spawn that died mid-way
 	// leaves no id, so a retry tries again instead of claiming success.
 	if err := state.Append(twinState, state.Event{Type: state.EvOrchestratorSpawned, Data: data}); err != nil {
@@ -531,6 +568,9 @@ func spawnWorkspaceChat(r chatSpawnReq) error {
 	}
 	fmt.Printf("✓ orchestrator chat %s — workspace %s%s%s%s\n", plan.Session, label, chatProfileSuffix(plan.Profile), chatResumeSuffix(plan.Resume, revived), chatModelSuffix(plan.Runs))
 	fmt.Println(remote.ChatAttachLine(plan.Session))
+	if line := chatAccountLine(plan.Account); line != "" {
+		fmt.Println(line)
+	}
 	if plan.Resume != "" {
 		// Verified 2026-08-31: `claude --resume` re-fires SessionStart with
 		// the SAME session id and opens IDLE — it does not replay or
