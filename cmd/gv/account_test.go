@@ -184,16 +184,19 @@ func TestAccountShellInitRuns(t *testing.T) {
 	if out, err := exec.Command("bash", "-n", fnFile).CombinedOutput(); err != nil {
 		t.Fatalf("bash -n: %v\n%s", err, out)
 	}
-	fakeClaude := []byte("#!/bin/sh\necho \"${CLAUDE_CODE_OAUTH_TOKEN:-none}\"\n")
+	// The fake prints the token and the account the session is attributed
+	// to (GROVE_ACCOUNT, what gv statusline files usage under).
+	fakeClaude := []byte("#!/bin/sh\necho \"${CLAUDE_CODE_OAUTH_TOKEN:-none} ${GROVE_ACCOUNT:-none}\"\n")
 	if err := os.WriteFile(filepath.Join(sb.bin, "claude"), fakeClaude, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// run calls the function with an inherited token in the env (it must
-	// never leak through a login or pass-through path); extra env wins.
+	// run calls the function with an inherited token and GROVE_ACCOUNT in
+	// the env (neither may leak through a login or pass-through path);
+	// extra env wins.
 	run := func(extra ...string) (stdout, stderr string, err error) {
 		cmd := exec.Command("bash", "-c", `. "$1" && claude`, "bash", fnFile)
 		cmd.Dir = sb.home
-		cmd.Env = sb.env(append([]string{"CLAUDE_CODE_OAUTH_TOKEN=inherited"}, extra...)...)
+		cmd.Env = sb.env(append([]string{"CLAUDE_CODE_OAUTH_TOKEN=inherited", "GROVE_ACCOUNT=inherited"}, extra...)...)
 		var eb strings.Builder
 		cmd.Stderr = &eb
 		out, err := cmd.Output()
@@ -211,8 +214,8 @@ func TestAccountShellInitRuns(t *testing.T) {
 		}
 	}
 
-	if out, _, err := run(); err != nil || out != "none" {
-		t.Errorf("login: %q, %v; want none", out, err)
+	if out, _, err := run(); err != nil || out != "none none" {
+		t.Errorf("login: %q, %v; want none none", out, err)
 	}
 	if out, err := sb.gv(t, "alt-token\n", "account", "add", "alt"); err != nil {
 		t.Fatalf("add: %v\n%s", err, out)
@@ -220,8 +223,8 @@ func TestAccountShellInitRuns(t *testing.T) {
 	if out, err := sb.gv(t, "", "account", "use", "alt"); err != nil {
 		t.Fatalf("use: %v\n%s", err, out)
 	}
-	if out, _, err := run(); err != nil || out != "alt-token" {
-		t.Errorf("active alt: %q, %v; want alt-token", out, err)
+	if out, _, err := run(); err != nil || out != "alt-token alt" {
+		t.Errorf("active alt: %q, %v; want alt-token alt", out, err)
 	}
 
 	// ~/.claude spelled another way is still the personal dir.
@@ -234,13 +237,13 @@ func TestAccountShellInitRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range []string{claudeDir, claudeDir + "/", link, link + "/"} {
-		if out, _, err := run("CLAUDE_CONFIG_DIR=" + d); err != nil || out != "alt-token" {
-			t.Errorf("CLAUDE_CONFIG_DIR=%s: %q, %v; want alt-token", d, out, err)
+		if out, _, err := run("CLAUDE_CONFIG_DIR=" + d); err != nil || out != "alt-token alt" {
+			t.Errorf("CLAUDE_CONFIG_DIR=%s: %q, %v; want alt-token alt", d, out, err)
 		}
 	}
 	// A foreign dir passes through, inherited token stripped.
-	if out, _, err := run("CLAUDE_CONFIG_DIR=" + filepath.Join(sb.home, ".cc-work")); err != nil || out != "none" {
-		t.Errorf("CLAUDE_CONFIG_DIR=$HOME/.cc-work: %q, %v; want none", out, err)
+	if out, _, err := run("CLAUDE_CONFIG_DIR=" + filepath.Join(sb.home, ".cc-work")); err != nil || out != "none none" {
+		t.Errorf("CLAUDE_CONFIG_DIR=$HOME/.cc-work: %q, %v; want none none", out, err)
 	}
 
 	// token-path failing refuses, with gv's own error on stderr.
@@ -271,8 +274,8 @@ func TestAccountShellInitRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(noGv, "claude"), fakeClaude, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, _, err := run("PATH=" + noGv + ":/usr/bin:/bin"); err != nil || out != "none" {
-		t.Errorf("no gv on PATH: %q, %v; want none", out, err)
+	if out, _, err := run("PATH=" + noGv + ":/usr/bin:/bin"); err != nil || out != "none none" {
+		t.Errorf("no gv on PATH: %q, %v; want none none", out, err)
 	}
 
 	if err := os.WriteFile(filepath.Join(sb.state, "accounts", "alt.token"), nil, 0o600); err != nil {

@@ -173,6 +173,8 @@ const usage = `gv — grove
                                               Claude subscription accounts: add stores a ` + "`claude setup-token`" + `
                                               token read from stdin; use sets the default; shell-init prints
                                               the ~/.bashrc function (eval "$(gv account shell-init)")
+  gv statusline install|uninstall             wrap ~/.claude/settings.json's status line command so
+                                              every session records per-account 5h/weekly usage
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
@@ -341,6 +343,15 @@ func main() {
 	// must not make it fail.
 	if len(os.Args) >= 2 && os.Args[1] == "account" {
 		if err := cmdAccount(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// `gv statusline` is on Claude Code's status line hot path: same
+	// early dispatch, for speed and so it never touches a workspace.
+	if len(os.Args) >= 2 && os.Args[1] == "statusline" {
+		if err := cmdStatusline(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "gv:", err)
 			os.Exit(1)
 		}
