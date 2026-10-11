@@ -4,7 +4,8 @@ package statusline
 // (design §Decision 2: accounts never apply to another config dir). The
 // edit is the `gv hooks install` discipline: decode to a generic map,
 // change only `statusLine`, re-encode — every other key keeps its meaning
-// (numbers are kept as json.Number so none is re-rounded).
+// (numbers are kept as json.Number so none is re-rounded). The write
+// replaces a symlink's target, never the link.
 
 import (
 	"bytes"
@@ -14,27 +15,102 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/JollyGrin/grove/internal/config"
 )
 
 // SettingsPath is the one settings.json the shim installs into.
 func SettingsPath(home string) string { return filepath.Join(home, ".claude", "settings.json") }
 
 // ShimCommand is the statusLine.command for the gv binary at exe — an
-// absolute path, as the hook commands are.
-func ShimCommand(exe string) string { return exe + " statusline" }
+// absolute path, as the hook commands are, shell-quoted when it needs it.
+func ShimCommand(exe string) string { return shellQuote(exe) + " statusline" }
 
-// IsShim reports whether a statusLine.command is grove's shim: `<bin>
-// statusline` with a gv/grove-named binary — the hooks' basename rule plus
-// `gv-*`, the throwaway-build name (`go build -o /tmp/gv-<ticket>`). A
-// miss here is not harmless: install would record the shim as its own
-// wrap.
+// IsShim reports whether a status line command invokes grove's shim
+// anywhere: a gv-named binary word (gv, gv-* throwaway builds, *grove*)
+// followed by `statusline`, after shell-word splitting — so a quoted path,
+// `exec gv statusline`, `GROVE_ACCOUNT=x gv statusline` or `foo; gv
+// statusline` all count. A miss here is not harmless: install would
+// record the shim as its own wrap. (Run's GROVE_STATUSLINE_DEPTH marker
+// is the backstop for what no parse can see, e.g. a script that calls
+// gv.)
 func IsShim(cmd string) bool {
-	f := strings.Fields(cmd)
-	if len(f) != 2 || f[1] != "statusline" {
-		return false
+	w := shellWords(cmd)
+	for i := 0; i+1 < len(w); i++ {
+		if w[i+1] == "statusline" && isGvBinary(w[i]) {
+			return true
+		}
 	}
-	base := filepath.Base(f[0])
+	return false
+}
+
+func isGvBinary(word string) bool {
+	base := filepath.Base(word)
 	return base == "gv" || strings.HasPrefix(base, "gv-") || strings.Contains(base, "grove")
+}
+
+// shellWords splits a command into words the way sh would for this check:
+// single quotes literal, double quotes with backslash escapes, a bare
+// backslash escaping the next byte, and whitespace or an unquoted
+// operator byte (; & | ( ) < >) ending a word. Unbalanced quotes end at
+// the string's end.
+func shellWords(s string) []string {
+	var (
+		out  []string
+		cur  strings.Builder
+		have bool
+	)
+	flush := func() {
+		if have {
+			out = append(out, cur.String())
+		}
+		cur.Reset()
+		have = false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\'':
+			have = true
+			for i++; i < len(s) && s[i] != '\''; i++ {
+				cur.WriteByte(s[i])
+			}
+		case c == '"':
+			have = true
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`", s[i+1]) >= 0 {
+					i++
+				}
+				cur.WriteByte(s[i])
+			}
+		case c == '\\':
+			have = true
+			if i+1 < len(s) {
+				i++
+				cur.WriteByte(s[i])
+			}
+		case c == ' ' || c == '\t' || c == '\n' || strings.IndexByte(";&|()<>", c) >= 0:
+			flush()
+		default:
+			have = true
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
+}
+
+// shellQuote single-quotes s unless it is made only of shell-safe bytes.
+func shellQuote(s string) string {
+	safe := s != ""
+	for i := 0; i < len(s) && safe; i++ {
+		c := s[i]
+		safe = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("/._-+:,@%=", c) >= 0
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Installed reports whether the settings file's statusLine runs the shim.
@@ -59,17 +135,24 @@ func ReadCommand(path string) (cmd string, present bool, err error) {
 }
 
 // WriteCommand sets statusLine.command to cmd, creating
-// `statusLine: {type: command}` when absent; remove instead drops the
-// whole statusLine key (restoring a file that never had one).
+// `statusLine: {type: command}` when absent. remove instead drops only
+// `command`, and the statusLine object only when nothing but `type` is
+// left (restoring a file that never had one, while keeping keys like
+// padding).
 func WriteCommand(path, cmd string, remove bool) error {
 	s, err := load(path)
 	if err != nil {
 		return err
 	}
+	sl, _ := s["statusLine"].(map[string]any)
 	if remove {
-		delete(s, "statusLine")
+		if sl != nil {
+			delete(sl, "command")
+			if _, onlyType := sl["type"]; len(sl) == 0 || len(sl) == 1 && onlyType {
+				delete(s, "statusLine")
+			}
+		}
 	} else {
-		sl, _ := s["statusLine"].(map[string]any)
 		if sl == nil {
 			sl = map[string]any{"type": "command"}
 		}
@@ -83,14 +166,7 @@ func WriteCommand(path, cmd string, remove bool) error {
 	if err := enc.Encode(s); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	mode := os.FileMode(0o644)
-	if fi, err := os.Stat(path); err == nil {
-		mode = fi.Mode().Perm()
-	}
-	return writeAtomic(path, buf.Bytes(), mode)
+	return config.WriteFileAtomic(path, buf.Bytes(), 0o644)
 }
 
 func load(path string) (map[string]any, error) {

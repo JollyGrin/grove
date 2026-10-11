@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/config"
@@ -86,5 +87,33 @@ func TestStatuslineInstallUninstallRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// The shim present with no statusline.wrap recorded is broken (a blank
+// status line): install must say so and how to repair, not "installed".
+func TestStatuslineInstallFlagsShimWithoutWrap(t *testing.T) {
+	home := t.TempDir()
+	settings := statusline.SettingsPath(home)
+	cfgPath := filepath.Join(home, ".config", "grove", "config.yaml")
+	if err := statusline.WriteCommand(settings, "/home/u/go/bin/gv statusline", false); err != nil {
+		t.Fatal(err)
+	}
+	err := statuslineInstall(settings, cfgPath, "/home/u/go/bin/gv")
+	if err == nil || !strings.Contains(err.Error(), "no statusline.wrap") || !strings.Contains(err.Error(), "repair") {
+		t.Fatalf("install over an unrecorded shim: %v, want a repair error", err)
+	}
+	if _, ok := config.StatuslineWrapFrom(cfgPath); ok {
+		t.Fatal("install recorded something for a broken shim")
+	}
+	// The repair it names: the operator's command back, install again.
+	if err := statusline.WriteCommand(settings, "echo mine", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := statuslineInstall(settings, cfgPath, "/home/u/go/bin/gv"); err != nil {
+		t.Fatal(err)
+	}
+	if wrap, _ := config.StatuslineWrapFrom(cfgPath); wrap != "echo mine" {
+		t.Fatalf("after repair wrap = %q", wrap)
 	}
 }

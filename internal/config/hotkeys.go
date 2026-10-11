@@ -106,10 +106,7 @@ func editDoc(path string, edit func(root *yaml.Node)) error {
 	if err := enc.Close(); err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(preserved, buf.Bytes()...), 0o644)
+	return WriteFileAtomic(path, append(preserved, buf.Bytes()...), 0o644)
 }
 
 // ensureMap returns the mapping node at key inside m, appending an empty

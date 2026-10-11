@@ -2,6 +2,7 @@ package statusline
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +54,6 @@ func TestCaptureAbsentRateLimitsWritesNothing(t *testing.T) {
 	noLimits := strings.Replace(string(fixture(t)), `"rate_limits"`, `"not_rate_limits"`, 1)
 	for name, payload := range map[string]string{
 		"absent":        noLimits,
-		"spend only":    `{"rate_limits":{"spend_limit":{"used_percentage":1,"resets_at":2}}}`,
 		"not json":      `garbage`,
 		"empty payload": ``,
 	} {
@@ -75,27 +75,75 @@ func TestCaptureUnchangedDoesNotRewrite(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := Capture(fixture(t), path, t0.Add(time.Minute))
+	wrote, err := Capture(fixture(t), path, t0.Add(SeenAtRefresh-time.Second))
 	if err != nil || wrote {
 		t.Fatalf("unchanged Capture = %v, %v; want no write", wrote, err)
 	}
 	if fi, _ := os.Stat(path); !fi.ModTime().Equal(old) {
 		t.Fatalf("mtime moved to %v; unchanged values must not rewrite", fi.ModTime())
 	}
-	if u, _ := ReadUsage(path); !u.SeenAt.Equal(t0) {
-		t.Errorf("seen_at = %v, want the first sighting %v", u.SeenAt, t0)
+	// seen_at is the LAST sighting: once it is SeenAtRefresh old, an
+	// unchanged reading refreshes it.
+	later := t0.Add(SeenAtRefresh)
+	if wrote, _ := Capture(fixture(t), path, later); !wrote {
+		t.Fatal("unchanged reading never refreshed seen_at")
 	}
-	// A changed value rewrites; a dropped window (reset passed) is a change.
+	if u, _ := ReadUsage(path); !u.SeenAt.Equal(later) {
+		t.Errorf("seen_at = %v, want the last sighting %v", u.SeenAt, later)
+	}
+	// A changed value rewrites at once; a dropped window (reset passed)
+	// is a change.
 	changed := strings.Replace(string(fixture(t)), "23.5", "24", 1)
-	if wrote, _ := Capture([]byte(changed), path, t0.Add(2*time.Minute)); !wrote {
+	if wrote, _ := Capture([]byte(changed), path, later.Add(time.Second)); !wrote {
 		t.Fatal("changed used_percentage did not rewrite")
 	}
 	dropped := `{"rate_limits":{"seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}`
-	if wrote, _ := Capture([]byte(dropped), path, t0.Add(3*time.Minute)); !wrote {
+	if wrote, _ := Capture([]byte(dropped), path, later.Add(2*time.Second)); !wrote {
 		t.Fatal("dropped five_hour window did not rewrite")
 	}
 	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay == nil {
 		t.Errorf("after drop: %+v, want seven_day only", u)
+	}
+}
+
+// Both windows gone after a reset must be recorded, never left standing
+// at their pre-reset percentages.
+func TestCaptureRecordsResets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "login.json")
+	if _, err := Capture(fixture(t), path, t0); err != nil {
+		t.Fatal(err)
+	}
+	// An empty rate_limits: Claude Code dropped both windows.
+	if wrote, _ := Capture([]byte(`{"rate_limits":{}}`), path, t0.Add(time.Second)); !wrote {
+		t.Fatal("empty rate_limits not recorded")
+	}
+	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay != nil || !u.SeenAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("after reset: %+v, want no windows, seen_at updated", u)
+	}
+
+	// rate_limits absent altogether, with a recorded file: windows past
+	// resets_at are dropped; seen_at keeps the last real sighting.
+	if _, err := Capture(fixture(t), path, t0.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	noLimits := []byte(`{"model":{"id":"x"}}`)
+	beforeReset := time.Unix(1738425600, 0).Add(-time.Second) // five_hour resets_at
+	if wrote, _ := Capture(noLimits, path, beforeReset); wrote {
+		t.Fatal("rewrote with no window expired")
+	}
+	afterFive := time.Unix(1738425600, 0)
+	if wrote, _ := Capture(noLimits, path, afterFive); !wrote {
+		t.Fatal("expired five_hour not dropped")
+	}
+	u, _ := ReadUsage(path)
+	if u.FiveHour != nil || u.SevenDay == nil || !u.SeenAt.Equal(t0.Add(2*time.Second)) {
+		t.Fatalf("after five_hour reset: %+v", u)
+	}
+	if wrote, _ := Capture(noLimits, path, time.Unix(1738857600, 0)); !wrote {
+		t.Fatal("expired seven_day not dropped")
+	}
+	if u, _ := ReadUsage(path); u.FiveHour != nil || u.SevenDay != nil {
+		t.Fatalf("after both resets: %+v, want no windows", u)
 	}
 }
 
@@ -168,7 +216,12 @@ func TestRunEmptyOrSelfWrapPrintsNothing(t *testing.T) {
 
 // TestRunOverhead: the shim must add < 20ms over the wrapped command on
 // the fixture. Medians of interleaved runs, so machine noise hits both.
+// A wall-clock assertion is no gate test: it runs only with
+// GROVE_TIMING_TESTS=1 (BenchmarkRun is the always-available measure).
 func TestRunOverhead(t *testing.T) {
+	if os.Getenv("GROVE_TIMING_TESTS") == "" {
+		t.Skip("timing test; set GROVE_TIMING_TESTS=1")
+	}
 	dir := t.TempDir()
 	in := fixture(t)
 	wrap := "cat >/dev/null; echo ok"
@@ -199,10 +252,57 @@ func TestRunOverhead(t *testing.T) {
 	}
 }
 
+func BenchmarkRun(b *testing.B) {
+	dir := b.TempDir()
+	in := fixture(b)
+	for i := 0; i < b.N; i++ {
+		Run(bytes.NewReader(in), io.Discard, io.Discard, "cat >/dev/null", dir, "", t0)
+	}
+}
+
 func BenchmarkCapture(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "login.json")
 	in := fixture(b)
 	for i := 0; i < b.N; i++ {
 		_, _ = Capture(in, path, t0)
 	}
+}
+
+// The runtime guard: a wrap that reaches `gv statusline` by a route
+// IsShim cannot see (here: this test binary re-running itself as the
+// shim) runs exactly one nested level, which does nothing.
+func TestRunRefusesToReenter(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "levels")
+	wrap := shellQuote(os.Args[0]) + " -test.run=TestHelperShim"
+	t.Setenv("STATUSLINE_HELPER", marker)
+	t.Setenv("STATUSLINE_HELPER_WRAP", wrap)
+	var out bytes.Buffer
+	if code := Run(bytes.NewReader(fixture(t)), &out, io.Discard, wrap, dir, "", t0); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	raw, _ := os.ReadFile(marker)
+	if got := strings.Count(string(raw), "level\n"); got != 1 {
+		t.Fatalf("nested shim ran %d levels, want 1 (it must refuse to re-enter)", got)
+	}
+}
+
+// TestHelperShim is TestRunRefusesToReenter's nested "gv statusline": it
+// records that it ran, then runs the shim again — which the depth marker
+// must make a no-op. It stops itself at 5 levels so a broken guard fails
+// the test instead of hanging it.
+func TestHelperShim(t *testing.T) {
+	marker := os.Getenv("STATUSLINE_HELPER")
+	if marker == "" || os.Getenv(DepthEnv) == "" {
+		t.Skip("helper process only")
+	}
+	f, _ := os.OpenFile(marker, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f.WriteString("level\n")
+	f.Close()
+	if raw, _ := os.ReadFile(marker); strings.Count(string(raw), "level\n") >= 5 {
+		return
+	}
+	// Run as the real binary would, with the inherited env — the
+	// mechanism under test.
+	Run(os.Stdin, os.Stdout, os.Stderr, os.Getenv("STATUSLINE_HELPER_WRAP"), t.TempDir(), "", t0)
 }

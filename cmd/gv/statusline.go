@@ -53,6 +53,8 @@ func cmdStatusline(args []string) error {
 // is saved first, so a failed settings write never leaves the shim
 // running with nothing recorded. Re-running only refreshes the binary
 // path: the recorded command is never overwritten with the shim itself.
+// The shim present with nothing recorded is broken (a blank status line),
+// and install says how to repair it rather than calling it installed.
 func statuslineInstall(settings, cfgPath, exe string) error {
 	cur, _, err := statusline.ReadCommand(settings)
 	if err != nil {
@@ -60,6 +62,10 @@ func statuslineInstall(settings, cfgPath, exe string) error {
 	}
 	shim := statusline.ShimCommand(exe)
 	if statusline.IsShim(cur) {
+		if _, recorded := config.StatuslineWrapFrom(cfgPath); !recorded {
+			return fmt.Errorf("the status line shim is in %s but %s records no statusline.wrap, so the status line is blank\n"+
+				"repair: put your own command back in statusLine.command in %s (or delete statusLine), then run: gv statusline install", settings, cfgPath, settings)
+		}
 		if cur != shim {
 			if err := statusline.WriteCommand(settings, shim, false); err != nil {
 				return err

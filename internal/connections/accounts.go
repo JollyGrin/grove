@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/account"
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/statusline"
 )
 
@@ -22,7 +23,9 @@ var shellRCFiles = []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".
 // accountConnections returns one row per problem: warn for a token file
 // not 0600, an active record naming a missing account, accounts
 // configured but no shell rc evaluating shell-init, accounts configured
-// but the usage shim not in ~/.claude/settings.json, a token 330+ days
+// but the usage shim not in ~/.claude/settings.json, the shim installed
+// with no statusline.wrap recorded (a blank status line, flagged with or
+// without accounts), a token 330+ days
 // old; a ✗ error row for a token past its one-year life. Empty
 // AccountsStateDir (fake envs) drops the section.
 func accountConnections(env Env, now time.Time) []Connection {
@@ -72,6 +75,11 @@ func accountConnections(env Env, now time.Time) []Connection {
 		row("account-shell-init", "shell claude follows the active account",
 			`echo 'eval "$(gv account shell-init)"' >> `+shellRC(env),
 			"accounts are configured but no shell rc evals gv account shell-init — a shell `claude` always runs the login")
+	}
+	if statuslineInstalled(env) && !statuslineWrapRecorded(env) {
+		row("statusline-wrap-missing", "status line shim has a recorded command",
+			"restore your command in ~/.claude/settings.json statusLine.command, then: gv statusline install",
+			"~/.claude/settings.json runs gv statusline but no statusline.wrap is recorded in grove config — the status line is blank")
 	}
 	if len(accts) > 0 && !statuslineInstalled(env) {
 		row("account-statusline", "status line records per-account usage",
@@ -123,6 +131,20 @@ func statuslineInstalled(env Env) bool {
 	}
 	raw, err := env.ReadFile(statusline.SettingsPath(env.Home))
 	return err == nil && statusline.Installed(raw)
+}
+
+// statuslineWrapRecorded reports whether the global grove config records
+// statusline.wrap (the shim's wrapped command).
+func statuslineWrapRecorded(env Env) bool {
+	if env.ReadFile == nil || env.Home == "" {
+		return false
+	}
+	raw, err := env.ReadFile(filepath.Join(env.Home, ".config", "grove", "config.yaml"))
+	if err != nil {
+		return false
+	}
+	_, ok := config.StatuslineWrapIn(raw)
+	return ok
 }
 
 // shellRC is the rc file the fix line names: ~/.zshrc for a zsh $SHELL,

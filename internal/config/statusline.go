@@ -20,6 +20,12 @@ func StatuslineWrapFrom(path string) (wrap string, recorded bool) {
 	if err != nil {
 		return "", false
 	}
+	return StatuslineWrapIn(raw)
+}
+
+// StatuslineWrapIn is StatuslineWrapFrom over the file's bytes (doctor
+// reads through its injectable ReadFile).
+func StatuslineWrapIn(raw []byte) (wrap string, recorded bool) {
 	var c struct {
 		Statusline struct {
 			Wrap *string `yaml:"wrap"`
@@ -45,10 +51,26 @@ func SaveStatuslineWrap(path, wrap string) error {
 	})
 }
 
-// ClearStatuslineWrap drops the statusline block from the file at path.
+// ClearStatuslineWrap drops statusline.wrap from the file at path, and
+// the statusline block only when wrap was all it held.
 func ClearStatuslineWrap(path string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	return editDoc(path, func(root *yaml.Node) { removeKey(root, "statusline") })
+	return editDoc(path, func(root *yaml.Node) {
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value != "statusline" {
+				continue
+			}
+			sl := root.Content[i+1]
+			if sl.Kind != yaml.MappingNode {
+				return
+			}
+			removeKey(sl, "wrap")
+			if len(sl.Content) == 0 {
+				removeKey(root, "statusline")
+			}
+			return
+		}
+	})
 }

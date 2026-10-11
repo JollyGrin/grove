@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/account"
+	"github.com/JollyGrin/grove/internal/config"
 )
 
 func accountEnv(t *testing.T) (Env, account.Store) {
@@ -17,8 +18,16 @@ func accountEnv(t *testing.T) (Env, account.Store) {
 }
 
 // installShim writes a ~/.claude/settings.json whose status line is the
-// gv statusline shim.
+// gv statusline shim, and the grove config recording what it wraps.
 func installShim(t *testing.T, home string) {
+	t.Helper()
+	writeShimSettings(t, home)
+	if err := config.SaveStatuslineWrap(filepath.Join(home, ".config", "grove", "config.yaml"), "echo mine"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeShimSettings(t *testing.T, home string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
@@ -166,5 +175,26 @@ func TestAccountStatuslineRow(t *testing.T) {
 	}
 	if !has() {
 		t.Fatal("no statusline row: accounts exist and the shim is not installed")
+	}
+}
+
+// The shim with no recorded wrap is a blank status line: flagged with or
+// without accounts, silent once the wrap is recorded.
+func TestStatuslineWrapMissingRow(t *testing.T) {
+	env, _ := accountEnv(t)
+	writeShimSettings(t, env.Home)
+	rows := func() string {
+		var ids []string
+		for _, c := range accountConnections(env, time.Now()) {
+			ids = append(ids, c.ID)
+		}
+		return strings.Join(ids, ",")
+	}
+	if got := rows(); got != "statusline-wrap-missing" {
+		t.Fatalf("rows = %q, want statusline-wrap-missing", got)
+	}
+	installShim(t, env.Home)
+	if got := rows(); got != "" {
+		t.Fatalf("rows = %q once wrap is recorded, want none", got)
 	}
 }
