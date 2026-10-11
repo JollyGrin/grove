@@ -1,10 +1,13 @@
 package main
 
 // `gv account` (claude-accounts design §Decisions 4, 6, 7): thin glue
-// over internal/account. The store is GLOBAL — config.StateDir(), so
+// over internal/account. The store is GLOBAL — the grove state dir, so
 // GROVE_STATE_DIR relocates it — never a workspace's, because the shell
 // function asks `gv account token-path` from whatever cwd the operator
-// is in. No launch path reads it yet (that is car 03).
+// is in. main dispatches `account` before resolving the ambient
+// workspace, so nothing here creates a state dir it does not write to
+// (token-path, ls and shell-init are read-only). No launch path reads the
+// store yet (that is car 03).
 
 import (
 	"bytes"
@@ -26,7 +29,7 @@ import (
 
 const accountUsage = "usage: gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init"
 
-func accountStore() account.Store { return account.Open(config.StateDir()) }
+func accountStore() account.Store { return account.Open(config.StateDirPath()) }
 
 // accountUsageErr renders a store usage error (bad/reserved name) with the
 // verb's usage line.
@@ -159,6 +162,8 @@ func accountLs(s account.Store, jsonOut bool) error {
 				email = "interactive /login"
 			}
 			line += "  " + email
+		} else if r.Expired {
+			line += fmt.Sprintf("  token EXPIRED (%dd old) — %s", r.TokenAgeDays, account.ExpiredFix(r.Name))
 		} else {
 			line += fmt.Sprintf("  token %dd old", r.TokenAgeDays)
 		}
@@ -195,25 +200,30 @@ func accountRm(s account.Store, name string, force bool) error {
 
 // accountTasks folds every task an account pin could live in: the global
 // state, the ambient workspace, and each alive registered workspace —
-// read-only (state.Peek), unreadable dirs skipped. A pin is machine-wide
-// because the store is.
+// read-only (state.Peek, creation-free paths), unreadable dirs skipped. A
+// pin is machine-wide because the store is. Dirs are deduped after
+// resolving symlinks, so a workspace reached two ways folds once.
 func accountTasks() []*state.Task {
-	dirs := []string{config.StateDir(), stateDir()}
+	dirs := []string{config.StateDirPath()}
+	if cwd, err := os.Getwd(); err == nil {
+		if ws := workspace.Find(cwd); ws != nil {
+			dirs = append(dirs, workspace.StateDir(ws.Root))
+		}
+	}
 	list, _ := workspace.LoadRegistry()
 	for _, ws := range list {
-		if !workspace.Alive(ws) {
-			continue
-		}
-		if d := os.Getenv("GROVE_STATE_DIR"); d != "" {
-			dirs = append(dirs, d)
-		} else {
-			dirs = append(dirs, filepath.Join(ws.Root, ".grove", "state"))
+		if workspace.Alive(ws) {
+			dirs = append(dirs, workspace.StateDir(ws.Root))
 		}
 	}
 	seen := map[string]bool{}
 	var out []*state.Task
 	for _, d := range dirs {
-		if d == "" || seen[d] {
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			d = r
+		}
+		d = filepath.Clean(d)
+		if seen[d] {
 			continue
 		}
 		seen[d] = true

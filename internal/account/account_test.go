@@ -213,3 +213,63 @@ func TestRowsAndEmail(t *testing.T) {
 		t.Fatalf("after use alt: %+v", rows)
 	}
 }
+
+// A failed token swap never leaves the old token with a new date, nor a
+// new date with no token.
+func TestAddRollsBackMintedOnFailedSwap(t *testing.T) {
+	s := newStore(t)
+	old := now.AddDate(0, 0, -100)
+	mustAdd(t, s, "alt", sentinel, old)
+	// Block the swap: a non-empty directory where the token file goes.
+	tok := filepath.Join(s.Dir, "alt.token")
+	if err := os.Remove(tok); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tok, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add("alt", strings.NewReader("NEW"), now); err == nil {
+		t.Fatal("Add over a blocked token path succeeded")
+	}
+	raw, _ := os.ReadFile(filepath.Join(s.Dir, "alt.minted"))
+	if got, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(raw))); !got.Equal(old) {
+		t.Fatalf("minted after failed re-add = %v, want the old %v", got, old)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Dir, "beta.token", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add("beta", strings.NewReader("NEW"), now); err == nil {
+		t.Fatal("Add over a blocked token path succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "beta.minted")); err == nil {
+		t.Fatal("failed first add left a mint record behind")
+	}
+}
+
+func TestExpiredTokens(t *testing.T) {
+	s := newStore(t)
+	s.Now = func() time.Time { return now }
+	mustAdd(t, s, "dead", sentinel, now.AddDate(0, 0, -ExpiryDays))
+	mustAdd(t, s, "live", "tok", now.AddDate(0, 0, -ExpiryDays+1))
+	err := s.Use("dead")
+	if err == nil || !strings.Contains(err.Error(), "EXPIRED") || !strings.Contains(err.Error(), "setup-token") || strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("Use(expired) = %v, want an EXPIRED refusal naming setup-token", err)
+	}
+	if a, _ := s.Active(); a != "" {
+		t.Fatalf("refused use still set active = %q", a)
+	}
+	if err := s.Use("live"); err != nil {
+		t.Fatalf("Use(364d) = %v", err)
+	}
+	rows, err := s.Rows(t.TempDir(), now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.Name] = r.Expired
+	}
+	if !got["dead"] || got["live"] || got["login"] {
+		t.Fatalf("Expired by row = %v, want only dead", got)
+	}
+}

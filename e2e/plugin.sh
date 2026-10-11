@@ -343,9 +343,9 @@ assert data['schema_version'] == 1, data
 rows = data['accounts']
 assert [r['name'] for r in rows] == ['login', 'alt'], rows
 login, alt = rows
-assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0, login
-assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 0 and alt['token_age_days'] == 0, alt
-assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors'}, alt
+assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0 and login['expired'] is False, login
+assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 0 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
+assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
 "
 "$GV" account use login > /dev/null || fail "account use login failed"
 "$GV" account rm alt > /dev/null || fail "account rm alt failed"

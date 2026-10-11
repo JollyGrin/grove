@@ -214,9 +214,6 @@ func stateDir() string { return ambient.stateDir }
 var ambientLabelExempt = map[string]bool{
 	"version": true, "--version": true, "help": true, "-h": true, "--help": true,
 	"init": true, "workspaces": true, "doctor": true, "update": true,
-	// account: the shell function asks token-path from any cwd; a broken
-	// label there must not flip `claude` to the login.
-	"account": true,
 }
 
 // requireValidAmbientLabel applies the registry's ValidateLabel rule to
@@ -338,6 +335,17 @@ func hookCandidates() []hooks.Candidate {
 }
 
 func main() {
+	// `gv account` runs before the ambient workspace resolves: the shell
+	// function asks `token-path` from any cwd, so it must be read-only
+	// (resolveAmbient creates .grove/state) and a broken workspace label
+	// must not make it fail.
+	if len(os.Args) >= 2 && os.Args[1] == "account" {
+		if err := cmdAccount(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	resolveAmbient()
 	if len(os.Args) < 2 {
 		// Bare gv: inside a workspace -> its cockpit; outside with a
@@ -530,8 +538,6 @@ func main() {
 		err = cmdDoctor(args)
 	case "hooks":
 		err = cmdHooks(args)
-	case "account":
-		err = cmdAccount(args)
 	case "run-setup":
 		err = cmdRunSetup(args)
 	case "help", "-h", "--help":

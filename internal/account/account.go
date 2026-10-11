@@ -34,9 +34,13 @@ import (
 // /login credentials Claude Code keeps itself.
 const Login = "login"
 
-// ExpiryWarnDays is when doctor starts warning: tokens expire after one
-// year (design §Mechanism, documented cost 4).
-const ExpiryWarnDays = 330
+// ExpiryWarnDays is when doctor starts warning; ExpiryDays is when the
+// token is dead: setup-token tokens expire after one year (design
+// §Mechanism, documented cost 4).
+const (
+	ExpiryWarnDays = 330
+	ExpiryDays     = 365
+)
 
 // ConnectorsNote is the dim caveat on every token row (design §Mechanism,
 // documented cost 1).
@@ -64,8 +68,19 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// Store is the accounts directory.
-type Store struct{ Dir string }
+// Store is the accounts directory. Now is the clock expiry is judged by;
+// nil = time.Now.
+type Store struct {
+	Dir string
+	Now func() time.Time
+}
+
+func (s Store) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
 
 // Open returns the store under a grove state dir.
 func Open(stateDir string) Store { return Store{Dir: filepath.Join(stateDir, "accounts")} }
@@ -139,11 +154,20 @@ func (s Store) Add(name string, r io.Reader, now time.Time) (replaced bool, err 
 	if _, err := os.Stat(s.tokenPath(name)); err == nil {
 		replaced = true
 	}
-	if err := writeFile0600(s.tokenPath(name), []byte(tok+"\n")); err != nil {
+	// The mint record goes first, and is rolled back if the token swap
+	// fails: a new token must never carry the old date (it would hide
+	// expiry), and a failed add must leave the old token's date intact.
+	oldMinted, mintedErr := os.ReadFile(s.mintedPath(name))
+	if err := writeFile0600(s.mintedPath(name), []byte(now.UTC().Format(time.RFC3339)+"\n")); err != nil {
 		return false, err
 	}
-	if err := writeFile0600(s.mintedPath(name), []byte(now.UTC().Format(time.RFC3339)+"\n")); err != nil {
-		return replaced, err
+	if err := writeFile0600(s.tokenPath(name), []byte(tok+"\n")); err != nil {
+		if mintedErr == nil {
+			_ = writeFile0600(s.mintedPath(name), oldMinted)
+		} else {
+			_ = os.Remove(s.mintedPath(name))
+		}
+		return false, err
 	}
 	return replaced, nil
 }
@@ -164,19 +188,33 @@ func (s Store) List() ([]Account, error) {
 		if !ok || e.IsDir() || ValidateName(name) != nil {
 			continue
 		}
-		a := Account{Name: name, TokenPath: s.tokenPath(name)}
-		if raw, err := os.ReadFile(s.mintedPath(name)); err == nil {
-			a.Minted, _ = time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
-		}
-		if a.Minted.IsZero() {
-			if fi, err := e.Info(); err == nil {
-				a.Minted = fi.ModTime()
-			}
-		}
-		out = append(out, a)
+		out = append(out, s.account(name))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// account reads one account's record: its mint date from <name>.minted,
+// else the token file's mtime.
+func (s Store) account(name string) Account {
+	a := Account{Name: name, TokenPath: s.tokenPath(name)}
+	if raw, err := os.ReadFile(s.mintedPath(name)); err == nil {
+		a.Minted, _ = time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
+	}
+	if a.Minted.IsZero() {
+		if fi, err := os.Stat(a.TokenPath); err == nil {
+			a.Minted = fi.ModTime()
+		}
+	}
+	return a
+}
+
+// Expired reports a token at or past its one-year life.
+func Expired(minted, now time.Time) bool { return AgeDays(minted, now) >= ExpiryDays }
+
+// ExpiredFix is the remedy for an expired token.
+func ExpiredFix(name string) string {
+	return "re-run `claude setup-token`, then `gv account add " + name + "` with the new token"
 }
 
 // Names lists the selectable names: `login` first, then every account.
@@ -230,6 +268,10 @@ func (s Store) Use(name string) error {
 	}
 	if !s.exists(name) {
 		return s.notFound(name)
+	}
+	if a := s.account(name); Expired(a.Minted, s.now()) {
+		return fmt.Errorf("account %s's token EXPIRED (added %dd ago; tokens last one year) — %s",
+			name, AgeDays(a.Minted, s.now()), ExpiredFix(name))
 	}
 	if err := s.ensureDir(); err != nil {
 		return err
@@ -336,6 +378,7 @@ type Row struct {
 	TokenAgeDays int    `json:"token_age_days"`
 	Pinned       int    `json:"pinned"`
 	Connectors   bool   `json:"connectors"`
+	Expired      bool   `json:"expired"`
 }
 
 // Rows builds the listing: the implicit login row first (with its email,
@@ -363,6 +406,7 @@ func (s Store) Rows(home string, now time.Time, tasks []*state.Task) ([]Row, err
 			Active:       a.Name == active,
 			TokenAgeDays: AgeDays(a.Minted, now),
 			Pinned:       len(InUse(tasks, a.Name)),
+			Expired:      Expired(a.Minted, now),
 		})
 	}
 	return rows, nil

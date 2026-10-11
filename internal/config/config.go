@@ -245,13 +245,19 @@ func Dir() string {
 // GROVE_STATE_DIR overrides it — used to point E2E tests at a scratch
 // dir so they never touch live fleet state.
 func StateDir() string {
-	d := os.Getenv("GROVE_STATE_DIR")
-	if d == "" {
-		home, _ := os.UserHomeDir()
-		d = filepath.Join(home, ".local", "state", "grove")
-	}
+	d := StateDirPath()
 	_ = os.MkdirAll(d, 0o755)
 	return d
+}
+
+// StateDirPath is StateDir without creating it — for read-only paths
+// (`gv account token-path`) that must leave the disk untouched.
+func StateDirPath() string {
+	if d := os.Getenv("GROVE_STATE_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "grove")
 }
 
 func expand(p string) string {
