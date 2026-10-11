@@ -115,7 +115,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case costsTabAccount:
 			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
 		case costsTabClaude:
-			return m, newClaudeCmd(m.localTasks)
+			return m.claudeRead()
 		}
 		return m, nil
 	case "o":

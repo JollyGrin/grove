@@ -22,16 +22,19 @@ import (
 // (cockpit RAM rule). A gauge never claims a number it did not observe:
 // unknown renders as no data, never 0%, and every row carries its age.
 
-// claudeMsg is the tab's one-shot snapshot. now is the read time the
-// window states were derived at, so ages render against it; reset times
-// read in loc.
+// claudeMsg is the tab's one-shot snapshot. Window states and ages are
+// re-derived at render time (claudeClock), never frozen at the read.
+// fetched=false while a read is in flight: the held rows only carry the
+// selection across it, they never render as current.
 type claudeMsg struct {
 	fetched bool
 	rows    []account.Row // each with Usage set
-	now     time.Time
-	loc     *time.Location
 	err     string
 }
+
+// claudeClock is the tab's render clock; reset times read in its
+// location. A var so a golden test can pin it.
+var claudeClock = time.Now
 
 // claudeUsedMsg reports the u flow's `gv account use`.
 type claudeUsedMsg struct {
@@ -55,13 +58,13 @@ func claudeCmd(tasks []*state.Task) tea.Cmd {
 		s := claudeStore()
 		rows, err := s.Rows(home, now, tasks)
 		if err != nil {
-			return claudeMsg{fetched: true, now: now, loc: time.Local, err: err.Error()}
+			return claudeMsg{fetched: true, err: err.Error()}
 		}
 		for i := range rows {
 			u := s.Usage(rows[i].Name, now)
 			rows[i].Usage = &u
 		}
-		return claudeMsg{fetched: true, rows: rows, now: now, loc: time.Local}
+		return claudeMsg{fetched: true, rows: rows}
 	}
 }
 
@@ -71,19 +74,56 @@ func claudeUseCmd(name string) tea.Cmd {
 	return func() tea.Msg { return claudeUsedMsg{name: name, err: claudeStore().Use(name)} }
 }
 
+// Transient flashes the tab sets while a read or a switch is in flight;
+// the landing claudeMsg clears them so they never leak to another tab.
+const claudeReadingFlash = "rereading usage…"
+
+func claudeSwitchingFlash(name string) string { return "switching to " + name + "…" }
+
+// claudeRead marks the snapshot pending and fires one read.
+func (m Model) claudeRead() (Model, tea.Cmd) {
+	m.claude.fetched = false
+	return m, newClaudeCmd(m.localTasks)
+}
+
+// applyClaude lands a read. The selection follows the account the
+// operator picked, by name; a vanished one clamps to the last row, so u
+// never hits an account other than the one under the cursor.
+func (m Model) applyClaude(msg claudeMsg) Model {
+	picked := ""
+	if m.claudeSel < len(m.claude.rows) {
+		picked = m.claude.rows[m.claudeSel].Name
+	}
+	m.claude = msg
+	m.claudeSel = max(0, min(m.claudeSel, len(msg.rows)-1))
+	for i, r := range msg.rows {
+		if r.Name == picked {
+			m.claudeSel = i
+			break
+		}
+	}
+	if m.flash == claudeReadingFlash || strings.HasPrefix(m.flash, "switching to ") {
+		m.flash = ""
+	}
+	return m
+}
+
 // handleClaudeKey is the CLAUDE tab's keys; ok=false falls through to the
 // costs page's shared keys.
 func (m Model) handleClaudeKey(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 	if name := m.claudeUse; name != "" {
-		// The armed y/N confirm takes exactly one key: y runs, anything
-		// else cancels.
+		// The armed y/N confirm takes exactly one key: y runs, ctrl+c
+		// still quits, anything else cancels.
 		m.claudeUse = ""
-		if k.String() != "y" {
-			m.flash = ""
-			return m, nil, true
+		switch k.String() {
+		case "ctrl+c":
+			return m, tea.Quit, true
+		case "y":
+			m.flash = claudeSwitchingFlash(name)
+			return m, claudeUseCmd(name), true
 		}
-		m.flash = "switching to " + name + "…"
-		return m, claudeUseCmd(name), true
+		m.flash = ""
+		return m, nil, true
 	}
 	switch k.String() {
 	case "j", "down":
@@ -95,18 +135,24 @@ func (m Model) handleClaudeKey(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 			m.claudeSel--
 		}
 	case "r":
-		m.flash = "rereading usage…"
-		return m, newClaudeCmd(m.localTasks), true
+		m.flash = claudeReadingFlash
+		next, cmd := m.claudeRead()
+		return next, cmd, true
 	case "u":
-		if m.claudeSel >= len(m.claude.rows) {
+		// Never act on a pending or failed snapshot: the row under the
+		// cursor is only what the operator sees once a read has landed.
+		if !m.claude.fetched || m.claudeSel >= len(m.claude.rows) {
 			return m, nil, true
 		}
 		r := m.claude.rows[m.claudeSel]
-		if r.Active {
+		switch {
+		case r.Active:
 			m.flash = r.Name + " is already the active account"
-			return m, nil, true
+		case r.Expired:
+			m.flash = r.Name + "'s token EXPIRED — " + account.ExpiredFix(r.Name)
+		default:
+			m.claudeUse = r.Name
 		}
-		m.claudeUse = r.Name
 	default:
 		return m, nil, false
 	}
@@ -115,26 +161,37 @@ func (m Model) handleClaudeKey(k tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 // claudeGauge maps one observed window onto the kimi fuel gauge
 // (fuelLine): percent used of a 100 limit, so the bar reads headroom.
-func claudeGauge(label string, w *account.UsageWindow, now time.Time, loc *time.Location) kimi.Window {
+func claudeGauge(label string, w *account.UsageWindow, now time.Time) kimi.Window {
 	fw := kimi.Window{Label: label, Limit: 100, Used: int64(math.Round(*w.UsedPercentage))}
 	switch {
 	case w.State == account.StateReset:
 		fw.ResetHint = "reset since last seen"
 	case w.ResetsAt != nil:
-		fw.ResetHint = "resets " + account.ResetWhen(*w.ResetsAt, now, loc)
+		fw.ResetHint = "resets " + account.ResetWhen(*w.ResetsAt, now, now.Location())
 	default:
 		fw.ResetHint = "reset time unknown"
 	}
 	return fw
 }
 
-// claudeWindowLine renders one window: the fuel gauge when observed, a
-// grayed gauge when stale, a dash with "no data" when unknown.
-func claudeWindowLine(label string, w *account.UsageWindow, now time.Time, loc *time.Location, width int) string {
-	if w == nil || w.State == account.StateUnknown || w.UsedPercentage == nil {
-		return truncPad("    "+sChrome.Render(pad(label, 8))+sDim.Render(pad("—", 18)+"no data"), width)
+// noDataLine is a gauge slot with nothing observed: a dash and "no data",
+// plus why when there is a hint.
+func noDataLine(label, hint string, width int) string {
+	text := "no data"
+	if hint != "" {
+		text += " — " + hint
 	}
-	fw := claudeGauge(label, w, now, loc)
+	return truncPad("    "+sChrome.Render(pad(label, 8))+sDim.Render(pad("—", 18)+text), width)
+}
+
+// claudeWindowLine renders one window, already re-derived as of now: the
+// fuel gauge when observed, a grayed gauge when stale, no data when
+// unknown.
+func claudeWindowLine(label string, w *account.UsageWindow, now time.Time, width int) string {
+	if w == nil || w.State == account.StateUnknown || w.UsedPercentage == nil {
+		return noDataLine(label, "", width)
+	}
+	fw := claudeGauge(label, w, now)
 	if w.Stale {
 		// A sighting older than the window, with no reset time: it cannot
 		// still be current, so it is shown but grayed out.
@@ -143,6 +200,10 @@ func claudeWindowLine(label string, w *account.UsageWindow, now time.Time, loc *
 	}
 	return fuelLine(fw, width)
 }
+
+// col pads s to a column of n cells, always leaving the last one blank so
+// a long value never runs into the next column.
+func col(s string, n int) string { return pad(s, n-1) + " " }
 
 func (m Model) viewClaude() string {
 	w := m.width - 4
@@ -165,6 +226,7 @@ func (m Model) viewClaude() string {
 
 func (m Model) viewClaudeRows(w int) string {
 	c := m.claude
+	now := claudeClock()
 	rows := []string{sPanelTitleFocus.Render("ACCOUNTS")}
 	for i, r := range c.rows {
 		cur := "  "
@@ -175,10 +237,14 @@ func (m Model) viewClaudeRows(w int) string {
 		if r.Active {
 			dot = sOK.Render("● ")
 		}
-		line := cur + dot + pad(r.Name, 14) + sChrome.Render(pad(fmt.Sprintf("%d pinned", r.Pinned), 10))
-		u := r.Usage
+		line := cur + dot + col(r.Name, 15) + sChrome.Render(col(fmt.Sprintf("%d pinned", r.Pinned), 11))
+		var u *account.Usage
+		if r.Usage != nil {
+			at := r.Usage.At(now)
+			u = &at
+		}
 		if u != nil && u.SeenAt != nil {
-			line += sDim.Render("as of " + account.UsageAge(c.now.Sub(*u.SeenAt)))
+			line += sDim.Render("as of " + account.UsageAge(now.Sub(*u.SeenAt)))
 		}
 		if r.Expired {
 			line += "  " + sBlocked.Render("EXPIRED")
@@ -192,16 +258,12 @@ func (m Model) viewClaudeRows(w int) string {
 			if u != nil {
 				hint = u.Hint
 			}
-			rows = append(rows, truncPad("    "+sChrome.Render(pad("usage", 8))+sDim.Render(pad("—", 18)+"no data — "+hint), w))
+			rows = append(rows, noDataLine("usage", hint, w))
 			continue
 		}
-		loc := c.loc
-		if loc == nil {
-			loc = time.Local
-		}
 		rows = append(rows,
-			claudeWindowLine("5h", u.FiveHour, c.now, loc, w),
-			claudeWindowLine("7d", u.SevenDay, c.now, loc, w))
+			claudeWindowLine("5h", u.FiveHour, now, w),
+			claudeWindowLine("7d", u.SevenDay, now, w))
 	}
 	return strings.Join(rows, "\n")
 }

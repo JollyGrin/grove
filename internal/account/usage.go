@@ -133,6 +133,36 @@ func (s Store) Usage(name string, now time.Time) Usage {
 	return Usage{FiveHour: fh, SevenDay: sd, SeenAt: &seen}
 }
 
+// At re-derives u's window states as of now, from what was recorded: a
+// live window whose reset has since passed becomes reset (0%, no reset
+// time), and a live window with no reset time goes stale once its
+// sighting is older than the window. A view held open past its read uses
+// this so it never claims a number it no longer knows.
+func (u Usage) At(now time.Time) Usage {
+	if u.SeenAt == nil {
+		return u
+	}
+	u.FiveHour = u.FiveHour.at(*u.SeenAt, now)
+	u.SevenDay = u.SevenDay.at(*u.SeenAt, now)
+	return u
+}
+
+func (w *UsageWindow) at(seen, now time.Time) *UsageWindow {
+	if w == nil || w.State != StateLive {
+		return w
+	}
+	c := *w
+	if c.ResetsAt == nil {
+		c.Stale = now.Sub(seen) >= windowLength[c.Name]
+		return &c
+	}
+	if !now.Before(*c.ResetsAt) {
+		zero := 0.0
+		c.State, c.UsedPercentage, c.ResetsAt = StateReset, &zero, nil
+	}
+	return &c
+}
+
 // maxEpoch bounds resets_at before the int64 conversion: year ~5138, far
 // past any real reset and far inside int64.
 const maxEpoch = 1e11

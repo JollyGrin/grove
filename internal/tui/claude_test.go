@@ -148,7 +148,7 @@ func TestClaudeStaleResetsAtRendersReset(t *testing.T) {
 func twoAccounts() claudeMsg {
 	at := func(d time.Duration) *time.Time { t := claudeNow.Add(d); return &t }
 	pct := func(v float64) *float64 { return &v }
-	return claudeMsg{fetched: true, now: claudeNow, loc: time.UTC, rows: []account.Row{
+	return claudeMsg{fetched: true, rows: []account.Row{
 		{Name: account.Login, Active: true, Email: "me@example.com", Pinned: 2, Usage: &account.Usage{
 			FiveHour: &account.UsageWindow{Name: account.FiveHour, State: account.StateLive, UsedPercentage: pct(42), ResetsAt: at(2*time.Hour + 10*time.Minute)},
 			SevenDay: &account.UsageWindow{Name: account.SevenDay, State: account.StateLive, UsedPercentage: pct(93), ResetsAt: at(3 * 24 * time.Hour)},
@@ -162,23 +162,132 @@ func twoAccounts() claudeMsg {
 	}}
 }
 
+// pinClaudeClock fixes the tab's render clock (UTC, so reset times read
+// the same on every machine).
+func pinClaudeClock(t *testing.T, now time.Time) {
+	t.Helper()
+	prev := claudeClock
+	claudeClock = func() time.Time { return now }
+	t.Cleanup(func() { claudeClock = prev })
+}
+
+// The snapshot renders against the clock, not the read: at the read the
+// login 5h window is live; 3h later the same snapshot ages ("as of
+// 3h04m") and that window — its resets_at now past — reads as reset.
 func TestViewClaudeTwoAccountsSnapshot(t *testing.T) {
-	m := claudeModel(100)
-	m.claude = twoAccounts()
-	got := m.viewClaudeRows(96)
-	path := filepath.Join("testdata", "claude-tab-two-accounts.golden")
-	if *updateGolden {
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+	for _, tc := range []struct {
+		golden string
+		now    time.Time
+	}{
+		{"claude-tab-two-accounts.golden", claudeNow},
+		{"claude-tab-two-accounts-3h-later.golden", claudeNow.Add(3 * time.Hour)},
+	} {
+		pinClaudeClock(t, tc.now)
+		m := claudeModel(100)
+		m.claude = twoAccounts()
+		got := m.viewClaudeRows(96)
+		path := filepath.Join("testdata", tc.golden)
+		if *updateGolden {
+			if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return
+		if got != string(want) {
+			t.Errorf("%s drifted (go test ./internal/tui -run TestViewClaudeTwoAccountsSnapshot -update):\ngot:\n%s\nwant:\n%s", tc.golden, got, want)
+		}
 	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestClaudeUseRefusesExpired(t *testing.T) {
+	m := claudeModel(100)
+	m.claude = twoAccounts()
+	m.claude.rows[1].Expired = true
+	m.claudeSel = 1
+	next, cmd := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = next.(Model)
+	if cmd != nil || m.claudeUse != "" {
+		t.Fatalf("u on an expired row armed=%q cmd=%v", m.claudeUse, cmd)
 	}
-	if got != string(want) {
-		t.Errorf("CLAUDE rows drifted (go test ./internal/tui -run TestViewClaudeTwoAccountsSnapshot -update):\ngot:\n%s\nwant:\n%s", got, want)
+	for _, want := range []string{"EXPIRED", "claude setup-token", "gv account add alt"} {
+		if !strings.Contains(m.flash, want) {
+			t.Errorf("flash %q missing %q", m.flash, want)
+		}
+	}
+}
+
+func TestClaudeConfirmCtrlCQuits(t *testing.T) {
+	m := claudeModel(100)
+	m.claude = twoAccounts()
+	m.claudeUse = "alt"
+	next, cmd := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c under an armed confirm fired nothing")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("ctrl+c under an armed confirm did not quit")
+	}
+	if next.(Model).claudeUse != "" {
+		t.Error("confirm still armed")
+	}
+}
+
+// Re-entering the tab never shows the old snapshot as current; the read
+// landing clears the transient flash and keeps the cursor on the account
+// the operator picked, by name.
+func TestClaudeRereadPendingAndSelection(t *testing.T) {
+	claudeScratch(t)
+	m := claudeModel(100)
+	m.claude = twoAccounts()
+	m.claudeSel = 1 // alt
+
+	next, cmd := m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = next.(Model)
+	if cmd == nil || m.claude.fetched || m.flash != claudeReadingFlash {
+		t.Fatalf("r: cmd=%v fetched=%v flash=%q", cmd, m.claude.fetched, m.flash)
+	}
+	if out := m.viewClaude(); !strings.Contains(out, "reading usage…") || strings.Contains(out, "as of") {
+		t.Errorf("pending tab shows the old snapshot:\n%s", out)
+	}
+	if next, cmd = m.handleCostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")}); cmd != nil || next.(Model).claudeUse != "" {
+		t.Error("u acted on a pending snapshot")
+	}
+
+	// alt moved to the front: the cursor follows it.
+	moved := twoAccounts()
+	moved.rows[0], moved.rows[1] = moved.rows[1], moved.rows[0]
+	next, _ = m.Update(moved)
+	m = next.(Model)
+	if m.claude.rows[m.claudeSel].Name != "alt" || m.flash != "" {
+		t.Errorf("after reread: sel=%s flash=%q", m.claude.rows[m.claudeSel].Name, m.flash)
+	}
+
+	// alt vanished: clamp to the last row, never jump to login by default.
+	m.claude.rows = append(m.claude.rows, account.Row{Name: "third"})
+	m.claudeSel = 2
+	next, _ = m.Update(claudeMsg{fetched: true, rows: twoAccounts().rows})
+	m = next.(Model)
+	if m.claudeSel != 1 {
+		t.Errorf("vanished pick: sel=%d, want clamp to 1", m.claudeSel)
+	}
+}
+
+func TestClaudeColumnsSeparate(t *testing.T) {
+	pinClaudeClock(t, claudeNow)
+	m := claudeModel(120)
+	m.claude = twoAccounts()
+	m.claude.rows[1].Name = "a-very-long-account"
+	m.claude.rows[1].Pinned = 100
+	out := m.viewClaudeRows(116)
+	if !strings.Contains(out, "a-very-long-a… 100 pinned as of") {
+		t.Errorf("columns ran together:\n%s", out)
+	}
+	if strings.Contains(out, "no data — \n") {
+		t.Error("dangling no data separator")
 	}
 }
 

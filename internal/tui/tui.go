@@ -894,11 +894,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case claudeMsg:
-		m.claude = msg
-		if m.claudeSel >= len(msg.rows) {
-			m.claudeSel = 0
-		}
-		return m, nil
+		return m.applyClaude(msg), nil
 
 	case claudeUsedMsg:
 		if msg.err != nil {
@@ -906,7 +902,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.flash = "✓ active account: " + msg.name + " (new launches and shell `claude`; live sessions keep theirs)"
-		return m, newClaudeCmd(m.localTasks)
+		return m.claudeRead()
 
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in

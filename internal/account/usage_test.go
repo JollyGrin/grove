@@ -175,3 +175,35 @@ func TestUsageRecordRoundTrip(t *testing.T) {
 		t.Errorf("Usage = %+v", u)
 	}
 }
+
+func TestUsageAt(t *testing.T) {
+	read := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	seen := read.Add(-time.Minute)
+	resets := read.Add(30 * time.Minute)
+	pct := 42.0
+	u := Usage{
+		FiveHour: &UsageWindow{Name: FiveHour, State: StateLive, UsedPercentage: &pct, ResetsAt: &resets},
+		SevenDay: &UsageWindow{Name: SevenDay, State: StateLive, UsedPercentage: &pct},
+		SeenAt:   &seen,
+	}
+	// Before the reset nothing changes.
+	if got := u.At(read.Add(29 * time.Minute)); got.FiveHour.State != StateLive || got.FiveHour.ResetsAt == nil || got.SevenDay.Stale {
+		t.Errorf("before reset: %+v / %+v", *got.FiveHour, *got.SevenDay)
+	}
+	// Once resets_at passes: reset, 0%, no reset time — and u is untouched.
+	got := u.At(read.Add(30 * time.Minute))
+	if w := got.FiveHour; w.State != StateReset || *w.UsedPercentage != 0 || w.ResetsAt != nil {
+		t.Errorf("after reset: %+v", *w)
+	}
+	if u.FiveHour.State != StateLive || *u.FiveHour.UsedPercentage != 42 {
+		t.Error("At mutated its receiver")
+	}
+	// A reset-time-less window goes stale once older than the window.
+	if got := u.At(seen.Add(7 * 24 * time.Hour)); !got.SevenDay.Stale {
+		t.Error("7d window a week old should be stale")
+	}
+	// No data stays no data.
+	if got := (Usage{Hint: HintNoSession}).At(read); got.Hint != HintNoSession || got.FiveHour != nil {
+		t.Errorf("no-data usage changed: %+v", got)
+	}
+}
