@@ -28,26 +28,6 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 )
 
-// Window is one rate-limit window as Claude Code reports it. The numbers
-// are kept as json.Number so they round-trip exactly as received.
-type Window struct {
-	UsedPercentage json.Number `json:"used_percentage,omitempty"`
-	ResetsAt       json.Number `json:"resets_at,omitempty"`
-}
-
-// Usage is one account's recorded usage file. SeenAt is when these values
-// were first seen; an unchanged reading never rewrites the file.
-type Usage struct {
-	FiveHour *Window   `json:"five_hour,omitempty"`
-	SevenDay *Window   `json:"seven_day,omitempty"`
-	SeenAt   time.Time `json:"seen_at"`
-}
-
-// UsageDir is where usage files live under a grove state dir.
-func UsageDir(stateDir string) string {
-	return filepath.Join(account.Open(stateDir).Dir, "usage")
-}
-
 // AccountName is the usage file's name for a GROVE_ACCOUNT value: the
 // value when it is a valid account name, `login` when unset. ok=false for
 // anything else (it would not be a safe file name).
@@ -136,8 +116,8 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, wrap, usageDir, acct string,
 func Capture(payload []byte, path string, now time.Time) (wrote bool, err error) {
 	var p struct {
 		RateLimits *struct {
-			FiveHour *Window `json:"five_hour"`
-			SevenDay *Window `json:"seven_day"`
+			FiveHour *account.RecordedWindow `json:"five_hour"`
+			SevenDay *account.RecordedWindow `json:"seven_day"`
 		} `json:"rate_limits"`
 	}
 	d := json.NewDecoder(bytes.NewReader(payload))
@@ -145,16 +125,16 @@ func Capture(payload []byte, path string, now time.Time) (wrote bool, err error)
 	if err := d.Decode(&p); err != nil {
 		return false, err
 	}
-	old, oldErr := ReadUsage(path)
-	var u Usage
+	old, oldErr := account.ReadUsageRecord(path)
+	var u account.UsageRecord
 	switch {
 	case p.RateLimits != nil:
-		u = Usage{FiveHour: p.RateLimits.FiveHour, SevenDay: p.RateLimits.SevenDay, SeenAt: now.UTC()}
+		u = account.UsageRecord{FiveHour: p.RateLimits.FiveHour, SevenDay: p.RateLimits.SevenDay, SeenAt: now.UTC()}
 		if oldErr == nil && sameWindows(old, u) && now.Sub(old.SeenAt) < SeenAtRefresh {
 			return false, nil
 		}
 	case oldErr == nil:
-		u = Usage{FiveHour: unexpired(old.FiveHour, now), SevenDay: unexpired(old.SevenDay, now), SeenAt: old.SeenAt}
+		u = account.UsageRecord{FiveHour: unexpired(old.FiveHour, now), SevenDay: unexpired(old.SevenDay, now), SeenAt: old.SeenAt}
 		if sameWindows(old, u) {
 			return false, nil
 		}
@@ -172,7 +152,7 @@ func Capture(payload []byte, path string, now time.Time) (wrote bool, err error)
 }
 
 // unexpired returns w, or nil once its resets_at has passed.
-func unexpired(w *Window, now time.Time) *Window {
+func unexpired(w *account.RecordedWindow, now time.Time) *account.RecordedWindow {
 	if w == nil {
 		return nil
 	}
@@ -182,23 +162,11 @@ func unexpired(w *Window, now time.Time) *Window {
 	return w
 }
 
-func sameWindows(a, b Usage) bool {
+func sameWindows(a, b account.UsageRecord) bool {
 	return sameWindow(a.FiveHour, b.FiveHour) && sameWindow(a.SevenDay, b.SevenDay)
 }
 
-// ReadUsage reads one usage file.
-func ReadUsage(path string) (Usage, error) {
-	var u Usage
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return u, err
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.UseNumber()
-	return u, d.Decode(&u)
-}
-
-func sameWindow(a, b *Window) bool {
+func sameWindow(a, b *account.RecordedWindow) bool {
 	if a == nil || b == nil {
 		return a == b
 	}

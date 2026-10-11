@@ -279,7 +279,8 @@ func (s Store) Use(name string) error {
 	return writeFile0600(s.activePath(), []byte(name+"\n"))
 }
 
-// Remove deletes an account's token and mint record. When it was the
+// Remove deletes an account's token, mint record and recorded usage (a
+// re-added name must not inherit the old subscription's numbers). When it was the
 // active account, the active record goes too (the default falls back to
 // login) and wasActive says so. Callers check InUse first.
 func (s Store) Remove(name string) (wasActive bool, err error) {
@@ -293,6 +294,9 @@ func (s Store) Remove(name string) (wasActive bool, err error) {
 		return false, err
 	}
 	_ = os.Remove(s.mintedPath(name))
+	if err := os.Remove(s.UsagePath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
 	if active, _ := s.Active(); active == name {
 		wasActive = true
 		if err := os.Remove(s.activePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -393,6 +397,7 @@ type Row struct {
 	Pinned       int    `json:"pinned"`
 	Connectors   bool   `json:"connectors"`
 	Expired      bool   `json:"expired"`
+	Usage        *Usage `json:"usage,omitempty"` // only with --usage
 }
 
 // Rows builds the listing: the implicit login row first (with its email,
