@@ -75,7 +75,7 @@ const usage = `gv — grove
                                               parent scope in a folder of sibling repos)
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
-  gv grab [<task>] [--repo name] [--manual] [--model id] [--effort l] [--profile p]   task → worktree → agent (no arg: list backlog)
+  gv grab [<task>] [--repo name] [--manual] [--model id] [--effort l] [--profile p] [--account a]   task → worktree → agent (no arg: list backlog)
       [--feature slug|none]                   fork from an open feature's branch (default: the one open
                                               feature a ticket label names, else the repo base)
   gv ls [--json]                              fleet table
@@ -127,7 +127,7 @@ const usage = `gv — grove
                                               window "▶ <slug>"; prints its GROVE_READY url or path
   gv serve stop <slug>                        kill the "▶ <slug>" window
   gv serve init                               a chat pane drafts .grove/run.sh (never trusted — review it with s)
-  gv adopt <ticket> [--branch b] [--manual] [--model id] [--effort l]   revive a disconnected task / adopt a branch
+  gv adopt <ticket> [--branch b] [--manual] [--model id] [--effort l] [--account a|login]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
                                               branch, and uncommitted changes survive; resume: gv adopt
   gv done <ticket> [--force]                  verify merged → clean up everything
@@ -565,7 +565,7 @@ func main() {
 
 // grabValueFlags are grab's value-taking flags — the scanner below must
 // skip their values when looking for the ticket positional.
-var grabValueFlags = map[string]bool{"repo": true, "model": true, "effort": true, "profile": true, "brief": true, "feature": true}
+var grabValueFlags = map[string]bool{"repo": true, "model": true, "effort": true, "profile": true, "brief": true, "feature": true, "account": true}
 
 // scanGrabArgs pulls --feature, --repo, and the ticket out of a grab argv
 // without a FlagSet (the host hop passes flags through verbatim).
@@ -1621,9 +1621,10 @@ func cmdGrab(args []string) error {
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	briefFlag := fs.String("brief", "", "ad-hoc operator instructions appended to the kickoff prompt as a final \"## Operator brief\" section")
 	featureFlag := fs.String("feature", "", "fork from this open feature's branch (`gv feature ls`); 'none' opts out of label inference")
+	accountFlag := fs.String("account", "", "run this worker on a subscription account (`gv account ls`) and pin it to the task; 'login' runs the interactive login")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--effort level] [--profile name] [--brief text] [--feature slug|none]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--effort level] [--profile name] [--account name] [--brief text] [--feature slug|none]")
 	}
 	if err := config.CheckEffort(*effortFlag); err != nil {
 		return fmt.Errorf("--effort: %w", err)
@@ -1677,6 +1678,12 @@ func cmdGrab(args []string) error {
 	if err != nil {
 		return err
 	}
+	// claude-accounts: resolved and preflighted before any side effect —
+	// a bad pin refuses here, never after the worktree exists.
+	acct, err := resolveLaunchAccount(task.ID, *accountFlag, "", profileName, cfg, repo)
+	if err != nil {
+		return err
+	}
 	// grove-435: the flag pins this worker only; the repo's effort: is
 	// the standing default; "" leaves Claude Code's own per-model default.
 	effort := resolveEffort(*effortFlag, repo)
@@ -1706,6 +1713,9 @@ func cmdGrab(args []string) error {
 	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
+	}
+	if l := accountLine(acct); l != "" {
+		fmt.Println(l)
 	}
 	if *briefFlag != "" {
 		fmt.Println("→ operator brief attached")
@@ -1824,12 +1834,11 @@ func cmdGrab(args []string) error {
 	// grove-440: the repo's autocompact: window rides along the same way
 	// as the model/effort pins — strip-then-inject, exactly once.
 	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact)
-	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
-	// Profile wrap applies to the composed claude+prompt command only —
-	// never to repo.Claude itself (hooks resolve the worker's config dir
-	// from the stored r.Claude, hooks.go:246-274) and never to the setup
-	// prefix added just below.
-	claudeCmd = config.WrapProfile(claudeCmd, profile, config.SecretsPath())
+	// The profile or account wrap applies to the composed claude+prompt
+	// command only — never to repo.Claude itself (hooks resolve the
+	// worker's config dir from the stored r.Claude, hooks.go:246-274) and
+	// never to the setup prefix added just below.
+	claudeCmd := grabClaudeCmd(claudeBin, promptPath, profile, acct)
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
@@ -1838,7 +1847,7 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
-	grabData := taskCreatedData(task, repoName, name, wt.Path, sessionName, windowName, profileName, effort, choice)
+	grabData := taskCreatedData(task, repoName, name, wt.Path, sessionName, windowName, profileName, effort, acct.Pin, choice)
 	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskCreated, Ticket: task.ID, Data: grabData,
 	}); err != nil {
@@ -1924,8 +1933,10 @@ func resolveGrab(cfg *config.Config, repoFlag, ref string, chatty bool) (repoNam
 // written only when set, so a grab without them stays byte-identical to
 // the events written before they existed: model_profile (grove-36 T2),
 // feature+base (grove-373 — only when the grab rides a feature), effort
-// (grove-435 — only when pinned by flag or the repo's effort:).
-func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, window, profileName, effort string, choice feature.Choice) map[string]string {
+// (grove-435 — only when pinned by flag or the repo's effort:), account
+// (claude-accounts — only when pinned by an explicit --account; never a
+// token value).
+func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, window, profileName, effort, accountPin string, choice feature.Choice) map[string]string {
 	d := map[string]string{
 		"title": task.Title, "url": task.URL, "repo": repoName,
 		"branch": branch, "worktree": wtPath,
@@ -1936,6 +1947,9 @@ func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, win
 	}
 	if effort != "" {
 		d["effort"] = effort
+	}
+	if accountPin != "" {
+		d["account"] = accountPin
 	}
 	if choice.Feature != nil {
 		d["feature"], d["base"] = choice.Feature.Slug, choice.Base
@@ -2249,7 +2263,7 @@ func cmdInit(args []string) error {
 	// The summary board: what's available, what would improve this repo.
 	fmt.Println()
 	cfg, cfgErr := loadCfg()
-	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr, orchestratorDirAt(root)))
+	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr, orchestratorDirAt(root), accountTasks))
 	fmt.Printf("\nnext: gv grab   (list backlog) · gv grab task-001 · gv   (cockpit)\n")
 	return nil
 }
@@ -3700,10 +3714,11 @@ func cmdAdopt(args []string) error {
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
 	effortFlag := fs.String("effort", "", "pin this worker's effort (low|medium|high|xhigh|max; default: the effort it was grabbed with, else the repo's effort:)")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (default: the profile it was grabbed with; 'anthropic' strips it)")
+	accountFlag := fs.String("account", "", "run this worker on a subscription account and pin it (default: the account it was pinned to, else the active one; 'login' strips the pin)")
 	syncFlag := fs.Bool("sync", false, "fetch and hard-reset the worktree to origin/<branch> first (handoff pickup: another host worked the branch, so any surviving local checkout/branch ref is stale)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--effort level] [--profile name] [--sync]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--effort level] [--profile name] [--account name|login] [--sync]")
 	}
 	if err := config.CheckEffort(*effortFlag); err != nil {
 		return fmt.Errorf("--effort: %w", err)
@@ -3770,11 +3785,12 @@ func cmdAdopt(args []string) error {
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
 	// seen this task (active, done, or untracked), else cold via provider.
-	var repoName, branch, sessionID, storedProfile, storedFeature, storedBase, storedEffort string
+	var repoName, branch, sessionID, storedProfile, storedFeature, storedBase, storedEffort, storedAccount string
 	var task *provider.Task
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID, storedProfile = t.Repo, t.Branch, t.SessionID, t.ModelProfile
 		storedFeature, storedBase, storedEffort = t.Feature, t.Base, t.Effort
+		storedAccount = t.Account
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
@@ -3823,6 +3839,13 @@ func cmdAdopt(args []string) error {
 		effort = storedEffort
 	}
 	effort = resolveEffort(effort, repo)
+	// claude-accounts: --account, else the recorded pin (a missing one
+	// refuses — never a silent login), else the active account. Before any
+	// side effect; `--account login` strips the pin.
+	acct, err := resolveLaunchAccount(id, *accountFlag, storedAccount, profileName, cfg, repo)
+	if err != nil {
+		return err
+	}
 
 	// Fresh task fetch enriches the pickup prompt (description + new
 	// comments). Non-fatal for tracked tasks — offline adopt still works
@@ -3868,6 +3891,9 @@ func cmdAdopt(args []string) error {
 	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s\n", profileName)
+	}
+	if l := accountLine(acct); l != "" {
+		fmt.Println(l)
 	}
 
 	// --sync (grove-177, handoff pickup): make origin the source of truth
@@ -3995,6 +4021,13 @@ func cmdAdopt(args []string) error {
 	if effort != "" {
 		adoptData["effort"] = effort
 	}
+	// The account pin (claude-accounts), the model_profile rule: written
+	// when pinned, and as "" when `--account login` strips a recorded pin
+	// (the fold clears the field); an unpinned adopt event stays
+	// byte-identical. A name only — never a token value.
+	if acct.Pin != "" || storedAccount != "" {
+		adoptData["account"] = acct.Pin
+	}
 	// A train car stays on its train (grove-373): carry feature+base
 	// through, only when set, so off-train adopt events stay byte-identical.
 	if storedFeature != "" {
@@ -4010,21 +4043,9 @@ func cmdAdopt(args []string) error {
 	}
 
 	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact) // grove-440
-	secrets := config.SecretsPath()
-	// Wrap each claude limb separately: WrapProfile ends in `exec`, which
-	// replaces the shell, so a single wrap around `resume || fresh` would make
-	// the `|| fresh` fallback unreachable and, on a resume failure, silently
-	// drop to the operator's own Claude sub — the exact provider switch this
-	// ticket kills (grove-36 T3). Wrap the
-	// composed claude+prompt command only, never repo.Claude itself (hooks
-	// resolve the worker's config dir from the stored r.Claude) nor the setup
-	// prefix added below. profile == nil leaves every limb byte-identical.
-	freshCmd := config.WrapProfile(fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath), profile, secrets)
-	claudeCmd := freshCmd
-	if sessionID != "" && !*manual {
-		resumeCmd := config.WrapProfile(fmt.Sprintf("%s --resume %s", claudeBin, sessionID), profile, secrets)
-		claudeCmd = resumeCmd + " || " + freshCmd
-	}
+	// Each limb wrapped separately (adoptClaudeCmd); no profile and no
+	// account leaves every limb byte-identical.
+	claudeCmd := adoptClaudeCmd(claudeBin, promptPath, sessionID, *manual, profile, acct)
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
@@ -4045,6 +4066,9 @@ func cmdAdopt(args []string) error {
 	}
 	if effort != "" {
 		how += ", effort " + effort
+	}
+	if acct.Name != "" {
+		how += ", account " + acct.Name
 	}
 	fmt.Printf("✓ %s adopted (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", id, how, id)
 	return nil
@@ -4584,7 +4608,7 @@ func cmdDoctor(args []string) error {
 		return fmt.Errorf("usage: gv doctor [--json]")
 	}
 	cfg, cfgErr := loadCfg()
-	rows := doctor.Run(cfg, cfgErr, orchestratorDirFor(ambient.ws, cfg))
+	rows := doctor.Run(cfg, cfgErr, orchestratorDirFor(ambient.ws, cfg), accountTasks)
 	if jsonOut {
 		if err := doctor.RenderJSON(os.Stdout, rows); err != nil {
 			return err

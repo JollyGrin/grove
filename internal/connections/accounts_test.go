@@ -9,6 +9,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/state"
 )
 
 func accountEnv(t *testing.T) (Env, account.Store) {
@@ -42,7 +43,7 @@ func accountRowIDs(env Env, now time.Time) string {
 	var ids []string
 	for _, c := range accountConnections(env, now) {
 		want := StateWarn
-		if strings.HasPrefix(c.ID, "account-token-expired:") {
+		if strings.HasPrefix(c.ID, "account-token-expired:") || strings.HasPrefix(c.ID, "account-pin-missing:") {
 			want = StateMissing
 			if c.Severity != SeverityError {
 				ids = append(ids, "BAD-SEVERITY:"+c.ID)
@@ -196,5 +197,43 @@ func TestStatuslineWrapMissingRow(t *testing.T) {
 	installShim(t, env.Home)
 	if got := rows(); got != "" {
 		t.Fatalf("rows = %q once wrap is recorded, want none", got)
+	}
+}
+
+// The row car 02 deferred (design §Decision 7): a non-done task pinning a
+// missing account is a fail — its adopt refuses. Done tasks and pins to
+// configured accounts stay silent.
+func TestAccountRowPinMissing(t *testing.T) {
+	env, s := accountEnv(t)
+	noTasks := func() []*state.Task { t.Fatal("AccountTasks folded with no accounts configured"); return nil }
+	env.AccountTasks = noTasks
+	if got := accountRowIDs(env, time.Now()); got != "" {
+		t.Fatalf("no accounts: rows %q, want none", got)
+	}
+	if _, err := s.Add("alt", strings.NewReader("tok"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.Home, ".bashrc"), []byte("eval \"$(gv account shell-init)\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	installShim(t, env.Home)
+	called := false
+	env.AccountTasks = func() []*state.Task {
+		called = true
+		return []*state.Task{
+			{Ticket: "T-2", Account: "gone"},
+			{Ticket: "T-1", Account: "gone"},
+			{Ticket: "T-3", Account: "alt"},
+			{Ticket: "T-4", Account: "old", Done: true},
+			{Ticket: "T-5"},
+		}
+	}
+	if got := accountRowIDs(env, time.Now()); got != "account-pin-missing:gone" || !called {
+		t.Fatalf("rows = %q, want only account-pin-missing:gone", got)
+	}
+	for _, c := range accountConnections(env, time.Now()) {
+		if info := c.Check(env).Info; !strings.Contains(info, "T-1, T-2") {
+			t.Errorf("info = %q, want the sorted pinning tickets", info)
+		}
 	}
 }

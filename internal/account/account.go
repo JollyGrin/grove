@@ -343,6 +343,20 @@ func InUse(tasks []*state.Task, name string) []string {
 	return out
 }
 
+// PinnedDone lists the tickets of done tasks (done, untracked or handed
+// off) still pinned to name, sorted: they don't block `rm`, but `gv adopt`
+// would honour the pin and then refuse it.
+func PinnedDone(tasks []*state.Task, name string) []string {
+	var out []string
+	for _, t := range tasks {
+		if t != nil && t.Done && t.Account == name {
+			out = append(out, t.Ticket)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // LoginEmail reads the interactive login's email from ~/.claude.json
 // (`oauthAccount.emailAddress`); "" when absent or unreadable.
 func LoginEmail(home string) string {

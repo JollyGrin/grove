@@ -183,7 +183,8 @@ func accountRm(s account.Store, name string, force bool) error {
 	if err := account.ValidateName(name); err != nil {
 		return accountUsageErr(err, "rm <name> [--force]")
 	}
-	if pinned := account.InUse(accountTasks(), name); len(pinned) > 0 && !force {
+	tasks := accountTasks()
+	if pinned := account.InUse(tasks, name); len(pinned) > 0 && !force {
 		return fmt.Errorf("account %s is pinned by non-done task(s) %s — finish them, or rm --force (shell sessions are invisible to this check)",
 			name, strings.Join(pinned, ", "))
 	}
@@ -194,6 +195,12 @@ func accountRm(s account.Store, name string, force bool) error {
 	fmt.Printf("✓ account %s removed\n", name)
 	if wasActive {
 		fmt.Println("  it was the active account — the default is now login")
+	}
+	// Done, untracked and handed-off tasks don't block rm, but adopt
+	// honours their pin and would refuse — name them so it isn't a surprise.
+	if done := account.PinnedDone(tasks, name); len(done) > 0 {
+		fmt.Printf("  still pinned by done/untracked task(s) %s — reviving one needs gv adopt <ticket> --account <name|login>\n",
+			strings.Join(done, ", "))
 	}
 	return nil
 }
@@ -236,4 +243,56 @@ func accountTasks() []*state.Task {
 		}
 	}
 	return out
+}
+
+// resolveLaunchAccount resolves a worker launch's account (design
+// §Decisions 1–3) against the global store, preflighting any token before
+// a side effect runs. pinned is the task's recorded account (adopt only).
+func resolveLaunchAccount(ticket, flag, pinned, profileName string, cfg *config.Config, repo *config.Repo) (account.Resolved, error) {
+	return accountStore().Resolve(account.Launch{
+		Flag: flag, Pinned: pinned, Profile: profileName,
+		ConfigDir: cfg.ClaudeConfigDir, ClaudeCmd: repo.Claude, Ticket: ticket,
+	})
+}
+
+// wrapWorker applies exactly one launch wrap to a composed claude command:
+// the model profile's, else the account's — never both, since each ends in
+// `exec <cmd> )` (design §Decision 1). With neither, cmd is unchanged.
+func wrapWorker(cmd string, profile *config.ModelProfile, acct account.Resolved) string {
+	if profile != nil {
+		return config.WrapProfile(cmd, profile, config.SecretsPath())
+	}
+	return config.WrapAccount(cmd, acct.TokenPath, acct.Name)
+}
+
+// grabClaudeCmd is grab's claude limb: the prompt as argv via command
+// substitution, wrapped. Never wraps repo.Claude itself (hooks resolve the
+// worker's config dir from the stored r.Claude) nor the setup prefix.
+func grabClaudeCmd(claudeBin, promptPath string, profile *config.ModelProfile, acct account.Resolved) string {
+	return wrapWorker(fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath), profile, acct)
+}
+
+// adoptClaudeCmd is adopt's claude line: resume || fresh when a session is
+// known (and not manual), else fresh. Each limb is wrapped separately: a
+// wrap ends in `exec`, which replaces the shell, so one wrap around
+// `resume || fresh` would make the fallback unreachable and, on a resume
+// failure, silently drop to the operator's own login (grove-36 T3).
+func adoptClaudeCmd(claudeBin, promptPath, sessionID string, manual bool, profile *config.ModelProfile, acct account.Resolved) string {
+	freshCmd := wrapWorker(fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath), profile, acct)
+	if sessionID == "" || manual {
+		return freshCmd
+	}
+	return wrapWorker(fmt.Sprintf("%s --resume %s", claudeBin, sessionID), profile, acct) + " || " + freshCmd
+}
+
+// accountLine is the grab/adopt confirmation for a launch's account; ""
+// for the login.
+func accountLine(acct account.Resolved) string {
+	switch {
+	case acct.Pin != "":
+		return "→ account " + acct.Name + " (pinned to this worker)"
+	case acct.Name != "":
+		return "→ account " + acct.Name + " (active)"
+	}
+	return ""
 }
