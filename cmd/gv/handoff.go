@@ -216,7 +216,7 @@ func (l *localHandoff) Lookup(task string) (*handoff.Info, error) {
 	l.t = t
 	return &handoff.Info{
 		Ticket: t.Ticket, Repo: t.Repo, Branch: t.Branch, Worktree: t.Worktree,
-		Agent: t.Agent, Paused: t.Paused,
+		Agent: t.Agent, Paused: t.Paused, Account: t.Account,
 		WindowLive: tmux.WindowLive(t.TmuxSession, t.TmuxWindow),
 	}, nil
 }

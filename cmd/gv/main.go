@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/audit"
 	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/chat"
@@ -1083,6 +1084,12 @@ func seedOrchestratorDir(orchDir string) error {
 func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	session := cockpitSessionFor(ws)
 	orchDir := orchestratorDirFor(ws, cfg)
+	// claude-accounts: the first pane runs on the active account, resolved
+	// and preflighted before anything is built — a bad token refuses here.
+	acct, err := resolveChatAccount("", "", cfg)
+	if err != nil {
+		return err
+	}
 	if err := seedOrchestratorDir(orchDir); err != nil {
 		return err
 	}
@@ -1133,7 +1140,14 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SendKeys(dashPane, dash); err != nil {
 		return err
 	}
-	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
+	// A token account loses claude.ai connectors and Remote Control: the
+	// pane says so above claude, since the operator is attaching, not
+	// reading this process's stdout.
+	firstPane := orchestratorCmd(cfg, root, acct)
+	if line := chatAccountLine(acct); line != "" {
+		firstPane = "printf '%s\\n' " + remote.Quote(line) + "; " + firstPane
+	}
+	if _, err := tmux.SpawnPane(session, orchDir, firstPane); err != nil {
 		return err
 	}
 	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
@@ -1185,19 +1199,12 @@ func orchestratorLaunch(cfg *config.Config, root string) string {
 
 // orchestratorCmd resumes the last orchestrator chat when one exists;
 // fresh spawns (O / orchestrator new) always start clean, so this is only
-// for the cockpit's first pane.
-func orchestratorCmd(cfg *config.Config, root string) string {
+// for the cockpit's first pane. acct wraps each limb separately (adopt's
+// rule): a wrap ends in `exec`, so one around the chain would make the
+// fresh fallback unreachable and drop a failed resume to the login.
+func orchestratorCmd(cfg *config.Config, root string, acct account.Resolved) string {
 	launch := orchestratorLaunch(cfg, root)
-	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
-}
-
-// wrapOrchestratorLaunch wraps an already-composed orchestrator launch in
-// a profile's backend env (a nil profile leaves it untouched). Shared with
-// chatSpawnPlan, whose `--resume` variant must compose the flags onto the
-// bare launch BEFORE this wrap — WrapProfile ends in `exec <cmd> )`, so a
-// flag appended afterwards lands outside the subshell.
-func wrapOrchestratorLaunch(launch string, p *config.ModelProfile) string {
-	return config.WrapProfile(launch, p, config.SecretsPath())
+	return wrapWorker(launch+" --continue 2>/dev/null", nil, acct) + " || " + wrapWorker(launch, nil, acct)
 }
 
 // flagWasSet answers "did the operator type this flag?" — the one thing a
@@ -1229,6 +1236,7 @@ func cmdOrchestratorNew(args []string) error {
 	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
 	modelFlag := fs.String("model", "", "pin the chat to one of orchestrator.models' tiers (default opus|sonnet|haiku); on a --profile it picks that tier's slug")
 	effortFlag := fs.String("effort", "", "pin the chat's effort (low|medium|high|xhigh|max); default: the model's own")
+	accountFlag := fs.String("account", "", "run the chat on this `gv account` (login = the interactive login); default: the active account. Not with a non-Anthropic --profile")
 	_ = fs.Parse(args)
 
 	if err := chatResumeConflict(*profileFlag, *resumeFlag); err != nil {
@@ -1259,7 +1267,7 @@ func cmdOrchestratorNew(args []string) error {
 	if label != "" {
 		return spawnWorkspaceChat(chatSpawnReq{
 			Label: label, Profile: *profileFlag, Model: *modelFlag, Effort: *effortFlag, Resume: *resumeFlag,
-			Brief: brief, OpID: *opFlag, Host: *asFlag,
+			Brief: brief, OpID: *opFlag, Host: *asFlag, Account: *accountFlag,
 		})
 	}
 
@@ -1267,7 +1275,7 @@ func cmdOrchestratorNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, brief, *modelFlag, *effortFlag)
+	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, *accountFlag, brief, *modelFlag, *effortFlag)
 	if err != nil {
 		return err
 	}
@@ -1293,10 +1301,23 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 // effort (grove-435) pins the chat's --effort the same way ("" = the
 // model's own default).
 func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (string, error) {
+	return spawnOrchestratorAccountBrief(cfg, "", brief, model, effort)
+}
+
+// spawnOrchestratorAccountBrief is spawnOrchestratorBrief with `gv
+// orchestrator new --account` (claude-accounts): the flag, else the
+// active account, resolved and preflighted before anything is built. Like
+// a brief, an explicit account needs a pane of its own — the cockpit's
+// first pane runs the active one.
+func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model, effort string) (string, error) {
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return "", err
 	}
 	if err := config.CheckEffort(effort); err != nil {
+		return "", err
+	}
+	acct, err := resolveChatAccount(accountFlag, "", cfg)
+	if err != nil {
 		return "", err
 	}
 	ws := ambient.ws
@@ -1314,7 +1335,7 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (st
 		// place in it. An unbriefed spawn is done here — it built the
 		// pane that was asked for — and a briefed one falls through to a
 		// pane of its own, exactly as the profiled twin does.
-		if brief == "" && model == "" {
+		if brief == "" && model == "" && accountFlag == "" {
 			return "cockpit built — gv attaches", nil
 		}
 	}
@@ -1332,7 +1353,7 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (st
 	}
 
 	bare := config.WithEffort(config.PinModel(orchestratorLaunch(cfg, root), model), effort)
-	launch, id, err := mintedOrchestratorLaunch(bare, dir, brief, nil)
+	launch, id, err := mintedOrchestratorLaunch(bare, dir, brief, nil, acct)
 	if err != nil {
 		return "", err
 	}
@@ -1343,7 +1364,13 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (st
 	stampOrchestratorPane(paneID, id)
 	runs := chatRunsModel(cfg, bare, nil)
 	tagOrchestratorPaneModel(paneID, runs)
-	return "✓ new orchestrator chat pane" + chatModelSuffix(runs), nil
+	tagChatPaneAccount(paneID, acct.Pin)
+	msg := "✓ new orchestrator chat pane" + chatModelSuffix(runs)
+	// One line: the TUI's O keybind flashes this message.
+	if line := chatAccountLine(acct); line != "" {
+		msg += " " + line
+	}
+	return msg, nil
 }
 
 // mintedOrchestratorLaunch is grove-222 applied to a cockpit pane: mint the
@@ -1366,7 +1393,10 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (st
 // grove-271: a standing brief is written here too, for the same reason —
 // the file is named by the id, so it cannot be laid down until the id
 // exists. Both additions go on the BARE launch, ahead of the wrap.
-func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProfile) (string, string, error) {
+//
+// acct (claude-accounts) is the unprofiled pane's account; wrapWorker
+// applies exactly one of the two wraps.
+func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProfile, acct account.Resolved) (string, string, error) {
 	id, err := chat.NewSessionID()
 	if err != nil {
 		return "", "", err
@@ -1379,7 +1409,7 @@ func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProf
 		}
 		launch += chatBriefArg(path)
 	}
-	return wrapOrchestratorLaunch(launch, p), id, nil
+	return wrapWorker(launch, p, acct), id, nil
 }
 
 // stampOrchestratorPane records a spawned chat's identity on its pane.
@@ -1401,18 +1431,23 @@ func stampOrchestratorPane(pane, id string) {
 // pane's fresh launch runs wrapped in the profile's backend
 // (orchestratorLaunchProfile), never the operator's own Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
-	return spawnOrchestratorProfileBrief(cfg, profileName, "", "", "")
+	return spawnOrchestratorProfileBrief(cfg, profileName, "", "", "", "")
 }
 
 // spawnOrchestratorProfileBrief is that twin carrying grove-271's standing
 // brief — the CLI's entry point; the TUI hook above stays brief-less.
-func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief, model, effort string) (string, error) {
+func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, accountFlag, brief, model, effort string) (string, error) {
 	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
 		return "", err
 	}
 	if p == nil {
-		return spawnOrchestratorBrief(cfg, brief, model, effort)
+		return spawnOrchestratorAccountBrief(cfg, accountFlag, brief, model, effort)
+	}
+	// claude-accounts: a profile sets its own credentials, so an explicit
+	// --account beside it errors here; the active account is skipped.
+	if _, err := resolveChatAccount(accountFlag, resolvedName, cfg); err != nil {
+		return "", err
 	}
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return "", err
@@ -1461,7 +1496,7 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief, model
 	// grove-293: the pin goes on the BARE launch, before the wrap, so
 	// WrapProfile reads it and exports that tier's slug.
 	bare := config.WithEffort(config.PinModel(orchestratorLaunch(cfg, root), model), effort)
-	launch, id, err := mintedOrchestratorLaunch(bare, baseDir, brief, p)
+	launch, id, err := mintedOrchestratorLaunch(bare, baseDir, brief, p, account.Resolved{})
 	if err != nil {
 		return "", err
 	}

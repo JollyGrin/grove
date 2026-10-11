@@ -439,6 +439,20 @@ func WorkerWindowProfile(repoShort, ticket, profile string) string {
 	return base + " · " + r.Replace(profile)
 }
 
+// SetPaneAccount tags a chat pane with the account it was explicitly
+// pinned to (claude-accounts) as the pane user option @grove_account —
+// what `gv account rm` reads to refuse removing an account a live chat
+// runs on. A user option for @grove_profile's reason. An empty name
+// clears the option.
+func SetPaneAccount(pane, name string) error {
+	if name == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_account")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_account", name)
+	return err
+}
+
 // SetPaneProfile tags a pane with its model-profile name in a pane USER
 // OPTION (@grove_profile), so a profiled orchestrator pane is distinguishable
 // from the default (Anthropic) pane sharing the cockpit window. Unlike a pane
@@ -950,7 +964,7 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}"
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_account}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -968,6 +982,7 @@ type LivePane struct {
 	Dir         string // pane_current_path
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
+	Account     string // @grove_account (claude-accounts): the pinned account, "" when unpinned
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -999,6 +1014,7 @@ func ParsePanes(out string) []LivePane {
 			Dir:         paneField(f, 7),
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
+			Account:     paneField(f, 10),
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))

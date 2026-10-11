@@ -59,6 +59,10 @@ type Info struct {
 	Ticket, Repo, Branch, Worktree string
 	Agent                          string // state.Agent* value
 	Paused, WindowLive             bool
+	// Account is the task's pinned claude account ("" = unpinned). A
+	// handoff never carries it: the receiving host resolves its own
+	// active account (claude-accounts design §Out of scope).
+	Account string
 }
 
 // Verified holds the facts step 3 checks — all via git/gh, never ancestry.
@@ -302,7 +306,22 @@ func Plan(info *Info, v *Verified, o Options) string {
 		fmt.Fprintf(&b, "  then      ssh %s -- gv adopt %s --repo %s --branch %s --sync\n", o.Host, info.Ticket, info.Repo, info.Branch)
 	}
 	fmt.Fprintf(&b, "  note      the session transcript stays here; the PR body is the carrier\n")
+	fmt.Fprintf(&b, "  account   %s\n", accountNote(info, o))
 	return b.String()
+}
+
+// accountNote says what happens to the task's claude account: nothing
+// travels, and the adopting host runs on its own active account — so a
+// pin dropped by the handoff is visible, never silent.
+func accountNote(info *Info, o Options) string {
+	there := o.Host + " resolves its own active account"
+	if o.Release {
+		there = "the calling host resolves its own active account"
+	}
+	if info.Account == "" {
+		return "none pinned — " + there
+	}
+	return fmt.Sprintf("%s pinned here — NOT carried; %s (to re-pin there: gv adopt %s --account <name>)", info.Account, there, info.Ticket)
 }
 
 // FollowLine is the closing line of a successful handoff. The follow

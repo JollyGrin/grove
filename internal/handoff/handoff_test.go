@@ -266,3 +266,22 @@ func TestBodyNonTrivial(t *testing.T) {
 		t.Error("empty should fail")
 	}
 }
+
+// claude-accounts: the plan names the task's account and that the
+// receiving host resolves its own — a pin is never carried, so its drop
+// must be visible (design §Out of scope).
+func TestPlanNamesAccount(t *testing.T) {
+	v := &Verified{OnOrigin: true, LocalHead: "abc", RemoteHead: "abc", PRNumber: 3}
+	o := Options{Host: "pc"}
+	pinned := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o)
+	if !strings.Contains(pinned, "account   alt pinned here — NOT carried; pc resolves its own active account (to re-pin there: gv adopt grove-7 --account <name>)") {
+		t.Errorf("pinned plan:\n%s", pinned)
+	}
+	if got := Plan(&Info{Ticket: "grove-7"}, v, o); !strings.Contains(got, "account   none pinned — pc resolves its own active account") {
+		t.Errorf("unpinned plan:\n%s", got)
+	}
+	o.Release = true
+	if got := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o); !strings.Contains(got, "the calling host resolves its own active account") {
+		t.Errorf("release plan:\n%s", got)
+	}
+}
