@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/account"
+	"github.com/JollyGrin/grove/internal/statusline"
 )
 
 // shellRCFiles are where `eval "$(gv account shell-init)"` is looked for.
@@ -20,7 +21,8 @@ var shellRCFiles = []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".
 
 // accountConnections returns one row per problem: warn for a token file
 // not 0600, an active record naming a missing account, accounts
-// configured but no shell rc evaluating shell-init, a token 330+ days
+// configured but no shell rc evaluating shell-init, accounts configured
+// but the usage shim not in ~/.claude/settings.json, a token 330+ days
 // old; a ✗ error row for a token past its one-year life. Empty
 // AccountsStateDir (fake envs) drops the section.
 func accountConnections(env Env, now time.Time) []Connection {
@@ -71,6 +73,11 @@ func accountConnections(env Env, now time.Time) []Connection {
 			`echo 'eval "$(gv account shell-init)"' >> `+shellRC(env),
 			"accounts are configured but no shell rc evals gv account shell-init — a shell `claude` always runs the login")
 	}
+	if len(accts) > 0 && !statuslineInstalled(env) {
+		row("account-statusline", "status line records per-account usage",
+			"gv statusline install",
+			"accounts are configured but ~/.claude/settings.json's status line is not gv statusline — no 5h/weekly usage is recorded")
+	}
 	for _, a := range accts {
 		days := account.AgeDays(a.Minted, now)
 		switch {
@@ -106,6 +113,16 @@ func shellInitInstalled(env Env) bool {
 		}
 	}
 	return false
+}
+
+// statuslineInstalled reports whether ~/.claude/settings.json runs the
+// gv statusline shim. Unreadable reads as not installed.
+func statuslineInstalled(env Env) bool {
+	if env.ReadFile == nil || env.Home == "" {
+		return false
+	}
+	raw, err := env.ReadFile(statusline.SettingsPath(env.Home))
+	return err == nil && statusline.Installed(raw)
 }
 
 // shellRC is the rc file the fix line names: ~/.zshrc for a zsh $SHELL,

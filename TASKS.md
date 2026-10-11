@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-472 · claude-accounts 05: `gv statusline` pass-through shim recording per-account 5h/weekly usage (2026-10-11). `internal/statusline`: `Run` reads stdin once, runs `statusline.wrap` (global config) via `sh -c` with the same bytes, passes stdout/stderr/exit status through, and meanwhile writes `<state>/accounts/usage/<GROVE_ACCOUNT|login>.json` (`{five_hour, seven_day, seen_at}`, temp+rename, 0600, only when a window changed; invalid account names write nothing; every capture error swallowed). `gv statusline install|uninstall` edits `~/.claude/settings.json` only (generic-map + json.Number, other keys kept), records the prior command (or "" = none → uninstall drops `statusLine`), idempotent; `IsShim` also matches `gv-*` throwaway builds and `Run` refuses a self-wrap, so the shim can never wrap itself. `statusline` dispatches before the ambient workspace resolves. Conditional doctor row `account-statusline` (accounts exist, shim absent). `config.editDoc` factored out of `SaveHotkey` for the new yaml writer. Tests over the docs' full-schema fixture; real-binary overhead ≈12ms (mostly Go start-up), in-process ≈2ms.
 - [x] grove-469 · claude-accounts 02: `internal/account` store + `gv account add/ls/use/rm/token-path/shell-init` + doctor rows (2026-10-08). Store under `<state dir>/accounts/` (dir 0700, `<name>.token` 0600 written atomically, `<name>.minted` = add date, `active` = bare name; names `^[a-z][a-z0-9-]{0,31}$`, `login` reserved); every token reader goes through `Store.TokenSource` (the gv-keys 07 seam). `add` reads stdin only (echo off at a TTY); `ls --json` = `accounts` envelope documented in docs/plugins.md + asserted in e2e/plugin.sh; `rm` refuses while a non-done task's new read-side `Task.Account` names it (`--force`); `account` is exempt from the ambient-label check so shell `claude` never flips to login on a broken label. Conditional doctor rows (token not 0600, active missing, shell-init absent, token ≥330d). Tests: ZZZSENTINEL absent from every output/error; the shell-init function run under bash with the test binary as `gv` and a fake `claude`. No launch path changes (car 03).
 - [x] model-fit 06: LEARNINGS.md retirement pass (grove-438, 2026-10-07): 12 audited entries resolved by truth (1 deleted, 10 rewritten to the current fact + pointer, grove-79's lost headline restored), head §Claude Code + §tmux reshaped to fact + rule + ticket with narratives moved to `docs/archive/LEARNINGS-2026-{09,10}.md`, four generalized rules moved into tmux-discipline / shipping-gates / claude-code-facts, the four duplicated rules given one home each.
 - [x] grove-439 · model-fit 07: `gv learnings [--json] [--since 14d]` — read-only promotion report: per repo, auto-memory notes newer than the window (feedback first; memory dir resolved exactly as the #437 doctor row), LEARNINGS.md entries in the window, and `candidates` (a dated entry naming a skill whose SKILL.md cites neither its ticket, date nor headline). New `internal/learnings` (fixture-dir table tests: absent/empty/index-only/mixed/malformed-not-fatal), `report` envelope documented in docs/plugins.md + plugin-authoring digest, e2e/plugin.sh reads it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` and asserts the memory dir/LEARNINGS.md/skill are byte-identical after. Orchestrator duty 11 (learnings review: one promotion or retirement per note, target file + exact text, apply only on yes) + seed tripwire.
@@ -54,38 +55,6 @@
       fresh worktree and stays per-repo); a symlink is the settings-free
       route if the operator wants it. Two headless rote runs wrote no
       memory file — criterion reported unmet in the PR, not claimed.
-- [x] model-fit 08: compaction over discard (grove-440, 2026-10-07).
-      Per-repo `autocompact: auto|100000–1000000` beside `claude:` →
-      `claude --autocompact N` on grab/adopt via `config.WithAutocompact`
-      (strip-then-inject, the grove-142 shape; default unset = no flag,
-      events untouched); `config.example.yaml` recommends 150000 on
-      Claude lanes, unset on 1M third-party lanes. The SessionStart
-      receiver prints a ground-truth re-orientation on `source: compact`
-      only (ticket + acceptance-criteria section from the provider with a
-      5s fetch timeout, `git log --oneline -8` + `git status --short`,
-      PR number/URL/body via 5s-bounded `gh pr view` with a git-only
-      upstream fallback, the STATUS contract) — never from the summary,
-      never non-zero, degrades per block on an unreadable worktree; the
-      grove-289 `compaction` event is reused unchanged. One "when
-      compacting, preserve …" line in root CLAUDE.md and the AGENTS.md
-      bootstrap template. `e2e/dummy.sh` asserts the flag exactly once /
-      absent / rejected; `e2e/plugin.sh` asserts the re-orientation.
-- [x] model-fit 09: Stop hook evidence gate + last-match sentinel
-      (grove-441, 2026-10-07, PR #446). `hooks.ParseSentinel` is the one
-      parser (hooks + TUI): LAST `STATUS:` line wins, tolerates
-      bold/underscore wrap, `—`/`–`/`-`/`:` separators and a bare
-      `STATUS: DONE`, skips the kickoff's own `<placeholder>` echo. The
-      Stop receiver checks a DONE claim against the worktree (`git
-      status`, upstream/ahead, `gh pr list` with a 5s timeout, skipped
-      without a remote): per-repo `done_gate: off|warn|block`, default
-      **warn** for one release (verdict as additive
-      `gate`/`gate_reason`/`gate_decision` data + notify, never blocks);
-      `block` prints `{"decision":"block",…}` and records sentinel
-      `done_unverified` (`gv ls` label `done?`), never on
-      `stop_hook_active`, capped at 2 consecutive per session
-      (`<state>/done-gate/<ticket>`), never when grove itself errors.
-      `e2e/dummy.sh` covers block/warn/last-match. Flip to `block` once a
-      release of warn verdicts looks right.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

@@ -16,6 +16,19 @@ func accountEnv(t *testing.T) (Env, account.Store) {
 	return Env{AccountsStateDir: state, Home: home, Stat: os.Stat, ReadFile: os.ReadFile, Getenv: func(string) string { return "" }}, account.Open(state)
 }
 
+// installShim writes a ~/.claude/settings.json whose status line is the
+// gv statusline shim.
+func installShim(t *testing.T, home string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"statusLine":{"type":"command","command":"/home/u/go/bin/gv statusline"}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func accountRowIDs(env Env, now time.Time) string {
 	var ids []string
 	for _, c := range accountConnections(env, now) {
@@ -54,6 +67,7 @@ func TestAccountRowsSilentWhenFine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(env.Home, ".bashrc"), []byte("eval \"$(gv account shell-init)\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	installShim(t, env.Home)
 	if got := accountRowIDs(env, now); got != "" {
 		t.Fatalf("healthy: rows %q, want none", got)
 	}
@@ -74,7 +88,7 @@ func TestAccountRowsEachProblem(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Dir, "active"), []byte("gone\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := "account-token-mode:alt,account-active-missing,account-shell-init,account-token-expiry:alt"
+	want := "account-token-mode:alt,account-active-missing,account-shell-init,account-statusline,account-token-expiry:alt"
 	if got := accountRowIDs(env, now); got != want {
 		t.Fatalf("rows = %q\nwant   %q", got, want)
 	}
@@ -89,6 +103,7 @@ func TestAccountRowExpiredIsAFailNotTheWarn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(env.Home, ".zshrc"), []byte("eval \"$(gv account shell-init)\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	installShim(t, env.Home)
 	if got := accountRowIDs(env, now); got != "account-token-expired:dead" {
 		t.Fatalf("rows = %q, want only the expired fail row", got)
 	}
@@ -122,5 +137,34 @@ func TestAccountShellInitRowCommentsAndShell(t *testing.T) {
 	}
 	if fix := fixFor("/bin/bash"); !strings.HasSuffix(fix, ">> ~/.bashrc") {
 		t.Errorf("bash fix = %q, want ~/.bashrc", fix)
+	}
+}
+
+func TestAccountStatuslineRow(t *testing.T) {
+	env, s := accountEnv(t)
+	has := func() bool {
+		for _, c := range accountConnections(env, time.Now()) {
+			if c.ID == "account-statusline" {
+				return true
+			}
+		}
+		return false
+	}
+	installShim(t, env.Home) // the shim alone, no accounts: silent
+	if has() {
+		t.Fatal("statusline row with no accounts")
+	}
+	if _, err := s.Add("alt", strings.NewReader("tok"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if has() {
+		t.Fatal("statusline row with the shim installed")
+	}
+	other := `{"statusLine":{"type":"command","command":"bash ~/.claude/statusline-command.sh"}}`
+	if err := os.WriteFile(filepath.Join(env.Home, ".claude", "settings.json"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !has() {
+		t.Fatal("no statusline row: accounts exist and the shim is not installed")
 	}
 }
