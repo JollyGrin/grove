@@ -191,9 +191,12 @@ type Model struct {
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
-	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
+	costsTab   int             // SPEND | ACCOUNT | CLAUDE (grove-87); $ always lands on SPEND
 	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
 	accountSel int             // cursor into account.keys (grove-104 key manager)
+	claude     claudeMsg       // CLAUDE tab snapshot — local usage files, on tab open / r, never polled
+	claudeSel  int             // cursor into claude.rows
+	claudeUse  string          // account the u confirm is armed for ("" = not armed)
 
 	flash string
 
@@ -890,6 +893,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case claudeMsg:
+		m.claude = msg
+		if m.claudeSel >= len(msg.rows) {
+			m.claudeSel = 0
+		}
+		return m, nil
+
+	case claudeUsedMsg:
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+			return m, nil
+		}
+		m.flash = "✓ active account: " + msg.name + " (new launches and shell `claude`; live sessions keep theirs)"
+		return m, newClaudeCmd(m.localTasks)
+
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in
 		// ~/.config/grove/.env — refetch so the unset row becomes data.
@@ -1331,6 +1349,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "$", "c":
 		m.mode = modeCosts
 		m.costsTab = costsTabSpend // $ always lands on SPEND (grove-87)
+		m.claudeUse = ""
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs

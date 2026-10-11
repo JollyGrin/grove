@@ -187,18 +187,20 @@ func UsageText(u Usage, now time.Time, loc *time.Location) string {
 		case w.State == StateReset:
 			parts = append(parts, label+" 0% (reset)")
 		case w.ResetsAt != nil:
-			parts = append(parts, fmt.Sprintf("%s %.0f%% (resets %s)", label, *w.UsedPercentage, resetWhen(*w.ResetsAt, now, loc)))
+			parts = append(parts, fmt.Sprintf("%s %.0f%% (resets %s)", label, *w.UsedPercentage, ResetWhen(*w.ResetsAt, now, loc)))
 		case w.Stale:
 			parts = append(parts, fmt.Sprintf("%s %.0f%% (stale, reset time unknown)", label, *w.UsedPercentage))
 		default:
 			parts = append(parts, fmt.Sprintf("%s %.0f%% (reset time unknown)", label, *w.UsedPercentage))
 		}
 	}
-	parts = append(parts, "as of "+usageAge(now.Sub(*u.SeenAt)))
+	parts = append(parts, "as of "+UsageAge(now.Sub(*u.SeenAt)))
 	return strings.Join(parts, " · ")
 }
 
-func resetWhen(at, now time.Time, loc *time.Location) string {
+// ResetWhen is a reset time as the usage text reads it in loc: a bare
+// clock time today, `tomorrow 22:00`, else the weekday and time.
+func ResetWhen(at, now time.Time, loc *time.Location) string {
 	at, now = at.In(loc), now.In(loc)
 	day := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc) }
 	switch days := int(day(at).Sub(day(now)).Hours()/24 + 0.5); days {
@@ -210,7 +212,8 @@ func resetWhen(at, now time.Time, loc *time.Location) string {
 	return at.Format("Mon 15:04")
 }
 
-func usageAge(d time.Duration) string {
+// UsageAge is a sighting's age, e.g. `4m`, `2h05m`, `3d`.
+func UsageAge(d time.Duration) string {
 	d = max(d, 0).Round(time.Minute)
 	switch {
 	case d < time.Hour:
