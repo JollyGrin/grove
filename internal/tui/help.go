@@ -39,7 +39,7 @@ var (
 	}
 	helpGlobal = []helpEntry{
 		{"?", "this cheat sheet"},
-		{"L", "layout: cycle the cockpit pane split (persisted on the session)"},
+		{"L", "focus/horizontal: toggle the cockpit pane layout (persisted on the session)"},
 		{"$", "costs: spend + account tabs — per-ticket spend, ledger, OpenRouter balance"},
 		{"*", "effects: cycle ambient effects off → calm → full (runtime only)"},
 		{"g", "gardens: the almanac — one garden per day, h/l walk days"},

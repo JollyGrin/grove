@@ -14,11 +14,10 @@ func TestNextLayout(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"horizontal advances", "horizontal", "vertical"},
-		{"vertical advances", "vertical", "tiled"},
-		{"tiled wraps", "tiled", "horizontal"},
-		{"empty advances like the default", "", "vertical"},
-		{"unknown advances like the default", "garbage", "vertical"},
+		{"horizontal flips to focus", "horizontal", "focus"},
+		{"focus flips to horizontal", "focus", "horizontal"},
+		{"empty flips like the default", "", "focus"},
+		{"anything flips like the default", "anything", "focus"},
 	}
 	for _, tc := range cases {
 		if got := nextLayout(tc.in); got != tc.want {
@@ -27,7 +26,7 @@ func TestNextLayout(t *testing.T) {
 	}
 }
 
-// L must cycle in place: same mode, no overlay, a "layout: <name>" flash.
+// L must toggle in place: same mode, no overlay, a "layout: <name>" flash.
 // The tmux calls are best-effort (_ =), so without a live server the key
 // still lands on the config default and advances it.
 func TestHandleKeyLayoutCycle(t *testing.T) {
@@ -39,7 +38,7 @@ func TestHandleKeyLayoutCycle(t *testing.T) {
 	}
 	// No tmux server in tests: CockpitLayout("") reads nothing, so cur is
 	// the config default (horizontal) and the flash shows its successor.
-	if got.flash != "layout: vertical" {
-		t.Errorf("flash = %q, want %q", got.flash, "layout: vertical")
+	if got.flash != "layout: focus" {
+		t.Errorf("flash = %q, want %q", got.flash, "layout: focus")
 	}
 }

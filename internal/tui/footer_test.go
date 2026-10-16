@@ -42,7 +42,7 @@ func TestFooterLegendOneLineAlways(t *testing.T) {
 func TestFooterLegendDropsByPriority(t *testing.T) {
 	prio := []string{
 		"help", "new chat", "profiled chat", "reply",
-		"layout", "costs", "effects", "park", "quit",
+		"focus/horizontal", "costs", "effects", "park", "quit",
 	}
 	for width := 41; width <= 220; width++ {
 		line := footerLegend(width, true, false)
@@ -69,7 +69,7 @@ func TestFooterLegendWideCanonical(t *testing.T) {
 	}
 	order := []string{
 		"reply", "new chat", "profiled chat",
-		"help", "layout", "costs", "effects", "park", "quit",
+		"help", "focus/horizontal", "costs", "effects", "park", "quit",
 	}
 	last := -1
 	for _, s := range order {

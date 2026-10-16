@@ -8,6 +8,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -149,7 +150,81 @@ func TestPaneTargetHelpersExactSession(t *testing.T) {
 	if err := MainVertical("grove-x", 55); err != nil {
 		t.Fatalf("MainVertical: %v", err)
 	}
-	if err := SelectLayout("grove-x", "tiled"); err != nil {
+	if err := SelectLayout("grove-x", "horizontal"); err != nil {
 		t.Fatalf("SelectLayout: %v", err)
+	}
+}
+
+// grove-485: the cockpit has two layouts. focus is main-vertical with the
+// dash (first pane) at cockpitMainWidth% and the chats stacked right;
+// horizontal is even-horizontal — every pane a full-height column.
+func TestSelectLayoutFocusHorizontal(t *testing.T) {
+	scratchServer(t)
+	dir := t.TempDir()
+
+	if _, err := run("new-session", "-d", "-s", "grove-l", "-n", "cockpit", "-x", "200", "-y", "50", "-c", dir); err != nil {
+		t.Fatalf("new-session grove-l: %v", err)
+	}
+	for i := 0; i < 2; i++ { // two chat panes beside the dash
+		if _, err := run("split-window", "-t", ExactActive("grove-l"), "-c", dir); err != nil {
+			t.Fatalf("split-window: %v", err)
+		}
+	}
+
+	type pane struct{ left, top, width, height int }
+	geometry := func() (winW int, layout string, panes []pane) {
+		t.Helper()
+		out, err := run("display-message", "-p", "-t", ExactActive("grove-l"), "#{window_width}\t#{window_layout}")
+		if err != nil {
+			t.Fatalf("display-message: %v", err)
+		}
+		head := strings.SplitN(strings.TrimSpace(out), "\t", 2)
+		if _, err := fmt.Sscan(head[0], &winW); err != nil || len(head) != 2 {
+			t.Fatalf("parse window info %q: %v", out, err)
+		}
+		out, err = run("list-panes", "-t", ExactActive("grove-l"), "-F", "#{pane_left} #{pane_top} #{pane_width} #{pane_height}")
+		if err != nil {
+			t.Fatalf("list-panes: %v", err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			var p pane
+			if _, err := fmt.Sscan(line, &p.left, &p.top, &p.width, &p.height); err != nil {
+				t.Fatalf("parse pane %q: %v", line, err)
+			}
+			panes = append(panes, p)
+		}
+		return winW, head[1], panes
+	}
+
+	if err := SelectLayout("grove-l", "focus"); err != nil {
+		t.Fatalf("SelectLayout focus: %v", err)
+	}
+	winW, layout, panes := geometry()
+	if len(panes) != 3 {
+		t.Fatalf("got %d panes, want 3", len(panes))
+	}
+	// main-vertical: a left column, then a [..] vertical stack on the right.
+	if !strings.Contains(layout, "[") {
+		t.Errorf("focus window_layout = %q, want a main-vertical stack", layout)
+	}
+	want := winW * cockpitMainWidth / 100
+	if d := panes[0].width - want; d < -1 || d > 1 {
+		t.Errorf("focus dash width = %d of %d, want %d%% (%d) ± 1", panes[0].width, winW, cockpitMainWidth, want)
+	}
+	if panes[1].left != panes[2].left || panes[1].top == panes[2].top {
+		t.Errorf("focus chats not stacked right: %+v", panes[1:])
+	}
+
+	if err := SelectLayout("grove-l", "horizontal"); err != nil {
+		t.Fatalf("SelectLayout horizontal: %v", err)
+	}
+	_, layout, panes = geometry()
+	if strings.Contains(layout, "[") {
+		t.Errorf("horizontal window_layout = %q, want even-horizontal (no stack)", layout)
+	}
+	for i, p := range panes {
+		if p.top != panes[0].top || p.height != panes[0].height {
+			t.Errorf("horizontal pane %d = %+v, want a full-height column", i, p)
+		}
 	}
 }
