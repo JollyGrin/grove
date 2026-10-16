@@ -76,9 +76,23 @@ before an orchestrator there can load it.
 
 ## Step 1 — read live capacity on every lane
 
-**Claude sub** — no API. Take the percentage from the invocation
-(`/model-lanes 18%`); if absent, ask in one line — the whole plan pivots
-on it — and keep working on everything that does not depend on it.
+**Claude sub** — read it, per account:
+
+```bash
+gv account ls --usage --json
+```
+
+Each row carries `usage.five_hour` and `usage.seven_day` with
+`used_percentage` and `resets_at` (recorded from the sessions' own
+statusline data, so `stale: true` or a `hint` means no recent session has
+reported — say so rather than treating it as 0%). The sub can be several
+accounts: a second one with headroom is a lane of its own, dispatched with
+`gv grab DEV-X --account <name>` (proposed with the reason, never chosen
+unasked — see the orchestrator seed). If the invocation carries a
+percentage (`/model-lanes 18%`) it overrides the reading for the active
+account; if the command reports nothing for any account, ask in one line
+— the whole plan pivots on it — and keep working on everything that does
+not depend on it.
 
 **z.ai coding plan** — exact, always check it rather than assuming:
 
