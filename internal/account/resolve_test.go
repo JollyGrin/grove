@@ -175,3 +175,13 @@ func TestPinnedDone(t *testing.T) {
 		t.Fatalf("InUse = %q, want T-2", got)
 	}
 }
+
+// TestResolveOverrideHint (grove-471): a non-adopt launch (a revived chat)
+// replaces the adopt hint a refused recorded pin carries.
+func TestResolveOverrideHint(t *testing.T) {
+	s := newStore(t)
+	_, err := s.Resolve(Launch{Pinned: "gone", ClaudeCmd: "claude", Override: "override: gv orchestrator new --resume x --account <name|login>"})
+	if err == nil || !strings.Contains(err.Error(), "gv orchestrator new --resume x") || strings.Contains(err.Error(), "gv adopt") {
+		t.Fatalf("recorded pin refusal = %v; want the chat override, not adopt's", err)
+	}
+}

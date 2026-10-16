@@ -160,6 +160,9 @@ func cmdSub(args []string) error {
 	var res sub.Result
 	var callErr error
 	if *agentic {
+		// claude-accounts (design §Decision 5): deliberately NOT account-
+		// wrapped — a `--bare` lane run on the lane's own key, not a
+		// subscription session (`--bare` ignores CLAUDE_CODE_OAUTH_TOKEN).
 		res, callErr = sub.Agentic(ctx, lane, key, "claude", cwd, userMsg, *start, turns, *allowWrite, timeout)
 	} else {
 		res, callErr = sub.Raw(ctx, lane, key, system, userMsg, *maxTokens, *thinking, timeout)

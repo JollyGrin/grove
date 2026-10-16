@@ -367,3 +367,23 @@ func TestLabelDoneUnverified(t *testing.T) {
 		}
 	}
 }
+
+// TestSpawnAccount (grove-471): the LAST spawn naming the id decides the
+// account pin a revival re-applies; an unpinned spawn reads "".
+func TestSpawnAccount(t *testing.T) {
+	spawned := func(data map[string]string) Event { return Event{Type: EvOrchestratorSpawned, Data: data} }
+	events := []Event{
+		spawned(map[string]string{"session_id": "aaaa1111", "account": "alt"}),
+		spawned(map[string]string{"session_id": "bbbb2222"}),
+	}
+	if got := SpawnAccount(events, "aaaa1111"); got != "alt" {
+		t.Fatalf("pinned spawn = %q, want alt", got)
+	}
+	if got := SpawnAccount(events, "bbbb2222"); got != "" {
+		t.Fatalf("unpinned spawn = %q", got)
+	}
+	events = append(events, spawned(map[string]string{"resume": "aaaa1111", "session_id": "aaaa1111"}))
+	if got := SpawnAccount(events, "aaaa1111"); got != "" {
+		t.Fatalf("revival stripped with --account login = %q, want \"\" (the last one wins)", got)
+	}
+}

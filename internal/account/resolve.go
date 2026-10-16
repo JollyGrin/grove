@@ -27,6 +27,10 @@ type Launch struct {
 	// Ticket names the task in a recorded pin's override hint; "" = a
 	// generic hint.
 	Ticket string
+	// Override replaces a refused recorded pin's hint when the launch is
+	// not an adopt (a revived chat names its own re-spawn); "" = the adopt
+	// hint.
+	Override string
 }
 
 // Resolved is a launch's account. Name and TokenPath are both "" for the
@@ -74,6 +78,9 @@ func (l Launch) foreign() string {
 // override is the hint a refused recorded pin carries: re-pin with
 // another account, or strip it with login.
 func (l Launch) override() string {
+	if l.Override != "" {
+		return l.Override
+	}
 	t := l.Ticket
 	if t == "" {
 		t = "<ticket>"
