@@ -293,7 +293,7 @@ func TestServeLabelOnRail(t *testing.T) {
 	}
 	m := featureModel(t, 1, 120, 40)
 	nm, _ := m.Update(serveStatusMsg{serves: map[string]serve.Status{"train-0": {State: serve.StateRunning, Port: 4100, URL: "http://localhost:4100"}}})
-	if out := nm.(Model).View(); !strings.Contains(out, "train-0  1/3  ↓2 main  serve ▶ http://localhost:4100  est $2.00") {
+	if out := nm.(Model).View(); !strings.Contains(out, "train-0  ▰▱▱ 1/3 · ↓2 main · serve ▶ http://localhost:4100") {
 		t.Errorf("rail title lacks the running serve:\n%s", out)
 	}
 }
