@@ -12,8 +12,9 @@ func TestTmuxLayout(t *testing.T) {
 		want string
 	}{
 		{"horizontal", "horizontal", "even-horizontal"},
-		{"vertical", "vertical", "main-vertical"},
-		{"tiled", "tiled", "tiled"},
+		{"focus", "focus", "main-vertical"},
+		{"retired vertical falls back", "vertical", "even-horizontal"},
+		{"retired tiled falls back", "tiled", "even-horizontal"},
 		{"empty falls back to default", "", "even-horizontal"},
 		{"garbage falls back to default", "garbage", "even-horizontal"},
 	}
