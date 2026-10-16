@@ -104,7 +104,10 @@ grep -q 'gv feature ls' "$SCRATCH/fgone.out" || fail "closed-feature refusal doe
 grep -qx 'base: feature/trains (feature trains, from label trains)' "$SCRATCH/fgrab.out" || fail "grab did not name its inferred base"
 CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
 [ "$(git -C "$CAR_WT" rev-parse HEAD)" = "$TRAIN_SHA" ] || fail "car worktree did not fork from origin/feature/trains"
-"$GV" grab task-003 --feature none --effort low > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
+# claude-accounts 03: task-003 also rides an explicit --account pin; its
+# `account` row field and event key are asserted below.
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+"$GV" grab task-003 --feature none --effort low --account alt > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
 grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
 
 say "feature status (grove-375): a landed car, an active car, a queued car"
@@ -172,6 +175,11 @@ for off in ('task-001', 'task-003'):
 assert rows['task-003'].get('effort') == 'low', rows['task-003']
 for unpinned in ('task-001', 'task-002'):
     assert 'effort' not in rows[unpinned], rows[unpinned]
+# claude-accounts 03: account is additive — a name, only on the pinned worker.
+assert rows['task-003'].get('account') == 'alt', rows['task-003']
+for unpinned in ('task-001', 'task-002'):
+    assert 'account' not in rows[unpinned], rows[unpinned]
+assert 'ZZZSENTINEL' not in open('$OUT/ls.json').read(), 'token value in gv ls --json'
 print(data['tasks'][0]['ticket'])
 ")"
 
@@ -259,6 +267,9 @@ tc = {e['ticket']: e['data'] for e in created}
 assert tc['task-002']['feature'] == 'trains' and tc['task-002']['base'] == 'feature/trains', tc['task-002']
 for off in ('task-001', 'task-003'):
     assert 'feature' not in tc[off] and 'base' not in tc[off], tc[off]
+assert tc['task-003'].get('account') == 'alt', tc['task-003']
+assert 'account' not in tc['task-001'], tc['task-001']
+assert 'ZZZSENTINEL' not in open('$OUT/events.tail').read(), 'token value in events.jsonl'
 "
 
 # 4. STEER: mutations go through gv only.
@@ -330,6 +341,90 @@ grep -q '"compactions": 1' "$SCRATCH/ls-compacted.json" || fail "gv ls --json mi
 say "gv watch --replay --type compaction --json prints the compaction event"
 ( cd "$DUMMY" && "$GV" watch --replay --type compaction --until compaction --json > "$SCRATCH/watch-compaction.json" )
 grep -q '"type":"compaction"' "$SCRATCH/watch-compaction.json" || fail "gv watch did not print the compaction event"
+
+say "gv account ls --json (claude-accounts): the accounts envelope, login row first, no token value"
+# alt was added above for task-003's --account pin, so it counts 1 pinned.
+"$GV" account use alt > /dev/null || fail "account use alt failed"
+"$GV" account ls --json > "$SCRATCH/accounts.json" || fail "account ls --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts.json" "$SCRATCH/acct-add.out" && fail "a token value reached account output"
+python3 -c "
+import json
+data = json.load(open('$SCRATCH/accounts.json'))
+assert data['schema_version'] == 1, data
+rows = data['accounts']
+assert [r['name'] for r in rows] == ['login', 'alt'], rows
+login, alt = rows
+assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0 and login['expired'] is False, login
+assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 1 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
+assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
+"
+say "gv account ls --usage --json (grove-473): recorded usage, a reset window, a no-data hint, no token value"
+ACCT_DIR=$(dirname "$("$GV" account token-path)") || fail "account token-path failed"
+mkdir -p "$ACCT_DIR/usage"
+printf '{"five_hour":{"used_percentage":42,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":1000},"seen_at":"2026-01-01T00:00:00Z"}\n' \
+  "$(( $(date +%s) + 7200 ))" > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts-usage.json" && fail "a token value reached account ls --usage output"
+python3 -c "
+import json
+rows = json.load(open('$SCRATCH/accounts-usage.json'))['accounts']
+login, alt = rows
+assert login['usage'] == {'hint': 'no session on this account yet'}, login
+u = alt['usage']
+assert set(u) == {'five_hour', 'seven_day', 'seen_at'}, u
+assert u['five_hour']['state'] == 'live' and u['five_hour']['used_percentage'] == 42 and 'resets_at' in u['five_hour'], u
+assert u['seven_day'] == {'state': 'reset', 'used_percentage': 0}, u
+assert u['seen_at'] == '2026-01-01T00:00:00Z', u
+"
+printf '{"seven_day":{"used_percentage":61},"seen_at":"2026-01-01T00:00:00Z"}\n' > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+u = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]['usage']
+assert u['five_hour'] == {'state': 'unknown'}, u
+assert u['seven_day'] == {'state': 'live', 'used_percentage': 61, 'stale': True}, u
+"
+say "chat spawn (claude-accounts 04): orchestrator_spawned carries account only when pinned"
+# The orchestrator is stubbed so no real claude ever boots on the scratch
+# token; the chat runs in the isolated tmux server. The pane must read as
+# a LIVE claude (rm's in-use check skips a pinned pane whose claude has
+# exited), and tmux reports a shebang script as its interpreter — so the
+# stub is a copy of the bash BINARY named claude, running a script that
+# ignores claude's flags and stays up.
+grep -q '^orchestrator:' "$WCFG" && fail "workspace config grew an orchestrator: block — move the stub"
+mkdir -p "$SCRATCH/chatbin"
+cp "$(command -v bash)" "$SCRATCH/chatbin/claude"
+printf 'echo grove-471-chat\nsleep 600\n' > "$SCRATCH/chatbin/stub.sh"
+printf 'orchestrator:\n  claude: %s %s\n' "$SCRATCH/chatbin/claude" "$SCRATCH/chatbin/stub.sh" >> "$WCFG"
+"$GV" workspaces --json > "$SCRATCH/workspaces-label.json"
+WSLABEL="$(python3 -c "import json; print(json.load(open('$SCRATCH/workspaces-label.json'))['workspaces'][0]['label'])")"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" --account alt > "$SCRATCH/chat-pinned.out" ) || fail "orchestrator new --account alt failed"
+grep -q 'account alt (pinned to this chat) — a token session: no claude.ai connectors, no Remote Control' "$SCRATCH/chat-pinned.out" || fail "pinned chat did not say what a token session loses"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" > "$SCRATCH/chat-active.out" ) || fail "orchestrator new (active alt) failed"
+grep -q 'account alt (active)' "$SCRATCH/chat-active.out" || fail "active-account chat did not name its account"
+grep -q ZZZSENTINEL "$SCRATCH/chat-pinned.out" "$SCRATCH/chat-active.out" "$DUMMY/.grove/state/events.jsonl" && fail "a token value reached chat output or events"
+python3 -c "
+import json
+spawns = [e for e in map(json.loads, open('$DUMMY/.grove/state/events.jsonl')) if e.get('type') == 'orchestrator_spawned']
+assert len(spawns) == 2, spawns
+pinned, active = spawns
+assert pinned['data'].get('account') == 'alt', pinned
+assert 'account' not in active['data'], active
+"
+"$GV" account use login > /dev/null || fail "account use login failed"
+if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
+grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"
+grep -q 'live chat(s) grove-chat-' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinned live chat"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
+[ -e "$ACCT_DIR/usage/alt.json" ] && fail "account rm left alt's usage record"
+printf 'tok\n' | "$GV" account add alt > /dev/null || fail "account re-add failed"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+alt = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]
+assert alt['name'] == 'alt' and alt['usage'] == {'hint': 'no session on this account yet'}, alt
+"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
 
 say "feature land (grove-376): plan, dry run, execute, skip reasons"
 # task-002 is the only active (not-done) car on trains; a stub gh answers

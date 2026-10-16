@@ -34,6 +34,30 @@ func PathAt(root string) string {
 // A missing file is created with just the hotkeys block — the workspace
 // .grove/ dir may exist without a config.yaml.
 func SaveHotkey(path, digit, profile string) error {
+	return editDoc(path, func(root *yaml.Node) {
+		hotkeys := ensureMap(ensureMap(root, "orchestrator"), "hotkeys")
+		removeKey(hotkeys, digit)
+		if profile != "" {
+			// One digit per profile: drop the profile's previous binding.
+			for i := 0; i+1 < len(hotkeys.Content); i += 2 {
+				if hotkeys.Content[i+1].Value == profile {
+					hotkeys.Content = append(hotkeys.Content[:i], hotkeys.Content[i+2:]...)
+					break
+				}
+			}
+			hotkeys.Content = append(hotkeys.Content,
+				// The key is force-quoted so "1" round-trips as a string, never
+				// re-parsed as a yaml int.
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: digit, Style: yaml.DoubleQuotedStyle},
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: profile})
+		}
+	})
+}
+
+// editDoc applies edit to the top-level mapping of the yaml at path and
+// writes it back (node surgery — see the package comment). A missing file
+// is created with just what edit adds.
+func editDoc(path string, edit func(root *yaml.Node)) error {
 	var doc yaml.Node
 	raw, err := os.ReadFile(path)
 	switch {
@@ -71,22 +95,7 @@ func SaveHotkey(path, digit, profile string) error {
 		return fmt.Errorf("%s: top level is not a mapping", path)
 	}
 
-	hotkeys := ensureMap(ensureMap(root, "orchestrator"), "hotkeys")
-	removeKey(hotkeys, digit)
-	if profile != "" {
-		// One digit per profile: drop the profile's previous binding.
-		for i := 0; i+1 < len(hotkeys.Content); i += 2 {
-			if hotkeys.Content[i+1].Value == profile {
-				hotkeys.Content = append(hotkeys.Content[:i], hotkeys.Content[i+2:]...)
-				break
-			}
-		}
-		hotkeys.Content = append(hotkeys.Content,
-			// The key is force-quoted so "1" round-trips as a string, never
-			// re-parsed as a yaml int.
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: digit, Style: yaml.DoubleQuotedStyle},
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: profile})
-	}
+	edit(root)
 
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -97,10 +106,7 @@ func SaveHotkey(path, digit, profile string) error {
 	if err := enc.Close(); err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(preserved, buf.Bytes()...), 0o644)
+	return WriteFileAtomic(path, append(preserved, buf.Bytes()...), 0o644)
 }
 
 // ensureMap returns the mapping node at key inside m, appending an empty

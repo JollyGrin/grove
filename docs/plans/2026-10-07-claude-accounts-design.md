@@ -210,17 +210,28 @@ the operator adds with `eval "$(gv account shell-init)"`:
 
 ```bash
 claude() {
-  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
-    command claude "$@"; return; fi              # work/other dirs: never touch
-  local p; p=$(gv account token-path 2>/dev/null)
+  if [ -n "$CLAUDE_CONFIG_DIR" ]; then
+    local d h
+    d=$(cd "$CLAUDE_CONFIG_DIR" 2>/dev/null && pwd -P) || d="${CLAUDE_CONFIG_DIR%/}"
+    h=$(cd "$HOME/.claude" 2>/dev/null && pwd -P) || h="$HOME/.claude"
+    if [ "$d" != "$h" ]; then
+      env -u CLAUDE_CODE_OAUTH_TOKEN claude "$@"; return; fi   # work/other dirs: never touch
+  fi
+  if ! command -v gv >/dev/null 2>&1; then
+    env -u CLAUDE_CODE_OAUTH_TOKEN claude "$@"; return; fi     # no gv: login
+  local p; p=$(gv account token-path) || {
+    echo "gv account: token-path failed — refusing (gv account use login runs the login)" >&2; return 1; }
   if [ -z "$p" ]; then env -u CLAUDE_CODE_OAUTH_TOKEN claude "$@"; return; fi  # login
   local t; t=$(cat "$p") && [ -n "$t" ] || { echo "gv account: token unreadable" >&2; return 1; }
   CLAUDE_CODE_OAUTH_TOKEN="$t" command claude "$@"
 }
 ```
 
-It doesn't recurse (`command`/`env` bypass the function), it passes
-through when gv is absent, and it fails closed on an empty token. Only
+It doesn't recurse (`command`/`env` bypass the function). It compares
+config dirs after dropping a trailing slash and resolving symlinks, and
+strips an inherited token on every non-account path. It runs the login
+when gv is absent, and fails closed (exit 1) when `token-path` fails or
+the token is empty — never a silent login (PR #477 review). Only
 interactive shells get it; non-interactive shells always use the login.
 `gv doctor` reports whether it's installed.
 

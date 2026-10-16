@@ -632,6 +632,63 @@ row = [r for r in json.load(open(sys.argv[1]))['rows'] if r['id'] == 'effort-ove
 assert row['state'] == 'warn' and 'CLAUDE_CODE_EFFORT_LEVEL=low' in row['info'], row
 PYEOF2
 
+# --- claude accounts (grove-470): --account pins a worker to a token ---
+# The worker is a script that reports whether the token reached its env —
+# never the value. The token's content is a sentinel that must appear in no
+# pane, event, or --json output.
+say "accounts: grab --account runs the worker with the token exported"
+FAKE_CLAUDE="$SCRATCH/fake-claude.sh"
+cat > "$FAKE_CLAUDE" <<'SHEOF'
+#!/bin/sh
+echo "ACCT-TOKEN:${CLAUDE_CODE_OAUTH_TOKEN:+set}:${GROVE_ACCOUNT:-none}"
+SHEOF
+chmod +x "$FAKE_CLAUDE"
+perl -pi -e "s#^(\s*)claude: echo\$#\$1claude: $FAKE_CLAUDE#" "$WCFG"
+grep -q "claude: $FAKE_CLAUDE" "$WCFG" || fail "fake claude not written"
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+acct_out() { # $1 = ticket → the worker's last ACCT-TOKEN line
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pane_text "$1"
+    grep -q '^ACCT-TOKEN:' "$SCRATCH/effort-pane.txt" && break
+    sleep 0.5
+  done
+  grep -q ZZZSENTINEL "$SCRATCH/effort-pane.txt" && { cat "$SCRATCH/effort-pane.txt"; fail "the token value reached $1's pane"; } || true
+  grep '^ACCT-TOKEN:' "$SCRATCH/effort-pane.txt" | tail -1
+}
+mdtask task-020 "account pin"
+"$GV" grab task-020 --account alt > "$SCRATCH/grab-acct.out" || { cat "$SCRATCH/grab-acct.out"; fail "grab --account failed"; }
+grep -q '→ account alt (pinned to this worker)' "$SCRATCH/grab-acct.out" || fail "grab did not report the account pin"
+[ "$(acct_out task-020)" = "ACCT-TOKEN:set:alt" ] || { cat "$SCRATCH/effort-pane.txt"; fail "grab --account did not export the token"; }
+
+say "accounts: a missing account refuses before anything exists"
+mdtask task-021 "account typo"
+("$GV" grab task-021 --account nope 2>&1 || true) > "$SCRATCH/grab-acct-bad.out"
+grep -q 'no account "nope"' "$SCRATCH/grab-acct-bad.out" || { cat "$SCRATCH/grab-acct-bad.out"; fail "grab accepted a missing account"; }
+ls -d "$WT"/task-021-* >/dev/null 2>&1 && fail "a rejected --account still created a worktree" || true
+
+say "accounts: adopt keeps the pin"
+"$GV" pause task-020 --force > "$SCRATCH/acct-pause.out"
+"$GV" adopt task-020 > "$SCRATCH/adopt-acct-keep.out" || { cat "$SCRATCH/adopt-acct-keep.out"; fail "adopt of a pinned task failed"; }
+grep -q '→ account alt (pinned to this worker)' "$SCRATCH/adopt-acct-keep.out" || fail "adopt did not keep the account pin"
+[ "$(acct_out task-020)" = "ACCT-TOKEN:set:alt" ] || { cat "$SCRATCH/effort-pane.txt"; fail "adopt did not keep the token"; }
+
+say "accounts: adopt --account login strips the pin"
+"$GV" pause task-020 --force > "$SCRATCH/acct-pause2.out"
+"$GV" adopt task-020 --account login > "$SCRATCH/adopt-acct-login.out" || { cat "$SCRATCH/adopt-acct-login.out"; fail "adopt --account login failed"; }
+grep -q '→ account' "$SCRATCH/adopt-acct-login.out" && fail "adopt --account login still named an account" || true
+[ "$(acct_out task-020)" = "ACCT-TOKEN::none" ] || { cat "$SCRATCH/effort-pane.txt"; fail "adopt --account login still exported a token"; }
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-acct.json"
+python3 - "$SCRATCH/ls-acct.json" <<'PYEOF2' || fail "ls --json account field wrong after the strip"
+import json, sys
+rows = {t['ticket']: t for t in json.load(open(sys.argv[1]))['tasks']}
+assert 'account' not in rows['task-020'], rows['task-020']
+PYEOF2
+grep -q ZZZSENTINEL "$GROVE_STATE_DIR/events.jsonl" "$SCRATCH/ls-acct.json" && fail "the token value reached events.jsonl or ls --json" || true
+grep -q '"account":"alt"' "$GROVE_STATE_DIR/events.jsonl" || fail "no event recorded the account pin"
+perl -pi -e "s#^(\s*)claude: \Q$FAKE_CLAUDE\E\$#\$1claude: echo#" "$WCFG"
+grep -q 'claude: echo' "$WCFG" || fail "claude stub not restored"
+
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null
 

@@ -40,6 +40,14 @@ gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   ticket is payload)
 gv grab DEV-X --profile P # run this worker on a model profile lane (see
                            #   Dispatch below — lanes differ in who pays)
+gv account ls --usage --json # subscription accounts (pure read): per account,
+                           #   its 5h / weekly used_percentage, resets_at, pinned
+                           #   worker count, connectors (true only for `login`)
+gv grab DEV-X --account A # run this worker on subscription account A (names
+                           #   from `gv account ls`; `login` = the interactive
+                           #   login) and pin it to the task. Propose it with
+                           #   the reason; never `gv account use` (that flips
+                           #   the operator's default)
 gv grab DEV-X --feature F # fork the worktree from feature train F's branch
                            #   instead of the repo base, and PR back into it
                            #   (`--feature none` opts out). A ticket whose
@@ -316,6 +324,19 @@ When both merge: summary push, same summary in chat, end your turn.
    `zai-plan-*` lane can do the job; the per-token lane is for overflow when the
    flat plan is capped. When you propose a grab with `--profile`, say which lane
    it is and why in the same line.
+
+   **Accounts are a lane too.** The Claude sub can be more than one
+   subscription: `gv account ls --usage --json` lists every account with
+   its 5h and weekly `used_percentage`. When the active account is running
+   hot and another has headroom, propose `gv grab DEV-X --repo Y --account
+   <name>` and give the reason in the same line ("main 5h at 92%, alt at
+   10%"). Never pick an account unasked, and never run `gv account use` —
+   that changes the operator's default for every later launch, which is
+   their call. A token account has documented costs: no claude.ai
+   connectors (Gmail, Drive, Claude Docs, …) and no Remote Control, so a
+   chat that needs connectors stays on `login`; and `/login` inside an
+   account-pinned session switches that session to the new login — never
+   run it there (nor tell a worker to).
 
    **Feature trains.** A ticket that belongs to an open feature train (`gv
    feature ls --json`) is grabbed with `gv grab DEV-X --repo Y --feature

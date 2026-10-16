@@ -15,7 +15,7 @@ func mkFleet(t *testing.T, root, label, ticket string, done bool) Workspace {
 	t.Helper()
 	mkWorkspace(t, root, fmt.Sprintf("workspace:\n  label: %s\n", label))
 	ws := Workspace{Root: root, Label: label, Scope: ScopeRepo}
-	dir := stateDir(root)
+	dir := StateDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestFindTicketUnreadableState(t *testing.T) {
 	root := filepath.Join(tmp, "broken")
 	mkWorkspace(t, root, "workspace:\n  label: broken\n")
 	ws := Workspace{Root: root, Label: "broken", Scope: ScopeRepo}
-	if err := os.MkdirAll(filepath.Join(stateDir(root), "events.jsonl"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(StateDir(root), "events.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if got := FindTicket([]Workspace{ws}, "task-001", false); len(got) != 0 {

@@ -166,7 +166,12 @@ type Task struct {
 	// with (low|medium|high|xhigh|max): the grab/adopt flag, else the
 	// repo's `effort:` default. Empty = Claude Code's own default for the
 	// model. Additive & optional.
-	Effort      string `json:"effort,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Account (claude-accounts design §Decision 5) is the subscription
+	// account this worker was explicitly pinned to (`--account`); empty =
+	// the active account at launch time, or the login. Read side only
+	// until the launch car records it. Additive & optional.
+	Account     string `json:"account,omitempty"`
 	SessionID   string `json:"claude_session_id,omitempty"`
 	Agent       string `json:"agent"`
 	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | done_unverified | none
@@ -346,6 +351,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.ModelProfile = d["model_profile"]         // "" for unprofiled + pre-field events
 		t.Feature, t.Base = d["feature"], d["base"] // "" off-train + pre-field events
 		t.Effort = d["effort"]                      // "" unpinned + pre-field events
+		t.Account = d["account"]                    // "" unpinned + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
@@ -438,6 +444,8 @@ func fold(tasks map[string]*Task, ev Event) {
 				t.Base = v
 			case "effort":
 				t.Effort = v
+			case "account":
+				t.Account = v
 			case "session_id":
 				t.SessionID = v
 			}

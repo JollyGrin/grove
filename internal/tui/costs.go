@@ -96,6 +96,11 @@ func costsCmd(cfg *config.Config, stateDir string, tasks []*state.Task, prs map[
 }
 
 func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.costsTab == costsTabClaude {
+		if next, cmd, ok := m.handleClaudeKey(k); ok {
+			return next, cmd
+		}
+	}
 	switch k.String() {
 	case "esc", "$", "c":
 		m.mode = modeList
@@ -103,11 +108,14 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "tab":
-		m.costsTab = (m.costsTab + 1) % 2
-		if m.costsTab == costsTabAccount {
-			// One-shot fetch on tab open (the costsCmd pattern) — the 1s tick
-			// never re-fires it; r refetches manually.
+		m.costsTab = (m.costsTab + 1) % costsTabCount
+		// One-shot fetch on tab open (the costsCmd pattern) — the 1s tick
+		// never re-fires it; r refetches manually.
+		switch m.costsTab {
+		case costsTabAccount:
 			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
+		case costsTabClaude:
+			return m.claudeRead()
 		}
 		return m, nil
 	case "o":
@@ -175,8 +183,11 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) viewCosts() string {
-	if m.costsTab == costsTabAccount {
+	switch m.costsTab {
+	case costsTabAccount:
 		return m.viewAccount()
+	case costsTabClaude:
+		return m.viewClaude()
 	}
 	w := m.width - 4
 

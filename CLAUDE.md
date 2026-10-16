@@ -50,6 +50,12 @@ workspace's cockpit and its workers share one tmux session
 `grove-<label>` (window 0 = cockpit, 1+ = workers). `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.
+Subscription accounts live in `<state>/accounts/` (`<name>.token` 0600 +
+`active`); they are injected as `CLAUDE_CODE_OAUTH_TOKEN` at launch and
+never apply under a non-default `claude_config_dir` (that profile keeps
+its own login). A token-pinned session has no claude.ai connectors and no
+Remote Control — keep connector-needing chats on `login` — and `/login`
+inside one switches that session, so never run it there.
 
 ## Feature trains
 
