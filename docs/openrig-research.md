@@ -241,7 +241,14 @@ Candidate fixes, ranked by messages removed per effort:
 
 ## Open threads
 
-- [ ] Rebase churn fixes 1–4 — ticket them (see above).
+- [ ] Rebase churn fixes 2–4 (TASKS.md rows, kickoff rebase line,
+      regenerate-don't-merge) — small; ticket when ready.
+- [ ] **Decide:** fix 1, supervise auto-nudge on `pr_conflicting` — a
+      standing per-workspace opt-in (grove steers without the operator),
+      or only under a supervision mandate (today's rule)? Steering is
+      reversible and the recipe ends in QUESTION on any judgment hunk,
+      which argues for opt-in; propose-then-dispose argues for mandate-only.
+- [ ] Fix 5, train sequencing — fold into the ticket-writing skill?
 - [ ] Cockpit exceptions strip — draft a design (`docs/plans/`).
 - [ ] Seed `docs/lore/` with the four stories above; review in a month
       whether the names are in use.
