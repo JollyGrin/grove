@@ -185,10 +185,63 @@ Implication — a grove `gv ask DEV-X "q"` tiered cheapest-first:
 Open: does L2 answer as well as L3? Settle with ~10 questions whose
 answers are known from PRs, scored on both.
 
+## Rebase churn (2026-10-18 pass)
+
+Not an OpenRig idea — the evidence pass surfaced it as the largest
+steering cost. 62 operator messages were primarily conflict/rebase
+(re-verified; +12 incidental), across 54 tasks: unbrewed 26, grove 21,
+tableplace 11, chronicle 3, waterhouse 1.
+
+| Kind | → main | → train | Total |
+|---|---|---|---|
+| Real textual conflict (code/docs/registries) | 8 | 22 | 30 |
+| TASKS.md / LEARNINGS.md only (all grove) | 13 | 0 | 13 |
+| Generated files (goldens, protocol.ts, migration numbers) | 0 | 5 | 5 |
+| Behind but clean | 1 | 4 | 5 |
+| Dependency PR merged | 3 | 4 | 7 |
+| Train integration ticket | 0 | 2 | 2 |
+
+Findings (measured):
+- **Mechanical, not judgment.** All 62 finished after one message; no
+  worker ever raised QUESTION over a conflict hunk. ~61% were pure recipe
+  (keep both / take main / regenerate); ~15 carried a judgment the
+  operator wrote into the nudge. Workers fixed 18 more conflicts unasked.
+  The cost is the operator noticing and typing — 62 interruptions — not
+  the fix (median 21 calls, ~4 min; ~$130–235 total at Opus rates).
+- **Trains are 60% of it.** Many cars in flight on one train hitting the
+  same hub/registry files (tableplace `feature/table-feel`: 29 cars in a
+  day; `verbs/registry.ts`, `e2e/specs.ts`, `Pane.svelte`).
+- **Grove's TASKS.md is a guaranteed conflict.** 76% of grove's merged PRs
+  touch it and `log-append.py` always inserts at the same line; the
+  2026-10-07 model-fit batch cost 12 messages, 10 log-only. `main.go` is
+  touched by 82 PRs and conflicted once.
+- **Nothing automatic today.** `pr_conflicting` pushes ntfy
+  (`internal/supervise/push.go`) but nudges nobody; the kickoff never says
+  "rebase before the final push"; no branch protection, auto-merge or
+  merge queue on any repo (private repos can't have merge queue).
+  unbrewed keeps a hand-written `nudge-branch-moved.txt`.
+
+Candidate fixes, ranked by messages removed per effort:
+1. **Supervise auto-nudge on `pr_conflicting`** with a fixed recipe
+   (fetch, rebase, keep-both / regenerate, marker check, light gate,
+   `--force-with-lease`, QUESTION if a hunk needs judgment). ~38–50 of 62.
+   M. A standing steering default — needs explicit per-workspace opt-in.
+2. **TASKS.md rows that can't collide** — per-ticket file folded later, or
+   `gv done` writes the row to main after merge. 13 + part of 6. S/M.
+   Avoid `merge=union`: GitHub mergeability likely ignores it
+   (unverified), and divergent archive rotations can duplicate rows.
+3. **Kickoff: rebase onto latest base before the final push and before
+   DONE.** ~5 + 12 incidental. Template-only.
+4. **"Regenerate, never hand-merge" rule for generated files** per repo.
+   5 + ~4 episodes. Trivial.
+5. **Train sequencing** — order cars that touch the same hub files
+   (ticket-writing skill); a grab-time overlap warning is the expensive
+   version. Biggest root cause, effect inferred.
+6. GitHub "update branch" — clean-behind only (5). Lowest.
+
 ## Open threads
 
-- [ ] Rebase churn: which tasks hit "main moved" most, and why
-      (long-lived branches, hot shared files, train ordering)?
+- [ ] Rebase churn fixes 1–4 — ticket them (see above).
 - [ ] Cockpit exceptions strip — draft a design (`docs/plans/`).
 - [ ] Seed `docs/lore/` with the four stories above; review in a month
       whether the names are in use.
