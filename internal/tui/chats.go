@@ -454,3 +454,44 @@ func (m Model) viewChats(lay chatLayout) string {
 	body := truncPad(titleStyle.Render(m.chatTitle), w) + "\n" + strings.Join(rows, "\n")
 	return border.Width(m.width - 2).Render(body)
 }
+
+// Clicks on CHATS rows (grove-517). The box's geometry is chatLayout's —
+// the same numbers viewChats draws with — so a click can't land on a row
+// the frame doesn't show there.
+
+// chatsTop is the frame line of the box's top border: the header line,
+// then FEATURES and AGENTS as they render. Measured, not re-derived, and
+// only on a click — never per frame.
+func (m Model) chatsTop() int {
+	top := 1
+	if lay := m.featureLayout(); lay.height > 0 {
+		top += lipgloss.Height(m.viewFeatures(lay))
+	}
+	return top + lipgloss.Height(m.viewAgents())
+}
+
+// hit maps a line dy below the box's top border to the chat drawn there:
+// border, title, column header, the reply row, `+N more` and the bottom
+// border are none. sel is the cursor the reply row hangs under. Pure.
+func (lay chatLayout) hit(dy, sel int) (int, bool) {
+	line := 3 // border, title, column header
+	for i := lay.start; i < lay.start+lay.shown; i++ {
+		if dy == line {
+			return i, true
+		}
+		line++
+		if lay.reply && i == sel {
+			line++
+		}
+	}
+	return 0, false
+}
+
+// chatHit is the chat under frame cell (x, y), if any.
+func (m Model) chatHit(x, y int) (int, bool) {
+	lay := m.chatLayout()
+	if lay.height == 0 || x < 1 || x > m.width-2 { // no box, or on its side border
+		return 0, false
+	}
+	return lay.hit(y-m.chatsTop(), m.chatSel)
+}

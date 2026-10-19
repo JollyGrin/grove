@@ -341,7 +341,11 @@ func New(cfg *config.Config, stateDir, label string) Model {
 func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error) {
 	m := New(cfg, stateDir, label)
 	m.acquireSupervise()
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	// grove-517: clicks reach the CHATS box. Cell motion is the narrowest
+	// mode bubbletea offers (press/release, motion only while a button is
+	// held — never all-motion); mouseFilter drops all but the left press and
+	// the wheel before Update.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(mouseFilter))
 	out, err := p.Run()
 	if err != nil {
 		return nil, "", err
@@ -1107,6 +1111,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case tea.MouseMsg:
+		return m.handleChatsClick(msg)
 	}
 	return m, nil
 }
