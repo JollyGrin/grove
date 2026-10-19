@@ -9,9 +9,9 @@
 │ CHATS 4 · 2 hidden                                                                                                   │
 │    CHAT                   MODEL    STATE    AGE   LAST                                                               │
 │  ▣ cockpit·1              opus     idle     2m    anything need me? — fleet summary sent                             │
-│  ▣ cockpit·2 @groveremote glm-4.6  remote   41m                                                                      │
 │  ○ chat-1                 sonnet   running  6m    token-diet spec sweep · 4/7 subagents back                         │
 │  ○ chat-2                 sonnet   running  6m    token-diet spec sweep · 4/7 subagents back                         │
+│  ▣ cockpit·2 @groveremote glm-4.6  remote   41m                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ACTIVITY                                                                                                             │

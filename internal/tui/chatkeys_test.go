@@ -173,21 +173,21 @@ func TestChatKeysEmitCommands(t *testing.T) {
 		said string
 	}{
 		{"h", 0, "hide %1", "○ hid cockpit·1 as grove-chat-golden-9"},
-		{"h", 2, "show grove-chat-golden-1 focus=false", "▣ showed chat-1"},
-		{"enter", 2, "show grove-chat-golden-1 focus=true", "▣ showed chat-1"},
+		{"h", 1, "show grove-chat-golden-1 focus=false", "▣ showed chat-1"},
+		{"enter", 1, "show grove-chat-golden-1 focus=true", "▣ showed chat-1"},
 		{"enter", 0, "focus %1", "→ cockpit·1"},
 		// grove-404: a remote row runs the same keys. Hide goes through the
 		// one HideChat (the pane's stamps say it is remote); show names the
 		// host, because a hidden remote chat has no pane and no local session.
-		{"h", 1, "hide %22", "○ hid cockpit·2 @groveremote as grove-chat-golden-9"},
-		{"enter", 1, "focus %22", "→ cockpit·2 @groveremote"},
+		{"h", 2, "hide %22", "○ hid cockpit·2 @groveremote as grove-chat-golden-9"},
+		{"enter", 2, "focus %22", "→ cockpit·2 @groveremote"},
 		{"h", 3, "show-remote groveremote grove-chat-golden-3 focus=false", "▣ showed chat-3 @groveremote"},
 		{"enter", 3, "show-remote groveremote grove-chat-golden-3 focus=true", "▣ showed chat-3 @groveremote"},
 	}
 	for _, c := range cases {
 		calls := stubChatFuncs(t)
-		// The box sorts them: shown (local 1, remote 2), then hidden (local 1,
-		// remote 3) — rows 0 to 3.
+		// The box sorts them: by stable name: cockpit·1, chat-1, then remote
+		// cockpit·2, chat-3 — rows 0 to 3.
 		m := chatsFocused(t, 120, 40, c.sel, chatShownRow(1), chatHiddenRow(1), chatRemoteRow(2), chatHiddenRemoteRow(3))
 		m, cmd := chatPress(t, m, c.key)
 		if len(calls.log) != 0 {
@@ -238,7 +238,7 @@ func TestChatKeysRefusals(t *testing.T) {
 	// a on a remote row, shown or hidden: no relay carries a reply to a
 	// host's chat, so it is refused and nothing opens (grove-404).
 	m = chatsFocused(t, 120, 40, 0, chatShownRow(1), chatRemoteRow(2), chatHiddenRow(1), chatHiddenRemoteRow(3))
-	for _, sel := range []int{1, 3} {
+	for _, sel := range []int{2, 3} {
 		m.chatSel = sel
 		got, cmd := chatPress(t, m, "a")
 		if cmd != nil || got.mode != modeList || got.flash != chatsRemoteFlash {
@@ -257,10 +257,10 @@ func TestChatCloseNeedsY(t *testing.T) {
 		want string
 	}{
 		{0, "close-pane %1"},
-		{2, "close-session grove-chat-golden-1"},
+		{1, "close-session grove-chat-golden-1"},
 		// grove-404: a shown remote row names its pane (host and session are
 		// read off the pane's stamps); a hidden one names host + session.
-		{1, `close-remote groveremote session="" pane="%22"`},
+		{2, `close-remote groveremote session="" pane="%22"`},
 		{3, `close-remote groveremote session="grove-chat-golden-3" pane=""`},
 	} {
 		for _, answer := range []string{"y", "n", "Y", "enter", "esc", "x", "q", "1"} {
@@ -635,7 +635,7 @@ func TestChatFooterHints(t *testing.T) {
 	m := chatsFocused(t, 80, 24, 0, chatShownRow(1), chatHiddenRow(1), chatRemoteRow(2))
 	for sel, want := range map[int][]string{
 		0: {"h hide", "enter focus", "x close"},
-		2: {"h show", "enter show+focus", "a reply", "x close"},
+		1: {"h show", "enter show+focus", "a reply", "x close"},
 	} {
 		m.chatSel = sel
 		foot := stripANSI(m.viewFooter())
@@ -652,7 +652,7 @@ func TestChatFooterHints(t *testing.T) {
 	if foot := stripANSI(m.viewFooter()); strings.Contains(foot, "a reply") {
 		t.Errorf("a shown row refuses a — the footer must not offer it: %q", foot)
 	}
-	m.chatSel = 1 // the remote row: every chat key but the reply
+	m.chatSel = 2 // the remote row: every chat key but the reply
 	if foot := stripANSI(m.viewFooter()); !strings.Contains(foot, "h hide") || !strings.Contains(foot, "x close") || strings.Contains(foot, "a reply") {
 		t.Errorf("a remote row's hints: %q", foot)
 	}
@@ -668,7 +668,7 @@ func TestChatFooterHints(t *testing.T) {
 	// One line at every width, with or without a flash; the keys survive
 	// as bare keys when the labels do not fit.
 	m.focus = focusChats
-	for _, sel := range []int{0, 2} {
+	for _, sel := range []int{0, 1} {
 		m.chatSel = sel
 		hints, n := chatHints(m.chatRows[sel])
 		for _, flash := range []string{"", "○ hid cockpit·1 as grove-chat-golden-1"} {

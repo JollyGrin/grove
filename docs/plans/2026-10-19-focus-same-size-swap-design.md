@@ -15,7 +15,10 @@ fast-path precondition and the sync compare the hidden PANE to the slot,
 not its window — under a global `pane-border-status` a lone pane is a row
 shorter than its window (LEARNINGS 2026-10-19). Follows the focus-mode train
 (#502), #510 (stable chat names), #521/PR #523 (scoped lookup + rail
-redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`).
+redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`). Car 05 (grove-528): the CHATS box sorts by
+stable name with the rail's rule — one shared `tui.ChatLess` — so a swap,
+hide or show never moves a row; the cursor follows its chat across a
+refresh.
 
 ## Problem
 
