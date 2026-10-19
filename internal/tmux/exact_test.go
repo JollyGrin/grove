@@ -156,7 +156,7 @@ func TestPaneTargetHelpersExactSession(t *testing.T) {
 }
 
 // grove-485: the cockpit has two layouts. focus is main-vertical with the
-// dash (first pane) at cockpitMainWidth% and the chats stacked right;
+// dash (first pane) at cockpitFocusMainWidth% and the chats stacked right;
 // horizontal is even-horizontal — every pane a full-height column.
 func TestSelectLayoutFocusHorizontal(t *testing.T) {
 	scratchServer(t)
@@ -207,9 +207,9 @@ func TestSelectLayoutFocusHorizontal(t *testing.T) {
 	if !strings.Contains(layout, "[") {
 		t.Errorf("focus window_layout = %q, want a main-vertical stack", layout)
 	}
-	want := winW * cockpitMainWidth / 100
+	want := winW * cockpitFocusMainWidth / 100
 	if d := panes[0].width - want; d < -1 || d > 1 {
-		t.Errorf("focus dash width = %d of %d, want %d%% (%d) ± 1", panes[0].width, winW, cockpitMainWidth, want)
+		t.Errorf("focus dash width = %d of %d, want %d%% (%d) ± 1", panes[0].width, winW, cockpitFocusMainWidth, want)
 	}
 	if panes[1].left != panes[2].left || panes[1].top == panes[2].top {
 		t.Errorf("focus chats not stacked right: %+v", panes[1:])
@@ -225,6 +225,10 @@ func TestSelectLayoutFocusHorizontal(t *testing.T) {
 	for i, p := range panes {
 		if p.top != panes[0].top || p.height != panes[0].height {
 			t.Errorf("horizontal pane %d = %+v, want a full-height column", i, p)
+		}
+		// grove-518: the focus width never leaks — horizontal stays even.
+		if d := p.width - panes[0].width; d < -1 || d > 1 {
+			t.Errorf("horizontal pane %d width = %d, want even with dash %d", i, p.width, panes[0].width)
 		}
 	}
 }

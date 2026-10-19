@@ -38,9 +38,10 @@ func ExactActive(session string) string { return Exact(session) + ":" }
 // session option nor config supplies one (grove-52): side-by-side columns.
 const defaultCockpitLayout = "horizontal"
 
-// cockpitMainWidth is the dash pane's share of the window in the focus
-// (main-vertical) layout — the pre-grove-52 cockpit shape.
-const cockpitMainWidth = 55
+// cockpitFocusMainWidth is the dash pane's share of the window in the focus
+// (main-vertical) layout: 2/5 of the window, the shown chat + rail get the
+// rest (grove-518). horizontal never sets main-pane-width.
+const cockpitFocusMainWidth = 40
 
 // tmuxLayout maps a grove-facing layout name to tmux's. Trap: the names
 // invert — grove "horizontal" (panes in a side-by-side row) is tmux
@@ -56,7 +57,7 @@ func tmuxLayout(name string) string {
 
 // SelectLayout re-tiles the session's active window to the given grove
 // layout name. focus delegates to RetileFocus (main-vertical at the dash's
-// cockpitMainWidth share, plus the rail's height — grove-486); the rest are plain select-layout calls. Targets the
+// cockpitFocusMainWidth share, plus the rail's height — grove-486); the rest are plain select-layout calls. Targets the
 // bare session (its active window) exactly like MainVertical/SpawnPane.
 func SelectLayout(session, name string) error {
 	if name == "focus" {

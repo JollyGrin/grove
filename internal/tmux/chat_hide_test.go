@@ -348,7 +348,7 @@ func TestHideShowHonorsLayout(t *testing.T) {
 }
 
 // mainVerticalShape: the first pane sits at the left edge holding the
-// dashboard's 55% share (an even row of two would give it half), and every
+// dashboard's cockpitFocusMainWidth share (an even row of two would give it half), and every
 // other pane sits to its right.
 func mainVerticalShape(t *testing.T, target string) bool {
 	t.Helper()
@@ -358,7 +358,7 @@ func mainVerticalShape(t *testing.T, target string) bool {
 	if _, err := fmt.Sscan(lines[0], &left, &width, &total); err != nil || left != 0 {
 		return false
 	}
-	if share := width * 100 / total; share < 53 || share > 56 {
+	if share := width * 100 / total; share < cockpitFocusMainWidth-2 || share > cockpitFocusMainWidth+1 {
 		return false
 	}
 	for _, l := range lines[1:] {
