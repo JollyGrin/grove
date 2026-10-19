@@ -1267,8 +1267,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		next := nextLayout(cur)
 		_ = tmux.SetCockpitLayout(session, next)
-		_ = tmux.ApplyLayout(session, next)
 		m.flash = "layout: " + next
+		return m, func() tea.Msg {
+			// off the tea loop: focus moves panes and rebuilds the rail (grove-487)
+			if err := ApplyLayout(session, next); err != nil {
+				return flashMsg("layout: " + next + " — " + err.Error())
+			}
+			return nil
+		}
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"
@@ -1748,6 +1754,10 @@ var CloseWorkspace = func(stateDir, label string) error {
 // say what park is about to leave running. Unwired = none, and the modal
 // simply omits the line.
 var LiveChats = func(label string) []string { return nil }
+
+// ApplyLayout is injected by cmd/gv: the layout switch plus the focus
+// minimize / restore (grove-487). The default is the bare tmux switch.
+var ApplyLayout = tmux.ApplyLayout
 
 // RailTick is injected by cmd/gv: the focus-mode chat rail's writer
 // (grove-486). It is called from the existing refresh command — no
