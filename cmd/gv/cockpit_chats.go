@@ -136,7 +136,7 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 	var found []cockpitChatPane
 	cockpit, orchDir := cockpitSessionForLabel(ws.Label), orchestratorDirAt(ws.Root)
 	for _, p := range panes {
-		if p.Session != cockpit {
+		if p.Session != cockpit || p.Rail {
 			continue
 		}
 		if p.Remote == "" && !chat.IsOrchestratorPane(p.Dir, orchDir) {
@@ -281,8 +281,9 @@ func lastSaid(lines []string) string {
 func wireChatKeys() {
 	tui.HideChat = func(pane string) (string, error) { return hideChat(pane, "") }
 	tui.ShowChat = func(session string, focus bool) (string, error) {
-		pane, _, err := showChat(session, focus)
-		return pane, err
+		// grove-488: in the focus layout the same key swaps.
+		res, err := focusChat(session, focus)
+		return res.Pane, err
 	}
 	tui.FocusChat = func(pane string) error {
 		isCockpit, err := cockpitSessionCheck()

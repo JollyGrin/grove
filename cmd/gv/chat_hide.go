@@ -188,14 +188,29 @@ func cmdChatShow(args []string) error {
 // verb's behavior: the shown pane takes the keyboard. focus=false leaves
 // the cockpit window's active pane where it was.
 func showChat(target string, focus bool) (string, chat.Row, error) {
-	isCockpit, err := cockpitSessionCheck()
+	rec, isCockpit, err := showTarget(target)
 	if err != nil {
 		return "", chat.Row{}, err
+	}
+	return showRecord(rec, isCockpit, focus)
+}
+
+// showTarget resolves a show target to its report record, after the
+// registry check every show shares.
+func showTarget(target string) (chatRecord, tmux.CockpitCheck, error) {
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return chatRecord{}, nil, err
 	}
 	rec, err := findChat(target)
 	if err != nil {
-		return "", chat.Row{}, err
+		return chatRecord{}, nil, err
 	}
+	return rec, isCockpit, nil
+}
+
+// showRecord is showChat's second half: join an already-resolved chat.
+func showRecord(rec chatRecord, isCockpit tmux.CockpitCheck, focus bool) (string, chat.Row, error) {
 	if refusal := chat.ShowRefusal(rec.Row); refusal != "" {
 		return "", chat.Row{}, fmt.Errorf("%s", refusal)
 	}

@@ -38,32 +38,29 @@ func ExactActive(session string) string { return Exact(session) + ":" }
 // session option nor config supplies one (grove-52): side-by-side columns.
 const defaultCockpitLayout = "horizontal"
 
-// cockpitMainWidth is the dash pane's share of the window in the vertical
+// cockpitMainWidth is the dash pane's share of the window in the focus
 // (main-vertical) layout — the pre-grove-52 cockpit shape.
 const cockpitMainWidth = 55
 
 // tmuxLayout maps a grove-facing layout name to tmux's. Trap: the names
 // invert — grove "horizontal" (panes in a side-by-side row) is tmux
-// even-horizontal, whose dividers are vertical. Unknown falls back to the
-// default's tmux shape.
+// even-horizontal, whose dividers are vertical. focus is main-vertical
+// (dash main-left, chats stacked right); anything else — including the
+// retired vertical/tiled — falls back to the default's tmux shape.
 func tmuxLayout(name string) string {
-	switch name {
-	case "vertical":
+	if name == "focus" {
 		return "main-vertical"
-	case "tiled":
-		return "tiled"
-	default:
-		return "even-horizontal"
 	}
+	return "even-horizontal"
 }
 
 // SelectLayout re-tiles the session's active window to the given grove
-// layout name. vertical delegates to MainVertical so the dash keeps its
-// tested 55% share; the rest are plain select-layout calls. Targets the
+// layout name. focus delegates to RetileFocus (main-vertical at the dash's
+// cockpitMainWidth share, plus the rail's height — grove-486); the rest are plain select-layout calls. Targets the
 // bare session (its active window) exactly like MainVertical/SpawnPane.
 func SelectLayout(session, name string) error {
-	if name == "vertical" {
-		return MainVertical(session, cockpitMainWidth)
+	if name == "focus" {
+		return RetileFocus(session)
 	}
 	_, err := run("select-layout", "-t", ExactActive(session), tmuxLayout(name))
 	return err
@@ -526,9 +523,10 @@ func SetPaneRemoteBorder(pane string) error {
 //     falling back to "chat" for the host's own Claude — the pane is an ssh
 //     attachment, so its own title would be the ssh client's, not the agent's;
 //   - a local profiled pane (@grove_profile) shows "⚡ <profile>";
+//   - the focus-mode rail (@grove_rail, grove-486) shows "chats";
 //   - anything else falls back to whatever title the pane's foreground program
 //     set, so the no-profile local path is visually unchanged.
-const paneBorderFormat = "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
+const paneBorderFormat = "#{pane_index}: #{?#{@grove_rail},chats,#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}}"
 
 // ShowPaneBorders turns on a top pane-border status line, scoped to ONE window
 // via its target (e.g. session:cockpit) — never a global/session-wide option,
@@ -624,12 +622,15 @@ func PaneClosable(pane string, isCockpit CockpitCheck) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
 	}
-	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}")
+	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}\t#{@grove_rail}")
 	if err != nil {
 		return err
 	}
-	parts := strings.SplitN(strings.TrimSpace(info), "\t", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(strings.TrimSpace(info), "\t", 3)
+	if len(parts) == 3 && parts[2] != "" {
+		return ErrRail
+	}
+	if len(parts) < 2 {
 		return fmt.Errorf("unexpected pane info %q", info)
 	}
 	index, err := strconv.Atoi(parts[1])
@@ -971,7 +972,9 @@ type ChatSession struct {
 // call. Empty — and so absent — for every session with nothing hidden.
 // @grove_account (claude-accounts) sits between the two chat-hide fields so
 // every index older than it is unchanged.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}"
+// window_id and @grove_rail (grove-486, the focus-mode rail pane) follow it;
+// window_id is never empty, so the session option is never a trailing field.
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}\t#{window_id}\t#{@grove_rail}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -995,6 +998,8 @@ type LivePane struct {
 	// raw — ParseHiddenRemotes reads it. The same value on every pane of a
 	// session; "" when nothing is hidden.
 	HiddenRemote string
+	Window       string // @N of the pane's window (grove-486)
+	Rail         bool   // the focus-mode rail pane (@grove_rail) — never a chat
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -1032,6 +1037,8 @@ func ParsePanes(out string) []LivePane {
 			Account:     paneField(f, 11),
 
 			HiddenRemote: paneField(f, 12),
+			Window:       paneField(f, 13),
+			Rail:         paneField(f, 14) != "",
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1462,17 +1469,23 @@ func PaneHidable(pane string, isCockpit CockpitCheck) (PaneFacts, error) {
 // whatever window the operator happens to be looking at.
 func retileCockpit(session, windowID string) error {
 	layout := CockpitLayout(session)
-	if layout == "" {
-		layout = defaultCockpitLayout
+	if layout != "focus" {
+		_, err := run("select-layout", "-t", windowID, tmuxLayout(layout))
+		return err
 	}
-	if layout == "vertical" {
-		if _, err := run("set-option", "-w", "-t", windowID, "main-pane-width",
-			fmt.Sprintf("%d%%", cockpitMainWidth)); err != nil {
-			return err
-		}
+	// grove-486: focus has exactly one re-tile, RetileFocus (main-vertical
+	// at the dash's share, the rail re-held at its height), aimed at the
+	// cockpit window by NAME — never the session's active window. It also
+	// picks a pane to focus; a hide or show keeps whatever was active.
+	active, _ := run("display-message", "-p", "-t", windowID, "-F", "#{pane_id}")
+	if err := RetileFocus(session); err != nil {
+		return err
 	}
-	_, err := run("select-layout", "-t", windowID, tmuxLayout(layout))
-	return err
+	if active = strings.TrimSpace(active); active != "" {
+		_, err := run("select-pane", "-t", active)
+		return err
+	}
+	return nil
 }
 
 // HideChatPane moves a cockpit chat pane off-screen into its own detached

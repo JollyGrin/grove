@@ -35,6 +35,13 @@
 
 ---
 
+> **Status 2026-10:** the layout below shipped as the `focus` layout of
+> the `focus-mode` train (`feature/focus-mode`): one shown chat beside the
+> dash, the others minimized behind a rail pane, `L` toggling against
+> `horizontal`. The `vertical`/`tiled` config values are retired (read as
+> horizontal). Mockup: https://claude.ai/artifact/DZm15hBGJFgV1tEhKAZFy1 ·
+> cars in HANDOFF.md. The text below is the original design, unrewritten.
+
 ## 2. The cockpit shape
 
 Left column = TUI (**AGENTS** list + **ACTIVITY** feed). Right column = a

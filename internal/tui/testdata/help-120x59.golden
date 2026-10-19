@@ -30,7 +30,7 @@
 │                                                                                                                      │
 │ GLOBAL                                                                                                               │
 │   ?      this cheat sheet                                                                                            │
-│   L      layout: cycle the cockpit pane split (persisted on the session)                                             │
+│   L      focus/horizontal: toggle the cockpit pane layout (persisted on the session)                                 │
 │   $      costs: spend / account / claude tabs — per-ticket spend, ledger, OpenRouter balance, Claude 5h/7d limits    │
 │   *      effects: cycle ambient effects off → calm → full (runtime only)                                             │
 │   g      gardens: the almanac — one garden per day, h/l walk days                                                    │
@@ -40,8 +40,8 @@
 │   q      quit the cockpit — workers keep running                                                                     │
 │                                                                                                                      │
 │ CHATS — with the chat box focused (tab)                                                                              │
-│   h      hide / show: move the chat off-screen (it keeps running) or bring it back beside the dash                   │
-│   enter  focus the chat's pane — a hidden chat is shown first                                                        │
+│   h      hide / show: move the chat off-screen (it keeps running) or bring it back beside the dash (in focus: swaps) │
+│   enter  focus the chat's pane — a hidden chat is shown first (in focus: swaps)                                      │
 │   a      reply to a HIDDEN chat without showing it: enter sends, esc cancels (a shown chat refuses: enter focuses it │
 │   x      close the chat — asks to confirm first; its transcript is kept                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

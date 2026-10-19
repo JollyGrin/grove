@@ -159,9 +159,10 @@ type Config struct {
 	// render). Empty/unknown resolves to full in the TUI — a typo never
 	// breaks the cockpit, so parse() deliberately leaves it untouched.
 	// Layout is the pane orientation the cockpit window is built with
-	// (grove-52): horizontal (default, side-by-side columns) | vertical
-	// (main-vertical, dash-dominant left) | tiled. Resolved through
-	// CockpitLayout, which is equally typo-forgiving.
+	// (grove-52, grove-485): horizontal (default, side-by-side columns) |
+	// focus (main-vertical, dash-dominant left). Resolved through
+	// CockpitLayout, which is equally typo-forgiving — the retired
+	// vertical/tiled values read as horizontal.
 	Cockpit struct {
 		Effects string `yaml:"effects"`
 		Layout  string `yaml:"layout"`
@@ -182,14 +183,14 @@ func (c *Config) IdleAfter() time.Duration {
 
 // CockpitLayout resolves cockpit.layout to a valid grove layout name.
 // Empty/unknown falls back to horizontal (mirrors parseFx's forgiveness —
-// a typo in the config must never break the cockpit).
+// a typo in the config must never break the cockpit). The retired
+// "vertical" and "tiled" (grove-485) land here too: a stale config line
+// still builds a cockpit.
 func (c *Config) CockpitLayout() string {
-	switch c.Cockpit.Layout {
-	case "vertical", "tiled":
-		return c.Cockpit.Layout
-	default:
-		return "horizontal"
+	if c.Cockpit.Layout == "focus" {
+		return "focus"
 	}
+	return "horizontal"
 }
 
 // Sub configures `gv sub` — a read-only micro-task delegated to a cheaper

@@ -52,6 +52,11 @@ import (
 // `gv chat tail` on a fresh chat stamps its pane exactly like the first `ls`
 // would.
 func findChat(target string) (chatRecord, error) {
+	// The focus-mode rail (grove-486) is a pane, not a chat: every verb that
+	// resolves a target refuses it by name rather than "no chat matches".
+	if tmux.IsRailPane(target) {
+		return chatRecord{}, tmux.ErrRail
+	}
 	recs, err := chatReport()
 	if err != nil {
 		return chatRecord{}, err

@@ -24,6 +24,15 @@
 
 ## Now
 
+- [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
+- [x] **grove-504** — focus rail never a CHATS row: `cockpitChatPanes` skips `p.Rail`; `ApplyLayout` starts the rail in `$HOME`, not the caller's cwd; unit test + `e2e/rail.sh` leg (build from inside the orchestrator dir).
+- [x] grove-491: focus-mode 07 — docs wrap for the train: CLAUDE.md §Layout (two layouts, `L`, focus hides chats, `gv chat focus`), orchestrator seed (`gv chat focus` in tools, focus note under Dispatch-and-dismiss; brains go stale until `gv init --only orchestrator-md`), grove-cockpit-design Status 2026-10, HANDOFF train section. plugins.md already carries `reason:"focus"` (grove-487); no new tmux skill rule (no LEARNINGS entry on status/status-format).
+- [x] grove-489: focus-mode 05 — click a rail box to focus that chat. The rail process (gv itself) turns on SGR mouse reporting, `chatrail.Hit` hit-tests from the same `layout()` the drawing uses, a left release calls `focusChat` in-process (box inverts for the tick; a chat closed since the draw flashes `gone`, nothing mutated). `@grove_rail_rows` rows gain a trailing session field. No tmux binding added. Rail RSS ≈ 14 MB. e2e/focus.sh drives the click by typing the SGR bytes into the rail pane.
+- [x] grove-488 focus-mode 04: `gv chat focus <s>` swaps the shown chat in the focus layout (minimize current → `@grove_focus_hid`, show target, drop it from the option, rail rewritten; `chat_hidden` then `chat_shown`); the CHATS-row show keys call the same helper in focus, `gv chat show` semantics in horizontal. Refusals: shown chat (no-op), remote target, cockpit not running. e2e/focus.sh extended with a swap.
+- [x] grove-487: focus-mode 03 — `focus` shows one chat, minimizes the rest. `L` into focus keeps the active chat (else the window's previous pane, else the last chat) and hides the others into `grove-chat-<label>-<n>` via chat-hide's primitives, remembering them in `@grove_focus_hid`; `L` back restores exactly those (hand-hidden chats stay hidden); `O`/`)`/digits/`gv orchestrator new` in focus minimize the shown chat first; rail rewritten after every move; `chat_hidden`/`chat_shown` carry additive `reason:"focus"`, appended after the move. Pure planner in `internal/tmux/focus.go` (table-tested), `e2e/focus.sh` (default + hostile) in `all.sh`.
+- [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
+- [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
+- [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
 - [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
       `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
       orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
@@ -78,40 +87,6 @@
       chat keys under CHATS focus only; help gains a CHATS section. No new
       event type, no new `--json` field. `e2e/cockpit.sh` drives all four
       keys through the live TUI.
-- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
-      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
-      one row per live chat of the workspace: `▣` on screen, `○` hidden
-      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
-      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
-      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
-      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
-      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
-      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
-      transcript read per chat and the waiting capture ride the 30s beat,
-      or the 1s beat while the box is focused (`tui.CockpitChats`,
-      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
-      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
-      and footer/help hints are the next car. The global cockpit (no
-      workspace) owns no chats and shows no box.
-- [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
-      `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
-      Hiding a LOCAL cockpit chat pane turns it into an ordinary detached
-      `grove-chat-<label>-<n>` session (`new-session` placeholder →
-      `break-pane` → kill the placeholder), showing joins it back
-      (`join-pane`); same `%pane`, same pid, stamps travel, and the cockpit
-      window is re-tiled to `@grove_layout` by its `@N` id, never the
-      active window. `tmux.HideChatPane`/`ShowChatPane` with pure guards
-      (`hidablePane`, `showableChat`), `chat.MatchHide` (a bare cockpit
-      name holding several chats is an error, never a pick). Refused, with
-      nothing touched: the dashboard, worker windows, remote panes, an
-      already hidden/shown chat, a split chat session, a cockpit that is
-      not running. New additive events `chat_hidden` / `chat_shown`
-      (docs/plugins.md); no `--json` field changed. Opt-in: no spawn path
-      touched, nothing hides by itself. New `e2e/chat_hide.sh` in
-      `e2e/all.sh`, both tmux modes. Not yet: TUI rows/keys, remote chats,
-      the orchestrator seed (later cars).
-- [x] claude-accounts 08 — brains (grove-475, 2026-10-16): orchestrator seed tools block gains `gv account ls --usage --json` and `gv grab … --account A`; duty 3 gains the accounts-are-a-lane paragraph (propose `--account` with the reason, never pick unasked, never `gv account use`, token-account caveats: no connectors / Remote Control, never `/login` in a pinned session). model-lanes Step 1 reads the Claude sub from `gv account ls --usage --json` instead of "no API". CLAUDE.md §Layout documents `<state>/accounts/` and that accounts never apply under a non-default `claude_config_dir`. gv-keys 07 (#367) import note drafted in the PR body for the operator to post.
-- [x] grove-471 · claude-accounts 04: launch II (2026-10-11). Cockpit first pane (both `--continue`/fresh limbs), `gv orchestrator new [--account]` (refused beside a non-Anthropic `--profile`), detached + web chats resolve via `resolveChatAccount` and wrap via `wrapWorker`; a token-account chat says it has no claude.ai connectors/Remote Control (pane, CLI, web sheet `account`). `orchestrator_spawned` carries `account` when pinned; `@grove_account` pane tag lets `gv account rm` refuse on live chats; handoff plan prints the account. `gv sub --agentic` untouched. log-append `row_date` IndexError fixed.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

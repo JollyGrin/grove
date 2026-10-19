@@ -314,9 +314,9 @@ func TestHideShowHonorsLayout(t *testing.T) {
 	_, chatA, _ := fakeCockpit(t)
 	reg := registry("grove-x")
 	win := Exact("grove-x") + ":cockpit"
-	// vertical = main-vertical: the dashboard left, chats STACKED right — so
+	// focus = main-vertical: the dashboard left, chats STACKED right — so
 	// chat panes have different tops, which the default (a row) never has.
-	if err := SetCockpitLayout("grove-x", "vertical"); err != nil {
+	if err := SetCockpitLayout("grove-x", "focus"); err != nil {
 		t.Fatal(err)
 	}
 	// A worker window is active while the hide and show run: the re-tile

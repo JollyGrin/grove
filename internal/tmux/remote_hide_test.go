@@ -109,12 +109,12 @@ func TestAddRemoveHiddenRemote(t *testing.T) {
 	}
 }
 
-// The record is the LAST list-panes field (after @grove_remote and
-// @grove_account): every earlier field keeps its index, and a session with nothing hidden answers with the line it always
+// The record sits after @grove_remote and @grove_account (grove-486 appended
+// window_id and @grove_rail behind it): every earlier field keeps its index, and a session with nothing hidden answers with the line it always
 // did.
 func TestParsePanesHiddenRemote(t *testing.T) {
-	if !strings.HasSuffix(paneListFormat, "\t#{@grove_remote}\t#{@grove_account}\t#{"+hiddenRemoteOption+"}") {
-		t.Fatalf("paneListFormat must end with the hidden-remote field, appended after @grove_remote and @grove_account: %q", paneListFormat)
+	if !strings.Contains(paneListFormat, "\t#{@grove_remote}\t#{@grove_account}\t#{"+hiddenRemoteOption+"}\t#{window_id}") {
+		t.Fatalf("paneListFormat must carry the hidden-remote field right after @grove_remote and @grove_account, before window_id: %q", paneListFormat)
 	}
 	rec := EncodeHiddenRemotes([]HiddenRemote{{Host: "pc", Session: "grove-chat-g-1", Profile: "glm"}})
 	out := strings.Join([]string{
@@ -257,7 +257,7 @@ func TestHideShowRemotePane(t *testing.T) {
 	winID := paneFmt(t, dash, "#{window_id}")
 	// vertical = main-vertical, so a re-tile is visible (see
 	// TestHideShowHonorsLayout).
-	if err := SetCockpitLayout("grove-x", "vertical"); err != nil {
+	if err := SetCockpitLayout("grove-x", "focus"); err != nil {
 		t.Fatal(err)
 	}
 	host, hostPID := fakeHost(t)

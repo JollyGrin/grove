@@ -47,7 +47,13 @@ Config `~/.config/grove/`, state `~/.local/state/grove/` (env override
 with a `.grove/` marker is a WORKSPACE with its own
 `.grove/{config.yaml,state,orchestrator}`, found by ambient walk-up. A
 workspace's cockpit and its workers share one tmux session
-`grove-<label>` (window 0 = cockpit, 1+ = workers). `gv hooks install`
+`grove-<label>` (window 0 = cockpit, 1+ = workers). The cockpit has two
+layouts, `horizontal` (every pane side by side) and `focus`; `L` toggles
+them (`cockpit.layout`; the old `vertical`/`tiled` values read as
+horizontal). In `focus` one chat is shown beside the dash and the rest are
+minimized (hidden, as in §Hidden chats) behind a 4-row rail pane under it
+— click a box or `gv chat focus <session>` swaps the shown chat; `L` back
+restores exactly the chats focus minimized. `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.
 Subscription accounts live in `<state>/accounts/` (`<name>.token` 0600 +

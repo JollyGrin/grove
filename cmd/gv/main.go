@@ -791,6 +791,7 @@ func cmdDashboard() error {
 	}
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
+	tui.ApplyLayout = applyCockpitLayout
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
@@ -803,6 +804,7 @@ func cmdDashboard() error {
 		chats, _ := liveChats(label)
 		return closeWorkspace(sd, label, chats, false)
 	}
+	tui.RailTick = func(session string) { railTick(wsLabel(), session) }
 	tui.LiveChats = func(label string) []string {
 		chats, _ := liveChats(label)
 		names := make([]string, len(chats))
@@ -1153,7 +1155,9 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if _, err := tmux.SpawnPane(session, orchDir, cockpitFirstPane(cfg, root)); err != nil {
 		return err
 	}
-	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
+	// ApplyLayout owns the focus rail's lifecycle too (grove-486): focus
+	// ensures exactly one rail pane, anything else removes it.
+	if err := tmux.ApplyLayout(session, cfg.CockpitLayout()); err != nil {
 		return err
 	}
 	// Mark the cockpit built so a later `gv` (openCockpit) attaches instead
@@ -1371,10 +1375,12 @@ func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model
 	if err != nil {
 		return "", err
 	}
+	focusRan := focusBeforeSpawn(session, spawnLabel(ws), root)
 	paneID, err := tmux.SpawnPane(session, dir, launch)
 	if err != nil {
 		return "", err
 	}
+	focusAfterSpawn(session, spawnLabel(ws), focusRan)
 	stampOrchestratorPane(paneID, id)
 	runs := chatRunsModel(cfg, bare, nil)
 	tagOrchestratorPaneModel(paneID, runs)
@@ -1529,10 +1535,12 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, accountFlag,
 	if err != nil {
 		return "", err
 	}
+	focusRan := focusBeforeSpawn(session, spawnLabel(ws), root)
 	paneID, err := tmux.SpawnPane(session, paneDir, launch)
 	if err != nil {
 		return "", err
 	}
+	focusAfterSpawn(session, spawnLabel(ws), focusRan)
 	stampOrchestratorPane(paneID, id)
 	tagOrchestratorPaneModel(paneID, chatRunsModel(cfg, bare, p))
 	// Best-effort visual tag: label the new pane with its profile and turn on

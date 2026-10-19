@@ -116,6 +116,9 @@ gv orchestrator close    # dismiss THIS chat's pane (fire-and-forget only —
 gv chat close <s>         # end ANOTHER live chat (grove-chat-<label>-<n>) —
                            #   kills its claude process, keeps its transcript
                            #   (revive: `orchestrator new --resume`)
+gv chat focus <s>         # cockpit in the `focus` layout: swap the shown chat
+                           #   for <s> (the old one is minimized to the rail).
+                           #   Refuses a remote chat or a non-running cockpit
 gv chat hide [<s>]        # move a cockpit chat pane off-screen: it keeps
                            #   running as a detached grove-chat-<label>-<n>.
                            #   No argument = THIS chat's own pane; <s> is a
@@ -367,6 +370,9 @@ When both merge: summary push, same summary in chat, end your turn.
    (b) you have no questions for the operator;
    (c) the only thing left is to watch the PR (which the operator does
        from the dashboard).
+   In the operator's `focus` layout a closed chat leaves the window
+   dash-only (the other chats are minimized on the rail); they pick the
+   next with enter / a rail click — don't `gv chat focus` for them.
    Otherwise stay open and ask — an ambiguous ticket, a failed grab,
    anything you would normally ask about. Leaving a pane open is free;
    closing one with an unanswered question is not. Without that explicit

@@ -491,6 +491,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 		// loop or goroutine (grove-3). The read is a handful of sysctls; the
 		// sample lands in resource.jsonl (its own capped file, never folded by
 		// state.Load), giving the trajectory into a jetsam crash.
+		RailTick(session)
 		mem, _ := resource.Read()
 		workers := resource.LiveWorkers()
 		_ = resource.Log(stateDir, resource.Sample{
@@ -1256,7 +1257,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
-	case "L": // cycle cockpit pane orientation (grove-52) — persisted in the
+	case "L": // toggle cockpit pane layout horizontal ↔ focus (grove-485) — persisted in the
 		// session option @grove_layout, which is the source of truth (read
 		// live: a Model copy would go stale across dash reconnects).
 		session := m.sessionName()
@@ -1266,8 +1267,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		next := nextLayout(cur)
 		_ = tmux.SetCockpitLayout(session, next)
-		_ = tmux.SelectLayout(session, next)
 		m.flash = "layout: " + next
+		return m, func() tea.Msg {
+			// off the tea loop: focus moves panes and rebuilds the rail (grove-487)
+			if err := ApplyLayout(session, next); err != nil {
+				return flashMsg("layout: " + next + " — " + err.Error())
+			}
+			return nil
+		}
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"
@@ -1747,6 +1754,15 @@ var CloseWorkspace = func(stateDir, label string) error {
 // say what park is about to leave running. Unwired = none, and the modal
 // simply omits the line.
 var LiveChats = func(label string) []string { return nil }
+
+// ApplyLayout is injected by cmd/gv: the layout switch plus the focus
+// minimize / restore (grove-487). The default is the bare tmux switch.
+var ApplyLayout = tmux.ApplyLayout
+
+// RailTick is injected by cmd/gv: the focus-mode chat rail's writer
+// (grove-486). It is called from the existing refresh command — no
+// goroutine or timer of its own — and throttles itself.
+var RailTick = func(session string) {}
 
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
 // there); wired at startup to avoid an import cycle. Returns a flash line.

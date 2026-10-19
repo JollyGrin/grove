@@ -12,7 +12,7 @@ Everything a fresh operator, a fresh orchestrator chat, and a plugin author need
 - `docs/plugins.md`: any additive field or event data added in cars 02–04 (`reason: "focus"` on `chat_hidden`, if car 03 added it); `e2e/plugin.sh` stays green.
 - `docs/grove-cockpit-design.md`: a dated "Status 2026-10" paragraph pointing at the mockup and the train; do not rewrite the doc.
 - `HANDOFF.md`: the train, its cars, and what is deferred (NEEDS YOU, brief popup, since-you-looked, status-bar diet, prefix key table #421, remote chats in focus, AGENTS fold).
-- `.claude/skills/tmux-discipline/SKILL.md`: one rule if cars 02 or 05 learned one about session-scoped `status` / `status-format` or wrapping a root mouse binding (only if LEARNINGS.md got the entry first — a note moves up when it proves out).
+- `.claude/skills/tmux-discipline/SKILL.md`: one rule if cars 02 or 05 learned one about session-scoped `status` / `status-format`  (only if LEARNINGS.md got the entry first — a note moves up when it proves out).
 - `e2e/all.sh`: confirm the focus scripts from cars 02–04 are wired; run the whole suite once on a scratch socket and paste the tail.
 - `gv update` note for the operator in the PR body: after merge, `gv update --yes` on both hosts; restart `gv-chat.service` on groveremote.
 

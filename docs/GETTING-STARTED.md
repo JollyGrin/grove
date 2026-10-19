@@ -151,7 +151,8 @@ this is where you spend ~90% of your time. Each worker gets its own window
 
 Standard tmux keys work: **`ctrl-b z`** zooms the focused pane fullscreen,
 **`ctrl-b ↑/↓`** moves between panes. The default split is horizontal
-(equal columns); **`L`** cycles horizontal → vertical → tiled.
+(equal columns); **`L`** toggles horizontal ↔ focus (dash main-left,
+chats stacked right).
 
 ### Open a new orchestrator chat
 
@@ -239,7 +240,7 @@ Press **`?`** for the full help overlay. The main keys:
 | `t` | open the ticket in the browser |
 | `d` | mark done (verify merged → clean up) |
 | `$` | costs page (spend ledger, per-task/model breakdown; `esc` back) |
-| `L` | cycle pane layout (horizontal / vertical / tiled) |
+| `L` | toggle pane layout (focus / horizontal) |
 | `*` | cycle joy effects (full / calm / off) |
 | `X` | park the workspace (kill session; revive via `gv adopt`) |
 | `?` | help overlay |
