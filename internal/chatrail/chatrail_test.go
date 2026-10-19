@@ -418,3 +418,58 @@ func TestWriterConcurrentWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// drawSink hands each viewer write to the test as it happens.
+type drawSink chan string
+
+func (d drawSink) Write(p []byte) (int, error) { d <- string(p); return len(p), nil }
+
+// grove-521: the rail redraws when a writer wakes it, not on its next tick —
+// and without a wake or a tick it reads nothing at all.
+func TestViewerLoopRedrawsOnWake(t *testing.T) {
+	var mu sync.Mutex
+	payload := Encode(chips(2), t0)
+	set := func(s string) { mu.Lock(); payload = s; mu.Unlock() }
+	sink := make(drawSink, 8)
+	v := &Viewer{
+		Session: "grove-x", Out: sink, Width: func() int { return 80 }, Now: func() time.Time { return t0 },
+		Run: func(args ...string) (string, error) { mu.Lock(); defer mu.Unlock(); return payload, nil },
+	}
+	tick := make(chan time.Time)
+	wake := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	ended := make(chan struct{})
+	go func() { v.Loop(tick, wake, nil, done); close(ended) }()
+	next := func(what string) string {
+		t.Helper()
+		select {
+		case s := <-sink:
+			return s
+		case <-time.After(time.Second):
+			t.Fatalf("no redraw after %s", what)
+		}
+		return ""
+	}
+	if first := next("start"); strings.Contains(first, "chat-2") {
+		t.Fatalf("first picture already has the third chip: %q", first)
+	}
+
+	set(Encode(chips(3), t0))
+	select {
+	case s := <-sink:
+		t.Fatalf("redrew with no wake and no tick: %q", s)
+	case <-time.After(50 * time.Millisecond):
+	}
+	wake <- os.Interrupt // any signal value: the channel is the wake
+	if s := next("wake"); !strings.Contains(s, "chat-2") {
+		t.Errorf("the wake's redraw lacks the new chip: %q", s)
+	}
+
+	set(Encode(chips(4), t0))
+	tick <- t0 // the heartbeat still redraws on its own
+	if s := next("tick"); !strings.Contains(s, "chat-3") {
+		t.Errorf("the tick's redraw lacks the new chip: %q", s)
+	}
+	close(done)
+	<-ended
+}

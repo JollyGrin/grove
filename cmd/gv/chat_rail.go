@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -22,7 +24,8 @@ import (
 	"github.com/JollyGrin/grove/internal/tui"
 )
 
-// railViewerTick is how often the rail re-reads its option.
+// railViewerTick is how often the rail re-reads its option when nothing
+// wakes it — the heartbeat; a write wakes it at once (railSignal).
 const railViewerTick = 2 * time.Second
 
 func cmdChatRail(args []string) error {
@@ -44,8 +47,10 @@ func cmdChatRail(args []string) error {
 	// A click runs gv's own focus helper in this very process (the rail IS
 	// gv). The terminal goes raw so mouse reports arrive unechoed; one
 	// reader goroutine feeds the same loop that ticks, so nothing races.
+	// grove-521: the click resolves inside this rail's workspace only.
+	label, _, _ := cockpitWorkspace(*session)
 	v.Focus = func(target string) error {
-		_, err := focusChat(target, true)
+		_, err := focusChat(target, label, true)
 		return err
 	}
 	clicks := make(chan [2]int, 4)
@@ -63,17 +68,17 @@ func cmdChatRail(args []string) error {
 		}
 	}
 	fmt.Fprint(os.Stdout, "\x1b[?25l") // hide the cursor; the pane is a display
-	_ = v.Step()
+	// grove-521: a writer wakes the rail with SIGUSR1 right after it wrote;
+	// the stamp tells it which pid to signal. The tick stays as heartbeat.
+	wake := make(chan os.Signal, 1)
+	signal.Notify(wake, syscall.SIGUSR1)
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		_ = tmux.StampRailPID(pane, os.Getpid())
+	}
 	tick := time.NewTicker(railViewerTick)
 	defer tick.Stop()
-	for {
-		select {
-		case <-tick.C:
-			_ = v.Step()
-		case c := <-clicks:
-			_ = v.Click(c[0], c[1])
-		}
-	}
+	v.Loop(tick.C, wake, clicks, nil)
+	return nil
 }
 
 var (
@@ -125,7 +130,8 @@ func railWriteNow(label, session string) {
 // railWrite builds the rail from the same rows as the CHATS box (the deep
 // pass), so the box and the rail count and name the same chats.
 func railWrite(label, session string, force bool) {
-	if _, _, ok := tmux.RailPane(session); !ok {
+	_, _, pid, ok := tmux.RailPane(session)
+	if !ok {
 		return
 	}
 	ws, ok := labelWorkspace(label)
@@ -133,7 +139,19 @@ func railWrite(label, session string, force bool) {
 		return
 	}
 	rows := cockpitChats(&ws, true, liveCockpitChatLookup())
-	_, _ = railWriter.Write(session, railChips(rows), time.Now(), force)
+	if wrote, err := railWriter.Write(session, railChips(rows), time.Now(), force); wrote && err == nil {
+		railSignal(pid)
+	}
+}
+
+// railSignal wakes the rail viewer so it redraws now rather than on its
+// next tick (grove-521). pid 0 — no stamp, or a viewer not running as the
+// pane's own process — is left to the tick. Best-effort: a viewer that has
+// just gone needs no redraw.
+func railSignal(pid int) {
+	if pid > 0 {
+		_ = syscall.Kill(pid, syscall.SIGUSR1)
+	}
 }
 
 // railChips turns the CHATS box's rows into the rail's chips: every chat,

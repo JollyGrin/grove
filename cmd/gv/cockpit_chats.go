@@ -371,7 +371,7 @@ func wireChatKeys() {
 	tui.HideChat = func(pane string) (string, error) { return hideChat(pane, "") }
 	tui.ShowChat = func(session string, focus bool) (string, error) {
 		// grove-488: in the focus layout the same key swaps.
-		res, err := focusChat(session, focus)
+		res, err := focusChat(session, wsLabel(), focus)
 		return res.Pane, err
 	}
 	tui.FocusChat = func(pane string) error {

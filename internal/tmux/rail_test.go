@@ -159,9 +159,25 @@ func TestRailPaneClassifiers(t *testing.T) {
 	if err := PaneClosable(railID, nil); err != ErrRail {
 		t.Errorf("PaneClosable(rail) = %v, want ErrRail", err)
 	}
-	pane, win, ok := RailPane(s)
-	if !ok || pane != railID || !strings.HasPrefix(win, "@") {
-		t.Errorf("RailPane = %q %q %v", pane, win, ok)
+	pane, win, pid, ok := RailPane(s)
+	if !ok || pane != railID || !strings.HasPrefix(win, "@") || pid != 0 {
+		t.Errorf("RailPane = %q %q %d %v (no stamp yet: pid 0)", pane, win, pid, ok)
+	}
+	// grove-521: a stamp that is the pane's own process is the pid to wake;
+	// any other stamp (a viewer under a shell) is never signalled.
+	panePID, _ := run("display-message", "-p", "-t", railID, "#{pane_pid}")
+	want, _ := strconv.Atoi(strings.TrimSpace(panePID))
+	if err := StampRailPID(railID, want); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pid, _ := RailPane(s); pid != want || want == 0 {
+		t.Errorf("RailPane pid = %d, want the pane's own %d", pid, want)
+	}
+	if err := StampRailPID(railID, want+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pid, _ := RailPane(s); pid != 0 {
+		t.Errorf("RailPane pid = %d for a stamp that is not the pane's process, want 0", pid)
 	}
 	out, _ := run("list-panes", "-a", "-F", paneListFormat)
 	rails := 0

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -364,6 +365,27 @@ func (v *Viewer) Step() error {
 		return err
 	}
 	return v.draw(text)
+}
+
+// Loop is the viewer's life: one draw, then a Step per tick — the heartbeat
+// that also ages a picture into "stale" — and per wake, the SIGUSR1 a
+// writer sends right after it wrote (grove-521), so a swap shows in one
+// read instead of up to a tick later; a Click per click. Every input feeds
+// this one loop, so nothing races. Returns when done closes.
+func (v *Viewer) Loop(tick <-chan time.Time, wake <-chan os.Signal, clicks <-chan [2]int, done <-chan struct{}) {
+	_ = v.Step()
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick:
+			_ = v.Step()
+		case <-wake:
+			_ = v.Step()
+		case c := <-clicks:
+			_ = v.Click(c[0], c[1])
+		}
+	}
 }
 
 func (v *Viewer) draw(text string) error {

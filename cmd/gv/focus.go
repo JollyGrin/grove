@@ -118,12 +118,13 @@ const focusRemoteRefusal = "remote chats: `gv chat show @<host>/<session>` only,
 // cockpit's show keys on a CHATS row. Every refusal comes before the first
 // move; then in focus the shown local chat is minimized and the target joins
 // (each move followed by its event), @grove_focus_hid and the rail follow.
-// Outside focus it is showChat, call for call.
-func focusChat(target string, focus bool) (focusResult, error) {
+// Outside focus it is showChat, call for call. label is the cockpit's
+// workspace the target is looked up in ("" = the one the target names).
+func focusChat(target, label string, focus bool) (focusResult, error) {
 	if _, _, ok := parseRemoteChatTarget(strings.TrimSpace(target)); ok {
 		return focusResult{}, fmt.Errorf("%s", focusRemoteRefusal)
 	}
-	rec, isCockpit, err := showTarget(target)
+	rec, isCockpit, err := showTarget(target, label)
 	if err != nil {
 		return focusResult{}, err
 	}
@@ -145,7 +146,7 @@ func focusChat(target string, focus bool) (focusResult, error) {
 	if _, err := tmux.ChatShowable(rec.Row.Session, cockpit, isCockpit); err != nil {
 		return focusResult{}, err
 	}
-	label := rec.Row.Workspace
+	label = rec.Row.Workspace
 	freezeChatNames(label, isCockpit)
 	if err := tmux.MinimizeShown(cockpit, label, isCockpit, focusMoved(label, config.StateDirAt(rec.Root))); err != nil {
 		railWriteNow(label, cockpit)
@@ -169,7 +170,7 @@ func cmdChatFocus(args []string) error {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 		return fmt.Errorf("usage: gv chat focus <session>   (a grove-chat-<label>-<n> session, its session id, or a prefix; in the focus layout the shown chat is minimized and this one takes its place — in horizontal it is `gv chat show`)")
 	}
-	res, err := focusChat(strings.TrimSpace(args[0]), true)
+	res, err := focusChat(strings.TrimSpace(args[0]), "", true)
 	if err != nil {
 		return err
 	}
