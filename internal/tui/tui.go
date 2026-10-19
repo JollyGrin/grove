@@ -1052,7 +1052,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatsMsg:
 		// Data only (grove-402): never re-arms anything.
+		// The cursor follows its chat, not its index (grove-528).
+		sel := ""
+		if m.chatSel >= 0 && m.chatSel < len(m.chatRows) {
+			sel = ChatName(m.chatRows[m.chatSel])
+		}
 		m.chatRows = mergeChats(m.chatRows, msg.rows, msg.deep)
+		for i, r := range m.chatRows {
+			if sel != "" && ChatName(r) == sel {
+				m.chatSel = i
+				break
+			}
+		}
 		m.assembleChats()
 		m.holdChatTarget()
 		return m, nil

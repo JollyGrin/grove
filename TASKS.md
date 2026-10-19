@@ -24,6 +24,10 @@
 
 ## Now
 
+- [x] focus-swap train wrapped — measured before/after + docs (grove-533, 2026-10-19): last car of `focus-swap`; its PR into main is the operator's call. `e2e/focus-bench.sh` (not in all.sh) measures main vs tip on the dummy-data fixture with 3 real Claude Code chats, median of 9: start → target visually settled 480→107ms (`gv chat focus`), 488→90 (rail click), 472→112 (CHATS enter); tmux execs 52–62 → 10–11; the on-screen repaint is gone. Design doc Status → IMPLEMENTED with the table; CLAUDE.md §Layout; tmux-discipline gains never `set -g window-size`, `resize-window` pins `manual`, match PANE size, per-session hooks only; HANDOFF train entry. No event or `--json` change (the bench diffs event keys); orchestrator seed unchanged.
+- [x] grove-531 focus-swap 03 — direct attach + phone captures with slot-pinned hidden chats: hidden chat sessions carry their own `client-attached`/`client-session-changed` (unpin → follow the client) and `client-detached` (`gv chat sync-sizes` re-pins) hooks; the planner leaves attached windows alone; `DecideSwap` falls back on `SwapAttached`. `internal/chatweb/width_test.go` + 30 live 2.1.303 fixtures pin 80- vs 139-col readings. Spike recorded in docs/plans/2026-10-19-focus-same-size-swap-design.md §Edge cases; e2e/focus.sh attach/two-client leg (default + hostile).
+- [x] **grove-526** focus-swap 02 — a focus swap is one swap-pane (pure `DecideSwap`, fallback = break/join unchanged); `@grove_chat_home` keeps session names with chats; hidden sizing compares the PANE (global pane-border-status). PR #530 → `feature/focus-swap`.
+- [x] grove-525: focus-swap car 01 — hidden chat windows track the focus slot (the shown chat pane's live size, read after the re-tile). `internal/tmux/slot.go`: pure `PlanHiddenSizes` over one `list-panes -a` (per-window `window-size manual` + `resize-window`, equal = no command, remote skipped, other workspaces untouched) + `SyncHiddenSizes`/`ResetHiddenSizes`. Triggers: end of `RetileFocus` (via injected `tmux.FocusWorkspace`), the cockpit window's `window-resized` hook (`gv chat sync-sizes`, hidden verb), `HideChatPane` in focus; leave-focus unpins before restore. `TestNoGlobalWindowSize` source tripwire; e2e/focus.sh legs + hostile pass (aggressive-resize + global window-size).
 - [x] **grove-521** focus swaps: target lookup scoped to the cockpit's workspace, live rows only (`findLiveChat`; full report only on a miss, so archived refusals hold); rail viewer stamps `@grove_rail_pid` and redraws on SIGUSR1 after every write (2s tick kept as heartbeat). Fixture (12 ws, 260 archived): join 0.24→0.20s, rail redraw 1.29→0.30s.
 - [x] grove-517: click a CHATS row to show/focus it — bubbletea cell-motion mouse + a filter (left press passes, wheel → ↑/↓, the rest dropped before Update); a click = enter on that row, on-screen chats only selected; hit-test from chatLayout (PR #520)
 - [x] grove-510: focus rail — stable chat identity + every chat as a title chip (2026-10-19). Every move path (hide/show/focus/L/spawn-in-focus) first stamps each unstamped local chat pane with the name it wears (`@grove_chat_name`: `cockpit·N` / `chat-N`, rides break/join-pane); `nameChats` reads stamps first, positional otherwise, never reusing a stamped name — the original orchestrator stays `cockpit·1` when minimized. The rail is built from the CHATS box's own rows (`railChips`, wire `v2`): one chip per chat, shown chip bold `▣`, clicking it a no-op, remote chips unclickable; title = Claude's pane title (glyph stripped, `#{pane_title}` appended to the one `list-panes -a`) → ticket → first prompt. Every move force-writes the rail (Writer `force`, in-process `railWriteMu`). e2e/focus.sh: name stamps, chip counts, 6-move churn vs `gv chat ls`.
@@ -36,25 +40,6 @@
 - [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
 - [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
 - [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
-- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
-      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
-      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
-      — an orchestrator may hide ITSELF when the operator asks it to get
-      out of the way (non-destructive, no second yes), while
-      hiding/showing/closing ANOTHER chat stays propose-then-act —
-      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
-      79b5290fc383; workspace brains are NOT refreshed by this car (they go
-      `stale` in `gv brains` once the train is released, and are merged
-      then by the usual `gv init --only orchestrator-md` three-way).
-      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
-      `host`; it gains the event-before-move limit. LEARNINGS: pane
-      identity across break/join, why not a 1-column shrink, the
-      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
-      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
-      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
-      usage strings only. Idea, not built: a tmux prefix binding for hide
-      (bindings are server-global — it would leak into non-grove
-      sessions).
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
