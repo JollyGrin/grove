@@ -393,6 +393,13 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
+  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
+  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
+  `gv chat show` and wrong for a cockpit key that must keep the operator
+  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
+  afterwards is needed, and the re-tile does not move focus either.
+  `TestShowChatPaneFocus` pins both behaviors.
 - **2026-09-28 · a SESSION user option expands in `list-panes -a -F`, on
   every pane of that session — and its value lands in the line verbatim**
   (grove-404, tmux 3.6a): `#{@opt}` in a pane's format context falls

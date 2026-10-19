@@ -504,7 +504,12 @@ chat's tmux session ON that host, `pane` is the local attach pane — which
 does NOT survive the round trip, a shown remote chat has a new `%N` — and
 `session_id` is absent: the conversation's id is known to the host's own
 log, not this one. A remote chat is in no local `gv chat ls` row either
-way; absent `host` means the local move described above. Known limit
+way; absent `host` means the local move described above. `reason` (grove-487,
+additive) is `"focus"` when the move was the `focus` layout minimizing or
+restoring a chat (`L`, or a chat spawned while in focus) rather than an
+operator's hide/show; those events are appended AFTER the tmux move
+succeeded, so none is logged for a move that failed. Absent = a hand
+hide/show. Known limit
 (grove-405): except for a remote show, the record is appended BEFORE tmux
 acts, so a tmux failure after it leaves a `chat_hidden` / `chat_shown`
 for a move that did not happen — treat the pair as activity, and read

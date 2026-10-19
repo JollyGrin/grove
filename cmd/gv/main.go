@@ -791,6 +791,7 @@ func cmdDashboard() error {
 	}
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
+	tui.ApplyLayout = applyCockpitLayout
 	tui.SpawnOrchestratorProfile = spawnOrchestratorProfile
 	tui.SpawnRemoteOrchestrator = spawnRemoteChat
 	tui.AttachTask = attachTask
@@ -1374,10 +1375,12 @@ func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model
 	if err != nil {
 		return "", err
 	}
+	focusRan := focusBeforeSpawn(session, spawnLabel(ws), root)
 	paneID, err := tmux.SpawnPane(session, dir, launch)
 	if err != nil {
 		return "", err
 	}
+	focusAfterSpawn(session, spawnLabel(ws), focusRan)
 	stampOrchestratorPane(paneID, id)
 	runs := chatRunsModel(cfg, bare, nil)
 	tagOrchestratorPaneModel(paneID, runs)
@@ -1532,10 +1535,12 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, accountFlag,
 	if err != nil {
 		return "", err
 	}
+	focusRan := focusBeforeSpawn(session, spawnLabel(ws), root)
 	paneID, err := tmux.SpawnPane(session, paneDir, launch)
 	if err != nil {
 		return "", err
 	}
+	focusAfterSpawn(session, spawnLabel(ws), focusRan)
 	stampOrchestratorPane(paneID, id)
 	tagOrchestratorPaneModel(paneID, chatRunsModel(cfg, bare, p))
 	// Best-effort visual tag: label the new pane with its profile and turn on

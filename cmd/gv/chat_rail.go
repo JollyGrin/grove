@@ -67,6 +67,13 @@ func railTick(label, session string) {
 	if tmux.CockpitLayout(session) != "focus" {
 		return
 	}
+	railWriteNow(label, session)
+}
+
+// railWriteNow rebuilds the chat report and writes the rail's option at
+// once (grove-487: the focus moves rewrite it directly rather than waiting
+// for the next beat). No-op without a rail pane.
+func railWriteNow(label, session string) {
 	_, window, ok := tmux.RailPane(session)
 	if !ok {
 		return

@@ -60,6 +60,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- 2026-10-19 (grove-487, tmux 3.6a): `#{pane_last}` is 1 for the window's previously active pane — the only pane recency tmux has (no per-pane activity time), and the right "which chat was I in" answer when `L` is typed in the dash (the dash is always the active pane then). `run()` trims its output, so a list-panes format whose LAST field is an empty `@option` loses its trailing tabs on the final line and a field-count check rejects that pane — end such a format with a literal `\t.`. Two quick `L` presses run two off-loop layout commands concurrently: an e2e that polls pane count and presses `L` again can race the first command's option write (`@grove_focus_hid`) — wait for the option, not the panes.
 - **2026-10-07 · `tmux show-options` takes ONE option name and never
   auto-starts a server** (grove-455). Rule: the read-only query is a single
   exec `tmux start-server \; show-options -g \; show-options -gw` (on a
@@ -68,13 +69,6 @@
   WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
   table — one table alone misses half. Rule: tmux-discipline §3.
 
-- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
-  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
-  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
-  `gv chat show` and wrong for a cockpit key that must keep the operator
-  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
-  afterwards is needed, and the re-tile does not move focus either.
-  `TestShowChatPaneFocus` pins both behaviors.
 - **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
   not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
   is not an error, so "did the command fail" cannot answer "does this pane
