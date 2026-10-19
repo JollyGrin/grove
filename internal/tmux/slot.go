@@ -36,12 +36,16 @@ type SizePane struct {
 	Remote     bool   // @grove_remote: an ssh attachment, not a local chat
 	Rail       bool   // @grove_rail: the focus rail
 	Home       string // @grove_chat_home: the chat's own hidden session (grove-526)
+	Attached   bool   // a client is attached to the pane's session (grove-531)
+	Hooked     bool   // the session carries the attach hooks (grove-531)
 }
 
 // slotPaneFormat feeds the planner from ONE list-panes -a. Ends in a literal
 // "." field: run() trims its output, which would otherwise eat the trailing
-// empty @grove_rail of the last line (LEARNINGS 2026-10-19).
-const slotPaneFormat = "#{session_name}\t#{window_id}\t#{window_name}\t#{window_width}\t#{window_height}\t#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{@grove_remote}\t#{@grove_rail}\t#{@grove_chat_home}\t."
+// empty @grove_rail of the last line (LEARNINGS 2026-10-19). A hook reads
+// as a format like any option; the match tells grove's detach hook from an
+// operator's own global one.
+const slotPaneFormat = "#{session_name}\t#{window_id}\t#{window_name}\t#{window_width}\t#{window_height}\t#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{@grove_remote}\t#{@grove_rail}\t#{@grove_chat_home}\t#{session_attached}\t#{m:*sync-sizes*,#{client-detached}}\t."
 
 func parseSizePanes(out string) []SizePane {
 	var panes []SizePane
@@ -59,6 +63,10 @@ func parseSizePanes(out string) []SizePane {
 		})
 		if len(f) >= 13 {
 			panes[len(panes)-1].Home = f[11]
+		}
+		if len(f) >= 15 {
+			panes[len(panes)-1].Attached = f[12] != "" && f[12] != "0"
+			panes[len(panes)-1].Hooked = f[13] == "1"
 		}
 	}
 	return panes
@@ -98,11 +106,13 @@ func paneSlot(pane string) (Slot, bool) {
 // hiddenWindow is one window of a workspace's hidden chat session: its
 // size, and its first pane's.
 type hiddenWindow struct {
-	id     string
-	w, h   int
-	pw, ph int
-	panes  int
-	remote bool
+	id       string
+	w, h     int
+	pw, ph   int
+	panes    int
+	remote   bool
+	attached bool
+	hooked   bool
 }
 
 // hiddenWindows are the windows of every `grove-chat-<label>-<n>` session of
@@ -124,7 +134,7 @@ func hiddenWindows(panes []SizePane, label string, isCockpit CockpitCheck) []hid
 		if !seen {
 			i = len(wins)
 			at[p.WindowID] = i
-			wins = append(wins, hiddenWindow{id: p.WindowID, w: p.WindowW, h: p.WindowH, pw: p.PaneW, ph: p.PaneH})
+			wins = append(wins, hiddenWindow{id: p.WindowID, w: p.WindowW, h: p.WindowH, pw: p.PaneW, ph: p.PaneH, attached: p.Attached, hooked: p.Hooked})
 		}
 		wins[i].panes++
 		if p.Remote {
@@ -134,12 +144,41 @@ func hiddenWindows(panes []SizePane, label string, isCockpit CockpitCheck) []hid
 	return wins
 }
 
+// attachHooks are the hidden session's own hooks (grove-531): a pinned
+// window would not follow a terminal that attaches to it (`tmux attach -t
+// '=grove-chat-…'`, or gv's switch-client from inside tmux) — the client
+// would see a slot-sized Claude clipped to its screen. On attach the window
+// is unpinned and follows the client; on detach this binary re-pins it to
+// the cockpit's slot. Session hooks, never global; they die with the
+// session.
+func attachHooks(win, cockpitSession string) [][]string {
+	follow := "set-option -wu -t " + win + " window-size"
+	return [][]string{
+		{"set-hook", "-t", win, "client-attached", follow},
+		{"set-hook", "-t", win, "client-session-changed", follow},
+		{"set-hook", "-t", win, "client-detached", SyncSizesCommand(cockpitSession)},
+	}
+}
+
+// attachHookNames are attachHooks' hooks, for the leave-focus reset.
+var attachHookNames = []string{"client-attached", "client-session-changed", "client-detached"}
+
 // pinWindowSize is the per-window pin: window-size manual on that window
 // (never -g), then the size. It is the chat's PANE that must match the
 // slot (grove-526): under the operator's own `set -g pane-border-status`
 // a lone pane is a row shorter than its window, so a one-pane window is
 // sized to the slot plus that border. Nothing when the pane already has it.
-func pinWindowSize(w hiddenWindow, slot Slot) [][]string {
+// A window a client is attached to follows that client instead, and is
+// left alone; the attach hooks are installed with the pin, or alone when
+// the size already matches but the session lacks them (grove-531).
+func pinWindowSize(w hiddenWindow, slot Slot, cockpitSession string) [][]string {
+	if w.attached {
+		return nil
+	}
+	var hooks [][]string
+	if !w.hooked {
+		hooks = attachHooks(w.id, cockpitSession)
+	}
 	pw, ph := w.pw, w.ph
 	dw, dh := w.w-w.pw, w.h-w.ph
 	if w.panes != 1 || dw < 0 || dh < 0 {
@@ -147,18 +186,19 @@ func pinWindowSize(w hiddenWindow, slot Slot) [][]string {
 		pw, ph, dw, dh = w.w, w.h, 0, 0
 	}
 	if pw == slot.W && ph == slot.H {
-		return nil
+		return hooks
 	}
-	return [][]string{
+	return append([][]string{
 		{"set-option", "-w", "-t", w.id, "window-size", "manual"},
 		{"resize-window", "-t", w.id, "-x", strconv.Itoa(slot.W + dw), "-y", strconv.Itoa(slot.H + dh)},
-	}
+	}, hooks...)
 }
 
 // PlanHiddenSizes is the pure planner behind SyncHiddenSizes: the commands
 // that bring every local hidden chat window of the label to the cockpit's
-// slot. No slot, nothing; a window already slot-sized, nothing; a window
-// holding an ssh attachment (a remote chat) is skipped.
+// slot. No slot, nothing; a window already slot-sized (and hooked),
+// nothing; a window holding an ssh attachment (a remote chat), or one a
+// client is attached to, is skipped.
 func PlanHiddenSizes(panes []SizePane, cockpitSession, label string, isCockpit CockpitCheck) [][]string {
 	slot, ok := FocusSlot(panes, cockpitSession)
 	if !ok {
@@ -167,7 +207,7 @@ func PlanHiddenSizes(panes []SizePane, cockpitSession, label string, isCockpit C
 	var cmds [][]string
 	for _, w := range hiddenWindows(panes, label, isCockpit) {
 		if !w.remote {
-			cmds = append(cmds, pinWindowSize(w, slot)...)
+			cmds = append(cmds, pinWindowSize(w, slot, cockpitSession)...)
 		}
 	}
 	return cmds
@@ -175,11 +215,17 @@ func PlanHiddenSizes(panes []SizePane, cockpitSession, label string, isCockpit C
 
 // PlanHiddenSizeReset is the leave-focus planner: unset the window-level
 // window-size on every hidden chat window of the label, so horizontal and a
-// later direct attach behave exactly as before focus pinned them.
+// later direct attach behave exactly as before focus pinned them; the
+// attach hooks go with it.
 func PlanHiddenSizeReset(panes []SizePane, label string, isCockpit CockpitCheck) [][]string {
 	var cmds [][]string
 	for _, w := range hiddenWindows(panes, label, isCockpit) {
 		cmds = append(cmds, []string{"set-option", "-wu", "-t", w.id, "window-size"})
+		if w.hooked {
+			for _, h := range attachHookNames {
+				cmds = append(cmds, []string{"set-hook", "-u", "-t", w.id, h})
+			}
+		}
 	}
 	return cmds
 }

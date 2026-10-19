@@ -1,0 +1,22 @@
+✻ Sautéed for 4s · done 9:38 PM
+
+❯ Ask the exact same AskUserQuestion again, same four questions.
+
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Favourite  ☒ Beverages  ☒ Seasonal  ☒ Transport  ✔ Submit  →
+
+Review your answers
+
+ ● Which fruits do you like?
+   → Banana
+ ● Which drink do you prefer, tea or coffee?
+   → Coffee
+ ● Which season do you prefer, summer or winter?
+   → Summer
+ ● How do you usually get around, bike or train?
+   → Train
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

@@ -1,0 +1,22 @@
+❯ Use the AskUserQuestion tool once with four questions: (1) header 'Favourite'
+  multiSelect true: which fruits do I like, apple/banana/cherry; (2) header
+  'Beverages' which drink, tea or coffee; (3) header 'Seasonal' which season,
+  summer or winter; (4) header 'Transport' bike or train. One-sentence
+  description per option.
+────────────────────────────────────────────────────────────────────────────────
+←  ☐ Favourite  ☐ Beverages  ☐ Seasonal  ☐ Transport  ✔ Submit  →
+
+Which fruits do you like?
+
+❯ 1. [ ] Apple
+         A crisp, sweet fruit that is easy to carry and eat on the go.
+  2. [ ] Banana
+         A soft, mild fruit that is naturally sweet and rich in potassium.
+  3. [ ] Cherry
+         A small, juicy stone fruit with a bright, tangy-sweet flavor.
+  4. [ ] Type something
+     Next
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

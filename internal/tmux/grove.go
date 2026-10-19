@@ -1630,7 +1630,7 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 			w.pw, _ = strconv.Atoi(f[3])
 			w.ph, _ = strconv.Atoi(f[4])
 		}
-		if err := runPlan(pinWindowSize(w, slot)); err != nil {
+		if err := runPlan(pinWindowSize(w, slot, facts.Session)); err != nil {
 			return session, err
 		}
 	}

@@ -1,0 +1,23 @@
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratchpad/partb/repo · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯ please summarise the README in this repository and then tell me what 1. the
+  build and 2. the tests do, esc to interrupt is not a thing here
+────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-53…
+  ⏸ manual mode on
