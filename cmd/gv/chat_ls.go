@@ -35,7 +35,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|hide|show|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat hide [<session-id>|<pane-id>]\n  gv chat show <session>|@<host>/<session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|hide|show|focus|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat hide [<session-id>|<pane-id>]\n  gv chat show <session>|@<host>/<session>\n  gv chat focus <session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
 	}
 	switch args[0] {
 	case "ls":
@@ -52,6 +52,8 @@ func cmdChat(args []string) error {
 		return cmdChatHide(args[1:])
 	case "show":
 		return cmdChatShow(args[1:])
+	case "focus":
+		return cmdChatFocus(args[1:])
 	case "restamp":
 		return cmdChatRestamp(args[1:])
 	case "serve":
@@ -59,7 +61,7 @@ func cmdChat(args []string) error {
 	case "rail":
 		return cmdChatRail(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, restamp, serve, rail)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail)", args[0])
 	}
 }
 

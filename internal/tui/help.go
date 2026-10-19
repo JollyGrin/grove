@@ -55,8 +55,8 @@ var (
 		{"l", "land: finish every merged car of the feature — shows the plan, asks to confirm"},
 	}
 	helpChats = []helpEntry{
-		{"h", "hide / show: move the chat off-screen (it keeps running) or bring it back beside the dash"},
-		{"enter", "focus the chat's pane — a hidden chat is shown first"},
+		{"h", "hide / show: move the chat off-screen (it keeps running) or bring it back beside the dash (in focus: swaps)"},
+		{"enter", "focus the chat's pane — a hidden chat is shown first (in focus: swaps)"},
 		{"a", "reply to a HIDDEN chat without showing it: enter sends, esc cancels (a shown chat refuses: enter focuses it)"},
 		{"x", "close the chat — asks to confirm first; its transcript is kept"},
 	}

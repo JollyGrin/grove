@@ -187,6 +187,49 @@ for _ in $(seq 1 30); do
 done
 [ "$RAILN" = 3 ] || fail "rail must hold three boxes (hand-hidden + two minimized), got $RAILN"
 
+say "gv chat focus: swap the shown chat (grove-488)"
+SHOWN_NOW="$(panes | sed -n 2p)"
+SN="$(tmux display-message -p -t "$SHOWN_NOW" '#{session_name}')"   # still the cockpit session
+HIDLIST="$(hid_opt)"
+T1="$(echo "$HIDLIST" | awk '{print $1}')"
+T1PANE="$(tmux list-panes -s -t "=$T1" -F '#{pane_id}' | head -1)"
+T1PID="$(tmux display-message -p -t "$T1PANE" '#{pane_pid}')"
+SHOWN_PID="$(tmux display-message -p -t "$SHOWN_NOW" '#{pane_pid}')"
+( cd "$WS" && "$GV" chat focus "$T1" ) > "$SCRATCH/focus.out" 2>&1 || { cat "$SCRATCH/focus.out"; fail "chat focus $T1"; }
+waitfor 40 npanes_is 3 || fail "swap: want dash + chat + rail, got $(npanes)"
+panes | grep -qx "$T1PANE" || fail "swap: $T1PANE not on screen"
+panes | grep -qx "$SHOWN_NOW" && fail "swap: the previous chat is still on screen"
+[ "$(tmux display-message -p -t "$T1PANE" '#{pane_pid}')" = "$T1PID" ] || fail "swap: target pid changed"
+[ "$(tmux display-message -p -t "$SHOWN_NOW" '#{pane_pid}')" = "$SHOWN_PID" ] || fail "swap: minimized pid changed"
+PREV="$(tmux display-message -p -t "$SHOWN_NOW" '#{session_name}')"
+HID="$(hid_opt)"
+echo "$HID" | grep -qw "$PREV" || fail "swap: @grove_focus_hid ($HID) missing $PREV"
+echo "$HID" | grep -qw "$T1" && fail "swap: target still in @grove_focus_hid ($HID)"
+LAST2="$(tail -2 "$EVENTS")"
+echo "$LAST2" | sed -n 1p | grep -q '"type":"chat_hidden"' || fail "swap: want chat_hidden then chat_shown, got: $LAST2"
+echo "$LAST2" | sed -n 2p | grep -q '"type":"chat_shown"' || fail "swap: want chat_hidden then chat_shown, got: $LAST2"
+
+say "gv chat focus: the shown chat is a friendly no-op; a remote target is refused"
+EV_BEFORE="$(wc -l < "$EVENTS")"
+T1ID="$(tmux display-message -p -t "$T1PANE" '#{@grove_chat_session}')"
+[ -n "$T1ID" ] || fail "the shown chat has no session id stamp"
+( cd "$WS" && "$GV" chat focus "$T1ID" ) > "$SCRATCH/focus.out" 2>&1 || { cat "$SCRATCH/focus.out"; fail "focus on the shown chat must exit 0"; }
+grep -q 'already the shown chat' "$SCRATCH/focus.out" || fail "no-op message missing: $(cat "$SCRATCH/focus.out")"
+[ "$(wc -l < "$EVENTS")" = "$EV_BEFORE" ] || fail "the no-op wrote events"
+if ( cd "$WS" && "$GV" chat focus @somehost/grove-chat-alpha-9 ) > "$SCRATCH/focus.out" 2>&1; then fail "remote target must be refused"; fi
+grep -q 'gv chat show' "$SCRATCH/focus.out" || fail "remote refusal must name gv chat show: $(cat "$SCRATCH/focus.out")"
+npanes_is 3 || fail "refusals moved panes"
+
+say "gv chat focus in horizontal is gv chat show"
+sleep 1   # let the previous toggle finish its tail re-tile
+tmux send-keys -t "$DASH" L
+waitfor 40 npanes_is 4 || fail "horizontal 3: want dash + 3 chats, got $(npanes)"
+( cd "$WS" && "$GV" chat hide "$T1PANE" >/dev/null ) || fail "hide for horizontal check"
+waitfor 40 npanes_is 3 || fail "horizontal 3: want 3 panes after hide, got $(npanes)"
+( cd "$WS" && "$GV" chat focus "$T1ID" ) > "$SCRATCH/focus.out" 2>&1 || { cat "$SCRATCH/focus.out"; fail "horizontal focus"; }
+grep -q 'horizontal' "$SCRATCH/focus.out" || fail "horizontal line must say so: $(cat "$SCRATCH/focus.out")"
+waitfor 40 npanes_is 4 || fail "horizontal focus must show without minimizing, got $(npanes)"
+
 say "real tmux server untouched"
 [ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "real tmux session list changed"
 echo "focus e2e ok"
