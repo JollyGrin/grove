@@ -99,7 +99,7 @@ func TestRailLifecycleAndRetile(t *testing.T) {
 		if last.left != panes[1].left || last.top <= panes[1].top {
 			t.Errorf("%s: rail not stacked under the chat: %+v", when, panes)
 		}
-		want := winW * cockpitMainWidth / 100
+		want := winW * cockpitFocusMainWidth / 100
 		if d := panes[0].w - want; d < -1 || d > 1 {
 			t.Errorf("%s: dash width = %d of %d, want ~%d", when, panes[0].w, winW, want)
 		}
