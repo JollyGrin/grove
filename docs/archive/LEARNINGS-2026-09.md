@@ -8,6 +8,14 @@
 
 ## Go / CLI
 
+- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
 - **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
   `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
   while cars 01–04 ran their gates side by side — root cause UNKNOWN, not

@@ -10,8 +10,15 @@
 # grove-525: in focus every hidden chat window has exactly the slot's size —
 # after entering focus, a cockpit resize, a dash-width change + `L` round
 # trip, a spawn and a hand `gv chat hide`; leaving focus unpins every one.
-# GROVE_E2E_TMUX_CONF=hostile adds base-index 1 / pane-base-index 1 and a
-# user-level aggressive-resize + global window-size.
+# grove-526: in focus a swap is ONE swap-pane — from `gv chat focus`, a rail
+# click and the CHATS box's enter alike — so the swapped-in pane's screen is
+# byte-identical before and after (no SIGWINCH reaches it) and no
+# select-layout runs; across 6 swaps among 3 chats every chat keeps its
+# session name (@grove_chat_home) and its #510 name; a window knocked off
+# the slot's size falls back to break/join and is re-synced.
+# GROVE_E2E_TMUX_CONF=hostile adds base-index 1 / pane-base-index 1, a
+# user-level aggressive-resize + global window-size, and a global
+# pane-border-status (a lone pane a row shorter than its window).
 #
 # tmux: isolated — unsets TMUX/TMUX_PANE, scratch TMUX_TMPDIR, scoped
 # kill-server, real-server canary before/after (tmux-discipline).
@@ -63,6 +70,7 @@ set -g allow-rename on
 set -g exit-empty off
 set -gw aggressive-resize on
 set -g window-size smallest # grove-e2e: user-conf fixture (an operator's own global value)
+set -g pane-border-status top
 CONF
   tmux -f "$SCRATCH/hostile.conf" start-server
 else
@@ -94,14 +102,15 @@ hid_opt() { tmux show-options -t '=grove-alpha:' -v @grove_focus_hid 2>/dev/null
 chat_sessions() { tmux list-sessions -F '#{session_name}' | grep '^grove-chat-alpha-' | sort || true; }
 EVENTS="$WS/.grove/state/events.jsonl"
 # grove-525: the slot is the shown chat's pane — not the dash (first), not
-# the rail (its @grove_rail adds a field); a hidden chat window must match it.
+# the rail (its @grove_rail adds a field); a hidden chat's PANE must match it
+# (grove-526: under a global pane-border-status its window is a row taller).
 slot_dims() { tmux list-panes -t "$W" -F '#{pane_id} #{@grove_rail} #{pane_width}x#{pane_height}' | sed 1d | awk 'NF == 2 {print $2}'; }
-hidden_dims() { tmux list-windows -a -F '#{session_name} #{window_width}x#{window_height}' | awk '$1 ~ /^grove-chat-alpha-/ {print $2}' | sort -u; }
+hidden_dims() { tmux list-panes -a -F '#{session_name} #{pane_width}x#{pane_height}' | awk '$1 ~ /^grove-chat-alpha-/ {print $2}' | sort -u; }
 hidden_at_slot() { # every hidden chat window == the one slot
   local sl; sl="$(slot_dims)"
   [ -n "$sl" ] && [ "$(echo "$sl" | wc -l | tr -d ' ')" = 1 ] && [ -n "$(hidden_dims)" ] && [ "$(hidden_dims)" = "$sl" ]
 }
-size_report() { echo "slot=[$(slot_dims | tr '\n' ' ')] hidden=[$(tmux list-windows -a -F '#{session_name} #{window_width}x#{window_height}' | grep '^grove-chat-alpha-' | tr '\n' ' ')]"; }
+size_report() { echo "slot=[$(slot_dims | tr '\n' ' ')] hidden=[$(tmux list-panes -a -F '#{session_name} #{pane_width}x#{pane_height} (window #{window_width}x#{window_height})' | grep '^grove-chat-alpha-' | tr '\n' ' ')]"; }
 pinned() { # window-level window-size of any hidden chat window
   tmux list-windows -a -F '#{session_name} #{window_id}' | awk '$1 ~ /^grove-chat-alpha-/ {print $2}' | while read -r w; do
     tmux show-options -w -t "$w" window-size; done
@@ -335,6 +344,127 @@ if ! panes | grep -qx "$T1PANE"; then   # the later legs want the clicked chat s
   ( cd "$WS" && "$GV" chat focus "$(tmux display-message -p -t "$T1PANE" '#{session_name}')" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "refocus $T1PANE"; }
 fi
 
+say "grove-526: fast swaps — no repaint, no re-tile, every chat keeps its session name"
+# Three chats: the shown one and two focus-minimized ones. Each is respawned
+# (same %pane, its stamps kept) as a program that prints WINCH on every
+# SIGWINCH, so a resize — what makes Claude repaint — shows in its capture.
+SA="$(panes | sed -n 2p)"
+SB="$(tmux list-panes -s -t "=$(hid_opt | awk '{print $1}')" -F '#{pane_id}' | head -1)"
+SC="$(tmux list-panes -s -t "=$(hid_opt | awk '{print $2}')" -F '#{pane_id}' | head -1)"
+[ -n "$SA" ] && [ -n "$SB" ] && [ -n "$SC" ] && [ "$SB" != "$SC" ] || fail "fast swaps: want a shown chat and two minimized ones (shown=$SA hid=$(hid_opt))"
+for p in "$SA" "$SB" "$SC"; do
+  tmux respawn-pane -k -t "$p" "sh -c 'trap \"echo WINCH\" WINCH; echo ready $p; while :; do sleep 0.1; done'"
+done
+waitfor 20 hidden_at_slot || fail "fast swaps: hidden chats not at the slot: $(size_report)"
+LAYOUTS="$SCRATCH/layouts.log"; : > "$LAYOUTS"
+tmux set-hook -g after-select-layout "run-shell 'echo L >> $LAYOUTS'"
+sleep 1   # every pane has drawn; any WINCH from the respawn has printed
+# Per-pane bookkeeping without bash-4 arrays: NAME_<n> / CHOME_<n> for %<n>.
+kv()     { eval "printf '%s' \"\${$1_${2#%}:-}\""; }
+kv_set() { eval "$1_${2#%}=\$3"; }
+for p in "$SA" "$SB" "$SC"; do kv_set NAME "$p" "$(tmux display-message -p -t "$p" '#{@grove_chat_name}')"; done
+kv_set CHOME "$SB" "$(tmux display-message -p -t "$SB" '#{session_name}')"
+kv_set CHOME "$SC" "$(tmux display-message -p -t "$SC" '#{session_name}')"
+check_names() { # <step>
+  local p s h
+  for p in "$SA" "$SB" "$SC"; do
+    [ "$(tmux display-message -p -t "$p" '#{@grove_chat_name}')" = "$(kv NAME "$p")" ] || fail "swap $1: $p lost its name $(kv NAME "$p")"
+    s="$(tmux display-message -p -t "$p" '#{session_name}')"
+    [ "$s" = grove-alpha ] && continue
+    h="$(tmux display-message -p -t "$p" '#{@grove_chat_home}')"
+    [ "$s" = "$h" ] || fail "swap $1: $p hidden in $s, its @grove_chat_home is '$h'"
+    [ -z "$(kv CHOME "$p")" ] || [ "$(kv CHOME "$p")" = "$s" ] || fail "swap $1: $p moved from session $(kv CHOME "$p") to $s"
+    kv_set CHOME "$p" "$s"
+    echo " $(hid_opt) " | grep -q " $s " || fail "swap $1: $s ($p) is minimized but not in @grove_focus_hid ($(hid_opt))"
+  done
+  for s in $(hid_opt); do
+    tmux has-session -t "=$s" 2>/dev/null || fail "swap $1: @grove_focus_hid names $s, which does not exist ($(hid_opt))"
+  done
+  [ "$(tmux display-message -p -t "$(panes | sed -n 2p)" '#{session_name}')" = grove-alpha ] || fail "swap $1: no chat shown"
+}
+rail_click() { # <session>: the chip's column, as the click leg computes it
+  local rows n i idx rw slots cw shown sess rp
+  rp="$(tmux list-panes -t "$W" -F '#{pane_id} #{@grove_rail}' | awk '$2 != "" {print $1}')"
+  rows="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | sed 1d)"
+  n="$(echo "$rows" | grep -c .)"; i=0; idx=""
+  while IFS=$'\t' read -r shown _ _ _ sess _; do
+    [ "$sess" = "$1" ] && idx=$i
+    i=$((i + 1))
+  done <<< "$rows"
+  [ -n "$idx" ] || return 1
+  rw="$(tmux display-message -p -t "$rp" '#{pane_width}')"
+  slots="$n"; [ $((rw / slots)) -ge 16 ] || slots=$((rw / 16))
+  cw=$((rw / slots - 1))
+  tmux send-keys -t "$rp" -l "$(printf '\033[<0;%d;1m' $((idx * (cw + 1) + 3)))"
+}
+dash_has() { tmux capture-pane -p -t "$DASH" | grep -q -- "$1"; }
+chats_enter() { # <chat name>: tab to CHATS, walk the cursor onto the row, enter
+  local k
+  tmux select-pane -t "$DASH"
+  waitfor 10 dash_has '▸[▣○]' || { tmux send-keys -t "$DASH" Tab; waitfor 20 dash_has '▸[▣○]' || return 1; }
+  for k in j j j j j j k k k k k k k k k k k k; do
+    dash_has "▸. $1" && { tmux send-keys -t "$DASH" Enter; return 0; }
+    tmux send-keys -t "$DASH" "$k"; sleep 0.3
+  done
+  return 1
+}
+in_slot() { [ "$(panes | sed -n 2p)" = "$1" ]; }
+SHOWN="$SA"
+STEP=0
+for TGT in "$SB" "$SC" "$SA" "$SC" "$SB" "$SA"; do
+  STEP=$((STEP + 1))
+  TS="$(tmux display-message -p -t "$TGT" '#{session_name}')"
+  BEFORE_CAP="$(tmux capture-pane -p -t "$TGT")"
+  NL="$(wc -l < "$LAYOUTS" | tr -d ' ')"
+  case $((STEP % 3)) in
+    1) ( cd "$WS" && "$GV" chat focus "$TS" ) > "$SCRATCH/fast.out" 2>&1 || { cat "$SCRATCH/fast.out"; fail "swap $STEP: gv chat focus $TS"; }; HOW="gv chat focus" ;;
+    2) rail_click "$TS" || fail "swap $STEP: no rail chip for $TS"; HOW="rail click" ;;
+    0) chats_enter "$(kv NAME "$TGT")" || fail "swap $STEP: could not enter $(kv NAME "$TGT") on the CHATS box: $(tmux capture-pane -p -t "$DASH")"; HOW="CHATS enter" ;;
+  esac
+  waitfor 40 in_slot "$TGT" || fail "swap $STEP ($HOW): $TGT ($TS) did not take the slot"
+  npanes_is 3 || fail "swap $STEP ($HOW): want dash + chat + rail, got $(npanes)"
+  sleep 0.6   # a SIGWINCH would have printed by now
+  [ "$(tmux capture-pane -p -t "$TGT")" = "$BEFORE_CAP" ] || fail "swap $STEP ($HOW): $TGT repainted:
+$BEFORE_CAP
+-->
+$(tmux capture-pane -p -t "$TGT")"
+  [ "$(wc -l < "$LAYOUTS" | tr -d ' ')" = "$NL" ] || fail "swap $STEP ($HOW): a select-layout ran — the slow path"
+  echo "$(tail -2 "$EVENTS")" | sed -n 1p | grep -q '"type":"chat_hidden".*"reason":"focus"' || fail "swap $STEP: want chat_hidden (reason focus) then chat_shown, got: $(tail -2 "$EVENTS")"
+  echo "$(tail -2 "$EVENTS")" | sed -n 2p | grep -q "\"type\":\"chat_shown\".*\"session\":\"$TS\"" || fail "swap $STEP: want chat_shown of $TS, got: $(tail -2 "$EVENTS")"
+  check_names "$STEP"
+  echo "  swap $STEP ($HOW): $SHOWN -> $TGT fast, no repaint"
+  SHOWN="$TGT"
+done
+for p in "$SA" "$SB" "$SC"; do  # gv chat ls finds every one of them by its session name
+  s="$(tmux display-message -p -t "$p" '#{session_name}')"
+  [ "$s" = grove-alpha ] && continue
+  ( cd "$WS" && "$GV" chat ls --json ) | python3 -c 'import json,sys; rows=json.load(sys.stdin); rows=rows.get("chats", rows) if isinstance(rows, dict) else rows; sys.exit(0 if any(r["session"] == sys.argv[1] and r["kind"] == "chat" for r in rows) else 1)' "$s" \
+    || fail "gv chat ls has no chat row for $s after the swaps"
+done
+
+say "grove-526: a hidden window off the slot's size falls back to break/join, then is re-synced"
+FB="$(tmux list-panes -s -t "=$(kv CHOME "$SB")" -F '#{pane_id}' | head -1)"
+[ "$FB" = "$SB" ] || fail "fallback: $SB is not in $(kv CHOME "$SB")"
+tmux resize-window -t "$(tmux display-message -p -t "$SB" '#{window_id}')" -x 80 -y 24
+NL="$(wc -l < "$LAYOUTS" | tr -d ' ')"
+( cd "$WS" && "$GV" chat focus "$(kv CHOME "$SB")" ) > "$SCRATCH/fast.out" 2>&1 || { cat "$SCRATCH/fast.out"; fail "fallback: gv chat focus $(kv CHOME "$SB")"; }
+waitfor 40 in_slot "$SB" || fail "fallback: $SB did not take the slot"
+npanes_is 3 || fail "fallback: want dash + chat + rail, got $(npanes)"
+[ "$(wc -l < "$LAYOUTS" | tr -d ' ')" -gt "$NL" ] || fail "fallback: no select-layout — the fast path ran on a mis-sized window"
+waitfor 20 hidden_at_slot || fail "fallback: hidden chats not re-synced to the slot: $(size_report)"
+SHOWN="$SB"
+check_names fallback
+TS="$(tmux display-message -p -t "$SC" '#{session_name}')"
+NL="$(wc -l < "$LAYOUTS" | tr -d ' ')"
+( cd "$WS" && "$GV" chat focus "$TS" ) > "$SCRATCH/fast.out" 2>&1 || { cat "$SCRATCH/fast.out"; fail "after fallback: gv chat focus $TS"; }
+waitfor 40 in_slot "$SC" || fail "after fallback: $SC did not take the slot"
+[ "$(wc -l < "$LAYOUTS" | tr -d ' ')" = "$NL" ] || fail "after fallback: the next swap was not fast"
+check_names after-fallback
+tmux set-hook -gu after-select-layout
+if ! panes | grep -qx "$T1PANE"; then   # the later legs want T1 shown
+  ( cd "$WS" && "$GV" chat focus "$(tmux display-message -p -t "$T1PANE" '#{session_name}')" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "refocus $T1PANE"; }
+fi
+
 say "gv chat focus: the shown chat is a friendly no-op; a remote target is refused"
 EV_BEFORE="$(wc -l < "$EVENTS")"
 T1ID="$(tmux display-message -p -t "$T1PANE" '#{@grove_chat_session}')"
@@ -352,8 +482,8 @@ SLOT_NOW="$(slot_dims)"
 ( cd "$WS" && "$GV" chat hide "$T1PANE" >/dev/null ) || fail "hand hide in focus"
 waitfor 40 npanes_is 2 || fail "hand hide in focus: want dash + rail, got $(npanes)"
 T1HOME="$(tmux display-message -p -t "$T1PANE" '#{session_name}')"
-[ "$(tmux display-message -p -t "$T1PANE" '#{window_width}x#{window_height}')" = "$SLOT_NOW" ] \
-  || fail "hand hide in focus: $T1HOME is $(tmux display-message -p -t "$T1PANE" '#{window_width}x#{window_height}'), want the slot $SLOT_NOW"
+[ "$(tmux display-message -p -t "$T1PANE" '#{pane_width}x#{pane_height}')" = "$SLOT_NOW" ] \
+  || fail "hand hide in focus: $T1HOME is $(tmux display-message -p -t "$T1PANE" '#{pane_width}x#{pane_height}'), want the slot $SLOT_NOW"
 [ "$(hidden_dims)" = "$SLOT_NOW" ] || fail "hand hide in focus: every hidden chat must stay at $SLOT_NOW: $(size_report)"
 ( cd "$WS" && "$GV" chat focus "$T1HOME" ) > "$SCRATCH/focus.out" 2>&1 || { cat "$SCRATCH/focus.out"; fail "focus back $T1HOME"; }
 waitfor 40 npanes_is 3 || fail "focus back: want dash + chat + rail, got $(npanes)"

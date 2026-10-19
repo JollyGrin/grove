@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] **grove-526** focus-swap 02 — a focus swap is one swap-pane (pure `DecideSwap`, fallback = break/join unchanged); `@grove_chat_home` keeps session names with chats; hidden sizing compares the PANE (global pane-border-status). PR #530 → `feature/focus-swap`.
 - [x] grove-525: focus-swap car 01 — hidden chat windows track the focus slot (the shown chat pane's live size, read after the re-tile). `internal/tmux/slot.go`: pure `PlanHiddenSizes` over one `list-panes -a` (per-window `window-size manual` + `resize-window`, equal = no command, remote skipped, other workspaces untouched) + `SyncHiddenSizes`/`ResetHiddenSizes`. Triggers: end of `RetileFocus` (via injected `tmux.FocusWorkspace`), the cockpit window's `window-resized` hook (`gv chat sync-sizes`, hidden verb), `HideChatPane` in focus; leave-focus unpins before restore. `TestNoGlobalWindowSize` source tripwire; e2e/focus.sh legs + hostile pass (aggressive-resize + global window-size).
 - [x] **grove-521** focus swaps: target lookup scoped to the cockpit's workspace, live rows only (`findLiveChat`; full report only on a miss, so archived refusals hold); rail viewer stamps `@grove_rail_pid` and redraws on SIGUSR1 after every write (2s tick kept as heartbeat). Fixture (12 ws, 260 archived): join 0.24→0.20s, rail redraw 1.29→0.30s.
 - [x] grove-517: click a CHATS row to show/focus it — bubbletea cell-motion mouse + a filter (left press passes, wheel → ↑/↓, the rest dropped before Update); a click = enter on that row, on-screen chats only selected; hit-test from chatLayout (PR #520)

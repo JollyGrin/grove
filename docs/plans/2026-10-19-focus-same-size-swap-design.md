@@ -5,7 +5,15 @@ the slot — grove-525): IMPLEMENTED on `feature/focus-swap` —
 `internal/tmux/slot.go` (`SyncHiddenSizes`/`ResetHiddenSizes`, pure
 `PlanHiddenSizes`), synced at the end of `RetileFocus`, by the cockpit
 window's `window-resized` hook (`gv chat sync-sizes`), and at `HideChatPane`
-in focus; unpinned on leaving focus. Follows the focus-mode train
+in focus; unpinned on leaving focus. Car 02 (§2, one swap-pane + stable
+home sessions — grove-526): IMPLEMENTED — `internal/tmux/swap.go` (pure
+`DecideSwap`/`PickHome`/`SwapFocusHid`, `FocusSwap` = one tmux exec of
+swap-pane + rename-session + `@grove_focus_hid`), `@grove_chat_home` stamped
+by `HideChatPane` (and lazily on show), `focusChat` falls back to the
+break/join path on any `DecideSwap` reason. One correction to §1/§2: the
+fast-path precondition and the sync compare the hidden PANE to the slot,
+not its window — under a global `pane-border-status` a lone pane is a row
+shorter than its window (LEARNINGS 2026-10-19). Follows the focus-mode train
 (#502), #510 (stable chat names), #521/PR #523 (scoped lookup + rail
 redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`).
 

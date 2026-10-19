@@ -1570,7 +1570,21 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 	if pin {
 		slot, pin = paneSlot(pane)
 	}
-	session := NextChatSession(label, SessionNames())
+	// grove-526: the chat hides into its own home session, stamped on the
+	// pane the first time it is hidden — so it keeps one name for life.
+	var home string
+	var sessions, homes []string
+	if panes, err := sizePanes(); err == nil {
+		sessions, homes = sessionsAndHomes(panes)
+		for _, p := range panes {
+			if p.Pane == pane {
+				home = p.Home
+			}
+		}
+	} else {
+		sessions = SessionNames()
+	}
+	session := PickHome(home, label, "", sessions, homes)
 	placeholder, err := run("new-session", "-d", "-s", session, "-n", hidePlaceholder, "-P", "-F", "#{window_id}")
 	if err != nil {
 		return "", err
@@ -1594,16 +1608,29 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 	if err := KillWindowID(placeholder); err != nil {
 		return session, err
 	}
-	window, err := run("display-message", "-p", "-t", pane, "-F", "#{window_id}")
+	if home != session {
+		if _, err := run("set-option", "-p", "-t", pane, ChatHomeOption, session); err != nil {
+			return session, err
+		}
+	}
+	out, err := run("display-message", "-p", "-t", pane, "-F", "#{window_id}\t#{window_width}\t#{window_height}\t#{pane_width}\t#{pane_height}")
 	if err != nil {
 		return session, err
 	}
-	window = strings.TrimSpace(window)
+	f := strings.Split(strings.TrimSpace(out), "\t")
+	window := f[0]
 	if err := DisableAutoRename(window); err != nil {
 		return session, err
 	}
 	if pin {
-		if err := runPlan(pinWindowSize(window, 0, 0, slot)); err != nil {
+		w := hiddenWindow{id: window, panes: 1}
+		if len(f) == 5 {
+			w.w, _ = strconv.Atoi(f[1])
+			w.h, _ = strconv.Atoi(f[2])
+			w.pw, _ = strconv.Atoi(f[3])
+			w.ph, _ = strconv.Atoi(f[4])
+		}
+		if err := runPlan(pinWindowSize(w, slot)); err != nil {
 			return session, err
 		}
 	}
@@ -1616,6 +1643,7 @@ type ChatFacts struct {
 	Exists        bool   // it is a live tmux session
 	Panes         []string
 	Remote        string // @grove_remote of its pane, "" for a local chat
+	Home          string // @grove_chat_home of its first pane, "" when unstamped (grove-526)
 	Cockpit       string // the workspace's cockpit session
 	CockpitWindow string // that session's cockpit window "@N", "" when not running
 }
@@ -1652,14 +1680,17 @@ func chatFacts(session, cockpitSession string) ChatFacts {
 	c.Exists = true
 	// -s: every pane of the SESSION, across windows — an operator who opened
 	// a second window in the chat split it just as surely.
-	if out, err := run("list-panes", "-s", "-t", Exact(session), "-F", "#{pane_id}\t#{@grove_remote}"); err == nil {
+	if out, err := run("list-panes", "-s", "-t", Exact(session), "-F", "#{pane_id}\t#{@grove_remote}\t#{@grove_chat_home}"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
-			f := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 2)
+			f := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
 			if f[0] == "" {
 				continue
 			}
+			if len(c.Panes) == 0 && len(f) == 3 {
+				c.Home = strings.TrimSpace(f[2])
+			}
 			c.Panes = append(c.Panes, strings.TrimSpace(f[0]))
-			if len(f) == 2 && c.Remote == "" {
+			if len(f) >= 2 && c.Remote == "" {
 				c.Remote = strings.TrimSpace(f[1])
 			}
 		}
@@ -1731,6 +1762,13 @@ func showChatPane(session, cockpitSession string, isCockpit CockpitCheck, announ
 	}
 	if announce != nil {
 		if err := announce(pane); err != nil {
+			return "", err
+		}
+	}
+	// grove-526: a chat hidden before homes existed takes the session it is
+	// leaving as its home, so its next hide lands back under the same name.
+	if facts.Home == "" {
+		if _, err := run("set-option", "-p", "-t", pane, ChatHomeOption, session); err != nil {
 			return "", err
 		}
 	}
