@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
 - [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
 - [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
 - [x] model-fit 06: LEARNINGS.md retirement pass (grove-438, 2026-10-07): 12 audited entries resolved by truth (1 deleted, 10 rewritten to the current fact + pointer, grove-79's lost headline restored), head §Claude Code + §tmux reshaped to fact + rule + ticket with narratives moved to `docs/archive/LEARNINGS-2026-{09,10}.md`, four generalized rules moved into tmux-discipline / shipping-gates / claude-code-facts, the four duplicated rules given one home each.
@@ -71,22 +72,6 @@
       compacting, preserve …" line in root CLAUDE.md and the AGENTS.md
       bootstrap template. `e2e/dummy.sh` asserts the flag exactly once /
       absent / rejected; `e2e/plugin.sh` asserts the re-orientation.
-- [x] model-fit 09: Stop hook evidence gate + last-match sentinel
-      (grove-441, 2026-10-07, PR #446). `hooks.ParseSentinel` is the one
-      parser (hooks + TUI): LAST `STATUS:` line wins, tolerates
-      bold/underscore wrap, `—`/`–`/`-`/`:` separators and a bare
-      `STATUS: DONE`, skips the kickoff's own `<placeholder>` echo. The
-      Stop receiver checks a DONE claim against the worktree (`git
-      status`, upstream/ahead, `gh pr list` with a 5s timeout, skipped
-      without a remote): per-repo `done_gate: off|warn|block`, default
-      **warn** for one release (verdict as additive
-      `gate`/`gate_reason`/`gate_decision` data + notify, never blocks);
-      `block` prints `{"decision":"block",…}` and records sentinel
-      `done_unverified` (`gv ls` label `done?`), never on
-      `stop_hook_active`, capped at 2 consecutive per session
-      (`<state>/done-gate/<ticket>`), never when grove itself errors.
-      `e2e/dummy.sh` covers block/warn/last-match. Flip to `block` once a
-      release of warn verdicts looks right.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

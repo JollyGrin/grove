@@ -103,8 +103,9 @@ func TestPaneBorderFormat(t *testing.T) {
 	// OSC-proof carrier): a remote chat pane reads "@<host> · <profile>",
 	// falling back to "chat" for the host's own Claude, because an ssh-attach
 	// pane's own title belongs to the ssh client, not the agent.
-	want := "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat}," +
-		"#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
+	// grove-486: the focus-mode rail's arm is outermost — "chats".
+	want := "#{pane_index}: #{?#{@grove_rail},chats,#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat}," +
+		"#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}}"
 	if paneBorderFormat != want {
 		t.Errorf("paneBorderFormat = %q, want %q", paneBorderFormat, want)
 	}

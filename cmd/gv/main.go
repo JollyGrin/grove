@@ -770,6 +770,7 @@ func cmdDashboard() error {
 		chats, _ := liveChats(label)
 		return closeWorkspace(sd, label, chats, false)
 	}
+	tui.RailTick = func(session string) { railTick(wsLabel(), session) }
 	tui.LiveChats = func(label string) []string {
 		chats, _ := liveChats(label)
 		names := make([]string, len(chats))
@@ -1110,7 +1111,9 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
 		return err
 	}
-	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
+	// ApplyLayout owns the focus rail's lifecycle too (grove-486): focus
+	// ensures exactly one rail pane, anything else removes it.
+	if err := tmux.ApplyLayout(session, cfg.CockpitLayout()); err != nil {
 		return err
 	}
 	// Mark the cockpit built so a later `gv` (openCockpit) attaches instead
