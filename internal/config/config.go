@@ -246,13 +246,19 @@ func Dir() string {
 // GROVE_STATE_DIR overrides it — used to point E2E tests at a scratch
 // dir so they never touch live fleet state.
 func StateDir() string {
-	d := os.Getenv("GROVE_STATE_DIR")
-	if d == "" {
-		home, _ := os.UserHomeDir()
-		d = filepath.Join(home, ".local", "state", "grove")
-	}
+	d := StateDirPath()
 	_ = os.MkdirAll(d, 0o755)
 	return d
+}
+
+// StateDirPath is StateDir without creating it — for read-only paths
+// (`gv account token-path`) that must leave the disk untouched.
+func StateDirPath() string {
+	if d := os.Getenv("GROVE_STATE_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "grove")
 }
 
 func expand(p string) string {
@@ -536,6 +542,27 @@ func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string 
 		shellQuote(p.Opus), shellQuote(p.Sonnet), shellQuote(p.Haiku),
 		modeledCmd,
 	)
+}
+
+// WrapAccount wraps an already-`WithModel`'d claude command so it runs on
+// a subscription account's token (claude-accounts design §Decision 5).
+// The pane's shell reads the token file itself, so the value never enters
+// the send-keys line, argv (`cat` only sees the path) or capture-pane; an
+// empty read refuses rather than falling back to the login. GROVE_ACCOUNT
+// carries the name (never a secret) for the statusline shim — the same
+// name shell-init derives from the token file's basename, since the store
+// keeps <name>.token (a resolver test pins the two together); an empty or
+// unreadable token prints why on stderr before the subshell fails. An empty
+// tokenPath returns cmd unchanged — the no-account path is byte-for-byte
+// today's. Never apply it to WrapProfile output: both end in `exec <cmd>
+// )`, so nesting renders `exec ( … )`; the resolver keeps accounts and
+// profiles apart (Decision 1). The caller preflights the file first.
+func WrapAccount(cmd, tokenPath, name string) string {
+	if tokenPath == "" {
+		return cmd
+	}
+	return fmt.Sprintf(`( t="$(cat %s)" && [ -n "$t" ] || { echo %s >&2; exit 1; }; export CLAUDE_CODE_OAUTH_TOKEN="$t" GROVE_ACCOUNT=%s && exec %s )`,
+		shellQuote(tokenPath), shellQuote("gv: account "+name+" token unreadable — gv account ls"), shellQuote(name), cmd)
 }
 
 // ProviderKindFor returns the effective task backend for a repo: its own

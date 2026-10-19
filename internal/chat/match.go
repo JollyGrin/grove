@@ -129,3 +129,69 @@ func idOf(r Row) string {
 	}
 	return "that chat"
 }
+
+// MatchHide resolves `gv chat hide <target>` (grove-401). Match's rules,
+// with one difference: every orchestrator pane of a cockpit shares the
+// cockpit's session name, so where Match would return the FIRST pane of
+// `grove-<label>`, a bare cockpit session name that matches more than one
+// pane is an error listing the candidates — never a pick. One pane is
+// unambiguous and is taken.
+func MatchHide(rows []Row, target string) (int, error) {
+	target = strings.TrimSpace(target)
+	var panes []int
+	for i, r := range rows {
+		if target != "" && r.Kind == KindCockpit && r.Session == target {
+			panes = append(panes, i)
+		}
+	}
+	switch len(panes) {
+	case 0:
+		return Match(rows, target)
+	case 1:
+		return panes[0], nil
+	}
+	var names []string
+	for _, i := range panes {
+		r := rows[i]
+		if r.SessionID != nil && *r.SessionID != "" {
+			names = append(names, fmt.Sprintf("%s (pane %d)", *r.SessionID, r.N))
+			continue
+		}
+		names = append(names, fmt.Sprintf("pane %d (no session id yet — name its %%pane id)", r.N))
+	}
+	return -1, fmt.Errorf("%s holds %d chat panes (%s) — name one by its session id, a prefix of it, or its %%pane id", target, len(panes), strings.Join(names, ", "))
+}
+
+// HideRefusal is the row-level gate on `gv chat hide`: "" for a chat in the
+// cockpit, else why it cannot be hidden and what to do instead.
+func HideRefusal(r Row) string {
+	switch r.Kind {
+	case KindCockpit:
+		return ""
+	case KindChat:
+		return fmt.Sprintf("%s is already hidden — bring it back with `gv chat show %s`", idOf(r), idOf(r))
+	case KindArchived:
+		return fmt.Sprintf("%s has ended (kind archived) — there is no pane to hide; revive it with `gv orchestrator new --resume %s`", idOf(r), idOf(r))
+	default:
+		return fmt.Sprintf("%s cannot be hidden (kind %s)", idOf(r), r.Kind)
+	}
+}
+
+// ShowRefusal is the row-level gate on `gv chat show`: "" for a live
+// detached chat, else why it cannot be shown. The session-name belt is
+// CloseRefusal's: only a `grove-chat-*` session is a chat to move.
+func ShowRefusal(r Row) string {
+	switch r.Kind {
+	case KindChat:
+		if !strings.HasPrefix(r.Session, "grove-chat-") {
+			return fmt.Sprintf("%s is not a grove-chat-<label>-<n> session — refusing to move it", idOf(r))
+		}
+		return ""
+	case KindCockpit:
+		return fmt.Sprintf("that chat is already shown — it is a pane of the cockpit %s; `gv chat hide` moves it off-screen", r.Session)
+	case KindArchived:
+		return fmt.Sprintf("%s has ended (kind archived) — there is no pane to show; revive it with `gv orchestrator new --resume %s`", idOf(r), idOf(r))
+	default:
+		return fmt.Sprintf("%s cannot be shown (kind %s)", idOf(r), r.Kind)
+	}
+}

@@ -27,51 +27,92 @@
 - [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
 - [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
 - [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
-- [x] model-fit 06: LEARNINGS.md retirement pass (grove-438, 2026-10-07): 12 audited entries resolved by truth (1 deleted, 10 rewritten to the current fact + pointer, grove-79's lost headline restored), head §Claude Code + §tmux reshaped to fact + rule + ticket with narratives moved to `docs/archive/LEARNINGS-2026-{09,10}.md`, four generalized rules moved into tmux-discipline / shipping-gates / claude-code-facts, the four duplicated rules given one home each.
-- [x] grove-439 · model-fit 07: `gv learnings [--json] [--since 14d]` — read-only promotion report: per repo, auto-memory notes newer than the window (feedback first; memory dir resolved exactly as the #437 doctor row), LEARNINGS.md entries in the window, and `candidates` (a dated entry naming a skill whose SKILL.md cites neither its ticket, date nor headline). New `internal/learnings` (fixture-dir table tests: absent/empty/index-only/mixed/malformed-not-fatal), `report` envelope documented in docs/plugins.md + plugin-authoring digest, e2e/plugin.sh reads it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` and asserts the memory dir/LEARNINGS.md/skill are byte-identical after. Orchestrator duty 11 (learnings review: one promotion or retirement per note, target file + exact text, apply only on yes) + seed tripwire.
-- [x] **grove-455** · `gv doctor` reports non-default tmux options (A/B arm C of #169): `tmux.GlobalOptions` (one exec, `start-server ; show-options -g ; show-options -gw`, parser unit-tested on canned output) + `connections.tmuxOptionConnections` behind a `TmuxGlobalOptions` Env seam — rows exist only for non-default values, so a stock machine prints nothing; `base-index`/`pane-base-index`/`renumber-windows` are ✓ info lines, `allow-rename on` is a `!` warn with a fix. Verified live against an isolated hostile-conf server.
-- [x] grove-452 — [A/B arm B] CLI/relay paper cuts (clone of #131): rune-safe `truncateLine` + notify body caps, `.env` copy reports write failure instead of lying, per-call tmux relay buffer name (pid+nonce), slashed branch names survive `parseWorktreeList`, ledger reader returns on non-parse I/O error instead of spinning. Unit test per item; gate + e2e/dummy.sh green.
-- [x] grove-451 [A/B arm C] decouple `gv done` merge gate from statusCheckRollup: `Merged` queries `number,url,state,mergedAt` only; `PRForBranch` retries without `statusCheckRollup,comments` on error and renders CI `unknown`; `finishTask` says `merge check failed … retry, or use --force` instead of `no PR found` when gh itself fails. Tests: merged verdict under CI 403, degraded display, distinct error strings.
-- [x] model-fit 02: kickoff A/B on three rote tickets × three arms
-      (#434, 2026-10-07; orchestrator-run). Old vs current template is
-      cost-neutral; `--effort medium` cut est $ 3–35% with identical gate
-      outcomes. Table + decision in LEARNINGS.md §Field notes; frozen old
-      template kept at docs/plans/2026-10-07-model-fit-train/kickoff-old.tmpl
-      as the `prompt:` override example.
-- [x] grove-436: model-fit 04 — route by effort before model: rote test dispatches `--effort medium` on the default model (lane second), seed duty 3 "effort first, lane second" + tripwire, DESIGN §7 dated note superseding the tier cascade (cache-namespace reason), model-lanes economics line; `claude-sonnet-5` → `claude-sonnet-5-5` (2026-10-07)
-- [x] model-fit 05: workers get the auto-memory surface (grove-437,
-      2026-10-07, PR #449). Every autonomous kickoff (both sets, default +
-      pickup) carries one paragraph on the line between the three memory
-      surfaces — auto memory (shared by the repo's worktrees; read
-      `MEMORY.md` first) for corrections and confirmed approaches,
-      LEARNINGS.md for dated harness/tooling surprises, nothing the
-      repo/ticket/git already records; goldens regenerated, STATUS block
-      untouched. `gv doctor` gains `memory:<repo>` (warn): the worker
-      profile's resolved auto-memory dir (`connections.ResolveMemory` —
-      local > project > user `autoMemoryDirectory`/`autoMemoryEnabled`,
-      `CLAUDE_CODE_DISABLE_AUTO_MEMORY`), note count, newest `modified`.
-      Root CLAUDE.md + LEARNINGS.md preamble state the split. The
-      `autoMemoryDirectory → .grove/memory` relocation is written up in
-      the PR: recommendation is not to relocate (no scope both reaches a
-      fresh worktree and stays per-repo); a symlink is the settings-free
-      route if the operator wants it. Two headless rote runs wrote no
-      memory file — criterion reported unmet in the PR, not claimed.
-- [x] model-fit 08: compaction over discard (grove-440, 2026-10-07).
-      Per-repo `autocompact: auto|100000–1000000` beside `claude:` →
-      `claude --autocompact N` on grab/adopt via `config.WithAutocompact`
-      (strip-then-inject, the grove-142 shape; default unset = no flag,
-      events untouched); `config.example.yaml` recommends 150000 on
-      Claude lanes, unset on 1M third-party lanes. The SessionStart
-      receiver prints a ground-truth re-orientation on `source: compact`
-      only (ticket + acceptance-criteria section from the provider with a
-      5s fetch timeout, `git log --oneline -8` + `git status --short`,
-      PR number/URL/body via 5s-bounded `gh pr view` with a git-only
-      upstream fallback, the STATUS contract) — never from the summary,
-      never non-zero, degrades per block on an unreadable worktree; the
-      grove-289 `compaction` event is reused unchanged. One "when
-      compacting, preserve …" line in root CLAUDE.md and the AGENTS.md
-      bootstrap template. `e2e/dummy.sh` asserts the flag exactly once /
-      absent / rejected; `e2e/plugin.sh` asserts the re-orientation.
+- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
+      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
+      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
+      — an orchestrator may hide ITSELF when the operator asks it to get
+      out of the way (non-destructive, no second yes), while
+      hiding/showing/closing ANOTHER chat stays propose-then-act —
+      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
+      79b5290fc383; workspace brains are NOT refreshed by this car (they go
+      `stale` in `gv brains` once the train is released, and are merged
+      then by the usual `gv init --only orchestrator-md` three-way).
+      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
+      `host`; it gains the event-before-move limit. LEARNINGS: pane
+      identity across break/join, why not a 1-column shrink, the
+      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
+      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
+      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
+      usage strings only. Idea, not built: a tmux prefix binding for hide
+      (bindings are server-global — it would leak into non-grove
+      sessions).
+- [x] chat-hide 04: remote chats — hide closes the local attach pane,
+      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
+      A remote chat lives on its host and the cockpit pane is only `ssh -t
+      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
+      pane (nothing is sent to the host) and `gv chat show
+      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
+      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
+      The spawn stamps `@grove_remote_session` on the pane; an unstamped
+      legacy pane is refused, never guessed. Hidden remote chats are
+      remembered in ONE user option on the cockpit session
+      (`@grove_hidden_remote`) that rides the CHATS box's existing
+      `list-panes -a` as its last field — no file, poll, cache or ssh on
+      any tick; rows render `○ chat-N @host` with `—` for state and last
+      line. `x` on a remote row relays the existing `gv chat close --host`;
+      `a` flashes "attach to reply" (no `chat send --host` relay exists —
+      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
+- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
+      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
+      chat / shows a hidden one (the keyboard stays on the dashboard —
+      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
+      pane (showing it first when hidden), `a` opens a one-line inline
+      reply under the row for a HIDDEN chat (a shown one refuses via
+      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
+      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
+      `a` flashes "attach to reply"); task keys stay refused; every
+      global key is untouched. The keys call the functions behind the CLI
+      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
+      `closeChat`, `closeCockpitPane` — the first, second and last factored
+      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
+      `tea.Cmd` per press and one costly pass of the box on its answer.
+      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
+      renders `chat_hidden` / `chat_shown`; the footer offers the row's
+      chat keys under CHATS focus only; help gains a CHATS section. No new
+      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
+      keys through the live TUI.
+- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
+      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
+      one row per live chat of the workspace: `▣` on screen, `○` hidden
+      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
+      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
+      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
+      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
+      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
+      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
+      transcript read per chat and the waiting capture ride the 30s beat,
+      or the 1s beat while the box is focused (`tui.CockpitChats`,
+      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
+      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
+      and footer/help hints are the next car. The global cockpit (no
+      workspace) owns no chats and shows no box.
+- [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
+      `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
+      Hiding a LOCAL cockpit chat pane turns it into an ordinary detached
+      `grove-chat-<label>-<n>` session (`new-session` placeholder →
+      `break-pane` → kill the placeholder), showing joins it back
+      (`join-pane`); same `%pane`, same pid, stamps travel, and the cockpit
+      window is re-tiled to `@grove_layout` by its `@N` id, never the
+      active window. `tmux.HideChatPane`/`ShowChatPane` with pure guards
+      (`hidablePane`, `showableChat`), `chat.MatchHide` (a bare cockpit
+      name holding several chats is an error, never a pick). Refused, with
+      nothing touched: the dashboard, worker windows, remote panes, an
+      already hidden/shown chat, a split chat session, a cockpit that is
+      not running. New additive events `chat_hidden` / `chat_shown`
+      (docs/plugins.md); no `--json` field changed. Opt-in: no spawn path
+      touched, nothing hides by itself. New `e2e/chat_hide.sh` in
+      `e2e/all.sh`, both tmux modes. Not yet: TUI rows/keys, remote chats,
+      the orchestrator seed (later cars).
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

@@ -46,6 +46,8 @@ const (
 	modeConfirmLand // the land plan, confirm-gated (grove-378)
 	modeServeReview // grove-381: the run.sh review modal
 	modeServeStop   // grove-381: stop a running serve? (footer confirm)
+	modeChatReply   // grove-403: the inline reply to a hidden chat
+	modeChatClose   // grove-403: close this chat? (footer confirm)
 )
 
 type refreshMsg struct {
@@ -191,9 +193,12 @@ type Model struct {
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
-	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
+	costsTab   int             // SPEND | ACCOUNT | CLAUDE (grove-87); $ always lands on SPEND
 	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
 	accountSel int             // cursor into account.keys (grove-104 key manager)
+	claude     claudeMsg       // CLAUDE tab snapshot — local usage files, on tab open / r, never polled
+	claudeSel  int             // cursor into claude.rows
+	claudeUse  string          // account the u confirm is armed for ("" = not armed)
 
 	flash string
 
@@ -277,6 +282,19 @@ type Model struct {
 	// featTips is the last PR-cadence pass's branch tip per feature.
 	featTips map[string]string
 
+	// The CHATS box (grove-402). chatRows is the last pass's rows, merged
+	// over the last costly pass (mergeChats); chats the lines the box
+	// renders, chatTitle its counter and chatNameW its CHAT column — all
+	// rebuilt only in assembleChats. chatSel is the cursor.
+	chatRows  []ChatRow
+	chats     []chatLine
+	chatTitle string
+	chatNameW int
+	chatSel   int
+	// chatTarget is the chat an open reply/close modal is bound to
+	// (grove-403) — the row as it was when the key was pressed.
+	chatTarget ChatRow
+
 	// The feature lens (grove-378): lensSlug is the lensed feature ("" =
 	// no lens open — modals return to the list), lensSel the car cursor.
 	// landSlug/landPlan are the land modal's plan, built from refresh data
@@ -338,7 +356,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
 }
 
 // --- commands ---
@@ -752,6 +770,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.mode == modeChatReply {
+			m.sizeChatInput()
+		}
 		// grove-53 cause (b): a shrink or a SIGWINCH replay on tmux re-attach
 		// leaves stale cells from the old geometry. Force one full repaint per
 		// resize so we always start from a clean slate — no per-frame cost.
@@ -765,7 +786,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), tickEvery(time.Second))
+		// grove-402: the CHATS box rides this beat — the cheap pass (one
+		// list-panes), the costly one only while the box is focused.
+		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), chatsCmd(m.label, m.focus == focusChats), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -891,6 +914,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case claudeMsg:
+		return m.applyClaude(msg), nil
+
+	case claudeUsedMsg:
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+			return m, nil
+		}
+		m.flash = "✓ active account: " + msg.name + " (new launches and shell `claude`; live sessions keep theirs)"
+		return m.claudeRead()
+
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in
 		// ~/.config/grove/.env — refetch so the unset row becomes data.
@@ -918,7 +952,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// own, slower featTickMsg — it was riding this 30s cadence and
 		// burning the shared gh rate-limit budget for data that barely
 		// changes tick to tick.
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), prTickEvery(30*time.Second))
+		// grove-402: the CHATS box's costly pass (ps, transcripts, the
+		// waiting capture) still rides this beat.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), prTickEvery(30*time.Second))
 
 	case featTickMsg:
 		// grove-428: the feature panel's gh-backed pass (landed/queued/PR
@@ -962,6 +998,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.assembleFeatures() // merged cars feed the lens and the land plan
 		}
 		return m, push
+
+	case chatsMsg:
+		// Data only (grove-402): never re-arms anything.
+		m.chatRows = mergeChats(m.chatRows, msg.rows, msg.deep)
+		m.assembleChats()
+		m.holdChatTarget()
+		return m, nil
+
+	case chatActedMsg:
+		// grove-403: one key press, one answer, ONE pass of the box — the
+		// row flips now instead of on the next beat. Re-arms nothing.
+		m.flash = msg.flash
+		return m, chatsCmd(m.label, true)
 
 	case featuresMsg:
 		// Data only, like prsMsg: never re-arms anything.
@@ -1096,6 +1145,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeServeStop {
 		return m.handleServeStopKey(k)
 	}
+	if m.mode == modeChatReply {
+		return m.handleChatReplyKey(k)
+	}
+	if m.mode == modeChatClose {
+		return m.handleChatCloseKey(k)
+	}
 
 	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
 	// it intercepts everything — including the remote-row keys below and
@@ -1120,6 +1175,15 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "n", "a", "o", "p", "t", "v", "d", "m":
 			m.flash = "FEATURES focused — tab to AGENTS for task keys"
 			return m, nil
+		}
+	}
+
+	// grove-403: with CHATS focused h / enter / a / x act on the selected
+	// chat; task keys are refused rather than landing on the AGENTS cursor
+	// out of sight (grove-402). Everything else keeps its global meaning.
+	if m.focus == focusChats && len(m.chats) > 0 {
+		if nm, cmd, handled := m.handleChatsKey(k); handled {
+			return nm, cmd
 		}
 	}
 
@@ -1243,10 +1307,8 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.feats) > 0 {
 			m.flash = "s serves a feature — tab to FEATURES and pick one"
 		}
-	case "tab": // FEATURES ⇄ AGENTS (grove-377); inert with no open feature
-		if len(m.feats) > 0 {
-			m.focus = 1 - m.focus
-		}
+	case "tab": // FEATURES ⇄ AGENTS ⇄ CHATS (grove-377, grove-402); inert panels are skipped
+		m.focus = nextFocus(m.focus, len(m.feats) > 0, m.chatsVisible())
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -1332,6 +1394,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "$", "c":
 		m.mode = modeCosts
 		m.costsTab = costsTabSpend // $ always lands on SPEND (grove-87)
+		m.claudeUse = ""
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs
@@ -1733,6 +1796,10 @@ var AttachTask = func(t *state.Task) error {
 func (m *Model) move(delta int) {
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		m.featSel = (m.featSel + delta + len(m.feats)) % len(m.feats)
+		return
+	}
+	if m.focus == focusChats && len(m.chats) > 0 {
+		m.chatSel = (m.chatSel + delta + len(m.chats)) % len(m.chats)
 		return
 	}
 	rows := len(m.board)

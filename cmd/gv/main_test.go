@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/workspace"
@@ -25,7 +26,7 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 
-	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", p)
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", p, account.Resolved{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestOrchestratorLaunchProfileIsFresh(t *testing.T) {
 func TestOrchestratorLaunchProfileNilIsUnchanged(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Orchestrator.Claude = "claude --dangerously-skip-permissions"
-	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", nil)
+	got, id, err := mintedOrchestratorLaunch(orchestratorLaunch(cfg, ""), "", "", nil, account.Resolved{})
 	if err != nil {
 		t.Fatal(err)
 	}

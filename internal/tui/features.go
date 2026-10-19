@@ -305,7 +305,10 @@ func trainBar(cars []feature.Car) string {
 func (m *Model) assembleFeatures() {
 	m.feats = m.feats[:0]
 	if len(m.features) == 0 {
-		m.focus, m.featSel, m.trainW = focusAgents, 0, 0
+		if m.focus == focusFeatures {
+			m.focus = focusAgents
+		}
+		m.featSel, m.trainW = 0, 0
 		m.clampLens()
 		return
 	}
@@ -371,7 +374,8 @@ func (m Model) featureLayout() featLayout {
 	if len(m.feats) == 0 {
 		return featLayout{}
 	}
-	room := m.height - (len(m.board) + 4) - 5 - m.footerHeight() - 3 // content rows after border+title
+	// grove-402: the CHATS box takes its rows first; TRAINS budgets what is left.
+	room := m.spareRows() - m.chatLayout().height - 3 // content rows after border+title
 	if room < 1 {
 		return featLayout{}
 	}

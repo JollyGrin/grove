@@ -266,3 +266,30 @@ func TestBodyNonTrivial(t *testing.T) {
 		t.Error("empty should fail")
 	}
 }
+
+// claude-accounts: the plan names the task's account and that the
+// receiving host resolves its own — a pin is never carried, so its drop
+// must be visible (design §Out of scope).
+func TestPlanNamesAccount(t *testing.T) {
+	v := &Verified{OnOrigin: true, LocalHead: "abc", RemoteHead: "abc", PRNumber: 3, AccountOnHost: "yes"}
+	o := Options{Host: "pc"}
+	pinned := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o)
+	if !strings.Contains(pinned, "account   alt pinned here — NOT carried; pc resolves its own active account (to keep alt, on pc: gv pause grove-7 && gv adopt grove-7 --account alt)") {
+		t.Errorf("pinned plan, host has alt:\n%s", pinned)
+	}
+	v.AccountOnHost = "no"
+	if got := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o); !strings.Contains(got, "(pc has no account alt)") || strings.Contains(got, "gv adopt grove-7 --account") {
+		t.Errorf("pinned plan, host lacks alt:\n%s", got)
+	}
+	v.AccountOnHost = ""
+	if got := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o); !strings.Contains(got, "(could not read pc's accounts)") || strings.Contains(got, "gv adopt grove-7 --account") {
+		t.Errorf("pinned plan, host unknown:\n%s", got)
+	}
+	if got := Plan(&Info{Ticket: "grove-7"}, v, o); !strings.Contains(got, "account   none pinned — pc resolves its own active account") {
+		t.Errorf("unpinned plan:\n%s", got)
+	}
+	o.Release = true
+	if got := Plan(&Info{Ticket: "grove-7", Account: "alt"}, v, o); !strings.Contains(got, "the calling host resolves its own active account") || strings.Contains(got, "gv adopt") {
+		t.Errorf("release plan:\n%s", got)
+	}
+}

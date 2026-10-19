@@ -161,6 +161,19 @@ func ReadEvents(stateDir string, limit int) ([]Event, error) {
 // chat ran on. "" when no event names the id or the last one carried no
 // model (the host default, or a spawn older than the field).
 func SpawnModel(events []Event, sessionID string) string {
+	return spawnField(events, sessionID, "model")
+}
+
+// SpawnAccount is SpawnModel for the claude account (claude-accounts): the
+// account the last spawn of sessionID was explicitly pinned to, so a
+// revival re-applies it. "" when it was unpinned or no event names it.
+func SpawnAccount(events []Event, sessionID string) string {
+	return spawnField(events, sessionID, "account")
+}
+
+// spawnField reads one data key off the last orchestrator_spawned event
+// whose session_id or resume names sessionID.
+func spawnField(events []Event, sessionID, key string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -170,8 +183,27 @@ func SpawnModel(events []Event, sessionID string) string {
 			continue
 		}
 		if ev.Data["session_id"] == sessionID || ev.Data["resume"] == sessionID {
-			return ev.Data["model"]
+			return ev.Data[key]
 		}
 	}
 	return ""
 }
+
+// EvChatHidden / EvChatShown (grove-401) record a LOCAL cockpit chat pane
+// being hidden — moved off-screen into its own detached
+// `grove-chat-<label>-<n>` session, still running — and a detached chat
+// being shown: joined into its workspace's cockpit window. Data carries
+// {session, pane, workspace, session_id?}: the chat session (the one the
+// pane moves INTO on hide, OUT OF on show), the pane's immutable %id, which
+// survives both moves, and the Claude session id when the pane wears one.
+// Ticket-less and workspace-scoped like EvOrchestratorClosed, so fold
+// ignores them and state.go stays byte-comparable.
+//
+// With `host` in Data (grove-404, additive) the chat is a REMOTE one: the
+// hide closed its local ssh-attach pane and the show opened a new one.
+// `session` is then the chat's session on that host, `pane` the local
+// attach pane (a new %id after every show), and there is no session_id.
+const (
+	EvChatHidden = "chat_hidden"
+	EvChatShown  = "chat_shown"
+)

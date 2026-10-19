@@ -185,7 +185,7 @@ func TestFooterHeightAlwaysOne(t *testing.T) {
 	}
 	m.width = 220
 	out := m.viewFooter()
-	for _, want := range []string{"2 chat(s) KEEP RUNNING", "grove-chat-unbrewed-1", "gv park --chats"} {
+	for _, want := range []string{"2 chat(s) KEEP RUNNING", "hidden too", "grove-chat-unbrewed-1", "gv park --chats"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("park modal must name the surviving chats (%q):\n%s", want, out)
 		}

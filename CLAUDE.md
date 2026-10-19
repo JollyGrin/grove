@@ -28,7 +28,9 @@ a first-run wizard, and a layered learnings system. OSS-ready successor to
   and confirmed approaches, one lesson per file. [LEARNINGS.md](LEARNINGS.md)
   (git, every machine) holds dated, verified surprises about the harness
   and tooling. `.claude/skills/` holds the rules that generalized. A note
-  moves up when it proves out; nothing lives in two places.
+  moves up when it proves out; nothing lives in two places. A train's
+  memory file is deleted when its PR merges — TASKS.md and git hold the
+  rest, and only the index line costs every chat.
 - Read only as the task needs: [DESIGN.md](DESIGN.md) (founding what/why),
   `docs/*-design.md` (deep designs), [docs/roadmap.md](docs/roadmap.md)
   (open phases), [docs/seed-manifest.md](docs/seed-manifest.md) (when
@@ -48,6 +50,12 @@ workspace's cockpit and its workers share one tmux session
 `grove-<label>` (window 0 = cockpit, 1+ = workers). `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.
+Subscription accounts live in `<state>/accounts/` (`<name>.token` 0600 +
+`active`); they are injected as `CLAUDE_CODE_OAUTH_TOKEN` at launch and
+never apply under a non-default `claude_config_dir` (that profile keeps
+its own login). A token-pinned session has no claude.ai connectors and no
+Remote Control — keep connector-needing chats on `login` — and `/login`
+inside one switches that session, so never run it there.
 
 ## Feature trains
 
@@ -65,6 +73,30 @@ exception to "never close any issue" (`orchestrator/CLAUDE.md`). `gv
 serve <slug>` runs the train's tip from `.grove/run.sh`, committed with
 the workspace — trust is a recorded sha256 (`run_script_trusted`); a
 changed script always re-prompts, never runs silently.
+
+## Hidden chats
+
+Opt-in, default unchanged: a chat opens as a side-by-side cockpit pane
+(`O`, `)`, digits, `gv orchestrator new`) and stays one until the
+operator hides it — nothing auto-hides, and hide/show touch no spawn
+path. Hiding a LOCAL chat moves its pane (`break-pane`) into an ordinary
+detached `grove-chat-<label>-<n>` session: the process keeps running,
+the `%pane` id and the pane's stamps are unchanged, and `gv chat
+ls|send|close`, the phone and `gv park --chats` see it as any other
+detached chat. Showing joins it back into the workspace's cockpit window
+(`join-pane`). Three routes: `!gv chat hide` inside the chat (no
+argument = `$TMUX_PANE`); the cockpit's CHATS box — between AGENTS and
+ACTIVITY, absent with zero chats, reached with `tab` — where `h`
+hides/shows (the keyboard stays on the dashboard), `enter` focuses
+(showing first), `a` replies inline to a hidden local chat and `x`
+closes after y/N; and `gv chat hide [<session-id>|<%pane>]` / `gv chat
+show <session>` from anywhere. A REMOTE chat's pane is only an ssh
+attachment, so hide closes that LOCAL pane and show (`gv chat show
+@<host>/<session>`) re-attaches — nothing is sent to the host; the
+hidden chat is remembered in the cockpit session's
+`@grove_hidden_remote` option, which dies with the session on park.
+Both log `chat_hidden` / `chat_shown` (docs/plugins.md, where the known
+limits are written down too).
 
 ## Build / test
 

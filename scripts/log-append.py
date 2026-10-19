@@ -68,7 +68,8 @@ def row_date(text):
     m = (re.search(r'grove-\d+,\s*(20\d\d-\d\d-\d\d)', text)
          or re.search(r'\((?:[^()]*?,\s*)?(20\d\d-\d\d-\d\d)\)', text)
          or DATE.search(text))
-    return m.group(1) if m else None
+    # DATE (the last fallback) has no capture group: take the whole match.
+    return (m.group(1) if m.re.groups else m.group(0)) if m else None
 
 
 def entry_date(text):

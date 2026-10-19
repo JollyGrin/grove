@@ -20,6 +20,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
 )
@@ -116,6 +117,13 @@ type Env struct {
 	// rows (fake envs, and the real one when tmux is not installed —
 	// the binary row already covers that).
 	TmuxGlobalOptions func(names ...string) map[string]string
+
+	// AccountsStateDir is the grove state dir holding accounts/ (the
+	// claude-accounts rows); "" drops those rows (fake envs).
+	AccountsStateDir string
+	// AccountTasks folds every task an account pin could live in (the
+	// pinned-missing row); nil drops that row.
+	AccountTasks func() []*state.Task
 }
 
 // NewEnv builds the real-machine Env.
@@ -143,6 +151,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
 		TmuxGlobalOptions: tmux.GlobalOptions,
+		AccountsStateDir:  config.StateDir(),
 	}
 }
 

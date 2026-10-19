@@ -19,7 +19,7 @@ repo wins.
 
 | Command | Key | What |
 |---|---|---|
-| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373); a worker pinned with `--effort` or a repo `effort:` carries `effort` (`low`\|`medium`\|`high`\|`xhigh`\|`max`), absent otherwise (grove-435) |
+| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373); a worker pinned with `--effort` or a repo `effort:` carries `effort` (`low`\|`medium`\|`high`\|`xhigh`\|`max`), absent otherwise (grove-435); a worker pinned with `--account <name>` carries `account` (a name, never a token), absent when unpinned — never read absent as `login` (grove-470) |
 | `gv audit --json` | `report` | task-vs-reality classification |
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
@@ -74,8 +74,17 @@ task's `compactions` count (`gv ls`/`gv cost --json`, omitted when 0). In
 docs/plugins.md for the full per-type data table. `task_created`/`task_adopted` data carries
 `feature` + `base` only for a feature-train car, and `effort` only when
 the worker launched with an `--effort` pin or a repo `effort:` default
-(grove-435). Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`, `feature_created`
+(grove-435), and `account` only when pinned by `--account` (an adopt
+writes `""` when `--account login` strips the pin; grove-470). Workspace-scoped (empty ticket):
+`workspace_parked`, `orchestrator_closed`, `orchestrator_spawned` (a
+detached chat; its data carries `account` only when pinned by
+`orchestrator new --account`, grove-471), `chat_hidden` / `chat_shown`
+(`{session, pane, workspace, session_id?}` — a local cockpit chat pane
+moved into a detached `grove-chat-*` session and back; same process, same
+`session_id`, only `gv chat ls`'s `session`/`kind`/`writable` change;
+with `host` present it was a REMOTE chat's local ssh-attach pane closed /
+re-opened — `session` is then the chat's session on that host),
+`feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,
 window, url}`), `feature_serve_stopped` (`{slug}`), `run_script_trusted`

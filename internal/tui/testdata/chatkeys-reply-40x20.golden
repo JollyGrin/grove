@@ -1,0 +1,19 @@
+ ⁂ GROVE · golden 1 working · 1 mail · 1
+╭──────────────────────────────────────╮
+│ AGENTS                               │
+│    TICKET     REPO       STATUS      │
+│ ▸● grove-18   grove      working     │
+│  ◆ grove-19   grove      QUESTION    │
+╰──────────────────────────────────────╯
+╭──────────────────────────────────────╮
+│ CHATS 3 · 2 hidden · 1 waiting       │
+│    CHAT      MODEL    STATE          │
+│ ▸◆ chat-2    sonnet   WAITING        │
+│     ❯ two issues                     │
+│   +2 more                            │
+╰──────────────────────────────────────╯
+╭──────────────────────────────────────╮
+│ ACTIVITY                             │
+│  0m      ●  grove-18    grabbed — wo │
+╰──────────────────────────────────────╯
+ reply → chat-2  enter send · esc cancel
