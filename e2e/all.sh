@@ -12,6 +12,25 @@ cd "$(dirname "$0")"
 LOGS="$(mktemp -d /tmp/grove-e2e-all.XXXXXX)"
 fail=0
 
+# grove-507: no suite may spend the operator's real GitHub quota (a cockpit
+# polls `gh` every beat, and 5 cockpits once exhausted the 5000/hr GraphQL
+# limit). A guard `gh` goes first on PATH for every suite: it records the
+# call and fails it, so a suite that reaches for the real gh both can't
+# spend quota and turns this run red. Suites that stub their own gh prepend
+# it ahead of the guard, so the guard only ever sees an unstubbed call.
+GUARD_BIN="$LOGS/guard-bin"
+GUARD_HITS="$LOGS/gh-guard-hits.log"
+mkdir -p "$GUARD_BIN"
+: > "$GUARD_HITS"
+cat > "$GUARD_BIN/gh" <<GUARD
+#!/usr/bin/env bash
+echo "gh \$*" >> "$GUARD_HITS"
+echo "gh blocked by e2e/all.sh (grove-507): stub gh in the suite" >&2
+exit 1
+GUARD
+chmod +x "$GUARD_BIN/gh"
+export PATH="$GUARD_BIN:$PATH"
+
 run_suite() { # <script> <mode: default|hostile>
   local s="$1" mode="$2" tag='' log="$1.log"
   if [ "$mode" = hostile ]; then
@@ -44,6 +63,12 @@ done
 for s in workspace.sh cockpit.sh chat.sh chat_hide.sh; do
   run_suite "$s" hostile
 done
+
+if [ -s "$GUARD_HITS" ]; then
+  printf '\n\033[31mFAIL\033[0m — a suite called the real gh (would spend live quota):\n'
+  sort "$GUARD_HITS" | uniq -c | head -20
+  fail=1
+fi
 
 if [ "$fail" -eq 0 ]; then
   rm -rf "$LOGS"

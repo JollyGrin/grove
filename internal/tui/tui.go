@@ -107,6 +107,12 @@ type remoteMsg struct {
 type prsMsg struct {
 	prs     map[string]*github.PR
 	unknown map[string]bool
+	// grove-507: skipped means the beat was skipped for a nearly-empty
+	// GraphQL quota — no data, the handler keeps the last PRs and marks
+	// them stale. interval/low carry the quota plan back to the model.
+	skipped  bool
+	interval time.Duration
+	low      bool
 }
 type paneTailMsg string
 
@@ -169,7 +175,13 @@ type Model struct {
 	// column instead of the "no PR" dash, since m.prs holding no entry for
 	// it is otherwise ambiguous between the two.
 	prUnknown map[string]bool
-	events    []state.Event
+	// grove-507: the quota plan from the last poll — the next beat's
+	// interval (0 = the 30s default), whether to say "gh quota low", and
+	// whether the shown PRs are stale because the last beat was skipped.
+	prInterval time.Duration
+	prQuotaLow bool
+	prStale    bool
+	events     []state.Event
 
 	mem     resource.Mem // last memory reading (gauge)
 	workers int          // live worker count at that reading
@@ -366,6 +378,15 @@ func (m Model) Init() tea.Cmd {
 // old per-refreshMsg re-arm that let the loops multiply (grove-24).
 func tickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// prBeat is the interval the PR beat re-arms with: the quota plan from the
+// last poll, the 30s default before any poll has reported one.
+func (m Model) prBeat() time.Duration {
+	if m.prInterval > 0 {
+		return m.prInterval
+	}
+	return github.BeatNormal
 }
 
 // prTickEvery arms the single PR-poll beat. It carries no data — the handler
@@ -712,10 +733,26 @@ func remoteFlash(results []fleet.Result) string {
 	return fmt.Sprintf("remote fleet: %d row(s) from %d host(s)", rows, hosts)
 }
 
+// prsCmd is the beat's poll: it reads the GraphQL quota (cached), skips
+// outright when nearly empty, and otherwise goes through the shared PR
+// cache (grove-507). prsNowCmd is the operator's explicit refresh: it
+// bypasses the cache TTL and the quota skip.
 func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
+	return prsPoll(cfg, stateDir, tasks, false)
+}
+
+func prsNowCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
+	return prsPoll(cfg, stateDir, tasks, true)
+}
+
+func prsPoll(cfg *config.Config, stateDir string, tasks []*state.Task, force bool) tea.Cmd {
 	return func() tea.Msg {
 		if cfg == nil {
 			return prsMsg{}
+		}
+		interval, skip, low := github.BeatPlan(github.ReadQuota())
+		if skip && !force {
+			return prsMsg{skipped: true, interval: interval, low: low}
 		}
 		if tasks == nil {
 			// Read-only fallback (grove-126): the derived tasks.json is at
@@ -729,12 +766,12 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 				lookups[t.Ticket] = [2]string{r.Path, t.Branch}
 			}
 		}
-		prs, unknownErrs := github.FetchAll(lookups)
+		prs, unknownErrs := github.CachedFetchAll(stateDir, lookups, github.PRCacheTTL, force, github.FetchAll)
 		unknown := make(map[string]bool, len(unknownErrs))
 		for k := range unknownErrs {
 			unknown[k] = true
 		}
-		return prsMsg{prs: prs, unknown: unknown}
+		return prsMsg{prs: prs, unknown: unknown, interval: interval, low: low}
 	}
 }
 
@@ -953,7 +990,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// changes tick to tick.
 		// grove-402: the CHATS box's costly pass (ps, transcripts, the
 		// waiting capture) still rides this beat.
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), prTickEvery(30*time.Second))
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), prTickEvery(m.prBeat()))
 
 	case featTickMsg:
 		// grove-428: the feature panel's gh-backed pass (landed/queued/PR
@@ -971,6 +1008,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// fresh PR set against the last refresh's fold, PRKnown from the
 		// unknown map so a gh outage emits nothing. No pane read here (a
 		// zero LiveInfo is out of liveness scope by construction).
+		if msg.interval > 0 {
+			m.prInterval, m.prQuotaLow = msg.interval, msg.low
+		}
+		if msg.skipped {
+			// Quota nearly spent (grove-507): no data this beat. Keep the
+			// last PRs on screen, marked stale; never blank or error.
+			m.prStale = true
+			return m, nil
+		}
+		m.prStale = false
 		push := m.superviseObserve(m.localTasks, nil, msg.prs, msg.unknown, time.Now())
 		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
 		// short shimmer + footer flash. Detected by diffing old vs new — no new
@@ -1386,7 +1433,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Local tasks only: PRs polled off a merged board would land a
 		// tombstone's handoff PR in m.prs and inflate the review count.
 		m.flash = "refreshing PRs…"
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
+		return m, tea.Batch(prsNowCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
 	case "?": // the cheat-sheet overlay (grove-60) — esc/? closes
 		m.mode = modeHelp
 		m.flash = ""
