@@ -63,6 +63,17 @@ dated log behind it. Four that no skill carries:
   ovs from parkranger and have survived two tools — treat them as the
   most-proven code in the tree.
 
+## Train in flight: focus-mode
+
+Feature train `focus-mode` (branch `feature/focus-mode`; mockup
+https://claude.ai/artifact/DZm15hBGJFgV1tEhKAZFy1). Cars: #485 two layouts
+(`horizontal` | `focus`, `L`) · #486 the chat rail pane · #487 focus
+minimizes (enter/leave/spawn) · #488 `gv chat focus <s>` · #489 rail click
+· #490 TRAINS box · #491 docs. Deferred, not built: NEEDS YOU, the brief
+popup, since-you-looked, status-bar diet, the prefix key table (#421),
+remote chats in focus (a remote chat is never minimized or swapped in), the
+AGENTS fold.
+
 ## The end state you are building toward
 
 `gv init` on a stranger's repo → wizard → working fleet with local
