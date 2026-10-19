@@ -50,7 +50,10 @@ workspace's cockpit and its workers share one tmux session
 `grove-<label>` (window 0 = cockpit, 1+ = workers). The cockpit has two
 layouts, `horizontal` (every pane side by side) and `focus`; `L` toggles
 them (`cockpit.layout`; the old `vertical`/`tiled` values read as
-horizontal). In `focus` one chat is shown beside the dash and the rest are
+horizontal). In `focus` one chat is shown beside the dash (the dash's
+width is `cockpit.focus_dash_width`, a fraction, default 0.3; unset, 0,
+non-numeric, a percent like `30`, or outside 0.15–0.85 read as 0.3;
+takes effect when the cockpit session is next built) and the rest are
 minimized (hidden, as in §Hidden chats) behind a 4-row rail pane under it
 — one chip per chat, the shown one bold, titled by Claude's pane title; a
 chat's name (`cockpit·1`, `chat-3`) is stamped on its pane

@@ -197,3 +197,33 @@ func TestRailPaneClassifiers(t *testing.T) {
 		t.Errorf("@grove_rail = %q, want 1", bf)
 	}
 }
+
+// grove-522: the session's @grove_focus_dash_width (seeded from
+// cockpit.focus_dash_width) reaches main-pane-width on retile; an
+// out-of-range stamp falls back to cockpitFocusMainWidth.
+func TestRetileFocusHonorsDashWidth(t *testing.T) {
+	scratchServer(t)
+	dir := t.TempDir()
+	const s = "grove-w"
+	if _, err := run("new-session", "-d", "-s", s, "-n", "cockpit", "-x", "200", "-y", "50", "-c", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("split-window", "-t", ExactActive(s), "-c", dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ stamp, want int }{{50, 50}, {99, cockpitFocusMainWidth}, {20, 20}} {
+		if err := SetFocusDashWidth(s, tc.stamp); err != nil {
+			t.Fatal(err)
+		}
+		if err := RetileFocus(s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := run("show-options", "-t", cockpitWindowTarget(s), "-wv", "main-pane-width")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.TrimSpace(out), fmt.Sprintf("%d%%", tc.want); got != want {
+			t.Errorf("stamp %d: main-pane-width = %q, want %q", tc.stamp, got, want)
+		}
+	}
+}
