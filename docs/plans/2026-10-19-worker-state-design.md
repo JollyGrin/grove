@@ -86,9 +86,11 @@ here), so grove never calls it on a beat.
 // Resolve folds everything known about one worker into the one state
 // shown everywhere. Pure: no I/O, no clock reads, no allocation beyond
 // the returned value.
-func Resolve(t *Task, o Observation, now time.Time) Resolved
+func Resolve(t *Task, s Signals, now time.Time) Resolved
 
-type Observation struct {
+// Signals, not Observation: supervise.Observation already exists and
+// will carry one of these.
+type Signals struct {
     WindowExists bool
     PaneCommand  string        // from the existing tmux snapshot
     Claude       *ClaudeStatus // nil = no session file for this pane
@@ -133,7 +135,7 @@ have no observation, so nothing that reads the label breaks.
 **The resolver does not append events.** `events.jsonl` stays a history
 of what hooks and verbs reported. The resolved state is a view, computed
 per beat and discarded — no new persisted state, no `tasks.json` churn.
-The supervise engine feeds the same `Observation` into its existing
+The supervise engine feeds the same `Signals` into its existing
 liveness rules, so the row, the push and `gv watch` finally agree.
 
 ### 2. The session-file read replaces the per-worker capture
