@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -244,12 +245,15 @@ type Runner func(args ...string) (string, error)
 // (plus a slow heartbeat), so identical ticks cost nothing.
 type Writer struct {
 	Run   Runner
+	mu    sync.Mutex // Write is called from overlapping refresh and focus commands
 	last  string
 	lastT time.Time
 }
 
 // Write stores rows for the session; reports whether it touched tmux.
 func (w *Writer) Write(session string, rows []chat.Row, shown int, now time.Time) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	body := Encode(rows, shown, time.Time{})
 	// Compare without the timestamp: change detection ignores the clock.
 	if body == w.last && now.Sub(w.lastT) < Heartbeat {
