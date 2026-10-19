@@ -7,7 +7,10 @@ the slot — grove-525): IMPLEMENTED on `feature/focus-swap` —
 window's `window-resized` hook (`gv chat sync-sizes`), and at `HideChatPane`
 in focus; unpinned on leaving focus. Follows the focus-mode train
 (#502), #510 (stable chat names), #521/PR #523 (scoped lookup + rail
-redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`).
+redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`). Car 05 (grove-528): the CHATS box sorts by
+stable name with the rail's rule — one shared `tui.ChatLess` — so a swap,
+hide or show never moves a row; the cursor follows its chat across a
+refresh.
 
 ## Problem
 
