@@ -1,6 +1,11 @@
 # Focus layout: same-size swap — design
 
-Status: DRAFT (2026-10-19, orchestrator). Follows the focus-mode train
+Status: DRAFT (2026-10-19, orchestrator). Car 01 (§1, hidden windows track
+the slot — grove-525): IMPLEMENTED on `feature/focus-swap` —
+`internal/tmux/slot.go` (`SyncHiddenSizes`/`ResetHiddenSizes`, pure
+`PlanHiddenSizes`), synced at the end of `RetileFocus`, by the cockpit
+window's `window-resized` hook (`gv chat sync-sizes`), and at `HideChatPane`
+in focus; unpinned on leaving focus. Follows the focus-mode train
 (#502), #510 (stable chat names), #521/PR #523 (scoped lookup + rail
 redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`).
 

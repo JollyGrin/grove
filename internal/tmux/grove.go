@@ -1562,6 +1562,14 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 		// local chat. A remote pane is hidden by closing it (HideRemotePane).
 		return "", fmt.Errorf("pane %d is an ssh attachment to %s, not a local chat — it is hidden by closing the attachment, not by moving it", facts.Index, facts.Remote)
 	}
+	// grove-525: in focus the pane being hidden is (normally) the one in the
+	// slot, so its size now is the slot's — the new hidden window is pinned
+	// to it right after break-pane, and the re-tile's sync corrects it if a
+	// chat is still on screen to measure.
+	slot, pin := Slot{}, CockpitLayout(facts.Session) == "focus"
+	if pin {
+		slot, pin = paneSlot(pane)
+	}
 	session := NextChatSession(label, SessionNames())
 	placeholder, err := run("new-session", "-d", "-s", session, "-n", hidePlaceholder, "-P", "-F", "#{window_id}")
 	if err != nil {
@@ -1590,8 +1598,14 @@ func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(sess
 	if err != nil {
 		return session, err
 	}
-	if err := DisableAutoRename(strings.TrimSpace(window)); err != nil {
+	window = strings.TrimSpace(window)
+	if err := DisableAutoRename(window); err != nil {
 		return session, err
+	}
+	if pin {
+		if err := runPlan(pinWindowSize(window, 0, 0, slot)); err != nil {
+			return session, err
+		}
 	}
 	return session, retileCockpit(facts.Session, facts.WindowID)
 }

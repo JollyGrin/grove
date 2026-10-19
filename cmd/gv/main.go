@@ -344,6 +344,10 @@ func hookCandidates() []hooks.Candidate {
 }
 
 func main() {
+	// grove-525: every focus re-tile, in any gv process, sizes the
+	// workspace's hidden chats to the slot — the registry lookup it needs
+	// lives here.
+	tmux.FocusWorkspace = focusWorkspace
 	// `gv account` runs before the ambient workspace resolves: the shell
 	// function asks `token-path` from any cwd, so it must be read-only
 	// (resolveAmbient creates .grove/state) and a broken workspace label
