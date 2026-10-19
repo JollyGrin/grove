@@ -7,6 +7,11 @@
 # hidden by hand stays hidden. A spawn in focus minimizes the shown chat.
 # grove-510: every chat keeps its cockpit·N name through the moves, the rail
 # has a chip per chat, and after a burst of focus moves it matches `gv chat ls`.
+# grove-525: in focus every hidden chat window has exactly the slot's size —
+# after entering focus, a cockpit resize, a dash-width change + `L` round
+# trip, a spawn and a hand `gv chat hide`; leaving focus unpins every one.
+# GROVE_E2E_TMUX_CONF=hostile adds base-index 1 / pane-base-index 1 and a
+# user-level aggressive-resize + global window-size.
 #
 # tmux: isolated — unsets TMUX/TMUX_PANE, scratch TMUX_TMPDIR, scoped
 # kill-server, real-server canary before/after (tmux-discipline).
@@ -56,6 +61,8 @@ set -g pane-base-index 1
 set -g renumber-windows on
 set -g allow-rename on
 set -g exit-empty off
+set -gw aggressive-resize on
+set -g window-size smallest # grove-e2e: user-conf fixture (an operator's own global value)
 CONF
   tmux -f "$SCRATCH/hostile.conf" start-server
 else
@@ -86,6 +93,19 @@ waitfor() { # <tries> <cmd...>
 hid_opt() { tmux show-options -t '=grove-alpha:' -v @grove_focus_hid 2>/dev/null || true; }
 chat_sessions() { tmux list-sessions -F '#{session_name}' | grep '^grove-chat-alpha-' | sort || true; }
 EVENTS="$WS/.grove/state/events.jsonl"
+# grove-525: the slot is the shown chat's pane — not the dash (first), not
+# the rail (its @grove_rail adds a field); a hidden chat window must match it.
+slot_dims() { tmux list-panes -t "$W" -F '#{pane_id} #{@grove_rail} #{pane_width}x#{pane_height}' | sed 1d | awk 'NF == 2 {print $2}'; }
+hidden_dims() { tmux list-windows -a -F '#{session_name} #{window_width}x#{window_height}' | awk '$1 ~ /^grove-chat-alpha-/ {print $2}' | sort -u; }
+hidden_at_slot() { # every hidden chat window == the one slot
+  local sl; sl="$(slot_dims)"
+  [ -n "$sl" ] && [ "$(echo "$sl" | wc -l | tr -d ' ')" = 1 ] && [ -n "$(hidden_dims)" ] && [ "$(hidden_dims)" = "$sl" ]
+}
+size_report() { echo "slot=[$(slot_dims | tr '\n' ' ')] hidden=[$(tmux list-windows -a -F '#{session_name} #{window_width}x#{window_height}' | grep '^grove-chat-alpha-' | tr '\n' ' ')]"; }
+pinned() { # window-level window-size of any hidden chat window
+  tmux list-windows -a -F '#{session_name} #{window_id}' | awk '$1 ~ /^grove-chat-alpha-/ {print $2}' | while read -r w; do
+    tmux show-options -w -t "$w" window-size; done
+}
 # `orchestrator new` attaches when it runs outside tmux; run-shell gives it
 # the server's $TMUX like a real chat spawn from inside the cockpit.
 spawn() {
@@ -133,6 +153,20 @@ for _ in $(seq 1 30); do
 done
 [ "$RAILN" = 3 ] || fail "rail must list every chat — 1, 2 (shown) and 3 (3 rows), got $RAILN"
 
+say "grove-525: entering focus sizes the minimized chats to the slot"
+waitfor 20 hidden_at_slot || fail "enter focus: hidden chats not at the slot: $(size_report)"
+[ -n "$(pinned)" ] || fail "enter focus: hidden windows not pinned per window"
+tmux show-options -g window-size | grep -q manual && fail "window-size went global"
+SLOT_ENTER="$(slot_dims)"
+
+say "grove-525: a resize of the cockpit window re-sizes them (window-resized hook)"
+tmux resize-window -t "$W" -x 180 -y 44
+waitfor 30 sh -c "[ \"\$(tmux list-panes -t '$W' -F '#{pane_id} #{@grove_rail} #{pane_width}x#{pane_height}' | sed 1d | awk 'NF == 2 {print \$2}')\" != '$SLOT_ENTER' ]" || fail "resize: the slot did not change: $(size_report)"
+waitfor 30 hidden_at_slot || fail "resize: hidden chats did not follow the slot: $(size_report)"
+tmux resize-window -t "$W" -x 200 -y 50
+waitfor 30 hidden_at_slot || fail "resize back: hidden chats did not follow the slot: $(size_report)"
+[ "$(slot_dims)" = "$SLOT_ENTER" ] || fail "resize back: slot $(slot_dims), want $SLOT_ENTER"
+
 say "grove-510: minimized chats keep their cockpit name; the rail names them so"
 for p in "$C1" "$C2" "$C3"; do
   NAME="$(tmux display-message -p -t "$p" '#{@grove_chat_name}')"
@@ -169,16 +203,27 @@ grep -q '"type":"chat_shown".*"reason":"focus"\|"reason":"focus".*"type":"chat_s
 say "a chat hidden by hand stays hidden through a focus round trip"
 ( cd "$WS" && "$GV" chat hide "$C1" >/dev/null ) || fail "hand hide"
 HAND="$(tmux display-message -p -t "$C1" '#{session_name}')"
+[ -z "$(pinned)" ] || fail "a chat hidden in horizontal must not be pinned: $(pinned)"
 tmux select-pane -t "$C2"
+# grove-525: a dash-width change (what cockpit.focus_dash_width seeds) lands
+# on the next re-tile — this `L` round trip — and the hidden chats follow.
+tmux set-option -t '=grove-alpha:' @grove_focus_dash_width 40
 sleep 1   # let the previous toggle finish its tail re-tile
 tmux send-keys -t "$DASH" L
 waitfor 40 npanes_is 3 || fail "focus 2: want 3 panes, got $(npanes)"
 waitfor 40 hid_count_is 1 || fail "focus 2: want one minimized chat, got '$(hid_opt)'"
 echo "$(hid_opt)" | grep -qw "$HAND" && fail "the hand-hidden chat must not be in @grove_focus_hid"
+waitfor 20 hidden_at_slot || fail "L round trip + dash width: hidden (minimized AND hand-hidden) not at the slot: $(size_report)"
+[ "$(slot_dims)" != "$SLOT_ENTER" ] || fail "dash width 40: the slot did not change ($SLOT_ENTER)"
+tmux set-option -t '=grove-alpha:' -u @grove_focus_dash_width
 sleep 1   # let the previous toggle finish its tail re-tile
 tmux send-keys -t "$DASH" L
 waitfor 40 npanes_is 3 || { fail "horizontal 2: want dash + 2 chats, got $(npanes)"; }
 [ "$(tmux display-message -p -t "$C1" '#{session_name}')" = "$HAND" ] || fail "hand-hidden chat was restored"
+no_rail() { ! tmux list-panes -t "$W" -F '#{@grove_rail}' | grep -q .; }
+waitfor 40 no_rail || fail "horizontal 2: the rail is still up"
+waitfor 40 hid_count_is 0 || fail "horizontal 2: @grove_focus_hid not cleared: '$(hid_opt)'"
+[ -z "$(pinned)" ] || fail "leave focus: hidden windows still carry a window-level window-size: $(pinned)"
 
 say "spawn in focus minimizes the shown chat"
 sleep 1   # let the previous toggle finish its tail re-tile
@@ -202,6 +247,7 @@ for _ in $(seq 1 30); do
 done
 [ "$RAILN" = 4 ] || fail "rail must hold four chips (hand-hidden + two minimized + the new shown chat), got $RAILN"
 [ "$(tmux display-message -p -t "$C1" '#{@grove_chat_name}')" = "$C1NAME" ] || fail "chat 1 lost its name $C1NAME"
+waitfor 20 hidden_at_slot || fail "spawn in focus: hidden chats not at the slot: $(size_report)"
 
 say "gv chat focus: swap the shown chat (grove-488)"
 SHOWN_NOW="$(panes | sed -n 2p)"
@@ -299,6 +345,20 @@ grep -q 'already the shown chat' "$SCRATCH/focus.out" || fail "no-op message mis
 if ( cd "$WS" && "$GV" chat focus @somehost/grove-chat-alpha-9 ) > "$SCRATCH/focus.out" 2>&1; then fail "remote target must be refused"; fi
 grep -q 'gv chat show' "$SCRATCH/focus.out" || fail "remote refusal must name gv chat show: $(cat "$SCRATCH/focus.out")"
 npanes_is 3 || fail "refusals moved panes"
+
+say "grove-525: a hand gv chat hide in focus is born at the slot's size"
+SLOT_NOW="$(slot_dims)"
+[ -n "$SLOT_NOW" ] || fail "hand hide in focus: no slot to start from"
+( cd "$WS" && "$GV" chat hide "$T1PANE" >/dev/null ) || fail "hand hide in focus"
+waitfor 40 npanes_is 2 || fail "hand hide in focus: want dash + rail, got $(npanes)"
+T1HOME="$(tmux display-message -p -t "$T1PANE" '#{session_name}')"
+[ "$(tmux display-message -p -t "$T1PANE" '#{window_width}x#{window_height}')" = "$SLOT_NOW" ] \
+  || fail "hand hide in focus: $T1HOME is $(tmux display-message -p -t "$T1PANE" '#{window_width}x#{window_height}'), want the slot $SLOT_NOW"
+[ "$(hidden_dims)" = "$SLOT_NOW" ] || fail "hand hide in focus: every hidden chat must stay at $SLOT_NOW: $(size_report)"
+( cd "$WS" && "$GV" chat focus "$T1HOME" ) > "$SCRATCH/focus.out" 2>&1 || { cat "$SCRATCH/focus.out"; fail "focus back $T1HOME"; }
+waitfor 40 npanes_is 3 || fail "focus back: want dash + chat + rail, got $(npanes)"
+panes | grep -qx "$T1PANE" || fail "focus back: $T1PANE not on screen"
+waitfor 20 hidden_at_slot || fail "focus back: hidden chats not at the slot: $(size_report)"
 
 say "gv chat focus in horizontal is gv chat show"
 sleep 1   # let the previous toggle finish its tail re-tile

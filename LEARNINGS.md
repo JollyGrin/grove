@@ -60,6 +60,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- 2026-10-19 (grove-525, tmux 3.6a): **`resize-window -x/-y` silently sets that window's `window-size` to `manual`** — `show-options -w` reads `window-size manual` afterwards with no `set-option` of ours. So an e2e `tmux resize-window -t <cockpit>` pins the cockpit window too, and "unpin on leave" must be an explicit `set-option -wu -t <@win> window-size` (it falls back to the global/user value). Also verified: a `set-hook` body is parsed when it fires, so `cmd1 ; cmd2` in one hook string runs both, in order (the rail's `resize-pane` then `run-shell -b`); `run-shell` format-expands its argument, so a `#` in a path must be doubled. A user conf with `set -g window-size smallest` + `aggressive-resize on` does NOT crash new windows — only global `manual` does.
 - 2026-10-19 (focus swap spike, tmux 3.6a): **`set -g window-size manual` crashes the tmux server on the next new window** — `new-session` (with or without `-x/-y`) or `new-window` after it prints `server exited unexpectedly` and every session on that server is gone (reproduced 2× on an isolated `-L` server, no client attached). Per-window `set -w -t <win> window-size manual` + `resize-window -x -y` is safe. Rule: never set `window-size` globally — on the operator's real server that line is a kill-server. Same spike: a `swap-pane` between two panes of IDENTICAL size sends no SIGWINCH, so Claude Code does not repaint (swapped-in screen byte-identical, ~5ms), while today's break-pane/join-pane into a differently-sized slot costs one full Claude repaint (~270ms on a short transcript). Design: docs/plans/2026-10-19-focus-same-size-swap-design.md.
 - 2026-10-19 (grove-487, tmux 3.6a): `#{pane_last}` is 1 for the window's previously active pane — the only pane recency tmux has (no per-pane activity time), and the right "which chat was I in" answer when `L` is typed in the dash (the dash is always the active pane then). `run()` trims its output, so a list-panes format whose LAST field is an empty `@option` loses its trailing tabs on the final line and a field-count check rejects that pane — end such a format with a literal `\t.`. Two quick `L` presses run two off-loop layout commands concurrently: an e2e that polls pane count and presses `L` again can race the first command's option write (`@grove_focus_hid`) — wait for the option, not the panes.
 - **2026-10-07 · `tmux show-options` takes ONE option name and never
@@ -69,13 +70,6 @@
   `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
   WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
   table — one table alone misses half. Rule: tmux-discipline §3.
-
-- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
-  tmux reports it as "File name too long"** (grove-401): an isolated
-  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
-  starts, and every call fails before connecting. Scratch tmux roots go
-  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
-  suite and `scratchServer` already do — the reason is now written down.
 
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Rule: prose goes via `load-buffer` +
@@ -121,12 +115,6 @@
   grep the launch line (`grep -o 'echo [^$]*\$(cat'`) and not the whole
   scrollback — the first cut of `e2e/dummy.sh`'s effort leg failed on a
   correct launch for exactly this reason.
-- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
-  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
-  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
-  reproduced here): until someone finds out what the two runs share, run
-  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
-  not a red suite — do not "fix" sub.sh on the strength of it.
 - **2026-09-28 · the cockpit flash never expires, and it takes its room
   from the footer legend** (grove-403): `m.flash` is plain state — nothing
   clears it on a beat, only the next assignment does. A flash left behind

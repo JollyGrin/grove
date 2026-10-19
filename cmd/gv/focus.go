@@ -7,6 +7,7 @@ package main
 // the rail. In `horizontal` nothing here moves a pane.
 
 import (
+	"flag"
 	"fmt"
 	"strings"
 
@@ -54,7 +55,13 @@ func applyCockpitLayout(session, name string) error {
 		if err := tmux.KillRail(session); err != nil {
 			return err
 		}
+		// grove-525: unpin every hidden chat's window-size first, so the
+		// restored chats and any later attach size as they always did.
+		zerr := tmux.ResetHiddenSizes(label, isCockpit)
 		rerr := tmux.RestoreMinimized(session, label, isCockpit, moved)
+		if rerr == nil {
+			rerr = zerr
+		}
 		if err := tmux.SelectLayout(session, name); err != nil {
 			return err
 		}
@@ -66,6 +73,41 @@ func applyCockpitLayout(session, name string) error {
 	merr := tmux.MinimizeChats(session, label, isCockpit, moved)
 	railWriteNow(label, session)
 	return merr
+}
+
+// focusWorkspace is tmux.FocusWorkspace: a cockpit session's workspace label
+// and the registry's cockpit check. ok=false for the global cockpit and for
+// anything the registry cannot place — no label, no hidden chats to size.
+func focusWorkspace(session string) (string, tmux.CockpitCheck, bool) {
+	label, _, err := cockpitWorkspace(session)
+	if err != nil || label == "" {
+		return "", nil, false
+	}
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return "", nil, false
+	}
+	return label, isCockpit, true
+}
+
+// cmdChatSyncSizes is `gv chat sync-sizes --session <cockpit>`, run by the
+// cockpit window's window-resized hook (grove-525) — not by hand. Re-sizes
+// the workspace's hidden chats to the slot; outside focus it does nothing.
+func cmdChatSyncSizes(args []string) error {
+	fs := flag.NewFlagSet("chat sync-sizes", flag.ExitOnError)
+	session := fs.String("session", "", "the cockpit tmux session whose hidden chats track its slot")
+	parseAnywhere(fs, args)
+	if *session == "" {
+		return fmt.Errorf("usage: gv chat sync-sizes --session <cockpit-session>   (run by the focus layout's resize hook; not by hand)")
+	}
+	if tmux.CockpitLayout(*session) != "focus" {
+		return nil
+	}
+	label, isCockpit, ok := focusWorkspace(*session)
+	if !ok {
+		return nil
+	}
+	return tmux.SyncHiddenSizes(*session, label, isCockpit)
 }
 
 // focusBeforeSpawn minimizes the shown chat when the cockpit is in focus, so

@@ -8,6 +8,12 @@
 
 ## Go / CLI
 
+- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
+  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
+  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
+  reproduced here): until someone finds out what the two runs share, run
+  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
+  not a red suite — do not "fix" sub.sh on the strength of it.
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt
@@ -393,6 +399,12 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
 - **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
   is ACTIVE, which is only the cockpit when the caller is sitting in it**
   (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target

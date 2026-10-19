@@ -60,8 +60,10 @@ func cmdChat(args []string) error {
 		return cmdChatServe(args[1:])
 	case "rail":
 		return cmdChatRail(args[1:])
+	case "sync-sizes":
+		return cmdChatSyncSizes(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail, sync-sizes)", args[0])
 	}
 }
 
