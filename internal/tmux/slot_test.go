@@ -31,6 +31,13 @@ func hidden(session, win string, w, h int) SizePane {
 	return SizePane{Session: session, WindowID: win, WindowName: "chat", WindowW: w, WindowH: h, Pane: "%" + win[1:] + "0", Index: 1, PaneW: w, PaneH: h}
 }
 
+// bordered is a hidden one-pane window whose pane is a border row shorter.
+func bordered(session, win string, w, h int) SizePane {
+	p := hidden(session, win, w, h)
+	p.PaneH = h - 1
+	return p
+}
+
 func pin(win string) [][]string {
 	return [][]string{
 		{"set-option", "-w", "-t", win, "window-size", "manual"},
@@ -62,6 +69,13 @@ func TestPlanHiddenSizes(t *testing.T) {
 			hidden("grove-alpha", "@7", 80, 24),          // the cockpit's other windows
 			hidden("grove-chat-alpha-1", "@1", 80, 24)), pin("@1")},
 		{"one window per chat, however many panes", append(slotCockpit(shownChat(139, 45)), hidden("grove-chat-alpha-1", "@1", 80, 24), hidden("grove-chat-alpha-1", "@1", 80, 24)), pin("@1")},
+		// grove-526: a global pane-border-status — the lone pane is a row
+		// shorter than its window; the PANE is what must match the slot.
+		{"border row: window sized slot + 1", append(slotCockpit(shownChat(139, 45)), bordered("grove-chat-alpha-1", "@1", 140, 49)), [][]string{
+			{"set-option", "-w", "-t", "@1", "window-size", "manual"},
+			{"resize-window", "-t", "@1", "-x", "139", "-y", "46"},
+		}},
+		{"border row: pane already at the slot", append(slotCockpit(shownChat(139, 45)), bordered("grove-chat-alpha-1", "@1", 139, 46)), nil},
 		{"another cockpit's slot is not ours", append(slotCockpit(), SizePane{Session: "grove-beta", WindowName: "cockpit", Pane: "%8", Index: 2, PaneW: 139, PaneH: 45}, hidden("grove-chat-alpha-1", "@1", 80, 24)), nil},
 	}
 	for _, tc := range tests {
@@ -89,11 +103,11 @@ func TestPlanHiddenSizeReset(t *testing.T) {
 }
 
 func TestParseSizePanes(t *testing.T) {
-	out := "grove-alpha\t@0\tcockpit\t200\t50\t%1\t2\t139\t45\t\t\t.\n" +
-		"grove-alpha\t@0\tcockpit\t200\t50\t%2\t3\t139\t4\t\t1\t.\n" +
-		"grove-chat-alpha-1\t@3\tchat\t80\t24\t%3\t0\t80\t24\thostA\t\t."
+	out := "grove-alpha\t@0\tcockpit\t200\t50\t%1\t2\t139\t45\t\t\tgrove-chat-alpha-2\t.\n" +
+		"grove-alpha\t@0\tcockpit\t200\t50\t%2\t3\t139\t4\t\t1\t\t.\n" +
+		"grove-chat-alpha-1\t@3\tchat\t80\t24\t%3\t0\t80\t24\thostA\t\t\t."
 	want := []SizePane{
-		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%1", Index: 2, PaneW: 139, PaneH: 45},
+		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%1", Index: 2, PaneW: 139, PaneH: 45, Home: "grove-chat-alpha-2"},
 		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%2", Index: 3, PaneW: 139, PaneH: 4, Rail: true},
 		{Session: "grove-chat-alpha-1", WindowID: "@3", WindowName: "chat", WindowW: 80, WindowH: 24, Pane: "%3", PaneW: 80, PaneH: 24, Remote: true},
 	}
@@ -205,13 +219,15 @@ func TestRetileFocusSyncsHiddenSizes(t *testing.T) {
 		t.Fatalf("no slot in %+v", panes)
 	}
 	size := func(session string) string {
-		out, _ := run("display-message", "-p", "-t", Exact(session)+":chat", "#{window_width}x#{window_height}")
+		// The PANE matches the slot; its window may be a border row taller
+		// under a global pane-border-status (grove-526).
+		out, _ := run("display-message", "-p", "-t", Exact(session)+":chat", "#{pane_width}x#{pane_height}")
 		return out
 	}
 	if got, want := size("grove-chat-alpha-1"), strconv.Itoa(slot.W)+"x"+strconv.Itoa(slot.H); got != want {
 		t.Errorf("hidden alpha window %s, want slot %s", got, want)
 	}
-	if got := size("grove-chat-beta-1"); got != "80x24" {
+	if got := mustRun(t, "display-message", "-p", "-t", Exact("grove-chat-beta-1")+":chat", "#{window_width}x#{window_height}"); got != "80x24" {
 		t.Errorf("another workspace's chat was resized to %s", got)
 	}
 	if out, _ := run("show-options", "-w", "-t", Exact("grove-chat-alpha-1")+":chat", "window-size"); !strings.Contains(out, "manual") {

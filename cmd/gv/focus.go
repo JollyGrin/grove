@@ -158,8 +158,10 @@ const focusRemoteRefusal = "remote chats: `gv chat show @<host>/<session>` only,
 
 // focusChat is the one implementation behind `gv chat focus` and the
 // cockpit's show keys on a CHATS row. Every refusal comes before the first
-// move; then in focus the shown local chat is minimized and the target joins
-// (each move followed by its event), @grove_focus_hid and the rail follow.
+// move; then in focus the shown local chat and the target trade places —
+// one swap-pane when the target is slot-sized (grove-526), else the shown
+// chat is minimized and the target joins — each move followed by its event,
+// and @grove_focus_hid and the rail follow.
 // Outside focus it is showChat, call for call. label is the cockpit's
 // workspace the target is looked up in ("" = the one the target names).
 func focusChat(target, label string, focus bool) (focusResult, error) {
@@ -190,7 +192,22 @@ func focusChat(target, label string, focus bool) (focusResult, error) {
 	}
 	label = rec.Row.Workspace
 	freezeChatNames(label, isCockpit)
-	if err := tmux.MinimizeShown(cockpit, label, isCockpit, focusMoved(label, config.StateDirAt(rec.Root))); err != nil {
+	dir := config.StateDirAt(rec.Root)
+	// grove-526: one swap-pane when the target is already slot-sized
+	// (tmux.DecideSwap); otherwise today's minimize + show below, whose
+	// re-tile syncs the hidden sizes so the next swap is fast.
+	sw, err := tmux.FocusSwap(cockpit, label, "focus", rec.Row.Session, focus)
+	if err != nil {
+		railWriteNow(label, cockpit)
+		return focusResult{}, err
+	}
+	if sw.Decision.Fast {
+		focusMoved(label, dir)("hidden", sw.HiddenAs, sw.Hidden)
+		_ = state.Append(dir, chatMoveEvent(state.EvChatShown, sw.From, sw.Shown, rec.Row))
+		railWriteNow(label, cockpit)
+		return focusResult{Pane: sw.Shown, Row: rec.Row, Mode: "swapped"}, nil
+	}
+	if err := tmux.MinimizeShown(cockpit, label, isCockpit, focusMoved(label, dir)); err != nil {
 		railWriteNow(label, cockpit)
 		return focusResult{}, err
 	}

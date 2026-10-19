@@ -33,14 +33,15 @@ type SizePane struct {
 	Index      int
 	PaneW      int
 	PaneH      int
-	Remote     bool // @grove_remote: an ssh attachment, not a local chat
-	Rail       bool // @grove_rail: the focus rail
+	Remote     bool   // @grove_remote: an ssh attachment, not a local chat
+	Rail       bool   // @grove_rail: the focus rail
+	Home       string // @grove_chat_home: the chat's own hidden session (grove-526)
 }
 
 // slotPaneFormat feeds the planner from ONE list-panes -a. Ends in a literal
 // "." field: run() trims its output, which would otherwise eat the trailing
 // empty @grove_rail of the last line (LEARNINGS 2026-10-19).
-const slotPaneFormat = "#{session_name}\t#{window_id}\t#{window_name}\t#{window_width}\t#{window_height}\t#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{@grove_remote}\t#{@grove_rail}\t."
+const slotPaneFormat = "#{session_name}\t#{window_id}\t#{window_name}\t#{window_width}\t#{window_height}\t#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{@grove_remote}\t#{@grove_rail}\t#{@grove_chat_home}\t."
 
 func parseSizePanes(out string) []SizePane {
 	var panes []SizePane
@@ -56,6 +57,9 @@ func parseSizePanes(out string) []SizePane {
 			Pane: f[5], Index: atoi(f[6]), PaneW: atoi(f[7]), PaneH: atoi(f[8]),
 			Remote: f[9] != "", Rail: f[10] != "",
 		})
+		if len(f) >= 13 {
+			panes[len(panes)-1].Home = f[11]
+		}
 	}
 	return panes
 }
@@ -66,28 +70,11 @@ func parseSizePanes(out string) []SizePane {
 // one local chat (a moment mid-move), is no slot: nothing is sized to a
 // guess.
 func FocusSlot(panes []SizePane, cockpitSession string) (Slot, bool) {
-	var win []SizePane
-	for _, p := range panes {
-		if p.Session == cockpitSession && p.WindowName == cockpitWindow {
-			win = append(win, p)
-		}
-	}
-	first, ok := 0, false
-	for _, p := range win {
-		if !ok || p.Index < first {
-			first, ok = p.Index, true
-		}
-	}
-	var chats []SizePane
-	for _, p := range win {
-		if p.Index != first && !p.Rail && !p.Remote {
-			chats = append(chats, p)
-		}
-	}
-	if len(chats) != 1 || chats[0].PaneW <= 0 || chats[0].PaneH <= 0 {
+	p, ok := slotPane(panes, cockpitSession)
+	if !ok || p.PaneW <= 0 || p.PaneH <= 0 {
 		return Slot{}, false
 	}
-	return Slot{W: chats[0].PaneW, H: chats[0].PaneH}, true
+	return Slot{W: p.PaneW, H: p.PaneH}, true
 }
 
 // paneSlot reads one pane's live size as a slot; false when it is gone.
@@ -108,10 +95,13 @@ func paneSlot(pane string) (Slot, bool) {
 	return Slot{W: w, H: h}, true
 }
 
-// hiddenWindow is one window of a workspace's hidden chat session.
+// hiddenWindow is one window of a workspace's hidden chat session: its
+// size, and its first pane's.
 type hiddenWindow struct {
 	id     string
 	w, h   int
+	pw, ph int
+	panes  int
 	remote bool
 }
 
@@ -134,8 +124,9 @@ func hiddenWindows(panes []SizePane, label string, isCockpit CockpitCheck) []hid
 		if !seen {
 			i = len(wins)
 			at[p.WindowID] = i
-			wins = append(wins, hiddenWindow{id: p.WindowID, w: p.WindowW, h: p.WindowH})
+			wins = append(wins, hiddenWindow{id: p.WindowID, w: p.WindowW, h: p.WindowH, pw: p.PaneW, ph: p.PaneH})
 		}
+		wins[i].panes++
 		if p.Remote {
 			wins[i].remote = true
 		}
@@ -144,14 +135,23 @@ func hiddenWindows(panes []SizePane, label string, isCockpit CockpitCheck) []hid
 }
 
 // pinWindowSize is the per-window pin: window-size manual on that window
-// (never -g), then the size. Nothing when it already has it.
-func pinWindowSize(window string, w, h int, slot Slot) [][]string {
-	if w == slot.W && h == slot.H {
+// (never -g), then the size. It is the chat's PANE that must match the
+// slot (grove-526): under the operator's own `set -g pane-border-status`
+// a lone pane is a row shorter than its window, so a one-pane window is
+// sized to the slot plus that border. Nothing when the pane already has it.
+func pinWindowSize(w hiddenWindow, slot Slot) [][]string {
+	pw, ph := w.pw, w.ph
+	dw, dh := w.w-w.pw, w.h-w.ph
+	if w.panes != 1 || dw < 0 || dh < 0 {
+		// An operator's split: no border to read, size the window as is.
+		pw, ph, dw, dh = w.w, w.h, 0, 0
+	}
+	if pw == slot.W && ph == slot.H {
 		return nil
 	}
 	return [][]string{
-		{"set-option", "-w", "-t", window, "window-size", "manual"},
-		{"resize-window", "-t", window, "-x", strconv.Itoa(slot.W), "-y", strconv.Itoa(slot.H)},
+		{"set-option", "-w", "-t", w.id, "window-size", "manual"},
+		{"resize-window", "-t", w.id, "-x", strconv.Itoa(slot.W + dw), "-y", strconv.Itoa(slot.H + dh)},
 	}
 }
 
@@ -167,7 +167,7 @@ func PlanHiddenSizes(panes []SizePane, cockpitSession, label string, isCockpit C
 	var cmds [][]string
 	for _, w := range hiddenWindows(panes, label, isCockpit) {
 		if !w.remote {
-			cmds = append(cmds, pinWindowSize(w.id, w.w, w.h, slot)...)
+			cmds = append(cmds, pinWindowSize(w, slot)...)
 		}
 	}
 	return cmds
