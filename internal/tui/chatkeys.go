@@ -129,7 +129,7 @@ func chatErr(err error) chatActedMsg {
 }
 
 func chatHideCmd(r ChatRow) tea.Cmd {
-	name := chatName(r)
+	name := ChatName(r)
 	return func() tea.Msg {
 		session, err := HideChat(r.Pane)
 		if err != nil {
@@ -140,7 +140,7 @@ func chatHideCmd(r ChatRow) tea.Cmd {
 }
 
 func chatShowCmd(r ChatRow, focus bool) tea.Cmd {
-	name := chatName(r)
+	name := ChatName(r)
 	return func() tea.Msg {
 		var err error
 		if r.Host != "" {
@@ -156,7 +156,7 @@ func chatShowCmd(r ChatRow, focus bool) tea.Cmd {
 }
 
 func chatFocusCmd(r ChatRow) tea.Cmd {
-	name := chatName(r)
+	name := ChatName(r)
 	return func() tea.Msg {
 		if err := FocusChat(r.Pane); err != nil {
 			return chatErr(err)
@@ -166,7 +166,7 @@ func chatFocusCmd(r ChatRow) tea.Cmd {
 }
 
 func chatSendCmd(r ChatRow, text string) tea.Cmd {
-	name := chatName(r)
+	name := ChatName(r)
 	return func() tea.Msg {
 		warn, err := SendChat(r.Session, text)
 		switch {
@@ -181,7 +181,7 @@ func chatSendCmd(r ChatRow, text string) tea.Cmd {
 }
 
 func chatCloseCmd(r ChatRow) tea.Cmd {
-	name := chatName(r)
+	name := ChatName(r)
 	return func() tea.Msg {
 		var err error
 		if r.Host != "" {
@@ -217,13 +217,13 @@ func (m Model) handleChatsKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.flash = flash
 		return m, nil, true
 	case actHide:
-		m.flash = "hiding " + chatName(r) + "…"
+		m.flash = "hiding " + ChatName(r) + "…"
 		return m, chatHideCmd(r), true
 	case actShow:
-		m.flash = "showing " + chatName(r) + "…"
+		m.flash = "showing " + ChatName(r) + "…"
 		return m, chatShowCmd(r, false), true
 	case actShowFocus:
-		m.flash = "showing " + chatName(r) + "…"
+		m.flash = "showing " + ChatName(r) + "…"
 		return m, chatShowCmd(r, true), true
 	case actFocus:
 		m.flash = ""
@@ -231,7 +231,7 @@ func (m Model) handleChatsKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case actReply:
 		m.mode, m.chatTarget, m.flash = modeChatReply, r, ""
 		m.input.SetValue("")
-		m.input.Placeholder = "reply to " + chatName(r)
+		m.input.Placeholder = "reply to " + ChatName(r)
 		m.sizeChatInput()
 		m.input.Focus()
 		return m, nil, true
@@ -273,7 +273,7 @@ func (m Model) handleChatReplyKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		r := m.chatTarget
 		m.closeChatModal()
-		m.flash = "sending to " + chatName(r) + "…"
+		m.flash = "sending to " + ChatName(r) + "…"
 		return m, chatSendCmd(r, text)
 	}
 	var cmd tea.Cmd
@@ -288,7 +288,7 @@ func (m Model) handleChatCloseKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() != "y" {
 		return m, nil
 	}
-	m.flash = "closing " + chatName(r) + "…"
+	m.flash = "closing " + ChatName(r) + "…"
 	return m, chatCloseCmd(r)
 }
 
@@ -309,7 +309,7 @@ func (m *Model) holdChatTarget() {
 			return
 		}
 	}
-	name := chatName(m.chatTarget)
+	name := ChatName(m.chatTarget)
 	m.closeChatModal()
 	m.flash = name + " is gone — nothing sent"
 }
@@ -383,7 +383,7 @@ func (m Model) legendFor(width int) string {
 
 // viewChatFooter is the footer while a chat modal is open.
 func (m Model) viewChatFooter() string {
-	name := chatName(m.chatTarget)
+	name := ChatName(m.chatTarget)
 	if m.mode == modeChatReply {
 		line := " " + sWaiting.Render("reply → "+name) + "  " +
 			sKey.Render("enter") + sFoot.Render(" send") + sDim.Render(intraSep) +

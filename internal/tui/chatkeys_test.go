@@ -60,14 +60,14 @@ func TestChatKeyAction(t *testing.T) {
 	for _, c := range cases {
 		got, flash := chatKeyAction(c.key, c.row)
 		if got != c.want || flash != c.flash {
-			t.Errorf("%s on %s = (%d, %q), want (%d, %q)", c.key, chatName(c.row), got, flash, c.want, c.flash)
+			t.Errorf("%s on %s = (%d, %q), want (%d, %q)", c.key, ChatName(c.row), got, flash, c.want, c.flash)
 		}
 	}
 	// Globals are untouched under CHATS focus.
 	for _, k := range []string{"X", "O", "0", ")", "1", "8", "@", "L", "R", "g", "$", "c", "*", "?", "q", "r", "s", "j", "k", "tab", "H", "A"} {
 		for _, r := range []ChatRow{shown, hidden, remote} {
 			if got, flash := chatKeyAction(k, r); got != actNone || flash != "" {
-				t.Errorf("%s on %s = (%d, %q), want the key left alone", k, chatName(r), got, flash)
+				t.Errorf("%s on %s = (%d, %q), want the key left alone", k, ChatName(r), got, flash)
 			}
 		}
 	}

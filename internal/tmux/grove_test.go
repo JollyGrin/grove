@@ -485,3 +485,16 @@ func TestParsePanesAccountTag(t *testing.T) {
 		t.Errorf("unpinned pane = %+v", panes[1])
 	}
 }
+
+// grove-510: the name stamp and the pane title are APPENDED, title last —
+// a title holding a tab keeps it, and the field order is unchanged.
+func TestParsePanesNameAndTitle(t *testing.T) {
+	line := strings.Join([]string{"grove-chat-x-4", "201", "claude", "0", "1700000100", "%7", "0", "/o", "id", "opus", "", "", "", "@3", "", "cockpit·1", "✳ Fix\tthe rail"}, "\t")
+	p := ParsePanes(line)
+	if len(p) != 1 || p[0].Name != "cockpit·1" || p[0].Title != "✳ Fix\tthe rail" || p[0].Window != "@3" || p[0].Rail {
+		t.Errorf("got %+v", p)
+	}
+	if !strings.HasSuffix(paneListFormat, "\t#{@grove_rail}\t#{"+ChatNameOption+"}\t#{pane_title}") {
+		t.Errorf("format must append the name stamp then the title: %q", paneListFormat)
+	}
+}

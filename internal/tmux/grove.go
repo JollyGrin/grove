@@ -957,6 +957,10 @@ type ChatSession struct {
 	// grove-293: the model the chat was spawned to run (@grove_model), ""
 	// for a chat spawned before the tag existed. Additive, like the above.
 	Model string `json:"model,omitempty"`
+	// grove-510: the pane's name stamp and raw title (LivePane's). Not part
+	// of the audit contract.
+	Name  string `json:"-"`
+	Title string `json:"-"`
 }
 
 // paneListFormat asks list-panes for everything a chat report needs in one
@@ -974,7 +978,7 @@ type ChatSession struct {
 // every index older than it is unchanged.
 // window_id and @grove_rail (grove-486, the focus-mode rail pane) follow it;
 // window_id is never empty, so the session option is never a trailing field.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}\t#{window_id}\t#{@grove_rail}"
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}\t#{window_id}\t#{@grove_rail}\t#{@grove_chat_name}\t#{pane_title}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -1000,6 +1004,14 @@ type LivePane struct {
 	HiddenRemote string
 	Window       string // @N of the pane's window (grove-486)
 	Rail         bool   // the focus-mode rail pane (@grove_rail) — never a chat
+	// Name is the chat's stable name stamp (@grove_chat_name, grove-510):
+	// "cockpit·1", "chat-3" — frozen before a pane's first move, so the
+	// name follows the pane across break-pane / join-pane. "" = unstamped.
+	Name string
+	// Title is the raw pane title — Claude Code titles its pane with the
+	// session's short title (chatrail.PaneTitle reads it). Last field: a
+	// title may hold anything.
+	Title string
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -1039,6 +1051,10 @@ func ParsePanes(out string) []LivePane {
 			HiddenRemote: paneField(f, 12),
 			Window:       paneField(f, 13),
 			Rail:         paneField(f, 14) != "",
+			Name:         paneField(f, 15),
+		}
+		if len(f) > 16 {
+			p.Title = strings.Join(f[16:], "\t")
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1112,6 +1128,7 @@ func ChatSessionsIn(panes []LivePane, label string, isCockpit CockpitCheck) []Ch
 			Session: p.Session, N: n, PID: p.PID, Command: p.Command,
 			Attached: p.Attached, Created: p.Created,
 			Pane: p.Pane, Dir: p.Dir, SessionID: p.ChatSession, Model: p.Model,
+			Name: p.Name, Title: p.Title,
 		})
 	}
 	sort.Slice(chats, func(i, j int) bool { return chats[i].N < chats[j].N })
@@ -1137,6 +1154,17 @@ func SetPaneChatSession(pane, id string) error {
 		return err
 	}
 	_, err := run("set-option", "-p", "-t", pane, "@grove_chat_session", id)
+	return err
+}
+
+// ChatNameOption is the pane option holding a chat's stable name (grove-510).
+const ChatNameOption = "@grove_chat_name"
+
+// SetPaneChatName stamps a chat pane with its stable name. A pane user
+// option rides the pane through break-pane and join-pane, which is the
+// point: the name stops tracking where the pane sits.
+func SetPaneChatName(pane, name string) error {
+	_, err := run("set-option", "-p", "-t", pane, ChatNameOption, name)
 	return err
 }
 

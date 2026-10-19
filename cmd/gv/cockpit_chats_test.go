@@ -14,6 +14,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/tui"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
@@ -252,5 +253,134 @@ func TestCockpitChatPanesSkipsRail(t *testing.T) {
 	panes := []tmux.LivePane{{Session: cockpitSessionForLabel(ws.Label), Command: "gv", Pane: "%5", Index: 3, Dir: orch, Rail: true}}
 	if got := cockpitChatPanes(ws, panes, nil); len(got) != 0 {
 		t.Fatalf("rail listed as a chat: %+v", got)
+	}
+}
+
+// identityNames runs the CHATS box's naming over a pane list and returns
+// pane → name.
+func identityNames(t *testing.T, ws workspace.Workspace, panes []tmux.LivePane) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	for _, f := range cockpitChatPanes(ws, panes, func() (tmux.CockpitCheck, error) { return neverCockpit, nil }) {
+		got[f.pane.Pane] = f.row.Name
+	}
+	return got
+}
+
+// freezeIn applies freezeChatNames' stamps to the in-memory pane list, as
+// tmux would hold them (a pane option rides the pane through every move).
+func freezeIn(t *testing.T, ws workspace.Workspace, panes []tmux.LivePane) {
+	t.Helper()
+	stamps := namesToStamp(cockpitChatPanes(ws, panes, func() (tmux.CockpitCheck, error) { return neverCockpit, nil }))
+	for _, s := range stamps {
+		for i := range panes {
+			if panes[i].Pane == s[0] {
+				panes[i].Name = s[1]
+			}
+		}
+	}
+}
+
+// grove-510 AC: a chat's name is stable across minimize → focus → restore.
+// The original cockpit orchestrator stays cockpit·1 after focus moves it
+// into a grove-chat session (never chat-N), and a chat joined into the
+// cockpit window keeps its chat-N.
+func TestChatIdentityAcrossMinimizeRestore(t *testing.T) {
+	ws, orch := chatFixture(t)
+	cockpit := cockpitSessionForLabel(ws.Label)
+	dash := tmux.LivePane{Session: cockpit, Command: "gv", Pane: "%1", Index: 0, Dir: ws.Root}
+	pane := func(id, session string, index int) tmux.LivePane {
+		return tmux.LivePane{Session: session, Command: "claude", Pane: id, Index: index, Dir: orch}
+	}
+	// Horizontal: two cockpit chats and one hidden chat, nothing stamped.
+	panes := []tmux.LivePane{dash, pane("%2", cockpit, 1), pane("%5", cockpit, 2), pane("%7", "grove-chat-unbrewed-3", 0)}
+	want := map[string]string{"%2": "cockpit·1", "%5": "cockpit·2", "%7": "chat-3"}
+	if got := identityNames(t, ws, panes); !reflect.DeepEqual(got, want) {
+		t.Fatalf("before any move: %v, want %v", got, want)
+	}
+	moves := []struct {
+		name string
+		move func(p []tmux.LivePane)
+	}{
+		{"enter focus: cockpit·1 minimized", func(p []tmux.LivePane) {
+			p[1].Session, p[1].Index = "grove-chat-unbrewed-4", 0
+			p[2].Index = 1
+		}},
+		{"focus chat-3: cockpit·2 minimized, chat-3 joins", func(p []tmux.LivePane) {
+			p[2].Session, p[2].Index = "grove-chat-unbrewed-5", 0
+			p[3].Session, p[3].Index = cockpit, 1
+		}},
+		{"focus cockpit·1 back", func(p []tmux.LivePane) {
+			p[3].Session, p[3].Index = "grove-chat-unbrewed-3", 0
+			p[1].Session, p[1].Index = cockpit, 1
+		}},
+		{"leave focus: restore", func(p []tmux.LivePane) {
+			p[2].Session, p[2].Index = cockpit, 2
+			p[3].Session, p[3].Index = cockpit, 3
+		}},
+	}
+	for _, m := range moves {
+		freezeIn(t, ws, panes) // every move path freezes first
+		m.move(panes)
+		if got := identityNames(t, ws, panes); !reflect.DeepEqual(got, want) {
+			t.Errorf("after %s: %v, want %v", m.name, got, want)
+		}
+	}
+}
+
+// An unstamped pane never takes a name a stamp holds: a chat spawned into
+// the cockpit window while cockpit·1 is minimized is not a second cockpit·1.
+func TestNameChatsAvoidsStampedNames(t *testing.T) {
+	ws, orch := chatFixture(t)
+	cockpit := cockpitSessionForLabel(ws.Label)
+	panes := []tmux.LivePane{
+		{Session: "grove-chat-unbrewed-4", Command: "claude", Pane: "%2", Dir: orch, Name: "cockpit·1"},
+		{Session: cockpit, Command: "claude", Pane: "%5", Index: 1, Dir: orch, Name: "cockpit·2"},
+		{Session: cockpit, Command: "claude", Pane: "%9", Index: 2, Dir: orch},
+		{Session: "grove-chat-unbrewed-3", Command: "claude", Pane: "%7", Dir: orch, Name: "chat-1"},
+		{Session: "grove-chat-unbrewed-1", Command: "claude", Pane: "%8", Dir: orch},
+	}
+	want := map[string]string{"%2": "cockpit·1", "%5": "cockpit·2", "%9": "cockpit·3", "%7": "chat-1", "%8": "chat-2"}
+	if got := identityNames(t, ws, panes); !reflect.DeepEqual(got, want) {
+		t.Errorf("names = %v, want %v", got, want)
+	}
+}
+
+// grove-510 AC: the rail has one chip per CHATS row, named the same way,
+// the on-screen ones Shown, in a stable name order; a remote chip is not
+// clickable; the title prefers Claude's session title over the label.
+func TestRailChipsMatchChatsBox(t *testing.T) {
+	ws, orch := chatFixture(t)
+	panes := cockpitChatPanesFixture(ws, orch)
+	panes[1].Title = "✳ Hidden chat panes title chips"
+	var c chatCosts
+	rows := cockpitChats(&ws, false, countingLookup(&c, panes, nil, ""))
+	rows[0].Label = "Problem you should know about grove-77"
+	chips := railChips(rows)
+	if len(chips) != len(rows) {
+		t.Fatalf("%d chips for %d CHATS rows", len(chips), len(rows))
+	}
+	var names []string
+	for _, ch := range chips {
+		names = append(names, ch.Name)
+	}
+	if want := "cockpit·2,chat-1,chat-2,cockpit·3 @groveremote"; strings.Join(names, ",") != want {
+		t.Errorf("chip order = %v, want %s", names, want)
+	}
+	byName := map[string]int{}
+	for i, ch := range chips {
+		byName[ch.Name] = i
+	}
+	for _, r := range rows {
+		ch := chips[byName[tui.ChatName(r)]]
+		if ch.Shown != !r.Hidden {
+			t.Errorf("%s: Shown=%v, hidden=%v", ch.Name, ch.Shown, r.Hidden)
+		}
+		if (r.Host != "") != (ch.Session == "") {
+			t.Errorf("%s: session %q (remote %q)", ch.Name, ch.Session, r.Host)
+		}
+	}
+	if got := chips[byName["cockpit·2"]].Title; got != "Hidden chat panes title chips" {
+		t.Errorf("title = %q, want the pane's session title", got)
 	}
 }

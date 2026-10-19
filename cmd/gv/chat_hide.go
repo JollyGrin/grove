@@ -145,9 +145,13 @@ func hideChat(pane, target string) (string, error) {
 	if rec.Pane == "" {
 		return "", fmt.Errorf("%s has no live pane to hide", chatName(rec.Row))
 	}
+	freezeChatNames(rec.Row.Workspace, isCockpit)
 	session, err := tmux.HideChatPane(rec.Pane, rec.Row.Workspace, isCockpit, func(session string) error {
 		return state.Append(config.StateDirAt(rec.Root), chatMoveEvent(state.EvChatHidden, session, rec.Pane, rec.Row))
 	})
+	if session != "" {
+		railWriteNow(rec.Row.Workspace, cockpitSessionForLabel(rec.Row.Workspace))
+	}
 	if err != nil {
 		if session != "" {
 			return "", fmt.Errorf("hid the chat as %s, but: %w", session, err)
@@ -192,7 +196,11 @@ func showChat(target string, focus bool) (string, chat.Row, error) {
 	if err != nil {
 		return "", chat.Row{}, err
 	}
-	return showRecord(rec, isCockpit, focus)
+	pane, row, err := showRecord(rec, isCockpit, focus)
+	if pane != "" {
+		railWriteNow(rec.Row.Workspace, cockpitSessionForLabel(rec.Row.Workspace))
+	}
+	return pane, row, err
 }
 
 // showTarget resolves a show target to its report record, after the
@@ -215,6 +223,7 @@ func showRecord(rec chatRecord, isCockpit tmux.CockpitCheck, focus bool) (string
 		return "", chat.Row{}, fmt.Errorf("%s", refusal)
 	}
 	session := rec.Row.Session
+	freezeChatNames(rec.Row.Workspace, isCockpit)
 	show := tmux.ShowChatPaneUnfocused
 	if focus {
 		show = tmux.ShowChatPane
@@ -299,6 +308,7 @@ func hideRemoteChat(pane string, facts tmux.PaneFacts, isCockpit tmux.CockpitChe
 	if rec.Host == "" {
 		return "", err
 	}
+	railWriteNow(label, facts.Session)
 	name := remoteChatTarget(rec.Host, rec.Session)
 	if err != nil {
 		return "", fmt.Errorf("hid %s, but: %w", name, err)
@@ -332,6 +342,7 @@ func showRemoteChat(host, session string, focus bool) (pane string, warnings []s
 	if pane == "" {
 		return "", nil, err
 	}
+	railWriteNow(label, cockpitSessionForLabel(label))
 	if aerr := state.Append(config.StateDirAt(root), remoteChatMoveEvent(state.EvChatShown, host, session, pane, label)); aerr != nil && err == nil {
 		err = aerr
 	}
