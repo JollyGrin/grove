@@ -1,0 +1,23 @@
+❯ Use AskUserQuestion with two questions. Q1 header 'Weekend', question text
+  exactly: 'When you think about how you would most like to spend a long, quiet
+  weekend away from screens and work, which of these do you prefer?' options
+  Hiking / Reading. Q2 header 'Drink', question 'Tea or coffee?' options Tea /
+  Coffee.
+
+⏺ User declined to answer questions
+  ⎿  · When you think about how you would most like to spend a long, quiet
+     weekend away from screens and work, which of these do you prefer? (Hiking /
+     Reading)
+     · Tea or coffee? (Tea / Coffee)
+
+✻ Sautéed for 2s · done 9:39 PM
+
+❯ Write a 400-word paragraph about the history of tmux. Plain prose, no tools.
+
+· Swirling… (3s · thinking)
+                                                            ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-53…
+  ⏸ manual mode on

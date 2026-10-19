@@ -1,0 +1,50 @@
+  ⎿  · Which fruits do you like? → Apple
+     · Which drink do you prefer, tea or coffee? → Tea
+     · How do you usually get around, bike or train? → Train
+
+⏺ Your answers:
+
+  - Fruits: Apple
+  - Drink: Tea
+  - Transport: Train
+
+  You didn't answer the season question, so I have no answer for it.
+
+✻ Sautéed for 4s · done 9:38 PM
+
+❯ Ask the exact same AskUserQuestion again, same four questions.
+
+⏺ User declined to answer questions
+  ⎿  · Which fruits do you like? (Apple / Banana / Cherry)
+     · Which drink do you prefer, tea or coffee? (Tea / Coffee)
+     · Which season do you prefer, summer or winter? (Summer / Winter)
+     · How do you usually get around, bike or train? (Bike / Train)
+
+✻ Cooked for 2s · done 9:38 PM
+
+❯ Use AskUserQuestion with two questions. Q1 header 'Weekend', question text exactly: 'When you think about how you would most like to
+  spend a long, quiet weekend away from screens and work, which of these do you prefer?' options Hiking / Reading. Q2 header 'Drink',
+  question 'Tea or coffee?' options Tea / Coffee.
+
+⏺ User declined to answer questions
+  ⎿  · When you think about how you would most like to spend a long, quiet weekend away from screens and work, which of these do you
+     prefer? (Hiking / Reading)
+     · Tea or coffee? (Tea / Coffee)
+
+✻ Sautéed for 2s · done 9:39 PM
+
+❯ Write a 400-word paragraph about the history of tmux. Plain prose, no tools.
+
+⏺ Tmux began in 2007 as a personal project by Nicholas Marriott, who wanted a terminal multiplexer that improved on GNU Screen, the tool
+  most developers used at the time to keep several shell sessions running inside one terminal window. Screen had served well for years, but
+  its codebase was old and its handling of modern terminal features, such as UTF-8 text and detailed terminal emulation, was awkward to
+  extend. Marriott wrote tmux from scratch with a cleaner design and released it under the permissive ISC license, which made it easy for
+  distributions and companies to adopt. The most important architectural choice was the client-server model. A tmux server runs in the
+
+✻ Swirling… (4s · ↓ 288 tokens · thought for 2s)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-531-focus-swap-03-direct-attach/f2844754-ebee-45bc-b8d7-938d6…
+  ⏸ manual mode on

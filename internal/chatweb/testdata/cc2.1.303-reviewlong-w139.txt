@@ -1,0 +1,49 @@
+✻ Cooked for 2s · done 9:37 PM
+
+❯ Use the AskUserQuestion tool once with four questions: (1) header 'Favourite' multiSelect true: which fruits do I like,
+  apple/banana/cherry; (2) header 'Beverages' which drink, tea or coffee; (3) header 'Seasonal' which season, summer or winter; (4) header
+  'Transport' bike or train. One-sentence description per option.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruits do you like? → Apple
+     · Which drink do you prefer, tea or coffee? → Tea
+     · How do you usually get around, bike or train? → Train
+
+⏺ Your answers:
+
+  - Fruits: Apple
+  - Drink: Tea
+  - Transport: Train
+
+  You didn't answer the season question, so I have no answer for it.
+
+✻ Sautéed for 4s · done 9:38 PM
+
+❯ Ask the exact same AskUserQuestion again, same four questions.
+
+⏺ User declined to answer questions
+  ⎿  · Which fruits do you like? (Apple / Banana / Cherry)
+     · Which drink do you prefer, tea or coffee? (Tea / Coffee)
+     · Which season do you prefer, summer or winter? (Summer / Winter)
+     · How do you usually get around, bike or train? (Bike / Train)
+
+✻ Cooked for 2s · done 9:38 PM
+
+❯ Use AskUserQuestion with two questions. Q1 header 'Weekend', question text exactly: 'When you think about how you would most like to
+  spend a long, quiet weekend away from screens and work, which of these do you prefer?' options Hiking / Reading. Q2 header 'Drink',
+  question 'Tea or coffee?' options Tea / Coffee.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Weekend  ☒ Drink  ✔ Submit  →
+
+Review your answers
+
+ │ ● When you think about how you would most like to spend a long, quiet weekend away from screens and work, which of these do you prefer?
+   → Reading
+ ● Tea or coffee?
+   → Tea
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
