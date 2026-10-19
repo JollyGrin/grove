@@ -114,6 +114,22 @@ func AddFocusHid(list []string, session string) []string {
 	return append(list, session)
 }
 
+// ForgetFocusHid drops one session from @grove_focus_hid (a minimized chat
+// that was just shown again by hand is no longer minimized by focus).
+func ForgetFocusHid(session, name string) error {
+	hid := FocusHid(session)
+	var keep []string
+	for _, s := range hid {
+		if s != name {
+			keep = append(keep, s)
+		}
+	}
+	if len(keep) == len(hid) {
+		return nil
+	}
+	return setFocusHid(session, keep)
+}
+
 // FocusMoved is called after a focus move succeeded, so the caller's event
 // lands only for a move that happened (#412). kind is "hidden" or "shown".
 type FocusMoved func(kind, session, pane string)
