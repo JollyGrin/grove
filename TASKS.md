@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] **grove-521** focus swaps: target lookup scoped to the cockpit's workspace, live rows only (`findLiveChat`; full report only on a miss, so archived refusals hold); rail viewer stamps `@grove_rail_pid` and redraws on SIGUSR1 after every write (2s tick kept as heartbeat). Fixture (12 ws, 260 archived): join 0.24→0.20s, rail redraw 1.29→0.30s.
 - [x] grove-517: click a CHATS row to show/focus it — bubbletea cell-motion mouse + a filter (left press passes, wheel → ↑/↓, the rest dropped before Update); a click = enter on that row, on-screen chats only selected; hit-test from chatLayout (PR #520)
 - [x] grove-510: focus rail — stable chat identity + every chat as a title chip (2026-10-19). Every move path (hide/show/focus/L/spawn-in-focus) first stamps each unstamped local chat pane with the name it wears (`@grove_chat_name`: `cockpit·N` / `chat-N`, rides break/join-pane); `nameChats` reads stamps first, positional otherwise, never reusing a stamped name — the original orchestrator stays `cockpit·1` when minimized. The rail is built from the CHATS box's own rows (`railChips`, wire `v2`): one chip per chat, shown chip bold `▣`, clicking it a no-op, remote chips unclickable; title = Claude's pane title (glyph stripped, `#{pane_title}` appended to the one `list-panes -a`) → ticket → first prompt. Every move force-writes the rail (Writer `force`, in-process `railWriteMu`). e2e/focus.sh: name stamps, chip counts, 6-move churn vs `gv chat ls`.
 - [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
@@ -54,22 +55,6 @@
       usage strings only. Idea, not built: a tmux prefix binding for hide
       (bindings are server-global — it would leak into non-grove
       sessions).
-- [x] chat-hide 04: remote chats — hide closes the local attach pane,
-      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
-      A remote chat lives on its host and the cockpit pane is only `ssh -t
-      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
-      pane (nothing is sent to the host) and `gv chat show
-      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
-      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
-      The spawn stamps `@grove_remote_session` on the pane; an unstamped
-      legacy pane is refused, never guessed. Hidden remote chats are
-      remembered in ONE user option on the cockpit session
-      (`@grove_hidden_remote`) that rides the CHATS box's existing
-      `list-panes -a` as its last field — no file, poll, cache or ssh on
-      any tick; rows render `○ chat-N @host` with `—` for state and last
-      line. `x` on a remote row relays the existing `gv chat close --host`;
-      `a` flashes "attach to reply" (no `chat send --host` relay exists —
-      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

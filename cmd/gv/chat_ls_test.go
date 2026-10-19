@@ -628,3 +628,96 @@ func TestMarkWaiting(t *testing.T) {
 		}
 	}
 }
+
+// grove-521: the focus/show resolver reads live rows only, inside the
+// workspaces it is handed — never an archived transcript, never another
+// workspace's chat — while the full report every other verb uses still
+// lists the archived rows.
+func TestLiveChatRecordsScopedAndLiveOnly(t *testing.T) {
+	t.Setenv("GV_CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "claude"))
+	var wss []workspace.Workspace
+	var panes []tmux.LivePane
+	for i, label := range []string{"unbrewed", "grove-repo"} {
+		root := t.TempDir()
+		orch := filepath.Join(root, ".grove", "orchestrator")
+		if err := os.MkdirAll(orch, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTranscript(t, orch, label+"-live", "live in "+label, time.Now())
+		writeTranscript(t, orch, label+"-gone", "archived in "+label, time.Now().Add(-72*time.Hour))
+		wss = append(wss, workspace.Workspace{Root: root, Label: label, Scope: "repo"})
+		panes = append(panes, tmux.LivePane{
+			Session: "grove-chat-" + label + "-1", Pane: "%" + string(rune('1'+i)),
+			Dir: orch, Command: "claude", ChatSession: label + "-live",
+		})
+	}
+	_, stamp := recordStamps()
+	l := look(panes, neverCockpit, stamp)
+
+	scoped := liveChatRecords(wss[:1], l)
+	if len(scoped) != 1 || scoped[0].Row.Session != "grove-chat-unbrewed-1" || scoped[0].Pane != "%1" {
+		t.Fatalf("scoped live report = %+v, want unbrewed's one live chat", scoped)
+	}
+	if _, err := matchChat(scoped, "grove-chat-grove-repo-1"); err == nil {
+		t.Error("the scoped resolver matched another workspace's chat")
+	}
+	if _, err := matchChat(scoped, "unbrewed-gone"); err == nil {
+		t.Error("the scoped resolver matched an archived transcript")
+	}
+	for _, r := range liveChatRecords(wss, l) {
+		if r.Row.Kind == chat.KindArchived {
+			t.Errorf("the live report holds an archived row: %+v", r.Row)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		targets []workspace.Workspace
+		want    int // archived rows
+	}{
+		{"one workspace", wss[:1], 1},
+		{"every workspace", wss, 2},
+	} {
+		got := 0
+		for _, r := range chatRecords(tc.targets, l) {
+			if r.Row.Kind == chat.KindArchived {
+				got++
+			}
+		}
+		if got != tc.want {
+			t.Errorf("%s: full report has %d archived rows, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// grove-521: a live pane with no id yet still resolves to its sole
+// candidate transcript in the live report — the one transcript read it keeps.
+func TestLiveChatRecordsStillResolvesUnstampedPane(t *testing.T) {
+	ws, orch := chatFixture(t)
+	writeTranscript(t, orch, "4444-only", "hello", time.Now())
+	panes := []tmux.LivePane{{Session: "grove-chat-unbrewed-1", Pane: "%7", Dir: orch, Command: "claude"}}
+	stamps, stamp := recordStamps()
+	recs := liveChatRecords([]workspace.Workspace{ws}, look(panes, neverCockpit, stamp))
+	if len(recs) != 1 || recs[0].Row.SessionID == nil || *recs[0].Row.SessionID != "4444-only" || stamps["%7"] != "4444-only" {
+		t.Fatalf("recs = %+v stamps = %v, want the sole candidate resolved and stamped", recs, stamps)
+	}
+}
+
+func TestTargetWorkspaceLabel(t *testing.T) {
+	list := []workspace.Workspace{{Label: "a"}, {Label: "a-b"}, {Label: "grove-repo"}}
+	for target, want := range map[string]string{
+		"grove-chat-a-1":          "a",
+		"grove-chat-a-b-12":       "a-b",
+		"grove-a-b":               "a-b",
+		"grove-a":                 "a",
+		"grove-chat-grove-repo-3": "grove-repo",
+		"grove-chat-a-":           "",
+		"grove-chat-zzz-1":        "",
+		"4444-only":               "",
+		"grove":                   "",
+	} {
+		if got := targetWorkspaceLabel(target, list); got != want {
+			t.Errorf("targetWorkspaceLabel(%q) = %q, want %q", target, got, want)
+		}
+	}
+}
