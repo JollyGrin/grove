@@ -23,6 +23,9 @@ grove worker) silently targets the **real server** unless it clears
   every session and worker on the machine (2026-07-07).
 - `tapes/run.sh` snapshots the real server's session list before/after as
   a canary — copy that pattern for new scripted-tmux suites.
+- **Never `set -g window-size`** — global `manual` crashes the server on
+  the next `new-session`/`new-window`, taking every session with it (focus
+  swap spike, 2026-10-19); set it per window only (`set -w -t <@win>`).
 - **A scratch dir is proven before it is removed** (grove-405). In
   `D="$(cd "$(mktemp -d …)" && pwd -P)"` a failed `mktemp` prints nothing,
   and `cd ""` STAYS PUT with exit 0 in zsh and in macOS's `/bin/bash` 3.2
@@ -127,6 +130,13 @@ grove worker) silently targets the **real server** unless it clears
   it lands in is a new one (`DisableAutoRename` it again). To take a pane
   off-screen, move it; never shrink it — a 1-column pane is stretched
   back by the next `select-layout` and still costs a border.
+- **`resize-window -x/-y` itself sets that window's `window-size` to
+  `manual`** (grove-525), so un-pinning is always an explicit `set -wu -t
+  <@win> window-size`, and an e2e that resizes the cockpit pins it too.
+- **Match a slot by PANE size, never window size** (grove-526): under the
+  operator's `pane-border-status top` a lone pane is one row shorter than
+  its window, so a "same-size" `swap-pane` still resizes it and Claude
+  repaints.
 - **`display-message -p -t %N` on a missing pane prints an empty line and
   exits 0** (grove-401) — treat an empty answer as "no such pane"; the exit
   status will not tell you.
@@ -139,6 +149,10 @@ grove worker) silently targets the **real server** unless it clears
   tables differ: `pane-base-index`/`allow-rename` are WINDOW options
   (`-gw`), `base-index`/`renumber-windows` session options (`-g`)
   (grove-455, tmux 3.4).
+- **Hooks go on grove-owned sessions, never global** (grove-531): a
+  per-session `client-attached`/`client-session-changed`/`client-detached`
+  shadows an operator's global hook for that session only, and no hook
+  fires on the session a client `switch-client`s AWAY from.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.

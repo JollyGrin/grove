@@ -1,28 +1,77 @@
 # Focus layout: same-size swap — design
 
-Status: DRAFT (2026-10-19, orchestrator). Car 01 (§1, hidden windows track
-the slot — grove-525): IMPLEMENTED on `feature/focus-swap` —
-`internal/tmux/slot.go` (`SyncHiddenSizes`/`ResetHiddenSizes`, pure
-`PlanHiddenSizes`), synced at the end of `RetileFocus`, by the cockpit
-window's `window-resized` hook (`gv chat sync-sizes`), and at `HideChatPane`
-in focus; unpinned on leaving focus. Car 02 (§2, one swap-pane + stable
-home sessions — grove-526): IMPLEMENTED — `internal/tmux/swap.go` (pure
-`DecideSwap`/`PickHome`/`SwapFocusHid`, `FocusSwap` = one tmux exec of
-swap-pane + rename-session + `@grove_focus_hid`), `@grove_chat_home` stamped
-by `HideChatPane` (and lazily on show), `focusChat` falls back to the
-break/join path on any `DecideSwap` reason. One correction to §1/§2: the
-fast-path precondition and the sync compare the hidden PANE to the slot,
-not its window — under a global `pane-border-status` a lone pane is a row
-shorter than its window (LEARNINGS 2026-10-19). Follows the focus-mode train
-(#502), #510 (stable chat names), #521/PR #523 (scoped lookup + rail
-redraw on signal), #522/PR #524 (`cockpit.focus_dash_width`). Car 05 (grove-528): the CHATS box sorts by
-stable name with the rail's rule — one shared `tui.ChatLess` — so a swap,
-hide or show never moves a row; the cursor follows its chat across a
-refresh. Car 03 (grove-531): IMPLEMENTED — §Edge cases 1–4 spiked and
-recorded below; hidden chat sessions carry their own attach/detach hooks
-(a direct attach follows its client, detach re-pins), `SwapAttached` keeps
-the fast swap off an attached session, and `internal/chatweb/width_test.go`
-pins 80- vs slot-width captures of 15 live Claude states.
+Status: IMPLEMENTED on `feature/focus-swap` (2026-10-19; cars 01, 02, 03,
+05, 04). Follows the focus-mode train (#502), #510 (stable chat names),
+#521/PR #523 (scoped lookup + rail redraw on signal), #522/PR #524
+(`cockpit.focus_dash_width`). The spike and design sections below are kept
+as written; the corrections the cars found are in the paragraphs here.
+
+- **Car 01 (#525) — hidden windows track the slot (§1).**
+  `internal/tmux/slot.go` (`SyncHiddenSizes`/`ResetHiddenSizes`, pure
+  `PlanHiddenSizes`) pins every hidden chat window per window, never `-g`.
+  It is synced at the end of `RetileFocus`, by the cockpit window's
+  `window-resized` hook (`gv chat sync-sizes`, internal), and at
+  `HideChatPane` in focus, and is unpinned when focus is left.
+- **Car 02 (#526) — a swap is one `swap-pane` (§2).** `internal/tmux/swap.go`
+  (pure `DecideSwap`/`PickHome`/`SwapFocusHid`). `FocusSwap` is one tmux exec
+  of swap-pane + rename-session + `@grove_focus_hid`. `@grove_chat_home` is
+  stamped by `HideChatPane` (lazily on show for older chats), so a chat
+  keeps one session name for life. `focusChat` falls back to break/join on
+  any `DecideSwap` reason. Correction to §1/§2: the precondition and the
+  sync compare the hidden PANE with the slot, not its window, because under
+  a global `pane-border-status` a lone pane is a row shorter than its
+  window (LEARNINGS 2026-10-19).
+- **Car 05 (#528) — CHATS box order.** The CHATS box sorts by stable name
+  with the rail's rule (one shared `tui.ChatLess`), so a swap, hide or show
+  never moves a row, and the cursor follows its chat across a refresh.
+- **Car 03 (#531) — attach + phone edges.** §Edge cases 1–4 were spiked and
+  recorded below. Hidden chat sessions carry their own attach/detach hooks,
+  so a direct attach follows its client and a detach re-pins it.
+  `SwapAttached` keeps the fast swap off an attached session, and
+  `internal/chatweb/width_test.go` pins 80- vs slot-width captures of 15
+  live Claude states. Four pre-existing, width-independent chatweb
+  capture bugs are follow-ups.
+- **Car 04 (#533) — measured before/after + docs.** The table below.
+  CLAUDE.md §Layout and the tmux-discipline skill carry the rules; no
+  event or `--json` field changed; the orchestrator seed is unchanged
+  (`gv chat sync-sizes` is internal).
+
+### Measured: `main` vs the train tip (grove-533)
+
+`e2e/focus-bench.sh` (not in `all.sh`; re-run as is, `BENCH_RUNS` /
+`BENCH_BASE` to vary). Each build gets a fresh fixture per pass: scratch
+HOME + `GROVE_STATE_DIR` + `GV_CLAUDE_CONFIG_DIR`, an isolated tmux server
+(3.6a), 10 workspaces, and 200 archived transcripts in the cockpit's
+project dir. The cockpit is 200x50 in focus with 3 chats running real
+Claude Code 2.1.304 (`claude --resume` of a 300–900k transcript under a
+scratch config dir, not logged in, no API calls), so each chat has a full
+screen that repaints on SIGWINCH. Each figure is the median of 9 runs per
+entry point, after one warm-up. Times are ms from the action, sampled
+after each poll; one tmux exec per poll gives ~3–6ms resolution.
+"Settled" is the target pane's capture in the slot staying unchanged for
+300ms; the moment counted is its last change. "Rail redrawn" is the rail
+pane's last capture change, under the same 300ms rule. tmux execs and
+their summed time come from a separate pass with a logging shim on PATH,
+counting the acting process (the `gv` CLI, the rail, the dash) over start
+→ settled; the shim's own cost never touches the timing pass. Base
+`origin/main` 6d2c912, tip a8a2657, macOS, 2026-10-19.
+
+| entry | build | wall | → in slot | → settled | → rail redrawn | tmux execs | tmux exec time |
+|---|---|---|---|---|---|---|---|
+| `gv chat focus` | main | 347 | 234 | 480 | 351 | 52 | 211 |
+| `gv chat focus` | tip | 182 | 103 | 107 | 188 | 10 | 43 |
+| rail click | main | — | 246 | 488 | 366 | 55 | 219 |
+| rail click | tip | — | 90 | 90 | 166 | 11 | 48 |
+| CHATS `enter` | main | — | 229 | 472 | 366 | 62 | 244 |
+| CHATS `enter` | tip | — | 112 | 112 | 190 | 10 | 44 |
+
+On main every swap repaints on screen: the pane lands at ~230ms and
+Claude's redraw settles it ~245ms later. On the tip the pane is settled
+the moment it lands (26 of 27 runs; one CLI run took a later change at
+348ms). Wall time is the CLI process's exit; a click or `enter` runs
+inside the long-lived rail/dash process, so it has none. The `chat_hidden`
+/ `chat_shown` events the swaps wrote have identical key sets on both
+builds (the bench diffs them).
 
 ## Problem
 
