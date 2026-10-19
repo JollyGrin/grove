@@ -39,7 +39,7 @@ func appendedLine(t *testing.T, data map[string]string) string {
 func TestTaskCreatedGolden(t *testing.T) {
 	task := &provider.Task{ID: "grove-9", Title: "car", URL: "https://x/9"}
 	args := func(c feature.Choice, profile string) map[string]string {
-		return taskCreatedData(task, "grove", "grove-9-car", "/wt/grove-9-car", "grove-ws", "grove · grove-9-car", profile, c)
+		return taskCreatedData(task, "grove", "grove-9-car", "/wt/grove-9-car", "grove-ws", "grove · grove-9-car", profile, "", "", c)
 	}
 	const head = `{"time":"2026-09-27T12:00:00Z","type":"task_created","ticket":"grove-9","data":{`
 	const tail = `"repo":"grove","title":"car","tmux_session":"grove-ws","tmux_window":"grove · grove-9-car","url":"https://x/9","worktree":"/wt/grove-9-car"},"v":`
@@ -67,6 +67,12 @@ func TestTaskCreatedGolden(t *testing.T) {
 	wantCar := head + `"base":"feature/keys","branch":"grove-9-car","feature":"keys",` + tail
 	if got := appendedLine(t, args(car, "")); !strings.HasPrefix(got, wantCar) {
 		t.Errorf("feature task_created:\n got %s\nwant %s…", got, wantCar)
+	}
+	// claude-accounts: an explicit pin adds exactly `account` (a name).
+	wantAcct := head + `"account":"alt","branch":"grove-9-car",` + tail
+	pinned := taskCreatedData(task, "grove", "grove-9-car", "/wt/grove-9-car", "grove-ws", "grove · grove-9-car", "", "", "alt", off)
+	if got := appendedLine(t, pinned); !strings.HasPrefix(got, wantAcct) {
+		t.Errorf("pinned task_created:\n got %s\nwant %s…", got, wantAcct)
 	}
 }
 

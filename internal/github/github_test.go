@@ -155,3 +155,82 @@ func TestFetchAllUnknownOnTimeout(t *testing.T) {
 		t.Fatal("expected grove-1 in unknown, got none")
 	}
 }
+
+// ciDenyingGH is a stub gh that models a GitHub App token (grove-451): any
+// query that asks for statusCheckRollup gets a 403, every other query
+// returns one merged PR.
+const ciDenyingGH = `#!/bin/sh
+case "$*" in
+  *statusCheckRollup*) echo 'GraphQL: Resource not accessible by integration (statusCheckRollup)' >&2; exit 1 ;;
+esac
+cat <<'JSON'
+[{"number": 7, "url": "https://github.com/o/r/pull/7", "state": "MERGED", "mergedAt": "2026-10-01T00:00:00Z", "isDraft": false, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"}]
+JSON
+`
+
+// TestMergedDespiteCIFieldFailure (grove-451): the merge gate never looks
+// at CI, so a token that cannot read statusCheckRollup must still produce
+// a merged verdict — previously every `gv done` on a merged ticket failed
+// and forced --force.
+func TestMergedDespiteCIFieldFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	stubGH(t, dir, ciDenyingGH)
+
+	merged, pr, err := Merged(dir, "some-branch")
+	if err != nil {
+		t.Fatalf("Merged: %v", err)
+	}
+	if !merged {
+		t.Fatal("merged = false, want true")
+	}
+	if pr == nil || pr.Number != 7 || pr.State != "MERGED" {
+		t.Fatalf("pr = %+v, want #7 MERGED", pr)
+	}
+	if pr.CI != "unknown" {
+		t.Errorf("CI = %q, want unknown (gate query asks for no CI fields)", pr.CI)
+	}
+}
+
+// TestPRForBranchDegradesCIOn403 (grove-451): the display path retries
+// without the CI fields and returns the PR with CI "unknown" instead of
+// failing the whole fetch — ls/TUI keep the PR number, blank the CI column.
+func TestPRForBranchDegradesCIOn403(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	stubGH(t, dir, ciDenyingGH)
+
+	pr, err := PRForBranch(dir, "some-branch")
+	if err != nil {
+		t.Fatalf("PRForBranch: %v", err)
+	}
+	if pr == nil {
+		t.Fatal("expected a PR, got nil")
+	}
+	if pr.Number != 7 || pr.State != "MERGED" {
+		t.Errorf("pr = %+v, want #7 MERGED", pr)
+	}
+	if pr.CI != "unknown" {
+		t.Errorf("CI = %q, want unknown", pr.CI)
+	}
+	if pr.Checks != 0 || len(pr.Failing) != 0 {
+		t.Errorf("Checks/Failing = %d/%v, want none on the degraded path", pr.Checks, pr.Failing)
+	}
+}
+
+// TestPRForBranchErrorsWhenRetryFails: when gh fails even without the CI
+// fields (offline, bad auth) the error still surfaces — degradation is
+// only for the CI fields, never a blanket swallow.
+func TestPRForBranchErrorsWhenRetryFails(t *testing.T) {
+	dir := t.TempDir()
+	stubGH(t, dir, "#!/bin/sh\necho boom >&2\nexit 1\n")
+
+	pr, err := PRForBranch(dir, "some-branch")
+	if err == nil {
+		t.Fatalf("expected an error, got pr=%+v", pr)
+	}
+}

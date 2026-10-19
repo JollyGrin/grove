@@ -439,6 +439,20 @@ func WorkerWindowProfile(repoShort, ticket, profile string) string {
 	return base + " · " + r.Replace(profile)
 }
 
+// SetPaneAccount tags a chat pane with the account it was explicitly
+// pinned to (claude-accounts) as the pane user option @grove_account —
+// what `gv account rm` reads to refuse removing an account a live chat
+// runs on. A user option for @grove_profile's reason. An empty name
+// clears the option.
+func SetPaneAccount(pane, name string) error {
+	if name == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_account")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_account", name)
+	return err
+}
+
 // SetPaneProfile tags a pane with its model-profile name in a pane USER
 // OPTION (@grove_profile), so a profiled orchestrator pane is distinguishable
 // from the default (Anthropic) pane sharing the cockpit window. Unlike a pane
@@ -955,7 +969,9 @@ type ChatSession struct {
 // format context like session_* does, so every pane of a cockpit carries its
 // session's hidden-remote record and the CHATS box learns it from this same
 // call. Empty — and so absent — for every session with nothing hidden.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_hidden_remote}"
+// @grove_account (claude-accounts) sits between the two chat-hide fields so
+// every index older than it is unchanged.
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -974,6 +990,7 @@ type LivePane struct {
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
 	Remote      string // @grove_remote (grove-199): the host a remote chat pane attaches to, "" for a local pane
+	Account     string // @grove_account (claude-accounts): the pinned account, "" when unpinned
 	// HiddenRemote is the pane's SESSION's @grove_hidden_remote (grove-404),
 	// raw — ParseHiddenRemotes reads it. The same value on every pane of a
 	// session; "" when nothing is hidden.
@@ -1012,8 +1029,9 @@ func ParsePanes(out string) []LivePane {
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
 			Remote:      paneField(f, 10),
+			Account:     paneField(f, 11),
 
-			HiddenRemote: paneField(f, 11),
+			HiddenRemote: paneField(f, 12),
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1666,4 +1684,49 @@ func FocusChatPane(pane string, isCockpit CockpitCheck) error {
 	}
 	_, err = run("select-pane", "-t", pane)
 	return err
+}
+
+// GlobalOptions reads the named global tmux options as the sourced config
+// sets them, for `gv doctor`'s tmux-config rows (grove-169). Read-only:
+// one exec, `start-server ; show-options -g ; show-options -gw` — tmux 3.4
+// refuses more than one option name per show-options, and without the
+// start-server a serverless machine answers "error connecting" instead of
+// sourcing the config. On a machine with no server the started one exits
+// as soon as the query is served (no session keeps it alive; exit-empty is
+// the default). Both tables are listed because the four options doctor
+// cares about are split across them (base-index / renumber-windows are
+// session options, pane-base-index / allow-rename are window options).
+// Missing names are absent from the result; a failed exec yields nil.
+func GlobalOptions(names ...string) map[string]string {
+	out, err := run("start-server", ";", "show-options", "-g", ";", "show-options", "-gw")
+	if err != nil {
+		return nil
+	}
+	return parseGlobalOptions(out, names...)
+}
+
+// parseGlobalOptions is split from the exec so it can be tested against
+// canned show-options output. Each line is `name value`; the value keeps
+// everything after the first space, with one layer of surrounding
+// double quotes removed (tmux quotes values that contain spaces).
+func parseGlobalOptions(out string, names ...string) map[string]string {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	opts := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		name, value, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if name == "" || !want[name] {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+			value = value[1 : len(value)-1]
+		}
+		if _, seen := opts[name]; !seen {
+			opts[name] = value
+		}
+	}
+	return opts
 }

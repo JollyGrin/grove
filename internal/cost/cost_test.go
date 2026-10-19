@@ -209,8 +209,10 @@ func TestCurrentGenerationHasExactRates(t *testing.T) {
 	currentGeneration := []string{
 		"claude-fable-5-1",
 		"claude-fable-5",
+		"claude-opus-5-5",
 		"claude-opus-5",
 		"claude-opus-4-8",
+		"claude-sonnet-5-5",
 		"claude-sonnet-5",
 		"claude-haiku-4-5",
 	}
@@ -223,6 +225,76 @@ func TestCurrentGenerationHasExactRates(t *testing.T) {
 	// model uses — collapsing it onto claude-fable-5 silently mispriced this.
 	if r := defaultRates["claude-fable-5-1"]; r.CacheRead != 0.25 {
 		t.Errorf("claude-fable-5-1 CacheRead = %v, want 0.25 (2.5%% of $10 input)", r.CacheRead)
+	}
+}
+
+// TestClaude55RatesExplicit (grove-442): Opus 5.5 and Sonnet 5.5 are their
+// own rows with the published cache-read rate ($0.20/MTok on both — 5% of
+// Opus 5.5's $4 input, not the 10% derive assumes), dated variants still
+// prefix-match them, and the rows they used to fall onto are unchanged.
+func TestClaude55RatesExplicit(t *testing.T) {
+	wantOpus := Rates{Input: 4, Output: 20, CacheRead: 0.20, CacheWrite5m: 5, CacheWrite1h: 8}
+	wantSonnet := Rates{Input: 2, Output: 10, CacheRead: 0.20, CacheWrite5m: 2.5, CacheWrite1h: 4}
+	cases := []struct {
+		model string
+		want  Rates
+	}{
+		{"claude-opus-5-5", wantOpus},
+		{"claude-opus-5-5-20261001", wantOpus}, // dated variant rides the 5.5 key, not opus-5
+		{"claude-sonnet-5-5", wantSonnet},
+		{"claude-sonnet-5-5-20261001", wantSonnet},
+		// Pre-existing rows the new keys must not disturb.
+		{"claude-opus-5", derive(5, 25)},
+		{"claude-opus-5-20260601", derive(5, 25)},
+		{"claude-sonnet-5", derive(2, 10)},
+		{"claude-fable-5-1", Rates{Input: 10, Output: 50, CacheRead: 0.25, CacheWrite5m: 12.5, CacheWrite1h: 20}},
+		{"claude-haiku-4-5", derive(1, 5)},
+	}
+	for _, tc := range cases {
+		got, ok := rateFor(tc.model)
+		if !ok {
+			t.Errorf("rateFor(%q) unpriced", tc.model)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("rateFor(%q) = %+v, want %+v", tc.model, got, tc.want)
+		}
+	}
+}
+
+// TestOpus55CacheReadsNotOpus5Derived (grove-442 regression): before the
+// explicit row, claude-opus-5-5 prefix-matched claude-opus-5 and derive()
+// priced its cache reads at 10% of $5 = $0.50/MTok; the real rate is
+// $0.20/MTok, so a cache-read-heavy session was over-billed 2.5×. 10M
+// cache-read tokens: $5.00 before, $2.00 now.
+func TestOpus55CacheReadsNotOpus5Derived(t *testing.T) {
+	const cacheReads = 10_000_000
+	tot := Total([]transcript.UsageEntry{
+		fe("m1", "r1", "claude-opus-5-5", 0, 0, 0, 0, cacheReads),
+	})
+	if !tot.CostKnown {
+		t.Fatal("claude-opus-5-5 must be priced (unpriced_models would list it)")
+	}
+	const wantNow, wasBefore = 2.00, 5.00
+	if math.Abs(tot.USD-wantNow) > 1e-9 {
+		t.Errorf("10M cache reads on claude-opus-5-5 = $%.2f, want $%.2f", tot.USD, wantNow)
+	}
+	if ratio := wasBefore / tot.USD; math.Abs(ratio-2.5) > 1e-9 {
+		t.Errorf("cache-read cost ratio before/after = %v, want 2.5 (opus-5 derived $0.50 vs real $0.20)", ratio)
+	}
+	// Both 5.5 ids price as known, so a fixture ledger shows no
+	// unpriced_models entry for them.
+	tot = Total([]transcript.UsageEntry{
+		fe("m1", "r1", "claude-opus-5-5", 1000, 100, 0, 0, 0),
+		fe("m2", "r2", "claude-sonnet-5-5", 1000, 100, 0, 0, 0),
+	})
+	if !tot.CostKnown {
+		t.Error("5.5 ids must not mark the ticket cost-unknown")
+	}
+	for _, m := range tot.Models {
+		if !m.CostKnown {
+			t.Errorf("%s reported unpriced", m.Model)
+		}
 	}
 }
 

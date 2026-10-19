@@ -467,3 +467,19 @@ func TestPanesOneExec(t *testing.T) {
 		t.Fatalf("Panes ran %v, want exactly one list-panes -a", calls)
 	}
 }
+
+// claude-accounts: @grove_account sits after @grove_remote (index 11), so an
+// account-pinned pane with no model tag keeps its place.
+func TestParsePanesAccountTag(t *testing.T) {
+	out := strings.Join([]string{
+		strings.Join([]string{"grove-chat-g-1", "201", "claude", "0", "1700000100", "%7", "1", "/ws/o", "eeee", "", "", "alt"}, "\t"),
+		strings.Join([]string{"grove-chat-g-2", "202", "claude", "0", "1700000100", "%8", "1", "/ws/o", "ffff", "opus"}, "\t"),
+	}, "\n")
+	panes := ParsePanes(out)
+	if panes[0].Model != "" || panes[0].Account != "alt" {
+		t.Errorf("pinned pane = %+v", panes[0])
+	}
+	if panes[1].Model != "opus" || panes[1].Account != "" {
+		t.Errorf("unpinned pane = %+v", panes[1])
+	}
+}

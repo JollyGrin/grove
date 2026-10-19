@@ -25,6 +25,9 @@ gv supervise              # HEADLESS loop that emits the transitions gv watch
                            #   (or the cockpit's own) refuses, naming the pid.
 gv grab DEV-X --repo Y    # dispatch a ticket to a new worker
 gv grab DEV-X --model M   # pin this worker to a model (one-off, no config edit)
+gv grab DEV-X --effort E   # pin this worker's effort (one-off, no config edit)
+                           #   E ∈ low|medium|high|xhigh|max; adopt and
+                           #   `orchestrator new` take it too
 gv grab DEV-X --manual    # set up for the operator to drive by hand
 gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   (hosts: in config). grab/ls/adopt/handoff/answer/
@@ -37,6 +40,14 @@ gv grab DEV-X --host H    # dispatch a NEW worker on a configured remote host
                            #   ticket is payload)
 gv grab DEV-X --profile P # run this worker on a model profile lane (see
                            #   Dispatch below — lanes differ in who pays)
+gv account ls --usage --json # subscription accounts (pure read): per account,
+                           #   its 5h / weekly used_percentage, resets_at, pinned
+                           #   worker count, connectors (true only for `login`)
+gv grab DEV-X --account A # run this worker on subscription account A (names
+                           #   from `gv account ls`; `login` = the interactive
+                           #   login) and pin it to the task. Propose it with
+                           #   the reason; never `gv account use` (that flips
+                           #   the operator's default)
 gv grab DEV-X --feature F # fork the worktree from feature train F's branch
                            #   instead of the repo base, and PR back into it
                            #   (`--feature none` opts out). A ticket whose
@@ -70,6 +81,10 @@ gv audit --json           # cross-check every task vs reality (pure read):
                            #   claude/mcp processes (both report-only)
                            #   + stale prompts
 gv sweep --json           # dry-run of what sweep would offer (pure read)
+gv learnings --json       # learnings review (pure read): per repo, recent
+     [--since 14d]        #   auto-memory notes (feedback first), recent
+                           #   LEARNINGS.md entries, and entries naming a
+                           #   skill that has not absorbed them (duty 11)
 gv sweep                  # interactive, per-row confirmed: merged → done,
                            #   abandoned → untrack --rm, idle → pause,
                            #   orphan process → kill
@@ -286,10 +301,18 @@ When both merge: summary push, same summary in chat, end your turn.
    Return a ranked table with one-line reasoning and a grab command per row.
 3. **Dispatch** — after the operator confirms, run `gv grab` (always pass `--repo`;
    label inference is unreliable). Several grabs are fine — setups queue.
-   To run a worker on a specific model (e.g. a cheap task on Sonnet, a
-   hard one on Opus), pass `--model <id>` — it pins that worker only and
-   needs no config edit or revert. Never hand-edit a repo's `claude:` line
-   to flip models.
+   **Effort first, lane second.** The cheap way to run a ticket is the
+   repo's default model at lower effort — `--effort
+   <low|medium|high|xhigh|max>` pins one worker's effort (a repo's
+   `effort:` key is the standing default): low effort on the newest
+   model still beats the previous generation at max, and staying on one
+   model keeps one prompt cache. Only when a lane budget forces it (the
+   Claude sub is capped, a flat plan has headroom) move the ticket to
+   another model or lane with `--model <id>` / `--profile <lane>` — both
+   pin that worker only and need no config edit or revert. Never
+   hand-edit a repo's `claude:` line to flip models. Whichever dial you
+   propose, say which setting and why in the same grab line, same as
+   `--profile`. Only when the operator asks: never route on your own.
 
    **Remote dispatch.** To start fresh work on another host, pass `--host
    <name>` to the grab — `gv grab DEV-X --repo Y --host <host>`. Do NOT reach
@@ -307,6 +330,19 @@ When both merge: summary push, same summary in chat, end your turn.
    `zai-plan-*` lane can do the job; the per-token lane is for overflow when the
    flat plan is capped. When you propose a grab with `--profile`, say which lane
    it is and why in the same line.
+
+   **Accounts are a lane too.** The Claude sub can be more than one
+   subscription: `gv account ls --usage --json` lists every account with
+   its 5h and weekly `used_percentage`. When the active account is running
+   hot and another has headroom, propose `gv grab DEV-X --repo Y --account
+   <name>` and give the reason in the same line ("main 5h at 92%, alt at
+   10%"). Never pick an account unasked, and never run `gv account use` —
+   that changes the operator's default for every later launch, which is
+   their call. A token account has documented costs: no claude.ai
+   connectors (Gmail, Drive, Claude Docs, …) and no Remote Control, so a
+   chat that needs connectors stays on `login`; and `/login` inside an
+   account-pinned session switches that session to the new login — never
+   run it there (nor tell a worker to).
 
    **Feature trains.** A ticket that belongs to an open feature train (`gv
    feature ls --json`) is grabbed with `gv grab DEV-X --repo Y --feature
@@ -388,11 +424,15 @@ When both merge: summary push, same summary in chat, end your turn.
 
 8. **Context-rot rescue** — a worker whose context has gone stale burns
    tokens without converging: it re-reads what it already read, circles
-   the same fix, and its cache-read share climbs while nothing lands.
-   Two cheap signals, both from `gv cost --json` (pure read):
+   the same fix, and its per-call context climbs while nothing lands.
+   Two cheap signals, both pure read:
    - `turns` past ~80 with no PR on the branch (`gv ls --json`), or
-   - `cache_read_tokens ÷ turns` past ~150k — the whole context is being
-     re-sent every turn.
+   - `gv cost --context DEV-X` — `avg_ctx`/`max_ctx` past ~200k with zero
+     `compactions`, or (`gv cost --analyze --json`, grove-289) either flag
+     `"context: avg ≥ 200k"` or `"context: ≥150 calls, never compacted"`
+     on the row. `gv cost --context DEV-X` also shows WHY, not just that:
+     `growth` (which source dominated — a re-read Bash loop, a giant
+     `read_whole`) and `top` (the specific reads amplifying it).
    Neither number is a verdict; they are a reason to LOOK. Confirm by
    reading the task's `last_message` and `gv diff DEV-X --stat`: real
    ground gained since the last commit, or the same ground again?
@@ -475,6 +515,23 @@ When both merge: summary push, same summary in chat, end your turn.
     Neither phrase authorizes anything else the supervision mandate
     forbids, and neither ever merges the feature branch into ITS base —
     that stays the operator's own act, always.
+
+11. **Learnings review** — on request ("review the learnings", "anything
+    to promote?"), run `gv learnings --json` and read the three layers it
+    reports per repo: auto-memory notes (`memory.notes`, `feedback`-type
+    first — corrections and confirmed approaches), recent `LEARNINGS.md`
+    entries, and `candidates` (an entry that names a skill the skill does
+    not yet cite). Propose **one promotion or retirement per note**, each
+    with the target file and the exact text:
+    - promotion → `.claude/skills/<skill>/SKILL.md`: the rule, one
+      sentence, where in the skill it goes;
+    - promotion → `LEARNINGS.md`: the dated entry, pasted as the
+      `scripts/log-append.py learnings --section "<name>"` command;
+    - retirement → delete: a note that is wrong, superseded, or already a
+      skill rule — name the file and say which.
+    Apply only on the operator's yes, one proposal at a time, and report
+    what changed. **Never edit a memory file or a skill unasked** — the
+    verb is read-only by design, and so are you until the yes.
 
 ## Guardrails
 

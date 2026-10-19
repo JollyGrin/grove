@@ -22,6 +22,8 @@ import (
 const (
 	costsTabSpend = iota
 	costsTabAccount
+	costsTabClaude // claude-accounts §Decision 8 (claude.go)
+	costsTabCount
 )
 
 // accountMsg is the ACCOUNT tab's one-shot snapshot: OpenRouter account
@@ -356,13 +358,15 @@ func (m Model) tankUSD() float64 {
 // + switch, no framework. Short by design — it must fit the narrowest panes
 // (viewHeader has no width clamp; grove-56 lesson applies to every header).
 func (m Model) costsTabBar() string {
-	spend, account := sPanelTitle.Render("SPEND"), sPanelTitle.Render("ACCOUNT")
-	if m.costsTab == costsTabAccount {
-		account = sPanelTitleFocus.Render("ACCOUNT")
-	} else {
-		spend = sPanelTitleFocus.Render("SPEND")
+	names := []string{"SPEND", "ACCOUNT", "CLAUDE"}
+	for i, n := range names {
+		if i == m.costsTab {
+			names[i] = sPanelTitleFocus.Render(n)
+		} else {
+			names[i] = sPanelTitle.Render(n)
+		}
 	}
-	return truncPad(spend+sDim.Render(" │ ")+account, m.width-4)
+	return truncPad(strings.Join(names, sDim.Render(" │ ")), m.width-4)
 }
 
 func (m Model) viewAccount() string {
@@ -462,15 +466,21 @@ func viewFuelRows(r keyRow, w int) []string {
 	}
 	out := make([]string, 0, len(r.fuel))
 	for _, fw := range r.fuel {
-		frac, sev, caption := fuelSpec(fw)
-		line := "    " + sChrome.Render(pad(trunc(fw.Label, 7), 8)) +
-			runwayStyle(sev)(gaugeBar(frac, 16)) + "  " + caption
-		if fw.ResetHint != "" {
-			line += sDim.Render(" · " + fw.ResetHint)
-		}
-		out = append(out, truncPad(line, w))
+		out = append(out, fuelLine(fw, w))
 	}
 	return out
+}
+
+// fuelLine renders one quota window as a fuel gauge; the CLAUDE tab
+// reuses it for the 5h / 7d windows.
+func fuelLine(fw kimi.Window, w int) string {
+	frac, sev, caption := fuelSpec(fw)
+	line := "    " + sChrome.Render(pad(trunc(fw.Label, 7), 8)) +
+		runwayStyle(sev)(gaugeBar(frac, 16)) + "  " + caption
+	if fw.ResetHint != "" {
+		line += sDim.Render(" · " + fw.ResetHint)
+	}
+	return truncPad(line, w)
 }
 
 // viewConnectPrompt replaces BALANCE/RUNWAY when no key resolves: explain
@@ -561,7 +571,7 @@ func (m Model) viewAccountByModel(w int) string {
 
 func (m Model) viewAccountFooter() string {
 	a := m.account
-	keys := []string{sKey.Render("tab") + sFoot.Render(" spend")}
+	keys := []string{sKey.Render("tab") + sFoot.Render(" claude")}
 	if len(a.keys) > 0 {
 		keys = append(keys, sKey.Render("enter")+sFoot.Render(" paste key"))
 	} else if a.fetched && a.keyMasked == "" {

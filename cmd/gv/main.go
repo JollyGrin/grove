@@ -21,10 +21,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/audit"
 	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/doctor"
@@ -34,6 +36,7 @@ import (
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/kickoff"
+	"github.com/JollyGrin/grove/internal/learnings"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/linear"
 	"github.com/JollyGrin/grove/internal/probe"
@@ -42,7 +45,9 @@ import (
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/sub"
 	"github.com/JollyGrin/grove/internal/tmux"
+	"github.com/JollyGrin/grove/internal/transcript"
 	"github.com/JollyGrin/grove/internal/tui"
 	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/wizard"
@@ -71,7 +76,7 @@ const usage = `gv — grove
                                               parent scope in a folder of sibling repos)
   gv switch [<label>] [--print]               cross-workspace picker with live rollups
   gv workspaces [--json|add <path>|rm <label>] manage the workspace registry
-  gv grab [<task>] [--repo name] [--manual] [--model id] [--profile p]   task → worktree → agent (no arg: list backlog)
+  gv grab [<task>] [--repo name] [--manual] [--model id] [--effort l] [--profile p] [--account a]   task → worktree → agent (no arg: list backlog)
       [--feature slug|none]                   fork from an open feature's branch (default: the one open
                                               feature a ticket label names, else the repo base)
   gv ls [--json]                              fleet table
@@ -123,7 +128,7 @@ const usage = `gv — grove
                                               window "▶ <slug>"; prints its GROVE_READY url or path
   gv serve stop <slug>                        kill the "▶ <slug>" window
   gv serve init                               a chat pane drafts .grove/run.sh (never trusted — review it with s)
-  gv adopt <ticket> [--branch b] [--manual] [--model id]   revive a disconnected task / adopt a branch
+  gv adopt <ticket> [--branch b] [--manual] [--model id] [--effort l] [--account a|login]   revive a disconnected task / adopt a branch
   gv pause <ticket> [--force]                 park a worker: kill its window to free CPU — worktree,
                                               branch, and uncommitted changes survive; resume: gv adopt
   gv done <ticket> [--force]                  verify merged → clean up everything
@@ -136,6 +141,8 @@ const usage = `gv — grove
                                               --profile opens it on a model profile instead of Claude
   gv orchestrator new --model m               pin the chat to a tier (opus|sonnet|haiku, or orchestrator.models);
                                               with --profile it runs that profile's slug for the tier
+  gv orchestrator new --effort l              pin the chat's effort (low|medium|high|xhigh|max); grab/adopt
+                                              take the same flag, and a repo's effort: sets its default
   gv orchestrator new --resume <id>           revive an archived chat by Claude session id, detached in its
                                               own grove-chat-<label>-<n> (it opens idle, awaiting input)
   gv orchestrator new --host H [--profile p]  spawn that chat on host H instead, detached in its twin of
@@ -165,7 +172,16 @@ const usage = `gv — grove
   gv dash                                     dashboard TUI only (the cockpit's left pane)
   gv mobile                                   phone-sized dashboard session (for SSH/Termius)
   gv doctor                                   preflight checks
+  gv learnings [--json] [--since 14d]         read-only promotion report: recent auto-memory notes per
+                                              repo (feedback first), recent LEARNINGS.md entries, and
+                                              entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
+  gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init
+                                              Claude subscription accounts: add stores a ` + "`claude setup-token`" + `
+                                              token read from stdin; use sets the default; shell-init prints
+                                              the ~/.bashrc function (eval "$(gv account shell-init)")
+  gv statusline install|uninstall             wrap ~/.claude/settings.json's status line command so
+                                              every session records per-account 5h/weekly usage
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
 `
@@ -322,12 +338,32 @@ func hookCandidates() []hooks.Candidate {
 		if !workspace.Alive(ws) {
 			continue
 		}
-		out = append(out, hooks.Candidate{Label: ws.Label, StateDir: config.StateDirAt(ws.Root)})
+		out = append(out, hooks.Candidate{Label: ws.Label, StateDir: config.StateDirAt(ws.Root), Root: ws.Root})
 	}
 	return append(out, hooks.Candidate{Label: "", StateDir: config.StateDir()})
 }
 
 func main() {
+	// `gv account` runs before the ambient workspace resolves: the shell
+	// function asks `token-path` from any cwd, so it must be read-only
+	// (resolveAmbient creates .grove/state) and a broken workspace label
+	// must not make it fail.
+	if len(os.Args) >= 2 && os.Args[1] == "account" {
+		if err := cmdAccount(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// `gv statusline` is on Claude Code's status line hot path: same
+	// early dispatch, for speed and so it never touches a workspace.
+	if len(os.Args) >= 2 && os.Args[1] == "statusline" {
+		if err := cmdStatusline(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "gv:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	resolveAmbient()
 	if len(os.Args) < 2 {
 		// Bare gv: inside a workspace -> its cockpit; outside with a
@@ -361,7 +397,7 @@ func main() {
 	// Hook receiver: always exit 0, never break a session.
 	if cmd == "hook" {
 		if len(args) == 1 {
-			if err := hooks.Receive(hookCandidates(), args[0], os.Stdin); err != nil {
+			if err := hooks.ReceiveTo(hookCandidates(), args[0], os.Stdin, os.Stdout); err != nil {
 				fmt.Fprintln(os.Stderr, "gv hook:", err)
 			}
 		}
@@ -514,6 +550,8 @@ func main() {
 		err = cmdChat(args)
 	case "mobile":
 		err = cmdMobile()
+	case "learnings":
+		err = cmdLearnings(args)
 	case "doctor":
 		err = cmdDoctor(args)
 	case "hooks":
@@ -534,7 +572,7 @@ func main() {
 
 // grabValueFlags are grab's value-taking flags — the scanner below must
 // skip their values when looking for the ticket positional.
-var grabValueFlags = map[string]bool{"repo": true, "model": true, "profile": true, "brief": true, "feature": true}
+var grabValueFlags = map[string]bool{"repo": true, "model": true, "effort": true, "profile": true, "brief": true, "feature": true, "account": true}
 
 // scanGrabArgs pulls --feature, --repo, and the ticket out of a grab argv
 // without a FlagSet (the host hop passes flags through verbatim).
@@ -1109,7 +1147,10 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SendKeys(dashPane, dash); err != nil {
 		return err
 	}
-	if _, err := tmux.SpawnPane(session, orchDir, orchestratorCmd(cfg, root)); err != nil {
+	// claude-accounts: only this pane needs the active account, and an
+	// account it cannot resolve prints its refusal there — the operator
+	// is attaching, not reading this process's stdout.
+	if _, err := tmux.SpawnPane(session, orchDir, cockpitFirstPane(cfg, root)); err != nil {
 		return err
 	}
 	if err := tmux.SelectLayout(session, cfg.CockpitLayout()); err != nil {
@@ -1161,19 +1202,12 @@ func orchestratorLaunch(cfg *config.Config, root string) string {
 
 // orchestratorCmd resumes the last orchestrator chat when one exists;
 // fresh spawns (O / orchestrator new) always start clean, so this is only
-// for the cockpit's first pane.
-func orchestratorCmd(cfg *config.Config, root string) string {
+// for the cockpit's first pane. acct wraps each limb separately (adopt's
+// rule): a wrap ends in `exec`, so one around the chain would make the
+// fresh fallback unreachable and drop a failed resume to the login.
+func orchestratorCmd(cfg *config.Config, root string, acct account.Resolved) string {
 	launch := orchestratorLaunch(cfg, root)
-	return fmt.Sprintf("%s --continue 2>/dev/null || %s", launch, launch)
-}
-
-// wrapOrchestratorLaunch wraps an already-composed orchestrator launch in
-// a profile's backend env (a nil profile leaves it untouched). Shared with
-// chatSpawnPlan, whose `--resume` variant must compose the flags onto the
-// bare launch BEFORE this wrap — WrapProfile ends in `exec <cmd> )`, so a
-// flag appended afterwards lands outside the subshell.
-func wrapOrchestratorLaunch(launch string, p *config.ModelProfile) string {
-	return config.WrapProfile(launch, p, config.SecretsPath())
+	return wrapWorker(launch+" --continue 2>/dev/null", nil, acct) + " || " + wrapWorker(launch, nil, acct)
 }
 
 // flagWasSet answers "did the operator type this flag?" — the one thing a
@@ -1204,10 +1238,15 @@ func cmdOrchestratorNew(args []string) error {
 	opFlag := fs.String("op-id", "", "idempotency receipt for a relayed spawn — the same id twice spawns once")
 	asFlag := fs.String("as", "", "the host alias the caller knows this machine by (relayed spawns; used in messages)")
 	modelFlag := fs.String("model", "", "pin the chat to one of orchestrator.models' tiers (default opus|sonnet|haiku); on a --profile it picks that tier's slug")
+	effortFlag := fs.String("effort", "", "pin the chat's effort (low|medium|high|xhigh|max); default: the model's own")
+	accountFlag := fs.String("account", "", "run the chat on this `gv account` (login = the interactive login); default: the active account. Not with a non-Anthropic --profile")
 	_ = fs.Parse(args)
 
 	if err := chatResumeConflict(*profileFlag, *resumeFlag); err != nil {
 		return err
+	}
+	if err := config.CheckEffort(*effortFlag); err != nil {
+		return fmt.Errorf("--effort: %w", err)
 	}
 	brief, err := chatBriefText(*briefFlag, flagWasSet(fs, "brief"), *briefFileFlag)
 	if err != nil {
@@ -1230,8 +1269,8 @@ func cmdOrchestratorNew(args []string) error {
 	// registered workspace twin, not a pane in this machine's cockpit.
 	if label != "" {
 		return spawnWorkspaceChat(chatSpawnReq{
-			Label: label, Profile: *profileFlag, Model: *modelFlag, Resume: *resumeFlag,
-			Brief: brief, OpID: *opFlag, Host: *asFlag,
+			Label: label, Profile: *profileFlag, Model: *modelFlag, Effort: *effortFlag, Resume: *resumeFlag,
+			Brief: brief, OpID: *opFlag, Host: *asFlag, Account: *accountFlag,
 		})
 	}
 
@@ -1239,7 +1278,7 @@ func cmdOrchestratorNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, brief, *modelFlag)
+	msg, err := spawnOrchestratorProfileBrief(cfg, *profileFlag, *accountFlag, brief, *modelFlag, *effortFlag)
 	if err != nil {
 		return err
 	}
@@ -1254,7 +1293,7 @@ func cmdOrchestratorNew(args []string) error {
 // Ambient-scoped (cockpit design §4.6 happy path): the pane joins the
 // invoking workspace's cockpit and its gv calls hit that fleet.
 func spawnOrchestrator(cfg *config.Config) (string, error) {
-	return spawnOrchestratorBrief(cfg, "", "")
+	return spawnOrchestratorBrief(cfg, "", "", "")
 }
 
 // spawnOrchestratorBrief is spawnOrchestrator with grove-271's standing
@@ -1262,9 +1301,32 @@ func spawnOrchestrator(cfg *config.Config) (string, error) {
 // hook keeps its two-argument shape and only the CLI reaches this.
 // model (grove-293) pins a tier ("" = the host default); like a brief, a
 // pin needs a pane of its own, never the cockpit's `--continue` first pane.
-func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, error) {
+// effort (grove-435) pins the chat's --effort the same way ("" = the
+// model's own default).
+func spawnOrchestratorBrief(cfg *config.Config, brief, model, effort string) (string, error) {
+	return spawnOrchestratorAccountBrief(cfg, "", brief, model, effort)
+}
+
+// spawnOrchestratorAccountBrief is spawnOrchestratorBrief with `gv
+// orchestrator new --account` (claude-accounts). An explicit account is
+// resolved and preflighted before anything is built; the active one only
+// once the cockpit exists, since a cockpit always builds (its first pane
+// shows an active-account refusal itself). Like a brief, an explicit
+// account needs a pane of its own — unless it is the login the first
+// pane already runs.
+func spawnOrchestratorAccountBrief(cfg *config.Config, accountFlag, brief, model, effort string) (string, error) {
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
 		return "", err
+	}
+	if err := config.CheckEffort(effort); err != nil {
+		return "", err
+	}
+	var acct account.Resolved
+	if accountFlag != "" {
+		var err error
+		if acct, err = resolveChatAccount(accountFlag, "", cfg); err != nil {
+			return "", err
+		}
 	}
 	ws := ambient.ws
 	session := cockpitSessionFor(ws)
@@ -1281,8 +1343,14 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, er
 		// place in it. An unbriefed spawn is done here — it built the
 		// pane that was asked for — and a briefed one falls through to a
 		// pane of its own, exactly as the profiled twin does.
-		if brief == "" && model == "" {
+		if brief == "" && model == "" && effort == "" && firstPaneServes(cfg, accountFlag, acct) {
 			return "cockpit built — gv attaches", nil
+		}
+	}
+	if accountFlag == "" {
+		var err error
+		if acct, err = resolveChatAccount("", "", cfg); err != nil {
+			return "", err
 		}
 	}
 	root := ""
@@ -1298,8 +1366,8 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, er
 		})
 	}
 
-	bare := config.PinModel(orchestratorLaunch(cfg, root), model)
-	launch, id, err := mintedOrchestratorLaunch(bare, dir, brief, nil)
+	bare := config.WithEffort(config.PinModel(orchestratorLaunch(cfg, root), model), effort)
+	launch, id, err := mintedOrchestratorLaunch(bare, dir, brief, nil, acct)
 	if err != nil {
 		return "", err
 	}
@@ -1310,7 +1378,28 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, er
 	stampOrchestratorPane(paneID, id)
 	runs := chatRunsModel(cfg, bare, nil)
 	tagOrchestratorPaneModel(paneID, runs)
-	return "✓ new orchestrator chat pane" + chatModelSuffix(runs), nil
+	tagChatPaneAccount(paneID, acct.Pin)
+	msg := "✓ new orchestrator chat pane" + chatModelSuffix(runs)
+	// One line: the TUI's O keybind flashes this message.
+	if line := chatAccountLine(acct); line != "" {
+		msg += " " + line
+	}
+	return msg, nil
+}
+
+// firstPaneServes reports whether the cockpit's just-built first pane
+// already runs the account a spawn with no brief, model or effort asked
+// for: no --account, or `--account login` while the first pane is on the
+// login too — a second identical pane would only duplicate it.
+func firstPaneServes(cfg *config.Config, accountFlag string, acct account.Resolved) bool {
+	if accountFlag == "" {
+		return true
+	}
+	if acct.Name != "" {
+		return false
+	}
+	first, err := resolveChatAccount("", "", cfg)
+	return err == nil && first.Name == ""
 }
 
 // mintedOrchestratorLaunch is grove-222 applied to a cockpit pane: mint the
@@ -1333,7 +1422,10 @@ func spawnOrchestratorBrief(cfg *config.Config, brief, model string) (string, er
 // grove-271: a standing brief is written here too, for the same reason —
 // the file is named by the id, so it cannot be laid down until the id
 // exists. Both additions go on the BARE launch, ahead of the wrap.
-func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProfile) (string, string, error) {
+//
+// acct (claude-accounts) is the unprofiled pane's account; wrapWorker
+// applies exactly one of the two wraps.
+func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProfile, acct account.Resolved) (string, string, error) {
 	id, err := chat.NewSessionID()
 	if err != nil {
 		return "", "", err
@@ -1346,7 +1438,7 @@ func mintedOrchestratorLaunch(launch, orchDir, brief string, p *config.ModelProf
 		}
 		launch += chatBriefArg(path)
 	}
-	return wrapOrchestratorLaunch(launch, p), id, nil
+	return wrapWorker(launch, p, acct), id, nil
 }
 
 // stampOrchestratorPane records a spawned chat's identity on its pane.
@@ -1368,20 +1460,28 @@ func stampOrchestratorPane(pane, id string) {
 // pane's fresh launch runs wrapped in the profile's backend
 // (orchestratorLaunchProfile), never the operator's own Claude sub.
 func spawnOrchestratorProfile(cfg *config.Config, profileName string) (string, error) {
-	return spawnOrchestratorProfileBrief(cfg, profileName, "", "")
+	return spawnOrchestratorProfileBrief(cfg, profileName, "", "", "", "")
 }
 
 // spawnOrchestratorProfileBrief is that twin carrying grove-271's standing
 // brief — the CLI's entry point; the TUI hook above stays brief-less.
-func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief, model string) (string, error) {
+func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, accountFlag, brief, model, effort string) (string, error) {
 	resolvedName, p, err := cfg.ResolveProfile(profileName, nil)
 	if err != nil {
 		return "", err
 	}
 	if p == nil {
-		return spawnOrchestratorBrief(cfg, brief, model)
+		return spawnOrchestratorAccountBrief(cfg, accountFlag, brief, model, effort)
+	}
+	// claude-accounts: a profile sets its own credentials, so an explicit
+	// --account beside it errors here; the active account is skipped.
+	if _, err := resolveChatAccount(accountFlag, resolvedName, cfg); err != nil {
+		return "", err
 	}
 	if err := cfg.CheckOrchestratorModel(model); err != nil {
+		return "", err
+	}
+	if err := config.CheckEffort(effort); err != nil {
 		return "", err
 	}
 	ws := ambient.ws
@@ -1424,8 +1524,8 @@ func spawnOrchestratorProfileBrief(cfg *config.Config, profileName, brief, model
 	// briefs/ per workspace, keyed by session id, whichever backend ran it.
 	// grove-293: the pin goes on the BARE launch, before the wrap, so
 	// WrapProfile reads it and exports that tier's slug.
-	bare := config.PinModel(orchestratorLaunch(cfg, root), model)
-	launch, id, err := mintedOrchestratorLaunch(bare, baseDir, brief, p)
+	bare := config.WithEffort(config.PinModel(orchestratorLaunch(cfg, root), model), effort)
+	launch, id, err := mintedOrchestratorLaunch(bare, baseDir, brief, p, account.Resolved{})
 	if err != nil {
 		return "", err
 	}
@@ -1588,12 +1688,17 @@ func cmdGrab(args []string) error {
 	repoFlag := fs.String("repo", "", "repo name from config (overrides label inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: task context only, no autonomous kickoff")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
+	effortFlag := fs.String("effort", "", "pin this worker's effort (low|medium|high|xhigh|max; default: the repo's effort:, else the model's own) — one-off, no config edit")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (e.g. openrouter-glm) instead of the repo's default Claude sub")
 	briefFlag := fs.String("brief", "", "ad-hoc operator instructions appended to the kickoff prompt as a final \"## Operator brief\" section")
 	featureFlag := fs.String("feature", "", "fork from this open feature's branch (`gv feature ls`); 'none' opts out of label inference")
+	accountFlag := fs.String("account", "", "run this worker on a subscription account (`gv account ls`) and pin it to the task; 'login' runs the interactive login")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) > 1 {
-		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--profile name] [--brief text] [--feature slug|none]")
+		return fmt.Errorf("usage: gv grab [<task-id-or-url>] [--repo name] [--manual] [--model id] [--effort level] [--profile name] [--account name] [--brief text] [--feature slug|none]")
+	}
+	if err := config.CheckEffort(*effortFlag); err != nil {
+		return fmt.Errorf("--effort: %w", err)
 	}
 
 	cfg, err := loadCfg()
@@ -1644,6 +1749,15 @@ func cmdGrab(args []string) error {
 	if err != nil {
 		return err
 	}
+	// claude-accounts: resolved and preflighted before any side effect —
+	// a bad pin refuses here, never after the worktree exists.
+	acct, err := resolveLaunchAccount(task.ID, *accountFlag, "", profileName, cfg, repo)
+	if err != nil {
+		return err
+	}
+	// grove-435: the flag pins this worker only; the repo's effort: is
+	// the standing default; "" leaves Claude Code's own per-model default.
+	effort := resolveEffort(*effortFlag, repo)
 
 	// grove-373: the base this worker forks from — an open feature's
 	// branch (--feature, or the one open feature a ticket label names),
@@ -1662,8 +1776,17 @@ func cmdGrab(args []string) error {
 	if *modelFlag != "" {
 		fmt.Printf("→ model pinned to %s (this worker only)\n", *modelFlag)
 	}
+	if effort != "" {
+		fmt.Printf("→ effort %s%s\n", effort, effortSource(*effortFlag))
+	}
+	if repo.Autocompact != "" {
+		fmt.Printf("→ autocompact %s (repo default)\n", repo.Autocompact)
+	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s (this worker only)\n", profileName)
+	}
+	if l := accountLine(acct); l != "" {
+		fmt.Println(l)
 	}
 	if *briefFlag != "" {
 		fmt.Println("→ operator brief attached")
@@ -1717,13 +1840,7 @@ func cmdGrab(args []string) error {
 		cleanupFailedGrab(repo.Path, wt.Path, name, promptPath)
 	}()
 
-	for _, envFile := range []string{".env", ".envrc", ".env.local"} {
-		src := filepath.Join(repo.Path, envFile)
-		if data, err := os.ReadFile(src); err == nil {
-			_ = os.WriteFile(filepath.Join(wt.Path, envFile), data, 0o600)
-			fmt.Printf("→ copied %s\n", envFile)
-		}
-	}
+	copyEnvFiles(repo.Path, wt.Path, os.Stdout)
 
 	promptMode := kickoff.ModeDefault
 	if *manual {
@@ -1785,13 +1902,14 @@ func cmdGrab(args []string) error {
 	// Claude pane: (serialized setup) && claude with the prompt as argv via
 	// command substitution — single line, no send-keys mangling, and the
 	// pane returns to a shell if claude exits.
-	claudeBin := config.PinModel(repo.Claude, *modelFlag)
-	claudeCmd := fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath)
-	// Profile wrap applies to the composed claude+prompt command only —
-	// never to repo.Claude itself (hooks resolve the worker's config dir
-	// from the stored r.Claude, hooks.go:246-274) and never to the setup
-	// prefix added just below.
-	claudeCmd = config.WrapProfile(claudeCmd, profile, config.SecretsPath())
+	// grove-440: the repo's autocompact: window rides along the same way
+	// as the model/effort pins — strip-then-inject, exactly once.
+	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact)
+	// The profile or account wrap applies to the composed claude+prompt
+	// command only — never to repo.Claude itself (hooks resolve the
+	// worker's config dir from the stored r.Claude, hooks.go:246-274) and
+	// never to the setup prefix added just below.
+	claudeCmd := grabClaudeCmd(claudeBin, promptPath, profile, acct)
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
@@ -1800,7 +1918,7 @@ func cmdGrab(args []string) error {
 		return err
 	}
 
-	grabData := taskCreatedData(task, repoName, name, wt.Path, sessionName, windowName, profileName, choice)
+	grabData := taskCreatedData(task, repoName, name, wt.Path, sessionName, windowName, profileName, effort, acct.Pin, choice)
 	if err := state.Append(stateDir(), state.Event{
 		Type: state.EvTaskCreated, Ticket: task.ID, Data: grabData,
 	}); err != nil {
@@ -1885,8 +2003,11 @@ func resolveGrab(cfg *config.Config, repoFlag, ref string, chatty bool) (repoNam
 // taskCreatedData is grab's task_created payload. Optional keys are
 // written only when set, so a grab without them stays byte-identical to
 // the events written before they existed: model_profile (grove-36 T2),
-// feature+base (grove-373 — only when the grab rides a feature).
-func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, window, profileName string, choice feature.Choice) map[string]string {
+// feature+base (grove-373 — only when the grab rides a feature), effort
+// (grove-435 — only when pinned by flag or the repo's effort:), account
+// (claude-accounts — only when pinned by an explicit --account; never a
+// token value).
+func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, window, profileName, effort, accountPin string, choice feature.Choice) map[string]string {
 	d := map[string]string{
 		"title": task.Title, "url": task.URL, "repo": repoName,
 		"branch": branch, "worktree": wtPath,
@@ -1895,10 +2016,39 @@ func taskCreatedData(task *provider.Task, repoName, branch, wtPath, session, win
 	if profileName != "" {
 		d["model_profile"] = profileName
 	}
+	if effort != "" {
+		d["effort"] = effort
+	}
+	if accountPin != "" {
+		d["account"] = accountPin
+	}
 	if choice.Feature != nil {
 		d["feature"], d["base"] = choice.Feature.Slug, choice.Base
 	}
 	return d
+}
+
+// resolveEffort is the effort a worker launches with: the --effort flag,
+// else the repo's `effort:` default, else "" (Claude Code's own per-model
+// default — grove passes no flag). Mirrors ResolveProfile's flag-then-repo
+// order. The flag is validated before this runs; the repo key at config
+// load.
+func resolveEffort(flag string, repo *config.Repo) string {
+	if flag != "" {
+		return flag
+	}
+	if repo != nil {
+		return repo.Effort
+	}
+	return ""
+}
+
+// effortSource labels a confirmation line with where the effort came from.
+func effortSource(flag string) string {
+	if flag != "" {
+		return " (this worker only)"
+	}
+	return " (repo default)"
 }
 
 // repoShort strips a redundant workspace-label prefix from a repo name so a
@@ -2184,7 +2334,7 @@ func cmdInit(args []string) error {
 	// The summary board: what's available, what would improve this repo.
 	fmt.Println()
 	cfg, cfgErr := loadCfg()
-	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr, orchestratorDirAt(root)))
+	doctor.Render(os.Stdout, doctor.Run(cfg, cfgErr, orchestratorDirAt(root), accountTasks))
 	fmt.Printf("\nnext: gv grab   (list backlog) · gv grab task-001 · gv   (cockpit)\n")
 	return nil
 }
@@ -2574,12 +2724,37 @@ func age(t time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
+// truncateLine keeps the first line and caps it at n RUNES — a byte slice
+// could split a multibyte codepoint and end `gv ls` previews in mojibake
+// (grove-131/452).
 func truncateLine(s string, n int) string {
 	s = strings.SplitN(s, "\n", 2)[0]
-	if len(s) > n {
-		return s[:n] + "…"
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// envFiles are the untracked secret files a fresh worktree needs copied
+// from the repo root before the worker starts.
+var envFiles = []string{".env", ".envrc", ".env.local"}
+
+// copyEnvFiles copies each present env file from src to dst, reporting
+// each outcome on out. A failed WRITE is reported as such — it used to be
+// discarded and announced as "copied", leaving the worker to fail
+// mysteriously without its secrets (grove-131/452).
+func copyEnvFiles(src, dst string, out io.Writer) {
+	for _, envFile := range envFiles {
+		data, err := os.ReadFile(filepath.Join(src, envFile))
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dst, envFile), data, 0o600); err != nil {
+			fmt.Fprintf(out, "→ failed to copy %s: %v\n", envFile, err)
+			continue
+		}
+		fmt.Fprintf(out, "→ copied %s\n", envFile)
+	}
 }
 
 // --- audit ---
@@ -2690,6 +2865,10 @@ type costRow struct {
 	Repo   string      `json:"repo"`
 	Done   bool        `json:"done"`
 	Cost   cost.Totals `json:"cost"`
+	// Sessions (grove-289) is set only on the synthetic "orchestrator" row
+	// — the transcript file count backing it, since that row has no
+	// worktree/task of its own to describe it.
+	Sessions int `json:"sessions,omitempty"`
 }
 
 // cmdCost reports per-ticket token/cost estimates (active table + done
@@ -2701,7 +2880,10 @@ func cmdCost(args []string) error {
 	analyze := fs.Bool("analyze", false, "outcome-priced ledger with analysis flags")
 	record := fs.String("record", "", "turn the persistent spend ledger on|off (also toggleable from the cockpit costs page)")
 	showLedger := fs.Bool("ledger", false, "print the recorded spend history (latest snapshot per ticket)")
-	parseAnywhere(fs, args)
+	ctxMode := fs.Bool("context", false, "per-call context decomposition: growth by source, compactions, delegation")
+	top := fs.Int("top", 10, "--context: how many amplification rows to show per ticket")
+	allTickets := fs.Bool("all", false, "--context: every tracked task, not just the ones named on the command line")
+	rest := parseAnywhere(fs, args)
 
 	if *record != "" {
 		if *record != "on" && *record != "off" {
@@ -2715,6 +2897,9 @@ func cmdCost(args []string) error {
 	}
 	if *showLedger {
 		return costLedger(*asJSON)
+	}
+	if *ctxMode {
+		return costContext(rest, *asJSON, *top, *allTickets)
 	}
 
 	cfg, err := loadCfg()
@@ -2753,6 +2938,11 @@ func cmdCost(args []string) error {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Cost.USD > rows[j].Cost.USD })
 
+	orchRow, hasOrch := orchestratorCostRow()
+	if hasOrch {
+		rows = append(rows, orchRow)
+	}
+
 	if *asJSON {
 		return emitJSON("rows", rows)
 	}
@@ -2763,16 +2953,219 @@ func cmdCost(args []string) error {
 		fmt.Printf("%-11s %-11s %-8s %-6s %-8s %-8s %-7s %s\n",
 			"TICKET", "REPO", "EST $", "TURNS", "IN", "OUT", "CACHE%", "MODELS")
 		for _, r := range rows {
-			fmt.Printf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s %s\n",
+			line := fmt.Sprintf("%-11s %-11s %-8s %-6d %-8s %-8s %-7s %s",
 				r.Ticket, r.Repo, fmtUSD(&r.Cost), r.Cost.Turns,
 				fmtTok(r.Cost.Input), fmtTok(r.Cost.Output),
 				fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()), r.Cost.Mix())
+			if r.Ticket == orchestratorTicket {
+				line = dim(line)
+			}
+			fmt.Println(line)
 		}
 	}
 	fmt.Printf("\ndone tasks: %d · est $%.2f total · %d turns  (estimates, not billing)\n",
 		doneCount, doneUSD, doneTurns)
 	printUnpricedFooter(unpricedModels(allTots))
 	return nil
+}
+
+// orchestratorTicket is the synthetic ticket id `gv cost` and `gv cost
+// --analyze` use for the ambient workspace's orchestrator chats
+// (grove-289) — spend today's per-ticket rows never show, since no task
+// owns it.
+const orchestratorTicket = "orchestrator"
+
+// orchestratorCostRow builds that row. Empty/false when there is no
+// ambient workspace (the legacy no-workspace path) — orchestrator spend
+// accounting is workspace-scoped by design (DESIGN.md, non-goals).
+func orchestratorCostRow() (costRow, bool) {
+	tot, sessions, label, ok := orchestratorTotals()
+	if !ok {
+		return costRow{}, false
+	}
+	return costRow{Ticket: orchestratorTicket, Repo: label, Done: false, Cost: tot, Sessions: sessions}, true
+}
+
+// orchestratorTotals aggregates every transcript under the ambient
+// workspace's orchestratorProjectDirs (its brain dir + one per model
+// profile, chat_ls.go:398) — everywhere its orchestrator chats have run.
+func orchestratorTotals() (tot cost.Totals, sessions int, label string, ok bool) {
+	if ambient.ws == nil {
+		return cost.Totals{}, 0, "", false
+	}
+	label = ambient.ws.Label
+	if cfg, err := config.LoadAt(ambient.ws.Root); err == nil && cfg.Workspace.Label != "" {
+		label = cfg.Workspace.Label
+	}
+	if label == "" {
+		label = "global"
+	}
+	configDir := workspaceClaudeConfigDir(*ambient.ws)
+	var entries []transcript.UsageEntry
+	for _, dir := range orchestratorProjectDirs(*ambient.ws) {
+		fileEntries, files := readProjectDirUsage(transcript.ProjectDirIn(configDir, dir))
+		entries = append(entries, fileEntries...)
+		sessions += files
+	}
+	return cost.Total(cost.Dedup(entries)), sessions, label, true
+}
+
+// readProjectDirUsage parses every *.jsonl in a Claude project dir (not
+// keyed to any one worktree, so cost.Cache's per-task discovery does not
+// apply) and reports how many files it found.
+func readProjectDirUsage(projDir string) ([]transcript.UsageEntry, int) {
+	entries, err := os.ReadDir(projDir)
+	if err != nil {
+		return nil, 0
+	}
+	var all []transcript.UsageEntry
+	files := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		files++
+		f, err := os.Open(filepath.Join(projDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		all = append(all, transcript.ParseUsage(f)...)
+		f.Close()
+	}
+	return all, files
+}
+
+// contextRow is one `gv cost --context --json` row.
+type contextRow struct {
+	Ticket string             `json:"ticket"`
+	Report cost.ContextReport `json:"report"`
+}
+
+// subCallsFor projects one ticket's `gv sub` ledger records into the
+// shape cost.Context reads (cost cannot import internal/sub: it would
+// cycle through config).
+func subCallsFor(all []sub.Record, ticket string) []cost.SubCall {
+	var out []cost.SubCall
+	for _, r := range sub.ForTicket(all, ticket) {
+		out = append(out, cost.SubCall{
+			Mode: r.Mode, Exit: r.Exit, InputChars: r.InputChars,
+			OutputTokens: r.OutputTokens, Millis: r.Millis,
+		})
+	}
+	return out
+}
+
+// costContext implements `gv cost --context` (grove-289): per-call context
+// decomposition — what filled a ticket's context, whether it compacted,
+// whether it delegated — so a context cap, the deny gate, or `gv sub` can
+// be judged by numbers a week later. Pure read.
+func costContext(tickets []string, asJSON bool, top int, all bool) error {
+	tasks, err := state.Peek(stateDir())
+	if err != nil {
+		return err
+	}
+
+	var selected []*state.Task
+	if all {
+		for _, t := range tasks {
+			selected = append(selected, t)
+		}
+		sort.Slice(selected, func(i, j int) bool { return selected[i].Ticket < selected[j].Ticket })
+	} else {
+		if len(tickets) == 0 {
+			return fmt.Errorf("usage: gv cost --context <ticket>... (or --all for every tracked task)")
+		}
+		for _, tk := range tickets {
+			t, ok := tasks[tk]
+			if !ok {
+				return fmt.Errorf("unknown ticket %q — not tracked (`gv ls` lists tracked tickets)", tk)
+			}
+			selected = append(selected, t)
+		}
+	}
+
+	allSubs, err := sub.Read(stateDir())
+	if err != nil {
+		return err
+	}
+
+	var rows []contextRow
+	for _, t := range selected {
+		lines, err := contextLinesForTask(t.Worktree)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, contextRow{
+			Ticket: t.Ticket,
+			Report: cost.Context(lines, subCallsFor(allSubs, t.Ticket), top),
+		})
+	}
+
+	if asJSON {
+		return emitJSON("rows", rows)
+	}
+	if len(rows) == 0 {
+		fmt.Println("no matching tasks with transcripts")
+		return nil
+	}
+	for _, r := range rows {
+		printContextReport(r.Ticket, r.Report)
+	}
+	return nil
+}
+
+// contextLinesForTask reads and decodes every session + subagent
+// transcript for a worktree, concatenated in file order (transcript.
+// SessionFiles' order — cost.Context relies on it for CallsAfter
+// accounting).
+func contextLinesForTask(worktreePath string) ([]transcript.Line, error) {
+	files, err := transcript.SessionFiles(worktreePath)
+	if err != nil {
+		return nil, err
+	}
+	var all []transcript.Line
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			continue // unreadable file degrades that file, not the ticket
+		}
+		all = append(all, transcript.ParseLines(f)...)
+		f.Close()
+	}
+	return all, nil
+}
+
+// printContextReport renders one ticket's `gv cost --context` human table:
+// a header line, growth-by-bucket sorted desc, then the top-N amplified
+// blocks.
+func printContextReport(ticket string, r cost.ContextReport) {
+	fmt.Printf("%s  calls %d  avg %s  p90 %s  max %s  floor %.0f%%  compactions %d  sub %d\n",
+		ticket, r.APICalls, fmtTok(r.AvgCtx), fmtTok(r.P90Ctx), fmtTok(r.MaxCtx),
+		100*r.FloorShare, len(r.Compactions), r.Delegation.Calls)
+
+	type growthRow struct {
+		bucket cost.GrowthBucket
+		share  float64
+	}
+	growth := make([]growthRow, 0, len(r.Growth))
+	for b, s := range r.Growth {
+		growth = append(growth, growthRow{b, s})
+	}
+	sort.Slice(growth, func(i, j int) bool {
+		if growth[i].share != growth[j].share {
+			return growth[i].share > growth[j].share
+		}
+		return growth[i].bucket < growth[j].bucket
+	})
+	for _, g := range growth {
+		fmt.Printf("  %-22s %.0f%%\n", g.bucket, 100*g.share)
+	}
+
+	for _, a := range r.Top {
+		fmt.Printf("  %-14s %s chars ×%d  ≈%s tok  %s\n",
+			a.Bucket, fmtTok(a.Chars), a.CallsAfter, fmtTok(a.EstTokens), a.Head)
+	}
+	fmt.Println()
 }
 
 // costLedger prints the recorded history — reads the ledger alone, so it
@@ -2816,6 +3209,19 @@ type analyzeRow struct {
 	Steers  int         `json:"steers"`
 	Flags   []string    `json:"flags,omitempty"`
 	Cost    cost.Totals `json:"cost"`
+	// The five fields below (grove-289, additive) come from the same
+	// transcript walk as `gv cost --context`, cached in the same
+	// cost.Cache generation (LinesForTask) so --analyze pays for parsing
+	// each transcript once, not twice.
+	APICalls      int     `json:"api_calls"`
+	AvgCtx        int     `json:"avg_ctx"`
+	MaxCtx        int     `json:"max_ctx"`
+	Compactions   int     `json:"compactions"`
+	SubCalls      int     `json:"sub_calls"`
+	EstUSDPerCall float64 `json:"est_usd_per_call,omitempty"`
+	// Sessions is set only on the synthetic "orchestrator" row (costRow's
+	// twin field) — the transcript file count backing it.
+	Sessions int `json:"sessions,omitempty"`
 }
 
 type analyzeReport struct {
@@ -2918,6 +3324,10 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	if err != nil {
 		return err
 	}
+	allSubs, err := sub.Read(stateDir())
+	if err != nil {
+		return err
+	}
 
 	// PR outcomes concurrently — every ticket ever tracked (done included).
 	type prRes struct {
@@ -2966,6 +3376,17 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 			Ticket: t.Ticket, Repo: t.Repo, Done: t.Done,
 			Outcome: outcomes[t.Ticket], Steers: steers[t.Ticket], Cost: tot,
 		}
+		if lines, err := cache.LinesForTask(t.Worktree); err == nil {
+			ctxRep := cost.Context(lines, subCallsFor(allSubs, t.Ticket), 5)
+			row.APICalls = ctxRep.APICalls
+			row.AvgCtx = ctxRep.AvgCtx
+			row.MaxCtx = ctxRep.MaxCtx
+			row.Compactions = len(ctxRep.Compactions)
+			row.SubCalls = ctxRep.Delegation.Calls
+			if ctxRep.APICalls > 0 {
+				row.EstUSDPerCall = tot.USD / float64(ctxRep.APICalls)
+			}
+		}
 		rep.Rows = append(rep.Rows, row)
 		rep.TotalUSD += tot.USD
 		rep.ByRepoUSD[t.Repo] += tot.USD
@@ -2996,6 +3417,12 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 		if cost.CostOutlier(r.Cost.USD, medianMerged) {
 			r.Flags = append(r.Flags, "cost: ≥2× median of merged tickets")
 		}
+		if cost.ContextHeavy(r.AvgCtx) {
+			r.Flags = append(r.Flags, "context: avg ≥ 200k")
+		}
+		if cost.NeverCompacted(r.APICalls, r.Compactions) {
+			r.Flags = append(r.Flags, "context: ≥150 calls, never compacted")
+		}
 	}
 	sort.Slice(rep.Rows, func(i, j int) bool { return rep.Rows[i].Cost.USD > rep.Rows[j].Cost.USD })
 
@@ -3005,6 +3432,13 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	}
 	rep.UnpricedModels = unpricedModels(rowTots)
 
+	if tot, sessions, label, ok := orchestratorTotals(); ok {
+		rep.Rows = append(rep.Rows, analyzeRow{
+			Ticket: orchestratorTicket, Repo: label, Done: false, Outcome: "n/a",
+			Cost: tot, Sessions: sessions,
+		})
+	}
+
 	if asJSON {
 		return emitJSON("report", rep)
 	}
@@ -3012,9 +3446,13 @@ func costAnalyze(cfg *config.Config, tasks map[string]*state.Task, asJSON bool) 
 	fmt.Printf("%-11s %-11s %-9s %-8s %-6s %-6s %-7s %s\n",
 		"TICKET", "REPO", "OUTCOME", "EST $", "TURNS", "STEER", "CACHE%", "FLAGS")
 	for _, r := range rep.Rows {
-		fmt.Printf("%-11s %-11s %-9s %-8s %-6d %-6d %-7s %s\n",
+		line := fmt.Sprintf("%-11s %-11s %-9s %-8s %-6d %-6d %-7s %s",
 			r.Ticket, r.Repo, r.Outcome, fmtUSD(&r.Cost), r.Cost.Turns, r.Steers,
 			fmt.Sprintf("%.0f%%", 100*r.Cost.CacheReadShare()), strings.Join(r.Flags, "; "))
+		if r.Ticket == orchestratorTicket {
+			line = dim(line)
+		}
+		fmt.Println(line)
 	}
 	fmt.Printf("\ntotal est $%.2f · %d merged (est $%.2f per merged PR) · est $%.2f on abandoned tickets\n",
 		rep.TotalUSD, rep.MergedCount, rep.USDPerMergedPR, rep.AbandonedUSD)
@@ -3345,11 +3783,16 @@ func cmdAdopt(args []string) error {
 	branchFlag := fs.String("branch", "", "branch to adopt (default: from state, or origin/<ticket>-* inference)")
 	manual := fs.Bool("manual", false, "hand-driven session: ticket context only, no autonomous pickup")
 	modelFlag := fs.String("model", "", "pin this worker to a model (e.g. claude-sonnet-5, opus) — one-off, no config edit")
+	effortFlag := fs.String("effort", "", "pin this worker's effort (low|medium|high|xhigh|max; default: the effort it was grabbed with, else the repo's effort:)")
 	profileFlag := fs.String("profile", "", "run this worker on a model profile (default: the profile it was grabbed with; 'anthropic' strips it)")
+	accountFlag := fs.String("account", "", "run this worker on a subscription account and pin it (default: the account it was pinned to, else the active one; 'login' strips the pin)")
 	syncFlag := fs.Bool("sync", false, "fetch and hard-reset the worktree to origin/<branch> first (handoff pickup: another host worked the branch, so any surviving local checkout/branch ref is stale)")
 	positionals := parseAnywhere(fs, args)
 	if len(positionals) != 1 {
-		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--profile name] [--sync]")
+		return fmt.Errorf("usage: gv adopt <ticket> [--repo name] [--branch b] [--manual] [--model id] [--effort level] [--profile name] [--account name|login] [--sync]")
+	}
+	if err := config.CheckEffort(*effortFlag); err != nil {
+		return fmt.Errorf("--effort: %w", err)
 	}
 	cfg, err := loadCfg()
 	if err != nil {
@@ -3413,11 +3856,12 @@ func cmdAdopt(args []string) error {
 
 	// Resolve repo, branch, and prior session — from state if gv has ever
 	// seen this task (active, done, or untracked), else cold via provider.
-	var repoName, branch, sessionID, storedProfile, storedFeature, storedBase string
+	var repoName, branch, sessionID, storedProfile, storedFeature, storedBase, storedEffort, storedAccount string
 	var task *provider.Task
 	if t, ok := tasks[id]; ok {
 		repoName, branch, sessionID, storedProfile = t.Repo, t.Branch, t.SessionID, t.ModelProfile
-		storedFeature, storedBase = t.Feature, t.Base
+		storedFeature, storedBase, storedEffort = t.Feature, t.Base, t.Effort
+		storedAccount = t.Account
 		task = &provider.Task{ID: t.Ticket, Title: t.Title, URL: t.URL}
 		if !t.Done && tmux.WindowLive(t.TmuxSession, t.TmuxWindow) {
 			return fmt.Errorf("%s already has a live window — `gv attach %s`", id, id)
@@ -3458,6 +3902,21 @@ func cmdAdopt(args []string) error {
 	if err != nil {
 		return err
 	}
+	// grove-435: a revival keeps the effort it was grabbed with unless
+	// --effort says otherwise (the grove-337 rule for a chat's model);
+	// a task that never had one falls back to the repo's effort: default.
+	effort := *effortFlag
+	if effort == "" {
+		effort = storedEffort
+	}
+	effort = resolveEffort(effort, repo)
+	// claude-accounts: --account, else the recorded pin (a missing one
+	// refuses — never a silent login), else the active account. Before any
+	// side effect; `--account login` strips the pin.
+	acct, err := resolveLaunchAccount(id, *accountFlag, storedAccount, profileName, cfg, repo)
+	if err != nil {
+		return err
+	}
 
 	// Fresh task fetch enriches the pickup prompt (description + new
 	// comments). Non-fatal for tracked tasks — offline adopt still works
@@ -3492,8 +3951,20 @@ func cmdAdopt(args []string) error {
 	}
 
 	fmt.Printf("→ adopting %s on %s (branch %s)\n", id, repoName, branch)
+	if *modelFlag != "" {
+		fmt.Printf("→ model pinned to %s (this worker only)\n", *modelFlag)
+	}
+	if effort != "" {
+		fmt.Printf("→ effort %s\n", effort)
+	}
+	if repo.Autocompact != "" {
+		fmt.Printf("→ autocompact %s (repo default)\n", repo.Autocompact)
+	}
 	if profileName != "" {
 		fmt.Printf("→ model profile %s\n", profileName)
+	}
+	if l := accountLine(acct); l != "" {
+		fmt.Println(l)
 	}
 
 	// --sync (grove-177, handoff pickup): make origin the source of truth
@@ -3517,13 +3988,7 @@ func cmdAdopt(args []string) error {
 		}
 		wtPath = wt.Path
 		freshWorktree = true
-		for _, envFile := range []string{".env", ".envrc", ".env.local"} {
-			src := filepath.Join(repo.Path, envFile)
-			if data, err := os.ReadFile(src); err == nil {
-				_ = os.WriteFile(filepath.Join(wtPath, envFile), data, 0o600)
-				fmt.Printf("→ copied %s\n", envFile)
-			}
-		}
+		copyEnvFiles(repo.Path, wtPath, os.Stdout)
 		fmt.Printf("→ worktree %s\n", wtPath)
 	} else {
 		fmt.Printf("→ reusing worktree %s\n", wtPath)
@@ -3621,6 +4086,19 @@ func cmdAdopt(args []string) error {
 	if profileName != "" || storedProfile != "" {
 		adoptData["model_profile"] = profileName
 	}
+	// Likewise the effective effort (grove-435): written whenever the
+	// task carries one, so a fold reads back exactly what launched; an
+	// unpinned adopt event stays byte-identical to the ones before.
+	if effort != "" {
+		adoptData["effort"] = effort
+	}
+	// The account pin (claude-accounts), the model_profile rule: written
+	// when pinned, and as "" when `--account login` strips a recorded pin
+	// (the fold clears the field); an unpinned adopt event stays
+	// byte-identical. A name only — never a token value.
+	if acct.Pin != "" || storedAccount != "" {
+		adoptData["account"] = acct.Pin
+	}
 	// A train car stays on its train (grove-373): carry feature+base
 	// through, only when set, so off-train adopt events stay byte-identical.
 	if storedFeature != "" {
@@ -3635,22 +4113,10 @@ func cmdAdopt(args []string) error {
 		return err
 	}
 
-	claudeBin := config.PinModel(repo.Claude, *modelFlag)
-	secrets := config.SecretsPath()
-	// Wrap each claude limb separately: WrapProfile ends in `exec`, which
-	// replaces the shell, so a single wrap around `resume || fresh` would make
-	// the `|| fresh` fallback unreachable and, on a resume failure, silently
-	// drop to the operator's own Claude sub — the exact provider switch this
-	// ticket kills (grove-36 T3). Wrap the
-	// composed claude+prompt command only, never repo.Claude itself (hooks
-	// resolve the worker's config dir from the stored r.Claude) nor the setup
-	// prefix added below. profile == nil leaves every limb byte-identical.
-	freshCmd := config.WrapProfile(fmt.Sprintf(`%s "$(cat %q)"`, claudeBin, promptPath), profile, secrets)
-	claudeCmd := freshCmd
-	if sessionID != "" && !*manual {
-		resumeCmd := config.WrapProfile(fmt.Sprintf("%s --resume %s", claudeBin, sessionID), profile, secrets)
-		claudeCmd = resumeCmd + " || " + freshCmd
-	}
+	claudeBin := config.WithAutocompact(config.WithEffort(config.PinModel(repo.Claude, *modelFlag), effort), repo.Autocompact) // grove-440
+	// Each limb wrapped separately (adoptClaudeCmd); no profile and no
+	// account leaves every limb byte-identical.
+	claudeCmd := adoptClaudeCmd(claudeBin, promptPath, sessionID, *manual, profile, acct)
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()
 		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
@@ -3668,6 +4134,12 @@ func cmdAdopt(args []string) error {
 	}
 	if *modelFlag != "" {
 		how += ", model " + *modelFlag
+	}
+	if effort != "" {
+		how += ", effort " + effort
+	}
+	if acct.Name != "" {
+		how += ", account " + acct.Name
 	}
 	fmt.Printf("✓ %s adopted (%s)\n  watch:  gv ls\n  attach: gv attach %s\n", id, how, id)
 	return nil
@@ -3761,6 +4233,11 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 	} else {
 		merged, pr, err := github.Merged(repo.Path, t.Branch)
 		if err != nil {
+			// grove-451: a gh failure is not "no PR" — say so, so the
+			// operator retries instead of reaching for --force.
+			if !force {
+				return fmt.Errorf("%s: merge check failed: %v — retry, or use --force to override", t.Ticket, err)
+			}
 			fmt.Fprintf(os.Stderr, "warning: merge check failed: %v\n", err)
 		}
 		if pr != nil {
@@ -3788,7 +4265,7 @@ func finishTask(cfg *config.Config, t *state.Task, force bool) error {
 			Input: tot.Input, Output: tot.Output,
 			CacheCreate: tot.CacheCreate5m + tot.CacheCreate1h,
 			CacheRead:   tot.CacheRead, Turns: tot.Turns, USD: tot.USD,
-			Models: tot.Mix(),
+			Models: tot.Mix(), Effort: t.Effort,
 		}
 		if err := ledger.Append(stateDir(), row); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: spend ledger append: %v\n", err)
@@ -4202,7 +4679,7 @@ func cmdDoctor(args []string) error {
 		return fmt.Errorf("usage: gv doctor [--json]")
 	}
 	cfg, cfgErr := loadCfg()
-	rows := doctor.Run(cfg, cfgErr, orchestratorDirFor(ambient.ws, cfg))
+	rows := doctor.Run(cfg, cfgErr, orchestratorDirFor(ambient.ws, cfg), accountTasks)
 	if jsonOut {
 		if err := doctor.RenderJSON(os.Stdout, rows); err != nil {
 			return err
@@ -4215,6 +4692,115 @@ func cmdDoctor(args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// --- learnings (grove-439) ---
+
+// cmdLearnings is the read side of the learnings promotion loop: per
+// configured repo, the auto-memory notes newer than --since (feedback —
+// corrections and confirmed approaches — first), the LEARNINGS.md entries
+// newer than --since, and the entries that name a skill which cites none
+// of them (promotion candidates). Pure read: it never touches a memory
+// file, LEARNINGS.md or a skill — proposing and applying a promotion is
+// the orchestrator's duty on the operator's yes. The memory directory is
+// resolved exactly as the doctor row does (autoMemoryDirectory in any
+// readable settings scope, else Claude Code's default).
+func cmdLearnings(args []string) error {
+	fs := flag.NewFlagSet("learnings", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	sinceFlag := fs.String("since", "14d", "how far back to look (14d, 2w, 48h)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: gv learnings [--json] [--since 14d]")
+	}
+	window, err := learnings.ParseSince(*sinceFlag)
+	if err != nil {
+		return err
+	}
+	cfg, cfgErr := loadCfg()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	env := connections.NewEnv(cfg, nil)
+	rep := learnings.Report{Since: time.Now().Add(-window).UTC(), Repos: []learnings.RepoReport{}}
+	names := make([]string, 0, len(cfg.Repos))
+	for n := range cfg.Repos {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r := cfg.Repos[name]
+		if r == nil || r.Path == "" {
+			continue
+		}
+		m := connections.ResolveMemory(env, r)
+		rep.Repos = append(rep.Repos, learnings.Build(learnings.RepoInput{
+			Name: name, Root: r.Path,
+			MemoryDir: m.Dir, MemorySource: m.Source, MemoryDisabled: m.Disabled,
+		}, rep.Since))
+	}
+	if *asJSON {
+		return emitJSON("report", rep)
+	}
+	renderLearnings(os.Stdout, rep)
+	return nil
+}
+
+// renderLearnings is the human view: one block per repo. Unstable —
+// plugins read --json.
+func renderLearnings(w io.Writer, rep learnings.Report) {
+	fmt.Fprintf(w, "GROVE LEARNINGS — since %s (read-only; promotions are proposed by the orchestrator, applied on your yes)\n", rep.Since.Format("2006-01-02"))
+	for _, r := range rep.Repos {
+		m := r.Memory
+		if m.Disabled == "" && len(m.Notes) == 0 && len(m.Warnings) == 0 && len(r.Entries) == 0 && len(r.Candidates) == 0 {
+			fmt.Fprintf(w, "\n== %s == nothing in the window (%d note(s) in %s)\n", r.Repo, m.Total, m.Dir)
+			continue
+		}
+		fmt.Fprintf(w, "\n== %s ==\n", r.Repo)
+		switch {
+		case m.Disabled != "":
+			fmt.Fprintf(w, "auto memory: OFF — %s\n", m.Disabled)
+		case m.Source != "":
+			fmt.Fprintf(w, "auto memory: %s (autoMemoryDirectory in %s) — %d note(s)\n", m.Dir, m.Source, m.Total)
+		default:
+			fmt.Fprintf(w, "auto memory: %s — %d note(s)\n", m.Dir, m.Total)
+		}
+		for _, wn := range m.Warnings {
+			fmt.Fprintf(w, "  ! %s\n", wn)
+		}
+		if len(m.Notes) == 0 {
+			fmt.Fprintln(w, "  no notes in the window")
+		}
+		for _, n := range m.Notes {
+			typ := n.Type
+			if typ == "" {
+				typ = "-"
+			}
+			idx := ""
+			if !n.Indexed {
+				idx = "  (not in MEMORY.md)"
+			}
+			fmt.Fprintf(w, "  %-9s %s  %s — %s%s\n", typ, n.Modified.UTC().Format("2006-01-02"), n.Name, n.Description, idx)
+		}
+		if r.LearningsFile == "" {
+			fmt.Fprintln(w, "LEARNINGS.md: none")
+			continue
+		}
+		fmt.Fprintf(w, "LEARNINGS.md: %d entries in the window\n", len(r.Entries))
+		for _, e := range r.Entries {
+			fmt.Fprintf(w, "  %s  [%s] %s\n", e.Date, e.Section, e.Fact)
+		}
+		if len(r.Candidates) == 0 {
+			fmt.Fprintln(w, "promotion candidates: none (every entry naming a skill is cited by it)")
+			continue
+		}
+		fmt.Fprintf(w, "promotion candidates (%d) — entries naming a skill that cites none of them:\n", len(r.Candidates))
+		for _, c := range r.Candidates {
+			fmt.Fprintf(w, "  → %s  %s  %s\n", c.Skill, c.Date, c.Fact)
+		}
+	}
 }
 
 // hookSettingsPaths derives every worker profile's settings.json from the

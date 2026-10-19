@@ -440,21 +440,49 @@ func TestWrapProfileMetacharInBaseURL(t *testing.T) {
 func TestWrapProfileSlotSelection(t *testing.T) {
 	p := &ModelProfile{
 		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
-		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+		// Opus and Sonnet slugs differ so the slot choice is observable.
+		Opus: "z-ai/glm-5.2-top", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 	cases := []struct {
 		name, model, wantSlug string
 	}{
 		{"no model flag defaults to sonnet", "", "z-ai/glm-5.2"},
-		{"opus flag maps to opus slug", "opus", "z-ai/glm-5.2"},
+		{"opus flag maps to opus slug", "opus", "z-ai/glm-5.2-top"},
 		{"haiku flag maps to haiku slug", "haiku", "z-ai/glm-4.5-air"},
 		{"sonnet flag maps to sonnet slug", "sonnet", "z-ai/glm-5.2"},
+		// grove-442: a Fable pin takes the lane's top tier (opus slug), not
+		// the sonnet default it used to fall through to.
+		{"fable alias maps to opus slug", "fable", "z-ai/glm-5.2-top"},
+		{"fable id maps to opus slug", "claude-fable-5-1", "z-ai/glm-5.2-top"},
 	}
 	for _, tc := range cases {
 		modeled := WithModel("claude", tc.model)
 		got := WrapProfile(modeled, p, "/s/.env")
 		if !strings.Contains(got, "ANTHROPIC_MODEL="+shellQuote(tc.wantSlug)) {
 			t.Errorf("%s: got %q, want ANTHROPIC_MODEL=%s", tc.name, got, shellQuote(tc.wantSlug))
+		}
+	}
+}
+
+// grove-442: modelSlot's family classification, including Fable → opus
+// (the lane's top tier) and the sonnet default for everything else.
+func TestModelSlot(t *testing.T) {
+	cases := map[string]string{
+		"claude":                                 "sonnet",
+		WithModel("claude", "opus"):              "opus",
+		WithModel("claude", "claude-opus-5-5"):   "opus",
+		WithModel("claude", "fable"):             "opus",
+		WithModel("claude", "claude-fable-5-1"):  "opus",
+		WithModel("claude", "Claude-Fable-5-1"):  "opus",
+		WithModel("claude", "haiku"):             "haiku",
+		WithModel("claude", "claude-haiku-4-5"):  "haiku",
+		WithModel("claude", "sonnet"):            "sonnet",
+		WithModel("claude", "claude-sonnet-5-5"): "sonnet",
+		WithModel("claude --x", "z-ai/glm-5.2"):  "sonnet",
+	}
+	for cmd, want := range cases {
+		if got := modelSlot(cmd); got != want {
+			t.Errorf("modelSlot(%q) = %q, want %q", cmd, got, want)
 		}
 	}
 }

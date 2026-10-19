@@ -20,6 +20,7 @@ func TestAgentsMDPromptRendersFacts(t *testing.T) {
 		"build: pnpm build", "test: pnpm test",
 		"## Layout", "## Conventions", "## Gotchas",
 		"WROTE AGENTS.md", "read in one sitting",
+		"When compacting, always", "acceptance criteria", "STATUS: line contract",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)

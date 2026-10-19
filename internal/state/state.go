@@ -37,6 +37,11 @@ const (
 	// event time is `at`. Folds like an untrack (leaves Active) but keeps
 	// the host on the task so `gv ls --json` can show handed_off_to.
 	EvTaskHandedOff = "task_handed_off"
+	// EvCompaction (grove-289) is appended by the SessionStart hook when
+	// Claude Code restarts a worker's session after an auto/manual context
+	// compaction (source: "compact") — a restart, not a new session: no
+	// glyph change, no session_started.
+	EvCompaction = "compaction"
 )
 
 // Delivery event types (grove-252): the supervisor's transition engine
@@ -155,11 +160,21 @@ type Task struct {
 	// grabbed onto a feature train names the feature's slug and the
 	// branch it forked from (and PRs into). Both empty = the repo's own
 	// base — readers go through BaseOr. Additive & optional.
-	Feature     string `json:"feature,omitempty"`
-	Base        string `json:"base,omitempty"`
+	Feature string `json:"feature,omitempty"`
+	Base    string `json:"base,omitempty"`
+	// Effort (grove-435) is the `--effort` level this worker was launched
+	// with (low|medium|high|xhigh|max): the grab/adopt flag, else the
+	// repo's `effort:` default. Empty = Claude Code's own default for the
+	// model. Additive & optional.
+	Effort string `json:"effort,omitempty"`
+	// Account (claude-accounts design §Decision 5) is the subscription
+	// account this worker was explicitly pinned to (`--account`); empty =
+	// the active account at launch time, or the login. Read side only
+	// until the launch car records it. Additive & optional.
+	Account     string `json:"account,omitempty"`
 	SessionID   string `json:"claude_session_id,omitempty"`
 	Agent       string `json:"agent"`
-	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | none
+	Sentinel    string `json:"sentinel,omitempty"` // question | blocked | done | done_unverified | none
 	Question    string `json:"question,omitempty"`
 	LastMessage string `json:"last_message,omitempty"`
 	Human       string `json:"human,omitempty"`
@@ -176,6 +191,11 @@ type Task struct {
 	// also untracks), cleared by a local task_created/task_adopted (the
 	// task came back). Additive & optional.
 	HandedOffTo string `json:"handed_off_to,omitempty"`
+	// Compactions (grove-289) counts EvCompaction events folded for this
+	// task — how many times this ticket's session has restarted after a
+	// context compaction. Additive & optional: events predating the field
+	// fold to 0.
+	Compactions int `json:"compactions,omitempty"`
 	// SentinelAt (grove-205) is when the agent_status event that set the
 	// CURRENT sentinel landed. Updated moves for any event, so it cannot
 	// tell "done just now" from "done an hour ago"; a poll-based consumer
@@ -330,12 +350,15 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.TmuxSession, t.TmuxWindow = d["tmux_session"], d["tmux_window"]
 		t.ModelProfile = d["model_profile"]         // "" for unprofiled + pre-field events
 		t.Feature, t.Base = d["feature"], d["base"] // "" off-train + pre-field events
+		t.Effort = d["effort"]                      // "" unpinned + pre-field events
+		t.Account = d["account"]                    // "" unpinned + pre-field events
 		t.Agent = AgentSetup
 		t.Done = false
 		t.Paused = false
 		t.HandedOffTo = ""
 		t.Delivery, t.Liveness = nil, nil
 		t.LiveSince = ev.Time
+		t.Compactions = 0
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
@@ -343,6 +366,8 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 		t.Paused = false // any live session un-pauses (mirrors ParkedTickets)
 		t.LiveSince = ev.Time
+	case EvCompaction:
+		t.Compactions++
 	case EvAgentStatus:
 		t.Agent = d["status"]
 		t.Sentinel = d["sentinel"]
@@ -417,6 +442,10 @@ func fold(tasks map[string]*Task, ev Event) {
 				t.Feature = v
 			case "base":
 				t.Base = v
+			case "effort":
+				t.Effort = v
+			case "account":
+				t.Account = v
 			case "session_id":
 				t.SessionID = v
 			}
@@ -515,6 +544,8 @@ func (t *Task) Label() string {
 		return "dead"
 	case t.Agent == AgentIdle && t.Sentinel == "done":
 		return "idle ✓"
+	case t.Agent == AgentIdle && t.Sentinel == "done_unverified":
+		return "done?" // grove-441: DONE claimed, worktree says otherwise
 	case t.Agent == AgentIdle:
 		return "stalled?"
 	default:
@@ -531,7 +562,8 @@ func (t *Task) Label() string {
 //	● live        actively working
 //	⏸ needs you   waiting on a question / plan approval
 //	⚠ blocked     BLOCKED sentinel, needs a decision
-//	✔ done        agent reports done (PR likely following)
+//	✔ done        agent reports done (PR likely following; also an
+//	              unverified done — grove-441 — the label carries the "?")
 //	✗ stalled     dead/crashed, or idle with no STATUS sentinel
 func Glyph(agent, sentinel string) string {
 	switch {
@@ -541,7 +573,7 @@ func Glyph(agent, sentinel string) string {
 		return "⚠"
 	case agent == AgentDead:
 		return "✗"
-	case agent == AgentIdle && sentinel == "done":
+	case agent == AgentIdle && (sentinel == "done" || sentinel == "done_unverified"):
 		return "✔"
 	case agent == AgentIdle:
 		return "✗"

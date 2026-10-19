@@ -24,6 +24,7 @@ import (
 	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/serve"
@@ -81,6 +82,15 @@ type tickMsg struct{}
 // 'r' refresh, post-action refreshes) produce only a data-applying prsMsg,
 // never a prTickMsg, so they can't multiply this loop.
 type prTickMsg struct{}
+
+// featTickMsg is the feature network-pass beat (grove-428): the gh-backed
+// landed/queued/PR lookups in featuresCmd are expensive (3-4 `gh` calls per
+// open feature) and don't need the 30s PR-poll cadence, so they ride their
+// own, slower timer — one per 10min, re-armed ONLY by its own handler. The
+// 'r' key and the open-feature-set-changed pass (grove-377) still fire
+// featuresCmd ad-hoc, producing only a data-applying featuresMsg, never a
+// featTickMsg, so they can't multiply this loop.
+type featTickMsg struct{}
 type flashMsg string
 
 // remoteMsg is the one-shot answer to an R keypress (grove-178): every
@@ -183,9 +193,12 @@ type Model struct {
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
-	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
+	costsTab   int             // SPEND | ACCOUNT | CLAUDE (grove-87); $ always lands on SPEND
 	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
 	accountSel int             // cursor into account.keys (grove-104 key manager)
+	claude     claudeMsg       // CLAUDE tab snapshot — local usage files, on tab open / r, never polled
+	claudeSel  int             // cursor into claude.rows
+	claudeUse  string          // account the u confirm is armed for ("" = not armed)
 
 	flash string
 
@@ -343,7 +356,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
 }
 
 // --- commands ---
@@ -362,6 +375,19 @@ func tickEvery(d time.Duration) tea.Cmd {
 func prTickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return prTickMsg{} })
 }
+
+// featTickEvery arms the feature network-pass beat, decoupled from the 30s
+// PR-poll beat (grove-428): the gh-backed feature lookups are too expensive
+// to ride that cadence, so they get their own timer, re-armed only here.
+func featTickEvery(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return featTickMsg{} })
+}
+
+// featTickInterval is the feature network-pass cadence — a var, not a
+// literal, so a re-arm test can shrink it instead of blocking real minutes
+// on tea.Tick's timer (which starts counting the instant featTickEvery is
+// called, not when its Cmd is invoked).
+var featTickInterval = 10 * time.Minute
 
 // relayCmd delivers an inline reply off the update loop. PasteText settles
 // before its Enter and then verifies the submit landed (grove-144), which can
@@ -887,6 +913,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case claudeMsg:
+		return m.applyClaude(msg), nil
+
+	case claudeUsedMsg:
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+			return m, nil
+		}
+		m.flash = "✓ active account: " + msg.name + " (new launches and shell `claude`; live sessions keep theirs)"
+		return m.claudeRead()
+
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in
 		// ~/.config/grove/.env — refetch so the unset row becomes data.
@@ -910,11 +947,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The single PR-poll beat (grove-118, grove-24 pattern): kick a poll
 		// AND re-arm ONLY this timer. Ad-hoc prsMsg deliveries (below) never
 		// re-arm, so 'r' and other ad-hoc refreshes can't multiply the loop.
-		// grove-377: the feature status pass (queued issues, feature PR)
-		// rides this beat — nil, and free, with no open feature.
-		// grove-402: so does the CHATS box's costly pass (ps, transcripts,
-		// the waiting capture).
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), featuresCmd(m.cfg, m.stateDir, m.features), chatsCmd(m.label, true), prTickEvery(30*time.Second))
+		// grove-428: the feature network pass moved off this beat onto its
+		// own, slower featTickMsg — it was riding this 30s cadence and
+		// burning the shared gh rate-limit budget for data that barely
+		// changes tick to tick.
+		// grove-402: the CHATS box's costly pass (ps, transcripts, the
+		// waiting capture) still rides this beat.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), prTickEvery(30*time.Second))
+
+	case featTickMsg:
+		// grove-428: the feature panel's gh-backed pass (landed/queued/PR
+		// lookups) on its own 10min beat, decoupled from the 30s PR poll.
+		// Ad-hoc featuresCmd calls (the 'r' key, the open-feature-set-changed
+		// pass in refreshMsg) never re-arm this timer, so they can't
+		// multiply the loop — same discipline as prTickMsg/tickMsg.
+		return m, tea.Batch(featuresCmd(m.cfg, m.stateDir, m.features), featTickEvery(featTickInterval))
 
 	case prsMsg:
 		// Data only — the poll loop lives on prTickMsg now (grove-118). This
@@ -1346,6 +1393,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "$", "c":
 		m.mode = modeCosts
 		m.costsTab = costsTabSpend // $ always lands on SPEND (grove-87)
+		m.claudeUse = ""
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs
@@ -1846,13 +1894,11 @@ func (m Model) reviewRows() []*state.Task {
 	return append(fresh, marked...)
 }
 
-// doneBlurb extracts the agent's DONE paragraph for the review queue.
+// doneBlurb extracts the agent's DONE paragraph for the review queue —
+// one parser for every surface (hooks.ParseSentinel, grove-441).
 func doneBlurb(t *state.Task) string {
-	if i := strings.Index(t.LastMessage, "STATUS: DONE"); i >= 0 {
-		s := t.LastMessage[i:]
-		if j := strings.IndexAny(s, "—–-"); j >= 0 {
-			return strings.TrimSpace(strings.SplitN(s[j:], "\n", 2)[0])
-		}
+	if kind, text, ok := hooks.ParseSentinel(t.LastMessage); ok && kind == hooks.SentinelDone {
+		return text
 	}
 	return ""
 }

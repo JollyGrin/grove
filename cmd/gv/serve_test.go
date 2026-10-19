@@ -22,7 +22,7 @@ func TestServeInitSpawnsPromptAndTrustsNothing(t *testing.T) {
 
 	var brief string
 	calls := 0
-	spawn := func(_ *config.Config, b, model string) (string, error) {
+	spawn := func(_ *config.Config, b, model, effort string) (string, error) {
 		calls++
 		brief = b
 		// The drafted script lands while the chat runs; init must not trust it.

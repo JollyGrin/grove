@@ -109,17 +109,17 @@ func TestAddRemoveHiddenRemote(t *testing.T) {
 	}
 }
 
-// The record is the LAST list-panes field: every earlier field keeps its
-// index, and a session with nothing hidden answers with the line it always
+// The record is the LAST list-panes field (after @grove_remote and
+// @grove_account): every earlier field keeps its index, and a session with nothing hidden answers with the line it always
 // did.
 func TestParsePanesHiddenRemote(t *testing.T) {
-	if !strings.HasSuffix(paneListFormat, "\t#{@grove_remote}\t#{"+hiddenRemoteOption+"}") {
-		t.Fatalf("paneListFormat must end with the hidden-remote field, appended after @grove_remote: %q", paneListFormat)
+	if !strings.HasSuffix(paneListFormat, "\t#{@grove_remote}\t#{@grove_account}\t#{"+hiddenRemoteOption+"}") {
+		t.Fatalf("paneListFormat must end with the hidden-remote field, appended after @grove_remote and @grove_account: %q", paneListFormat)
 	}
 	rec := EncodeHiddenRemotes([]HiddenRemote{{Host: "pc", Session: "grove-chat-g-1", Profile: "glm"}})
 	out := strings.Join([]string{
-		strings.Join([]string{"grove-g", "300", "gv", "1", "1700000100", "%8", "1", "/ws", "", "", "", rec}, "\t"),
-		strings.Join([]string{"grove-g", "301", "ssh", "1", "1700000100", "%9", "2", "/ws", "", "", "groveremote", rec}, "\t"),
+		strings.Join([]string{"grove-g", "300", "gv", "1", "1700000100", "%8", "1", "/ws", "", "", "", "", rec}, "\t"),
+		strings.Join([]string{"grove-g", "301", "ssh", "1", "1700000100", "%9", "2", "/ws", "", "", "groveremote", "", rec}, "\t"),
 		strings.Join([]string{"grove-h", "302", "claude", "1", "1700000100", "%10", "1", "/ws/o", "eeee", "opus"}, "\t"),
 	}, "\n")
 	panes := ParsePanes(out)
@@ -148,7 +148,7 @@ func TestPanesOneExecWithHiddenRemotes(t *testing.T) {
 	rec := EncodeHiddenRemotes([]HiddenRemote{{Host: "pc", Session: "grove-chat-g-1"}, {Host: "pc", Session: "grove-chat-g-2", Profile: "glm"}})
 	execTmux = func(args ...string) (string, error) {
 		calls = append(calls, args)
-		return "grove-g\t301\tgv\t1\t1700000100\t%9\t1\t/ws\t\t\t\t" + rec, nil
+		return "grove-g\t301\tgv\t1\t1700000100\t%9\t1\t/ws\t\t\t\t\t" + rec, nil
 	}
 	panes := Panes()
 	if len(panes) != 1 || len(ParseHiddenRemotes(panes[0].HiddenRemote)) != 2 {

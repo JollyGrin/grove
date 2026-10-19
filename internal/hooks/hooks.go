@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -30,12 +29,16 @@ type Payload struct {
 	Message              string `json:"message"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	// Source is SessionStart's origin: startup | resume | clear | compact
-	// (verified on Claude Code 2.1.283, grove-339).
+	// (verified on Claude Code 2.1.283, grove-339). "compact" means Claude
+	// Code restarted the session after a context compaction — not a new
+	// session, so it gets its own `compaction` event, never a
+	// session_started (grove-289).
 	Source string `json:"source"`
+	// StopHookActive is true on a Stop that fires because Claude is
+	// already continuing after a Stop hook blocked — the done gate never
+	// blocks that re-entry (grove-441).
+	StopHookActive bool `json:"stop_hook_active"`
 }
-
-// Matches "STATUS: QUESTION — text" with any dash flavor (—, –, -).
-var sentinelRe = regexp.MustCompile(`(?ms)^\s*STATUS:\s*(QUESTION|BLOCKED|DONE)\s*[—–-]+\s*(.+?)\s*$`)
 
 // Candidate is one fleet the receiver may attribute an event to: a
 // registered workspace (Label = workspace label) or the legacy global
@@ -44,6 +47,10 @@ var sentinelRe = regexp.MustCompile(`(?ms)^\s*STATUS:\s*(QUESTION|BLOCKED|DONE)\
 type Candidate struct {
 	Label    string
 	StateDir string
+	// Root is the workspace root whose .grove/config.yaml layers over the
+	// global file ("" for the legacy global fleet) — the done gate reads
+	// its per-repo switch from there (grove-441).
+	Root string
 }
 
 // Receive handles one hook event from stdin. Errors are swallowed by the
@@ -57,15 +64,25 @@ type Candidate struct {
 // goes to that fleet's state dir only. No candidate matching is the
 // ovs-coexistence no-op contract: return nil, zero writes.
 func Receive(candidates []Candidate, event string, stdin io.Reader) error {
+	return ReceiveTo(candidates, event, stdin, io.Discard)
+}
+
+// ReceiveTo is Receive with the hook's stdout. Two paths write there:
+// the Stop done gate's block decision (grove-441) and the SessionStart
+// re-orientation after a compaction (grove-440, plain text Claude Code
+// adds to the model's context) — every other path stays silent, so
+// Claude Code reads no decision and the stop proceeds. The exit code is 0
+// on every path regardless.
+func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.Writer) error {
 	var p Payload
 	if err := json.NewDecoder(stdin).Decode(&p); err != nil {
 		return err
 	}
-	var stateDir string
+	var stateDir, root string
 	var task *state.Task
 	for _, c := range candidates {
 		if t := state.FindByCwd(state.ReadTasks(c.StateDir), p.Cwd); t != nil {
-			stateDir, task = c.StateDir, t
+			stateDir, root, task = c.StateDir, c.Root, t
 			break
 		}
 	}
@@ -82,6 +99,20 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	switch event {
 	case "session-start":
+		if p.Source == "compact" {
+			// A compact restart is not a new session: no glyph change, no
+			// session_started — just the compaction count (grove-289), then
+			// the ground-truth re-orientation on stdout (grove-440). The
+			// event lands first so a slow lookup can never lose it.
+			err := state.Append(stateDir, state.Event{
+				Type: state.EvCompaction, Ticket: task.Ticket,
+				Data: map[string]string{"session_id": p.SessionID},
+			})
+			if _, werr := io.WriteString(stdout, reorientation(root, task, p)); werr != nil && err == nil {
+				err = werr
+			}
+			return err
+		}
 		glyphWorker(task, state.Glyph(state.AgentWorking, ""))
 		return state.Append(stateDir, state.Event{
 			Type: state.EvSessionStarted, Ticket: task.Ticket,
@@ -90,6 +121,23 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 
 	case "stop":
 		status, sentinel, question, message := classify(p.LastAssistantMessage)
+		// grove-441: a DONE claim is checked against the worktree. In
+		// block mode a claim without evidence lands as done_unverified
+		// (additive sentinel value); warn keeps the done sentinel and
+		// records the verdict as additive data so `gv watch` shows what
+		// block would have stopped. Any other stop resets the block cap.
+		var gate gateVerdict
+		if sentinel == "done" {
+			gate = doneGate(stateDir, root, task, p)
+		} else {
+			gateReset(stateDir, task.Ticket)
+		}
+		if gate.Unverified() && gate.Mode == config.DoneGateBlock {
+			sentinel = SentinelDoneUnverified
+			if gate.Block {
+				status = state.AgentWorking // Claude continues the turn on a block
+			}
+		}
 		// grove-126: events.jsonl is append-only and folded every cockpit
 		// tick, so an unbounded stored message compounds the read cost
 		// forever. Classification above ran on the full text; the head is
@@ -99,15 +147,29 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		// inside every reader's line buffer.
 		message = capRunes(message, messageCap)
 		glyphWorker(task, state.Glyph(status, sentinel))
+		data := map[string]string{
+			"status": status, "sentinel": sentinel,
+			"question": question, "message": message,
+			"session_id": p.SessionID,
+		}
+		if gate.Unverified() {
+			data["gate"] = gate.Mode
+			data["gate_reason"] = gate.Reason
+			if gate.Block {
+				data["gate_decision"] = "block"
+			} else {
+				data["gate_decision"] = "pass:" + gate.Pass
+			}
+		}
 		if err := state.Append(stateDir, state.Event{
-			Type: state.EvAgentStatus, Ticket: task.Ticket,
-			Data: map[string]string{
-				"status": status, "sentinel": sentinel,
-				"question": question, "message": message,
-				"session_id": p.SessionID,
-			},
+			Type: state.EvAgentStatus, Ticket: task.Ticket, Data: data,
 		}); err != nil {
 			return err
+		}
+		if gate.Block {
+			_, _ = stdout.Write(blockJSON(gate.Reason))
+			notify.Desktop(task.Ticket+" DONE blocked", gate.Reason)
+			return nil
 		}
 		switch sentinel {
 		case "question":
@@ -116,9 +178,14 @@ func Receive(candidates []Candidate, event string, stdin io.Reader) error {
 		case "blocked":
 			notify.Desktop(task.Ticket+" is blocked", question)
 			notify.Push(task.Ticket+" is blocked", question, "high", "no_entry")
-		case "done":
-			notify.Desktop(task.Ticket+" reports done", firstLine(message))
-			notify.Push(task.Ticket+" reports done", firstLine(message), "default", "white_check_mark")
+		case "done", SentinelDoneUnverified:
+			if gate.Unverified() {
+				notify.Desktop(task.Ticket+" reports done — unverified", gate.Reason)
+				notify.Push(task.Ticket+" reports done — unverified", gate.Reason, "default", "warning")
+			} else {
+				notify.Desktop(task.Ticket+" reports done", firstLine(message))
+				notify.Push(task.Ticket+" reports done", firstLine(message), "default", "white_check_mark")
+			}
 		default:
 			// Plain idle stops are the common case — desktop-only, so an
 			// ntfy outage can never tax every turn-end.
@@ -224,17 +291,18 @@ func glyphWorker(task *state.Task, glyph string) {
 }
 
 // classify maps the final assistant message to agent state via the STATUS
-// sentinel the kickoff prompt mandates.
+// sentinel the kickoff prompt mandates (ParseSentinel: last line wins,
+// format-tolerant — grove-441).
 func classify(msg string) (status, sentinel, question, message string) {
-	m := sentinelRe.FindStringSubmatch(msg)
-	if m == nil {
+	kind, text, ok := ParseSentinel(msg)
+	if !ok {
 		return state.AgentIdle, "none", "", msg
 	}
-	switch m[1] {
-	case "QUESTION":
-		return state.AgentWaiting, "question", m[2], msg
-	case "BLOCKED":
-		return state.AgentBlocked, "blocked", m[2], msg
+	switch kind {
+	case SentinelQuestion:
+		return state.AgentWaiting, "question", text, msg
+	case SentinelBlocked:
+		return state.AgentBlocked, "blocked", text, msg
 	default: // DONE
 		return state.AgentIdle, "done", "", msg
 	}

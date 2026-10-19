@@ -13,6 +13,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/schema"
+	"github.com/JollyGrin/grove/internal/state"
 )
 
 // Row is one evaluated connection, flattened for rendering and --json.
@@ -33,8 +34,12 @@ type Row struct {
 // caller resolves it, since only cmd/gv knows which workspace is
 // ambient; "" falls back to the configured (legacy global) dir, and the
 // seed-drift row drops out entirely when neither is known.
-func Run(cfg *config.Config, cfgErr error, orchDir string) []Row {
+//
+// accountTasks folds every task an account pin could live in (the
+// pinned-missing-account row); nil drops that row.
+func Run(cfg *config.Config, cfgErr error, orchDir string, accountTasks func() []*state.Task) []Row {
 	env := connections.NewEnv(cfg, cfgErr)
+	env.AccountTasks = accountTasks
 	if orchDir == "" && cfg != nil && cfgErr == nil {
 		orchDir = cfg.Orchestrator.Dir
 	}

@@ -342,6 +342,10 @@ type NewChatOption struct {
 	Profile string `json:"profile"`
 	Model   string `json:"model"`
 	Runs    string `json:"runs"`
+	// Account (claude-accounts, additive) names the token account a
+	// non-profile row's chat would run on; absent for the login. The page
+	// warns that such a chat has no claude.ai connectors or Remote Control.
+	Account string `json:"account,omitempty"`
 }
 
 // handleModels serves the sheet's rows for one workspace, in the order the

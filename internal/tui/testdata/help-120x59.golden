@@ -31,7 +31,7 @@
 │ GLOBAL                                                                                                               │
 │   ?      this cheat sheet                                                                                            │
 │   L      layout: cycle the cockpit pane split (persisted on the session)                                             │
-│   $      costs: spend + account tabs — per-ticket spend, ledger, OpenRouter balance                                  │
+│   $      costs: spend / account / claude tabs — per-ticket spend, ledger, OpenRouter balance, Claude 5h/7d limits    │
 │   *      effects: cycle ambient effects off → calm → full (runtime only)                                             │
 │   g      gardens: the almanac — one garden per day, h/l walk days                                                    │
 │   X      park: stop workers + orchestrator + cockpit (detached + hidden chats keep running); state stays on disk     │
