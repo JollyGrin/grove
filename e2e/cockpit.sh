@@ -640,7 +640,11 @@ $CAP"
 tmux send-keys -t "$PANE0" h
 wait_grep 'CHATS 3 · 2 hidden' || fail "h did not hide the chat:
 $CAP"
-wait_grep '○ chat-2' || fail "the hidden chat has no ○ row:
+# grove-510: a hidden cockpit chat keeps the name it had on screen — the
+# stamp gv put on its pane before the move — never a positional chat-N.
+LNAME="$(tmux display-message -p -t "$LOCALPANE" '#{@grove_chat_name}')"
+case "$LNAME" in cockpit·[0-9]*) ;; *) fail "hidden pane's name stamp is '$LNAME', want cockpit·N" ;; esac
+wait_grep "○ $LNAME" || fail "the hidden chat has no ○ $LNAME row:
 $CAP"
 [ "$(pane_session "$LOCALPANE")" = "grove-chat-rws-2" ] || fail "pane $LOCALPANE is in $(pane_session "$LOCALPANE"), want grove-chat-rws-2"
 [ "$(tmux display-message -p -t "$LOCALPANE" -F '#{pane_pid}')" = "$LOCALPID" ] || fail "the hidden pane is not the same process"
@@ -675,21 +679,21 @@ $CAP"
 [ -z "$(tmux show-options -qv -t '=grove-rws:' @grove_hidden_remote)" ] || fail "the record outlived the show"
 
 say "a replies inline to the hidden chat — delivered AND submitted, the chat stays hidden"
-select_chat 'chat-2' || fail "could not select the hidden chat's row:
+select_chat "$LNAME  " || fail "could not select the hidden chat's row:
 $CAP"
 tmux send-keys -t "$PANE0" a
-wait_grep 'reply → chat-2' || fail "a did not open the inline reply:
+wait_grep "reply → $LNAME" || fail "a did not open the inline reply:
 $CAP"
 # q, X and a digit are typed, not obeyed.
 tmux send-keys -t "$PANE0" -l 'qX1'
 sleep 0.3
 tmux send-keys -t "$PANE0" BSpace BSpace BSpace
 tmux has-session -t '=grove-rws' 2>/dev/null || fail "a hotkey leaked out of the inline reply and took the cockpit down"
-wait_grep 'reply → chat-2' || fail "a hotkey leaked out of the inline reply:
+wait_grep "reply → $LNAME" || fail "a hotkey leaked out of the inline reply:
 $CAP"
 tmux send-keys -t "$PANE0" -l 'echo landed-$((400+3))'
 tmux send-keys -t "$PANE0" Enter
-wait_grep 'sent to chat-2' || fail "the reply was not reported as sent:
+wait_grep "sent to $LNAME" || fail "the reply was not reported as sent:
 $CAP"
 LANDED=""
 for _ in $(seq 1 30); do
@@ -703,7 +707,7 @@ $(cat "$SCRATCH/hidden-pane.cap")"
 
 say "esc cancels a reply without sending"
 tmux send-keys -t "$PANE0" a
-wait_grep 'reply → chat-2' || fail "a did not reopen the inline reply:
+wait_grep "reply → $LNAME" || fail "a did not reopen the inline reply:
 $CAP"
 tmux send-keys -t "$PANE0" -l 'echo never-403'
 tmux send-keys -t "$PANE0" Escape
