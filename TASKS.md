@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-489: focus-mode 05 — click a rail box to focus that chat. The rail process (gv itself) turns on SGR mouse reporting, `chatrail.Hit` hit-tests from the same `layout()` the drawing uses, a left release calls `focusChat` in-process (box inverts for the tick; a chat closed since the draw flashes `gone`, nothing mutated). `@grove_rail_rows` rows gain a trailing session field. No tmux binding added. Rail RSS ≈ 14 MB. e2e/focus.sh drives the click by typing the SGR bytes into the rail pane.
 - [x] grove-488 focus-mode 04: `gv chat focus <s>` swaps the shown chat in the focus layout (minimize current → `@grove_focus_hid`, show target, drop it from the option, rail rewritten; `chat_hidden` then `chat_shown`); the CHATS-row show keys call the same helper in focus, `gv chat show` semantics in horizontal. Refusals: shown chat (no-op), remote target, cockpit not running. e2e/focus.sh extended with a swap.
 - [x] grove-487: focus-mode 03 — `focus` shows one chat, minimizes the rest. `L` into focus keeps the active chat (else the window's previous pane, else the last chat) and hides the others into `grove-chat-<label>-<n>` via chat-hide's primitives, remembering them in `@grove_focus_hid`; `L` back restores exactly those (hand-hidden chats stay hidden); `O`/`)`/digits/`gv orchestrator new` in focus minimize the shown chat first; rail rewritten after every move; `chat_hidden`/`chat_shown` carry additive `reason:"focus"`, appended after the move. Pure planner in `internal/tmux/focus.go` (table-tested), `e2e/focus.sh` (default + hostile) in `all.sh`.
 - [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
@@ -83,21 +84,6 @@
       chat keys under CHATS focus only; help gains a CHATS section. No new
       event type, no new `--json` field. `e2e/cockpit.sh` drives all four
       keys through the live TUI.
-- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
-      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
-      one row per live chat of the workspace: `▣` on screen, `○` hidden
-      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
-      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
-      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
-      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
-      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
-      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
-      transcript read per chat and the waiting capture ride the 30s beat,
-      or the 1s beat while the box is focused (`tui.CockpitChats`,
-      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
-      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
-      and footer/help hints are the next car. The global cockpit (no
-      workspace) owns no chats and shows no box.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

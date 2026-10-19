@@ -91,6 +91,8 @@ spawn() {
   grep -q 'new orchestrator chat pane' "$SCRATCH/spawn.out" || { cat "$SCRATCH/spawn.out"; return 1; }
 }
 
+KEYS_BEFORE="$(tmux list-keys -T root 2>/dev/null || true)"   # grove-489: no root binding is ever added
+
 say "cockpit (horizontal) + two more chats = dash + 3 chats"
 ( cd "$WS" && "$GV" >/dev/null 2>&1 || true )
 tmux has-session -t '=grove-alpha' 2>/dev/null || fail "grove-alpha missing"
@@ -208,6 +210,27 @@ echo "$HID" | grep -qw "$T1" && fail "swap: target still in @grove_focus_hid ($H
 LAST2="$(tail -2 "$EVENTS")"
 echo "$LAST2" | sed -n 1p | grep -q '"type":"chat_hidden"' || fail "swap: want chat_hidden then chat_shown, got: $LAST2"
 echo "$LAST2" | sed -n 2p | grep -q '"type":"chat_shown"' || fail "swap: want chat_hidden then chat_shown, got: $LAST2"
+
+say "click a rail box = gv chat focus (grove-489)"
+# A real mouse click cannot be driven here; the same bytes a terminal sends
+# for a left-button release (SGR, column 3 line 1) are typed into the rail
+# pane's pty, which is exactly what its mouse reader parses.
+RAILPANE="$(tmux list-panes -t "$W" -F '#{pane_id} #{@grove_rail}' | awk '$2 != "" {print $1}')"
+[ -n "$RAILPANE" ] || fail "click: no rail pane"
+sleep 3   # one viewer tick: the rail has drawn the post-swap picture
+BOX1="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | sed -n 2p | awk -F'\t' '{print $5}')"
+[ -n "$BOX1" ] || fail "click: the rail option carries no session for box 1"
+BOX1PANE="$(tmux list-panes -s -t "=$BOX1" -F '#{pane_id}' | head -1)"
+CLICKED_FROM="$(panes | sed -n 2p)"
+tmux send-keys -t "$RAILPANE" -l "$(printf '\033[<0;3;1m')"
+waitfor 40 npanes_is 3 || fail "click: want dash + chat + rail, got $(npanes)"
+waitfor 20 sh -c "tmux list-panes -t '$W' -F '#{pane_id}' | grep -qx '$BOX1PANE'" || fail "click: $BOX1PANE ($BOX1) did not take the screen"
+panes | grep -qx "$CLICKED_FROM" && fail "click: the previously shown chat is still on screen"
+active_is_box() { [ "$(tmux display-message -p -t "$BOX1PANE" '#{pane_active}')" = 1 ]; }
+waitfor 20 active_is_box || fail "click: the clicked chat does not have focus"
+KEYS_AFTER="$(tmux list-keys -T root 2>/dev/null || true)"
+[ "$KEYS_BEFORE" = "$KEYS_AFTER" ] || fail "click: tmux list-keys -T root changed"
+T1PANE="$BOX1PANE"   # the later legs treat the shown chat as T1
 
 say "gv chat focus: the shown chat is a friendly no-op; a remote target is refused"
 EV_BEFORE="$(wc -l < "$EVENTS")"

@@ -176,3 +176,144 @@ func TestViewerReadsOnlyShowOptions(t *testing.T) {
 		t.Errorf("want stale mark after %v: %q", StaleAfter, buf.String())
 	}
 }
+
+func sessRows(n int) []chat.Row {
+	rs := rows(n)
+	for i := range rs {
+		rs[i].Session = fmt.Sprintf("grove-chat-x-%d", rs[i].N)
+	}
+	return rs
+}
+
+// Hit and Render share layout(): for every width and box count, each column
+// of every drawn box answers that box, each separator answers nothing, and the
+// "+N more" slot and the space past the boxes answer nothing.
+func TestHitTable(t *testing.T) {
+	for _, w := range []int{80, 160} {
+		for _, n := range []int{1, 4, 9} {
+			rs := sessRows(n)
+			boxes, more, cw := layout(rs, 0, w)
+			for i, b := range boxes {
+				for x := i * (cw + 1); x < i*(cw+1)+cw; x++ {
+					if got, ok := Hit(rs, 0, w, x); !ok || got != b.Session {
+						t.Errorf("w%d n%d x%d: got %q,%v want %q", w, n, x, got, ok, b.Session)
+					}
+				}
+				if got, ok := Hit(rs, 0, w, i*(cw+1)+cw); ok {
+					t.Errorf("w%d n%d: separator after box %d hit %q", w, n, i, got)
+				}
+			}
+			if more > 0 {
+				if got, ok := Hit(rs, 0, w, len(boxes)*(cw+1)+2); ok {
+					t.Errorf("w%d n%d: overflow box hit %q", w, n, got)
+				}
+			}
+			if _, ok := Hit(rs, 0, w, w+50); ok {
+				t.Errorf("w%d n%d: past the end hit", w, n)
+			}
+			if _, ok := Hit(rs, 0, w, -1); ok {
+				t.Error("negative column hit")
+			}
+		}
+	}
+	if _, ok := Hit(nil, 0, 80, 3); ok {
+		t.Error("empty rail hit")
+	}
+	if n := len(func() []chat.Row { b, _, _ := layout(sessRows(9), 0, 80); return b }()); n != 4 {
+		t.Errorf("80 cells / 9 chats: want 4 boxes + overflow, got %d", n)
+	}
+}
+
+func TestWireCarriesSession(t *testing.T) {
+	got, _, _, ok := Parse(Encode(sessRows(2), 0, t0))
+	if !ok || got[1].Session != "grove-chat-x-2" {
+		t.Errorf("session lost in the wire format: %+v", got)
+	}
+}
+
+type clickFixture struct {
+	v     *Viewer
+	calls [][]string
+	focus []string
+	buf   *bytes.Buffer
+	opt   *string
+}
+
+func newClickFixture(rs []chat.Row, shown int) *clickFixture {
+	f := &clickFixture{buf: &bytes.Buffer{}}
+	payload := Encode(rs, shown, t0)
+	f.opt = &payload
+	f.v = &Viewer{
+		Session: "grove-x", Out: f.buf, Width: func() int { return 80 }, Now: func() time.Time { return t0 },
+		Run:   func(args ...string) (string, error) { f.calls = append(f.calls, args); return *f.opt, nil },
+		Focus: func(s string) error { f.focus = append(f.focus, s); return nil },
+	}
+	_ = f.v.Step()
+	return f
+}
+
+func TestClickFocusesBoxAndIgnoresTheRest(t *testing.T) {
+	f := newClickFixture(sessRows(3), 0)
+	_, _, cw := layout(sessRows(3), 0, 80)
+	_ = f.v.Click(cw+1+2, 0) // second box, first line
+	if len(f.focus) != 1 || f.focus[0] != "grove-chat-x-2" {
+		t.Fatalf("want focus on grove-chat-x-2, got %v", f.focus)
+	}
+	_ = f.v.Click(cw, 0) // separator
+	_ = f.v.Click(79, 0) // past the boxes
+	_ = f.v.Click(2, 2)  // below the rail
+	if len(f.focus) != 1 {
+		t.Errorf("separator / empty space / other line must do nothing, got %v", f.focus)
+	}
+	g := newClickFixture(sessRows(9), 0)
+	boxes, _, gcw := layout(sessRows(9), 0, 80)
+	_ = g.v.Click(len(boxes)*(gcw+1)+1, 0)
+	if len(g.focus) != 0 {
+		t.Errorf("+N more must do nothing, got %v", g.focus)
+	}
+}
+
+func TestClickInvertsBoxBeforeSwap(t *testing.T) {
+	f := newClickFixture(sessRows(2), 0)
+	f.buf.Reset()
+	_ = f.v.Click(1, 0)
+	if !strings.Contains(f.buf.String(), "\x1b[7m") {
+		t.Errorf("clicked box was not inverted: %q", f.buf.String())
+	}
+}
+
+func TestClickStaleBoxMutatesNothing(t *testing.T) {
+	f := newClickFixture(sessRows(2), 0)
+	*f.opt = Encode(sessRows(2)[:1], 0, t0) // chat 2 closed since the draw
+	f.calls = nil
+	f.buf.Reset()
+	_, _, cw := layout(sessRows(2), 0, 80)
+	_ = f.v.Click(cw+1+1, 0)
+	if len(f.focus) != 0 {
+		t.Errorf("stale box ran focus: %v", f.focus)
+	}
+	for _, c := range f.calls {
+		if c[0] != "show-options" {
+			t.Errorf("stale click ran %v", c)
+		}
+	}
+	if !strings.Contains(f.buf.String(), "gone") {
+		t.Errorf("no gone flash: %q", f.buf.String())
+	}
+	_ = f.v.Step()
+	if strings.Contains(f.v.prev, "gone") {
+		t.Error("the flash must last one tick")
+	}
+}
+
+func TestReadClicks(t *testing.T) {
+	in := "x\x1b[<0;10;1M" + // press: ignored
+		"\x1b[<0;10;1m" + // release: click (9,0)
+		"\x1b[<64;5;1M\x1b[<2;5;1m\x1b[<4;5;1m" + // wheel, right, shift-left: ignored
+		"\x1b[A\x1b\x1b[<0;3;2m" // arrow, stray esc, then click (2,1)
+	var got [][2]int
+	ReadClicks(strings.NewReader(in), func(x, y int) { got = append(got, [2]int{x, y}) })
+	if len(got) != 2 || got[0] != [2]int{9, 0} || got[1] != [2]int{2, 1} {
+		t.Errorf("got %v", got)
+	}
+}

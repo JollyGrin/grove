@@ -38,12 +38,39 @@ func cmdChatRail(args []string) error {
 			return 80
 		},
 	}
+	// A click runs gv's own focus helper in this very process (the rail IS
+	// gv). The terminal goes raw so mouse reports arrive unechoed; one
+	// reader goroutine feeds the same loop that ticks, so nothing races.
+	v.Focus = func(target string) error {
+		_, err := focusChat(target, true)
+		return err
+	}
+	clicks := make(chan [2]int, 4)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		if old, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+			defer term.Restore(int(os.Stdin.Fd()), old)
+			defer fmt.Fprint(os.Stdout, chatrail.MouseOff)
+			fmt.Fprint(os.Stdout, chatrail.MouseOn)
+			go chatrail.ReadClicks(os.Stdin, func(x, y int) {
+				select {
+				case clicks <- [2]int{x, y}:
+				default:
+				}
+			})
+		}
+	}
 	fmt.Fprint(os.Stdout, "\x1b[?25l") // hide the cursor; the pane is a display
 	_ = v.Step()
-	for range time.Tick(railViewerTick) {
-		_ = v.Step()
+	tick := time.NewTicker(railViewerTick)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			_ = v.Step()
+		case c := <-clicks:
+			_ = v.Click(c[0], c[1])
+		}
 	}
-	return nil
 }
 
 var (
