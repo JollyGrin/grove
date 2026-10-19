@@ -47,6 +47,7 @@ func applyCockpitLayout(session, name string) error {
 		return tmux.ApplyLayout(session, name)
 	}
 	moved := focusMoved(label, dir)
+	freezeChatNames(label, isCockpit)
 	if name != "focus" {
 		// Rail first so the restored chats join a plain window, then one
 		// re-tile into the layout (the rail is already gone).
@@ -78,6 +79,7 @@ func focusBeforeSpawn(session, label, root string) bool {
 	if err != nil {
 		return false
 	}
+	freezeChatNames(label, isCockpit)
 	_ = tmux.MinimizeShown(session, label, isCockpit, focusMoved(label, config.StateDirAt(root)))
 	return true
 }
@@ -144,6 +146,7 @@ func focusChat(target string, focus bool) (focusResult, error) {
 		return focusResult{}, err
 	}
 	label := rec.Row.Workspace
+	freezeChatNames(label, isCockpit)
 	if err := tmux.MinimizeShown(cockpit, label, isCockpit, focusMoved(label, config.StateDirAt(rec.Root))); err != nil {
 		railWriteNow(label, cockpit)
 		return focusResult{}, err

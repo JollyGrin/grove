@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/chatrail"
 	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/transcript"
@@ -144,7 +145,7 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 		}
 		found = append(found, cockpitChatPane{pane: p, row: tui.ChatRow{
 			Pane: p.Pane, Session: p.Session, N: p.Index, Host: p.Remote, Model: p.Model,
-			Busy: chat.Busy(p.Command), Created: p.Created,
+			Busy: chat.Busy(p.Command), Created: p.Created, Title: chatrail.PaneTitle(p.Title),
 		}})
 	}
 	prefix := "grove-chat-" + ws.Label + "-"
@@ -156,24 +157,112 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 		}
 	}
 	if !candidate || isCockpit == nil {
+		nameChats(found)
 		return found
 	}
 	check, err := isCockpit()
 	if err != nil {
 		// An unreadable registry cannot tell a chat from a cockpit: list
 		// none rather than guess (cockpitSessionCheck's rule).
+		nameChats(found)
 		return found
 	}
 	for _, c := range tmux.ChatSessionsIn(panes, ws.Label, check) {
 		found = append(found, cockpitChatPane{
-			pane: tmux.LivePane{Session: c.Session, PID: c.PID, Command: c.Command, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID},
+			pane: tmux.LivePane{Session: c.Session, PID: c.PID, Command: c.Command, Pane: c.Pane, Dir: c.Dir, ChatSession: c.SessionID, Name: c.Name},
 			row: tui.ChatRow{
 				Pane: c.Pane, Session: c.Session, Hidden: true, N: c.N, Model: c.Model,
-				Busy: chat.Busy(c.Command), Created: c.Created,
+				Busy: chat.Busy(c.Command), Created: c.Created, Title: chatrail.PaneTitle(c.Title),
 			},
 		})
 	}
+	nameChats(found)
 	return found
+}
+
+// nameChats gives every chat its stable name (grove-510). A pane's name
+// stamp wins — it was frozen before the pane's first move, so the original
+// cockpit orchestrator stays cockpit·1 after focus minimizes it into a
+// grove-chat session. An unstamped pane is named by position (cockpit·<pane
+// index>, chat-<session n>), unless a stamp already holds that name: then
+// it takes the lowest free number of its kind. Pure, and deterministic for
+// a given pane list, so every reader names a chat the same way.
+func nameChats(found []cockpitChatPane) {
+	// No map: a workspace holds a handful of chats, and this runs on the
+	// cockpit's 1s beat (the RAM rule).
+	taken := func(name string) bool {
+		for i := range found {
+			if found[i].row.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for i := range found {
+		if n := found[i].pane.Name; n != "" && !taken(n) {
+			found[i].row.Name = n
+		}
+	}
+	for i := range found {
+		r := &found[i].row
+		if r.Name != "" {
+			continue
+		}
+		kind := "cockpit·"
+		if r.Hidden {
+			kind = "chat-"
+		}
+		name := kind + strconv.Itoa(r.N)
+		for n := 1; taken(name); n++ {
+			name = kind + strconv.Itoa(n)
+		}
+		r.Name = name
+	}
+}
+
+// freezeChatNames stamps every unstamped local chat of the workspace with
+// the name it wears right now (grove-510). Every path that moves a chat
+// between the cockpit window and a grove-chat session calls it first, so
+// the name rides the pane through the move instead of tracking its
+// position. Remote panes are left alone: hiding one closes it. Best-effort —
+// a failed stamp only means that chat is named by position.
+func freezeChatNames(label string, isCockpit tmux.CockpitCheck) {
+	ws, ok := labelWorkspace(label)
+	if !ok {
+		return
+	}
+	check := func() (tmux.CockpitCheck, error) { return isCockpit, nil }
+	for _, s := range namesToStamp(cockpitChatPanes(ws, tmux.Panes(), check)) {
+		_ = tmux.SetPaneChatName(s[0], s[1])
+	}
+}
+
+// namesToStamp is freezeChatNames' pure half: the [pane, name] pairs of the
+// local chats that wear no name stamp yet.
+func namesToStamp(found []cockpitChatPane) [][2]string {
+	var out [][2]string
+	for _, f := range found {
+		if f.pane.Name == "" && f.row.Host == "" && f.pane.Pane != "" {
+			out = append(out, [2]string{f.pane.Pane, f.row.Name})
+		}
+	}
+	return out
+}
+
+// labelWorkspace is the registered workspace with this label.
+func labelWorkspace(label string) (workspace.Workspace, bool) {
+	if label == "" {
+		return workspace.Workspace{}, false
+	}
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return workspace.Workspace{}, false
+	}
+	targets, err := chatWorkspaces(list, label)
+	if err != nil || len(targets) != 1 {
+		return workspace.Workspace{}, false
+	}
+	return targets[0], true
 }
 
 // deepenCockpitChats fills the costly fields in place: which conversation

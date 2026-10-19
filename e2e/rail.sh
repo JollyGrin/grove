@@ -85,14 +85,14 @@ say "a second build reuses the rail"
 [ "$(rails | wc -l | tr -d ' ')" = 1 ] || fail "second build duplicated the rail: $(rails)"
 [ "$(rails)" = "$RAIL" ] || fail "second build replaced the rail pane"
 
-say "empty rail reads 'no minimized chats'"
+say "the rail shows the one chat on screen as a highlighted chip (grove-510)"
 CAP=""
-for _ in $(seq 1 20); do
+for _ in $(seq 1 30); do
   CAP="$(tmux capture-pane -p -S - -t "$RAIL" | tr -d '\n')"
-  echo "$CAP" | grep -q 'no minimized chats' && break
+  echo "$CAP" | grep -q '▣ cockpit·' && break
   sleep 0.5
 done
-echo "$CAP" | grep -q 'no minimized chats' || fail "rail did not render:
+echo "$CAP" | grep -q '▣ cockpit·' || fail "rail did not render the shown chat:
 $CAP"
 
 say "hide the chat by hand; seed its transcript so the box has a label"

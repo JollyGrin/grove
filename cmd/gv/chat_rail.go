@@ -9,15 +9,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/term"
 
-	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/chatrail"
 	"github.com/JollyGrin/grove/internal/tmux"
-	"github.com/JollyGrin/grove/internal/workspace"
+	"github.com/JollyGrin/grove/internal/tui"
 )
 
 // railViewerTick is how often the rail re-reads its option.
@@ -100,55 +102,89 @@ func railTick(label, session string) {
 	if tmux.CockpitLayout(session) != "focus" {
 		return
 	}
-	railWriteNow(label, session)
+	if !railWriteMu.TryLock() {
+		return // a move is writing the rail right now
+	}
+	defer railWriteMu.Unlock()
+	railWrite(label, session, false)
 }
 
-// railWriteNow rebuilds the chat report and writes the rail's option at
-// once (grove-487: the focus moves rewrite it directly rather than waiting
-// for the next beat). No-op without a rail pane.
+// railWriteMu serializes this process's rail rebuilds: two overlapping
+// moves must not let the older report land last (grove-510's churn lag).
+var railWriteMu sync.Mutex
+
+// railWriteNow rebuilds the chips and writes the rail's option at once,
+// unconditionally — every move calls it (grove-487, grove-510), not only
+// the beat. No-op without a rail pane.
 func railWriteNow(label, session string) {
-	_, window, ok := tmux.RailPane(session)
+	railWriteMu.Lock()
+	defer railWriteMu.Unlock()
+	railWrite(label, session, true)
+}
+
+// railWrite builds the rail from the same rows as the CHATS box (the deep
+// pass), so the box and the rail count and name the same chats.
+func railWrite(label, session string, force bool) {
+	if _, _, ok := tmux.RailPane(session); !ok {
+		return
+	}
+	ws, ok := labelWorkspace(label)
 	if !ok {
 		return
 	}
-	list, err := workspace.LoadRegistry()
-	if err != nil {
-		return
-	}
-	targets, err := chatWorkspaces(list, label)
-	if err != nil {
-		return
-	}
-	isCockpit, err := cockpitSessionCheck()
-	if err != nil {
-		return
-	}
-	recs := chatRecords(targets, liveChatLookup(isCockpit))
-	markWaiting(recs, tmux.CapturePane)
-	off, shown := railRows(recs, window)
-	_, _ = railWriter.Write(session, off, shown, time.Now())
+	rows := cockpitChats(&ws, true, liveCockpitChatLookup())
+	_, _ = railWriter.Write(session, railChips(rows), time.Now(), force)
 }
 
-// railRows splits a report into the chats off screen (one box each) and the
-// number of the chat on screen. Off screen = a detached chat session nobody
-// is attached to, or an orchestrator pane living outside the cockpit window
-// (hidden by hand, or minimized by focus).
-func railRows(recs []chatRecord, cockpitWindow string) (off []chat.Row, shown int) {
-	for _, r := range recs {
-		switch r.Row.Kind {
-		case chat.KindChat:
-			if r.Row.Attached {
-				shown = r.Row.N
-			} else {
-				off = append(off, r.Row)
-			}
-		case chat.KindCockpit:
-			if r.Window == cockpitWindow {
-				shown = r.Row.N
-			} else {
-				off = append(off, r.Row)
-			}
+// railChips turns the CHATS box's rows into the rail's chips: every chat,
+// the on-screen ones marked Shown, in a stable order — by name, cockpit·N
+// before chat-N — so a chip holds its place when focus swaps. A remote
+// chat has no session to focus here: its chip is not clickable.
+func railChips(rows []tui.ChatRow) []chatrail.Chip {
+	chips := make([]chatrail.Chip, 0, len(rows))
+	for _, r := range rows {
+		turn := r.Turn
+		if r.Waiting {
+			turn = "waiting"
 		}
+		at := r.LastActive
+		if at.IsZero() {
+			at = r.Created
+		}
+		c := chatrail.Chip{Name: tui.ChatName(r), Title: chatrail.Title(r.Title, r.Label), Turn: turn, At: at, Shown: !r.Hidden}
+		if r.Host == "" {
+			c.Session = r.Session
+		}
+		chips = append(chips, c)
 	}
-	return off, shown
+	sort.SliceStable(chips, func(i, j int) bool {
+		ki, ni := chipOrder(chips[i].Name)
+		kj, nj := chipOrder(chips[j].Name)
+		if ki != kj {
+			return ki < kj
+		}
+		if ni != nj {
+			return ni < nj
+		}
+		return chips[i].Name < chips[j].Name
+	})
+	return chips
+}
+
+// chipOrder ranks a chat name: local cockpit·N, local chat-N, then remote
+// (an "@host" suffix), each by number.
+func chipOrder(name string) (rank, n int) {
+	base, _, remote := strings.Cut(name, " @")
+	if num, ok := strings.CutPrefix(base, "cockpit·"); ok {
+		n, _ = strconv.Atoi(num)
+	} else if num, ok := strings.CutPrefix(base, "chat-"); ok {
+		rank = 1
+		n, _ = strconv.Atoi(num)
+	} else {
+		rank = 2
+	}
+	if remote {
+		rank += 3
+	}
+	return rank, n
 }

@@ -5,6 +5,8 @@
 # %pane, same pid), @grove_focus_hid names both, `gv chat ls` still reports
 # them kind chat / writable; `L` -> horizontal restores exactly those. A chat
 # hidden by hand stays hidden. A spawn in focus minimizes the shown chat.
+# grove-510: every chat keeps its cockpit·N name through the moves, the rail
+# has a chip per chat, and after a burst of focus moves it matches `gv chat ls`.
 #
 # tmux: isolated — unsets TMUX/TMUX_PANE, scratch TMUX_TMPDIR, scoped
 # kill-server, real-server canary before/after (tmux-discipline).
@@ -126,10 +128,21 @@ grep -q '"reason":"focus"' "$EVENTS" || fail "no chat_hidden with reason focus i
 RAILN=""
 for _ in $(seq 1 30); do
   RAILN="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows 2>/dev/null | sed 1d | grep -c . || true)"
-  [ "$RAILN" = 2 ] && break
+  [ "$RAILN" = 3 ] && break
   sleep 0.3
 done
-[ "$RAILN" = 2 ] || fail "rail must list chats 1 and 3 (2 rows), got $RAILN"
+[ "$RAILN" = 3 ] || fail "rail must list every chat — 1, 2 (shown) and 3 (3 rows), got $RAILN"
+
+say "grove-510: minimized chats keep their cockpit name; the rail names them so"
+for p in "$C1" "$C2" "$C3"; do
+  NAME="$(tmux display-message -p -t "$p" '#{@grove_chat_name}')"
+  case "$NAME" in cockpit·*) ;; *) fail "$p name stamp is '$NAME', want cockpit·N" ;; esac
+  tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | awk -F'\t' -v n="$NAME" 'NR > 1 && $4 == n {f=1} END {exit !f}' \
+    || fail "rail has no chip named $NAME"
+done
+C1NAME="$(tmux display-message -p -t "$C1" '#{@grove_chat_name}')"
+tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | awk -F'\t' 'NR > 1 && $1 == 1 {n++} END {exit n != 1}' \
+  || fail "want exactly one shown chip"
 
 say "gv chat ls --json: minimized chats are kind chat, writable"
 ( cd "$WS" && "$GV" chat ls --json ) > "$SCRATCH/ls.json"
@@ -184,10 +197,11 @@ NEW="$(panes | while read -r p; do echo "$BEFORE" | grep -qw "$p" || echo "$p"; 
 RAILN=""
 for _ in $(seq 1 30); do
   RAILN="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows 2>/dev/null | sed 1d | grep -c . || true)"
-  [ "$RAILN" = 3 ] && break
+  [ "$RAILN" = 4 ] && break
   sleep 0.3
 done
-[ "$RAILN" = 3 ] || fail "rail must hold three boxes (hand-hidden + two minimized), got $RAILN"
+[ "$RAILN" = 4 ] || fail "rail must hold four chips (hand-hidden + two minimized + the new shown chat), got $RAILN"
+[ "$(tmux display-message -p -t "$C1" '#{@grove_chat_name}')" = "$C1NAME" ] || fail "chat 1 lost its name $C1NAME"
 
 say "gv chat focus: swap the shown chat (grove-488)"
 SHOWN_NOW="$(panes | sed -n 2p)"
@@ -218,11 +232,28 @@ say "click a rail box = gv chat focus (grove-489)"
 RAILPANE="$(tmux list-panes -t "$W" -F '#{pane_id} #{@grove_rail}' | awk '$2 != "" {print $1}')"
 [ -n "$RAILPANE" ] || fail "click: no rail pane"
 sleep 3   # one viewer tick: the rail has drawn the post-swap picture
-BOX1="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | sed -n 2p | awk -F'\t' '{print $5}')"
-[ -n "$BOX1" ] || fail "click: the rail option carries no session for box 1"
+# grove-510: every chat has a chip, the shown one too (clicking it is a
+# no-op) — click the first chip that is off screen, at its own column.
+ROWS="$(tmux show-options -t '=grove-alpha:' -v @grove_rail_rows | sed 1d)"
+NCHIPS="$(echo "$ROWS" | grep -c .)"
+# The later legs read the clicked chat's session-id stamp, so pick a chip
+# whose pane wears one (a spawned chat; the build's first pane has none).
+IDX=""; BOX1=""; i=0
+while IFS=$'\t' read -r SHOWN _ _ _ SESS _; do
+  if [ "$SHOWN" = 0 ] && [ -n "$SESS" ]; then
+    SP="$(tmux list-panes -s -t "=$SESS" -F '#{pane_id}' | head -1)"
+    if [ -n "$(tmux display-message -p -t "$SP" '#{@grove_chat_session}')" ]; then IDX=$i; BOX1="$SESS"; break; fi
+  fi
+  i=$((i + 1))
+done <<< "$ROWS"
+[ -n "$BOX1" ] || fail "click: the rail option carries no off-screen chip with a stamped session"
+RW="$(tmux display-message -p -t "$RAILPANE" '#{pane_width}')"
+SLOTS="$NCHIPS"; [ $((RW / SLOTS)) -ge 16 ] || SLOTS=$((RW / 16))
+CW=$((RW / SLOTS - 1))
+COL=$((IDX * (CW + 1) + 3))
 BOX1PANE="$(tmux list-panes -s -t "=$BOX1" -F '#{pane_id}' | head -1)"
 CLICKED_FROM="$(panes | sed -n 2p)"
-tmux send-keys -t "$RAILPANE" -l "$(printf '\033[<0;3;1m')"
+tmux send-keys -t "$RAILPANE" -l "$(printf '\033[<0;%d;1m' "$COL")"
 waitfor 40 npanes_is 3 || fail "click: want dash + chat + rail, got $(npanes)"
 waitfor 20 sh -c "tmux list-panes -t '$W' -F '#{pane_id}' | grep -qx '$BOX1PANE'" || fail "click: $BOX1PANE ($BOX1) did not take the screen"
 panes | grep -qx "$CLICKED_FROM" && fail "click: the previously shown chat is still on screen"
@@ -231,6 +262,32 @@ waitfor 20 active_is_box || fail "click: the clicked chat does not have focus"
 KEYS_AFTER="$(tmux list-keys -T root 2>/dev/null || true)"
 [ "$KEYS_BEFORE" = "$KEYS_AFTER" ] || fail "click: tmux list-keys -T root changed"
 T1PANE="$BOX1PANE"   # the later legs treat the shown chat as T1
+
+say "grove-510 churn: 6 focus moves inside 60s, then the rail matches gv chat ls"
+START=$(date +%s)
+for i in 1 2 3 4 5 6; do
+  TGT="$(hid_opt | awk '{print $1}')"
+  [ -n "$TGT" ] || TGT="$(chat_sessions | head -1)"
+  ( cd "$WS" && "$GV" chat focus "$TGT" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "churn move $i ($TGT)"; }
+done
+[ $(( $(date +%s) - START )) -le 60 ] || fail "churn took over 60s"
+( cd "$WS" && "$GV" chat ls --json ) > "$SCRATCH/ls.json"
+tmux show-options -t '=grove-alpha:' -v @grove_rail_rows > "$SCRATCH/rail.txt"
+python3 - "$SCRATCH/ls.json" "$SCRATCH/rail.txt" <<'PY' || fail "rail does not match gv chat ls right after the last move: $(cat "$SCRATCH/rail.txt")"
+import json, sys
+rows = json.load(open(sys.argv[1]))
+rows = rows.get("chats", rows) if isinstance(rows, dict) else rows
+live = [r for r in rows if r["kind"] in ("chat", "cockpit")]
+chips = [l.split("\t") for l in open(sys.argv[2]).read().splitlines()[1:] if l]
+assert len(chips) == len(live), (len(chips), len(live))
+hidden = sorted(r["session"] for r in live if r["kind"] == "chat")
+off = sorted(c[4] for c in chips if c[0] == "0")
+assert hidden == off, (hidden, off)
+assert sum(c[0] == "1" for c in chips) == len(live) - len(hidden)
+PY
+if ! panes | grep -qx "$T1PANE"; then   # the later legs want the clicked chat shown again
+  ( cd "$WS" && "$GV" chat focus "$(tmux display-message -p -t "$T1PANE" '#{session_name}')" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "refocus $T1PANE"; }
+fi
 
 say "gv chat focus: the shown chat is a friendly no-op; a remote target is refused"
 EV_BEFORE="$(wc -l < "$EVENTS")"

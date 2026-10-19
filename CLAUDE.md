@@ -52,7 +52,10 @@ layouts, `horizontal` (every pane side by side) and `focus`; `L` toggles
 them (`cockpit.layout`; the old `vertical`/`tiled` values read as
 horizontal). In `focus` one chat is shown beside the dash and the rest are
 minimized (hidden, as in §Hidden chats) behind a 4-row rail pane under it
-— click a box or `gv chat focus <session>` swaps the shown chat; `L` back
+— one chip per chat, the shown one bold, titled by Claude's pane title; a
+chat's name (`cockpit·1`, `chat-3`) is stamped on its pane
+(`@grove_chat_name`) before any move, so it never flips with focus —
+click a chip or `gv chat focus <session>` swaps the shown chat; `L` back
 restores exactly the chats focus minimized. `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.

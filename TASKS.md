@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-510: focus rail — stable chat identity + every chat as a title chip (2026-10-19). Every move path (hide/show/focus/L/spawn-in-focus) first stamps each unstamped local chat pane with the name it wears (`@grove_chat_name`: `cockpit·N` / `chat-N`, rides break/join-pane); `nameChats` reads stamps first, positional otherwise, never reusing a stamped name — the original orchestrator stays `cockpit·1` when minimized. The rail is built from the CHATS box's own rows (`railChips`, wire `v2`): one chip per chat, shown chip bold `▣`, clicking it a no-op, remote chips unclickable; title = Claude's pane title (glyph stripped, `#{pane_title}` appended to the one `list-panes -a`) → ticket → first prompt. Every move force-writes the rail (Writer `force`, in-process `railWriteMu`). e2e/focus.sh: name stamps, chip counts, 6-move churn vs `gv chat ls`.
 - [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
 - [x] **grove-504** — focus rail never a CHATS row: `cockpitChatPanes` skips `p.Rail`; `ApplyLayout` starts the rail in `$HOME`, not the caller's cwd; unit test + `e2e/rail.sh` leg (build from inside the orchestrator dir).
 - [x] grove-491: focus-mode 07 — docs wrap for the train: CLAUDE.md §Layout (two layouts, `L`, focus hides chats, `gv chat focus`), orchestrator seed (`gv chat focus` in tools, focus note under Dispatch-and-dismiss; brains go stale until `gv init --only orchestrator-md`), grove-cockpit-design Status 2026-10, HANDOFF train section. plugins.md already carries `reason:"focus"` (grove-487); no new tmux skill rule (no LEARNINGS entry on status/status-format).
@@ -68,25 +69,6 @@
       line. `x` on a remote row relays the existing `gv chat close --host`;
       `a` flashes "attach to reply" (no `chat send --host` relay exists —
       deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
-- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
-      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
-      chat / shows a hidden one (the keyboard stays on the dashboard —
-      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
-      pane (showing it first when hidden), `a` opens a one-line inline
-      reply under the row for a HIDDEN chat (a shown one refuses via
-      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
-      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
-      `a` flashes "attach to reply"); task keys stay refused; every
-      global key is untouched. The keys call the functions behind the CLI
-      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
-      `closeChat`, `closeCockpitPane` — the first, second and last factored
-      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
-      `tea.Cmd` per press and one costly pass of the box on its answer.
-      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
-      renders `chat_hidden` / `chat_shown`; the footer offers the row's
-      chat keys under CHATS focus only; help gains a CHATS section. No new
-      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
-      keys through the live TUI.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

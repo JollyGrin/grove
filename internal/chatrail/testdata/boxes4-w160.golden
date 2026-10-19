@@ -1,2 +1,2 @@
-● 1 fix the flaky auth test in the gat…│? 2 grove-486                          │✓ 3 refactor billing                   │! 4
-running · now                          │waiting · 8m                           │idle · 29m                             │errored · 64m
+[1m● fix the flaky auth test in the gatew…[22m│? grove-486 rail                       │✓ refactor billing                     │!
+[1m▣ cockpit·1 · now                      [22m│○ chat-1 · 8m                          │○ chat-2 · 29m                         │○ chat-3 · 64m

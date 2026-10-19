@@ -50,6 +50,12 @@ type ChatRow struct {
 	Model   string
 	Busy    bool
 	Created time.Time
+	// Name is the chat's stable name (grove-510) — cockpit·1, chat-3 —
+	// fixed by its stamp, so it does not flip when focus moves the pane.
+	// "" = name it by position (chatName).
+	Name string
+	// Title is Claude's session title off the pane title ("" = none yet).
+	Title string
 
 	Label      string
 	LastActive time.Time
@@ -170,12 +176,18 @@ func chatCounter(rows []ChatRow) string {
 	return s
 }
 
-// chatName names a row: `cockpit·2` for a pane on screen, `chat-3` for a
-// hidden session, with the `@host` marker on a remote pane.
-func chatName(r ChatRow) string {
-	name := fmt.Sprintf("cockpit·%d", r.N)
-	if r.Hidden {
+// ChatName names a row: its stable Name when it has one, else by position —
+// `cockpit·2` for a pane on screen, `chat-3` for a hidden session — with
+// the `@host` marker on a remote pane. The rail names its chips with this
+// same function (grove-510).
+func ChatName(r ChatRow) string {
+	name := r.Name
+	switch {
+	case name != "":
+	case r.Hidden:
 		name = fmt.Sprintf("chat-%d", r.N)
+	default:
+		name = fmt.Sprintf("cockpit·%d", r.N)
 	}
 	if r.Host != "" {
 		name += " @" + r.Host
@@ -220,7 +232,7 @@ type chatLine struct {
 func buildChatLines(dst []chatLine, rows []ChatRow) []chatLine {
 	dst = dst[:0]
 	for _, r := range rows {
-		l := chatLine{kind: chatShown, name: chatName(r), model: r.Model, state: chatState(r)}
+		l := chatLine{kind: chatShown, name: ChatName(r), model: r.Model, state: chatState(r)}
 		if r.Hidden {
 			l.kind = chatHidden
 		}

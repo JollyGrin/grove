@@ -120,7 +120,7 @@ func TestSortChatsShownThenHiddenByNumber(t *testing.T) {
 	sortChats(rows)
 	var got []string
 	for _, r := range rows {
-		got = append(got, chatName(r))
+		got = append(got, ChatName(r))
 	}
 	if s := strings.Join(got, " "); s != "cockpit·1 cockpit·3 chat-1 chat-2" {
 		t.Errorf("order = %s", s)
