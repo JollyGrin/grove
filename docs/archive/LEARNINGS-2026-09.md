@@ -8,6 +8,33 @@
 
 ## Go / CLI
 
+- **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
+  not the branch or the issues' label** (grove-383): the gv-keys train's
+  issues carry the label `gv-keys`, so `gv feature new keys --adopt
+  --branch feature/gv-keys-secrets` registers label `keys`, infers
+  nothing on grab, and every car silently forks from main. Pass
+  `--label <the issues' label>` whenever the slug differs from it; check
+  with `gh issue view <n> --json labels` first.
+- **2026-09-26 · a flag injected after the command head loses to the same
+  flag already in the configured command** (grove-142). `config.WithModel`
+  built the launch command as `head + " --model 'sonnet' " + rest`, so a
+  repo whose `claude:` line already carried its own `--model` (e.g.
+  `claude --dangerously-skip-permissions --model opus`) produced `claude
+  --model 'sonnet' --dangerously-skip-permissions --model opus` — the
+  claude CLI resolves repeated `--model` flags last-wins, so the
+  pre-existing config flag silently beat the pin every time, on both
+  `gv grab --model` and `gv adopt --model` (same `WithModel` call, two
+  call sites). `gv` still reported "model pinned" — nothing checked what
+  actually ran; only the ledger's `models:` field on a finished session
+  told the truth. Fixed in PR #295: `WithModel` now strips any existing
+  `--model`/`--model=<value>` out of the configured command before
+  injecting the pin, so the pin always wins regardless of what the
+  configured command already contains. Generalizes: when a function's job
+  is "make sure X wins," appending X is not enough if the base string can
+  already contain X — strip-then-inject, or inject last, never assume the
+  base is flag-free. Add a test for the exact repro shape
+  (`WithModel("claude --flag --model opus", "sonnet")` → sonnet wins)
+  whenever this pattern shows up elsewhere.
 - **2026-09-26 · A shared-repo host turns "orphan" into "every sibling
   workspace's live worker"** (grove-350, seen on groveremote). `gv audit`'s
   `scanOrphans` walked every repo in `cfg.Repos` and subtracted only the
@@ -196,6 +223,13 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-09-07 · A restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Rule: never fold
+  it as `session_started` (that would flip the worker's glyph and inflate
+  its session count); it is its own event, `state.EvCompaction`, which
+  `gv cost --context` counts. The claim that `[1m]`-pinned sessions never
+  auto-compact is an unverified hypothesis — watch `compactions` /
+  `NeverCompacted` before relying on it. Rule: claude-code-facts §Hooks.
 - **2026-09-26 · a nested `claude` fires the FULL hook set, SessionStart
   included, each with its own session id; exempting SessionStart handed
   it the task** (grove-339; incident on grove-317). Captured raw on Claude
@@ -359,6 +393,84 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · a SESSION user option expands in `list-panes -a -F`, on
+  every pane of that session — and its value lands in the line verbatim**
+  (grove-404, tmux 3.6a): `#{@opt}` in a pane's format context falls
+  through pane → window → session options, so per-session state can ride
+  a listing that is already being run instead of costing a `show-options`
+  of its own. Two consequences. The value is repeated on each of the
+  session's panes (worker windows included), so keep it short; and it is
+  NOT escaped, so a value holding a tab or a newline splits the very line
+  that carries it — which is why `@grove_hidden_remote` is
+  `host|session|profile` records joined by `,` with every field
+  percent-escaped, not the tab/newline form the ticket sketched. Reading
+  an unset user option with `show-options -v` is an error ("invalid
+  option"); `-qv` answers with an empty line instead.
+- **2026-09-28 · chat-hide: known limits, as shipped** (grove-405, each
+  read off the code on `feature/chat-hide`):
+  (a) `chat_hidden` / `chat_shown` are appended BEFORE the pane moves
+  (`HideChatPane` / `showChatPane` / `HideRemotePane` call `announce`
+  first — hide runs inside the pane it moves), so a tmux failure after the
+  append leaves an event for a move that did not happen; only a remote
+  show appends after its pane exists.
+  (b) There is no `gv chat send --host` relay, so a remote row has no
+  inline reply — `a` flashes "attach to reply".
+  (c) Showing a remote chat does no liveness check (that would be a dial
+  on a key press): a chat that ended on its host shows as ssh's own error
+  in the new pane.
+  (d) `@grove_hidden_remote` is read-modify-write with no lock: two
+  concurrent remote hides (or a hide racing a show) can lose a record. The
+  chat is unharmed on its host; only its hidden row is gone.
+  (e) The record lives on the cockpit SESSION, so `gv park` forgets every
+  hidden remote chat, and an attach pane spawned before grove-404 (no
+  `@grove_remote_session` stamp) cannot be hidden at all.
+  (f) The cockpit's chat keys run `chatReport()`, whose stamp-failure
+  warning is a bare `fmt.Fprintf(os.Stderr, …)` (`stampChatPane`) — inside
+  the tea loop that is a stray line on the alt screen, not a flash.
+- **2026-09-28 · `D="$(cd "$(mktemp -d …)" && pwd -P)"` is the WORKTREE
+  when mktemp fails — in zsh and macOS's `/bin/bash` 3.2** (grove-405; the
+  harness stopped two workers of this train on the `rm -rf "$D"` that
+  follows): mktemp prints nothing, `cd ""` stays put and exits 0, `pwd -P`
+  answers with the cwd. bash 5.3 refuses (`cd: null directory`), so the
+  same line is safe or fatal depending on which bash `env` finds. Safe
+  form in the tmux-discipline skill. `e2e/chat.sh`, `chat_hide.sh`,
+  `brains.sh` and `supervise.sh` still carry the nested form (a follow-up,
+  not changed by a docs car).
+- **2026-09-28 · Why hiding is a move and not a 1-column shrink**
+  (grove-405; rejected in the grove-401 ticket): `resize-pane -x 1` does
+  make a pane 1 column wide, but the next `select-layout main-vertical` —
+  which the cockpit runs on every spawn, close, hide and show — stretches
+  it straight back (verified: 119 → 1 → 119). It would also still cost a
+  border column per chat, and the ticket records Claude Code redrawing
+  junk at that width (not re-verified here).
+- **2026-09-28 · `break-pane` / `join-pane` keep the pane's `%N` id, its
+  pid and its pane user options** (grove-405, tmux 3.6a, re-verified on an
+  isolated socket; grove-401 built on it): a pane stamped `@grove_model
+  opus` came back from a round trip through another session as the same
+  `%1`, same pid, same stamp. That is the whole reason a hidden chat needs
+  no new state — it is the same pane in a different session, and
+  everything that finds a chat by `%N` or by stamp keeps working. What
+  does NOT travel is anything on the window or session: the pane lands in
+  a new window (auto-rename has to be disabled again), and the session
+  `break-pane -t` needs must already exist, hence the placeholder window
+  `HideChatPane` creates and kills.
+- **2026-09-27 · A shell alias fools `gv editor`'s already-running check**
+  (grove-359). Rule: detection matches the pane's foreground command
+  against `editor.command`'s binary, so an alias (`vi` → nvim) reads as
+  not running and a second editor opens — set `editor.command: nvim` (or
+  drop the alias) in your own config, not in gv.
+- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
+  before the child prompts** (grove-380). Rule: hold the answer back —
+  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`. Verified
+  alongside (tmux 3.6a): `new-window -n <name> <argv…>` execs argv with no
+  shell, `-e K=V` scopes env to that window, `-P -F '#{window_id}'`
+  returns the `@N` id; serve windows match by EXACT name
+  (`tmux.WindowIDExact`), never `matchesWindowName`. Rule: shipping-gates
+  §The gate.
+- **2026-09-27 · `tmux kill-server` returns before its panes are gone, so
+  an immediate `rm -rf "$SCRATCH"` can race** (grove-383). Rule: wait for
+  the isolated socket to vanish, then retry the rm once — copy
+  `cleanup()` from `e2e/serve.sh`. Rule: shipping-gates §The gate.
 - **2026-09-27 · `tmux kill-server` returns before the server's panes
   are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
   (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every

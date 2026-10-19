@@ -24,13 +24,94 @@
 
 ## Now
 
+- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
+      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
+      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
+      — an orchestrator may hide ITSELF when the operator asks it to get
+      out of the way (non-destructive, no second yes), while
+      hiding/showing/closing ANOTHER chat stays propose-then-act —
+      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
+      79b5290fc383; workspace brains are NOT refreshed by this car (they go
+      `stale` in `gv brains` once the train is released, and are merged
+      then by the usual `gv init --only orchestrator-md` three-way).
+      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
+      `host`; it gains the event-before-move limit. LEARNINGS: pane
+      identity across break/join, why not a 1-column shrink, the
+      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
+      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
+      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
+      usage strings only. Idea, not built: a tmux prefix binding for hide
+      (bindings are server-global — it would leak into non-grove
+      sessions).
+- [x] chat-hide 04: remote chats — hide closes the local attach pane,
+      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
+      A remote chat lives on its host and the cockpit pane is only `ssh -t
+      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
+      pane (nothing is sent to the host) and `gv chat show
+      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
+      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
+      The spawn stamps `@grove_remote_session` on the pane; an unstamped
+      legacy pane is refused, never guessed. Hidden remote chats are
+      remembered in ONE user option on the cockpit session
+      (`@grove_hidden_remote`) that rides the CHATS box's existing
+      `list-panes -a` as its last field — no file, poll, cache or ssh on
+      any tick; rows render `○ chat-N @host` with `—` for state and last
+      line. `x` on a remote row relays the existing `gv chat close --host`;
+      `a` flashes "attach to reply" (no `chat send --host` relay exists —
+      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
+- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
+      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
+      chat / shows a hidden one (the keyboard stays on the dashboard —
+      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
+      pane (showing it first when hidden), `a` opens a one-line inline
+      reply under the row for a HIDDEN chat (a shown one refuses via
+      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
+      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
+      `a` flashes "attach to reply"); task keys stay refused; every
+      global key is untouched. The keys call the functions behind the CLI
+      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
+      `closeChat`, `closeCockpitPane` — the first, second and last factored
+      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
+      `tea.Cmd` per press and one costly pass of the box on its answer.
+      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
+      renders `chat_hidden` / `chat_shown`; the footer offers the row's
+      chat keys under CHATS focus only; help gains a CHATS section. No new
+      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
+      keys through the live TUI.
+- [x] chat-hide 02: cockpit CHATS box (grove-402, 2026-09-28, on
+      `feature/chat-hide`). A read-only box between AGENTS and ACTIVITY,
+      one row per live chat of the workspace: `▣` on screen, `○` hidden
+      (a detached `grove-chat-<label>-<n>`), `◆` WAITING (overrides both),
+      `@host` on a remote pane; title counter `CHATS 3 · 2 hidden · 1
+      waiting`. Columns drop right-to-left when narrow (LAST, AGE, MODEL);
+      no chats = no box, so the `nofeature-*` goldens are untouched. Cost
+      (the cockpit RAM rule): the 1s beat adds ONE `list-panes -a`
+      (`#{@grove_remote}` appended to `paneListFormat`); `ps`, one
+      transcript read per chat and the waiting capture ride the 30s beat,
+      or the 1s beat while the box is focused (`tui.CockpitChats`,
+      `cmd/gv/cockpit_chats.go`). A pure read — nothing stamped, no event.
+      `tab` cycles FEATURES ⇄ AGENTS ⇄ CHATS, `j/k` select; action keys
+      and footer/help hints are the next car. The global cockpit (no
+      workspace) owns no chats and shows no box.
+- [x] chat-hide 01: tmux hide/show primitives + `gv chat hide` /
+      `gv chat show` (grove-401, 2026-09-28, on `feature/chat-hide`).
+      Hiding a LOCAL cockpit chat pane turns it into an ordinary detached
+      `grove-chat-<label>-<n>` session (`new-session` placeholder →
+      `break-pane` → kill the placeholder), showing joins it back
+      (`join-pane`); same `%pane`, same pid, stamps travel, and the cockpit
+      window is re-tiled to `@grove_layout` by its `@N` id, never the
+      active window. `tmux.HideChatPane`/`ShowChatPane` with pure guards
+      (`hidablePane`, `showableChat`), `chat.MatchHide` (a bare cockpit
+      name holding several chats is an error, never a pick). Refused, with
+      nothing touched: the dashboard, worker windows, remote panes, an
+      already hidden/shown chat, a split chat session, a cockpit that is
+      not running. New additive events `chat_hidden` / `chat_shown`
+      (docs/plugins.md); no `--json` field changed. Opt-in: no spawn path
+      touched, nothing hides by itself. New `e2e/chat_hide.sh` in
+      `e2e/all.sh`, both tmux modes. Not yet: TUI rows/keys, remote chats,
+      the orchestrator seed (later cars).
 - [x] claude-accounts 08 — brains (grove-475, 2026-10-16): orchestrator seed tools block gains `gv account ls --usage --json` and `gv grab … --account A`; duty 3 gains the accounts-are-a-lane paragraph (propose `--account` with the reason, never pick unasked, never `gv account use`, token-account caveats: no connectors / Remote Control, never `/login` in a pinned session). model-lanes Step 1 reads the Claude sub from `gv account ls --usage --json` instead of "no API". CLAUDE.md §Layout documents `<state>/accounts/` and that accounts never apply under a non-default `claude_config_dir`. gv-keys 07 (#367) import note drafted in the PR body for the operator to post.
 - [x] grove-471 · claude-accounts 04: launch II (2026-10-11). Cockpit first pane (both `--continue`/fresh limbs), `gv orchestrator new [--account]` (refused beside a non-Anthropic `--profile`), detached + web chats resolve via `resolveChatAccount` and wrap via `wrapWorker`; a token-account chat says it has no claude.ai connectors/Remote Control (pane, CLI, web sheet `account`). `orchestrator_spawned` carries `account` when pinned; `@grove_account` pane tag lets `gv account rm` refuse on live chats; handoff plan prints the account. `gv sub --agentic` untouched. log-append `row_date` IndexError fixed.
-- [x] claude-accounts 07 — `$` → CLAUDE tab (grove-474, 2026-10-11): third tab on the costs page (SPEND / ACCOUNT / CLAUDE; tab cycles three, `$` still lands on SPEND). One row per account, login first: name, active ●, pinned count, "as of 4m", EXPIRED, login's email; under it a 5h and a 7d fuel gauge (the kimi `fuelLine`, factored out of `viewFuelRows`) reading `% left · resets 14:10`. Branches on each window's state from `Store.Usage`: live → severity-colored gauge; reset → `100% left · reset since last seen`; stale → grayed gauge; unknown or no usage file → "no data" + the store's hint, never 0%. Reads local usage files only, on tab open and `r` — never on the 1s tick (`newClaudeCmd` counted in tests). `u` arms a footer y/N to make the selected account active (in-process `Store.Use`, the same call `gv account use` makes; anything but y cancels), then rereads. `account.ResetWhen`/`UsageAge` exported for the tab. Tests: three-way cycle, no read on tick/refresh, no-data hint, stale resets_at → reset, two-account golden (`testdata/claude-tab-two-accounts.golden`), width clamp, use confirm/cancel.
-- [x] claude-accounts 06 — usage reader + `gv account ls --usage [--json]` (grove-473, 2026-10-11): `internal/account` now owns the usage record (`UsageRecord`, `ReadUsageRecord`, `Store.UsageDir`) that `gv statusline` writes and `ls --usage` reads — one schema, no drift. Each window carries an explicit `state`: `live` (observed, reset ahead), `reset` (resets_at passed → 0%), `unknown` (no percentage recorded — never 0); a live window with no reset time is `stale` once older than the window. Missing file → "no data — no session on this account yet"; corrupt/out-of-range → a hint, never an error. Text: `5h 42% (resets 14:10) · 7d 61% (resets Tue 22:00) · as of 3m`. `gv account rm` deletes the usage record so a re-added name starts empty. JSON documented in docs/plugins.md, asserted in e2e/plugin.sh; ZZZSENTINEL covers `--usage`.
-- [x] grove-470 · claude-accounts 03: launch I — resolver, `WrapAccount`, grab/adopt, state (2026-10-11). `account.Store.Resolve` (flag → recorded pin → active → login; explicit/recorded + non-Anthropic profile, workspace `claude_config_dir`, or a claude cmd naming `CLAUDE_CONFIG_DIR` or running `ccwork` by any path/after `env`/VAR=val → error, the same silently skip the active account; a missing or expired pin refuses, never falls back to login) + `Store.Preflight` (exists, non-empty, 0600, inside its one-year life). `config.WrapAccount` renders `( t="$(cat '<path>')" && [ -n "$t" ] && export CLAUDE_CODE_OAUTH_TOKEN="$t" GROVE_ACCOUNT='<name>' && exec <cmd> )`, printing `gv: account <name> token unreadable` on stderr when the read fails; cmd/gv `wrapWorker` applies the profile wrap or the account wrap, never both; adopt wraps resume and fresh limbs separately. `--account` on grab and adopt (`login` strips an adopt pin; in `grabValueFlags`); `task_created`/`task_adopted` carry `account` only when pinned (adopt writes "" on a strip); `gv ls --json` `account` documented in docs/plugins.md and asserted in e2e/plugin.sh. Doctor: `account-pin-missing:<name>` (fail; tasks folded only while accounts exist). `rm` names done/untracked tasks still pinning the account; a refused pin's error names `gv adopt <t> --account <name|login>`. The no-secrets hook patch is not grove's to ship (LEARNINGS). Tests: resolver table (27 rows), WrapAccount golden + run-in-sh, no-accounts launch strings golden, ZZZSENTINEL absent from the send-keys line; e2e/dummy.sh accounts leg (fake claude echoing `${CLAUDE_CODE_OAUTH_TOKEN:+set}`: grab → set, adopt keeps, `--account login` strips).
-- [x] grove-472 · claude-accounts 05: `gv statusline` pass-through shim recording per-account 5h/weekly usage (2026-10-11). `internal/statusline`: `Run` reads stdin once, runs `statusline.wrap` (global config) via `sh -c` with the same bytes, passes stdout/stderr/exit status through, and meanwhile writes `<state>/accounts/usage/<GROVE_ACCOUNT|login>.json` (`{five_hour, seven_day, seen_at}`, temp+rename, 0600, only when a window changed; invalid account names write nothing; every capture error swallowed). `gv statusline install|uninstall` edits `~/.claude/settings.json` only (generic-map + json.Number, other keys kept), records the prior command (or "" = none → uninstall drops `statusLine`), idempotent; `IsShim` also matches `gv-*` throwaway builds and `Run` refuses a self-wrap, so the shim can never wrap itself. `statusline` dispatches before the ambient workspace resolves. Conditional doctor row `account-statusline` (accounts exist, shim absent). `config.editDoc` factored out of `SaveHotkey` for the new yaml writer. Tests over the docs' full-schema fixture; real-binary overhead ≈12ms (mostly Go start-up), in-process ≈2ms. Review round: `IsShim` shell-word-parses (quoted paths, `exec`, `VAR=` prefixes, `;`/`|` chains) + `GROVE_STATUSLINE_DEPTH` runtime re-entry guard; shell-init exports `GROVE_ACCOUNT=<name>` beside the token (login paths strip it); quoted `ShimCommand`; `config.WriteFileAtomic` (symlink target, perms kept) for settings.json/config.yaml/usage; shim-without-wrap = install error + `statusline-wrap-missing` doctor row; seen_at = last sighting (≤1min stale), resets recorded; overhead test behind `GROVE_TIMING_TESTS=1`.
-- [x] grove-469 · claude-accounts 02: `internal/account` store + `gv account add/ls/use/rm/token-path/shell-init` + doctor rows (2026-10-08). Store under `<state dir>/accounts/` (dir 0700, `<name>.token` 0600 written atomically, `<name>.minted` = add date, `active` = bare name; names `^[a-z][a-z0-9-]{0,31}$`, `login` reserved); every token reader goes through `Store.TokenSource` (the gv-keys 07 seam). `add` reads stdin only (echo off at a TTY); `ls --json` = `accounts` envelope documented in docs/plugins.md + asserted in e2e/plugin.sh; `rm` refuses while a non-done task's new read-side `Task.Account` names it (`--force`); `account` is exempt from the ambient-label check so shell `claude` never flips to login on a broken label. Conditional doctor rows (token not 0600, active missing, shell-init absent, token ≥330d). Tests: ZZZSENTINEL absent from every output/error; the shell-init function run under bash with the test binary as `gv` and a fake `claude`. No launch path changes (car 03).
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

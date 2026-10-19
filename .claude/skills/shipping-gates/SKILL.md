@@ -29,10 +29,15 @@ gofmt -l .                                        # must be empty
 - **Write e2e shell for BSD userland too — the operator runs it on a Mac.**
   No GNU-only flags (`touch -d @<epoch>` is GNU; BSD needs
   `-t YYYYMMDDhhmm.SS`), and resolve the scratch root with
-  `SCRATCH="$(cd "$(mktemp -d /tmp/…)" && pwd -P)"` — on macOS `/tmp` is a
-  symlink, so a tmux pane reports its cwd as `/private/tmp/…` and any
-  assertion against a bare `$SCRATCH` path fails on that alone (grove-228:
-  `e2e/chat.sh` read green on Linux while half of it had never run on the
+  `pwd -P` — on macOS `/tmp` is a symlink, so a tmux pane reports its cwd
+  as `/private/tmp/…` and any assertion against a bare `$SCRATCH` path
+  fails on that alone. Two steps, never the nested one-liner
+  (`"$(cd "$(mktemp -d …)" && pwd -P)"` resolves to the WORKTREE when
+  mktemp fails — tmux-discipline §1 has the safe form and the `rm -rf`
+  guard): `SCRATCH=$(mktemp -d /tmp/…) || exit 1`, then
+  `SCRATCH="$(cd "$SCRATCH" && pwd -P)"`. Both bit
+  `e2e/chat.sh`, which read green on Linux while its whole `chat ls` half
+  had never executed on the Mac (grove-228).
   Mac). macOS `script(1)` drops a piped answer that arrives before the
   child prompts (`printf 'y\n' | script …` read as a bare EOF, so "y"
   became "no" — grove-380): hold the answer back,

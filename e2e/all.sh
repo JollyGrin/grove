@@ -35,13 +35,13 @@ run_suite() { # <script> <mode: default|hostile>
   fi
 }
 
-for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh relay.sh handoff.sh chat.sh watch.sh brains.sh supervise.sh sub.sh serve.sh feature.sh; do
+for s in dummy.sh wizard.sh workspace.sh github.sh cockpit.sh plugin.sh relay.sh handoff.sh chat.sh chat_hide.sh watch.sh brains.sh supervise.sh sub.sh serve.sh feature.sh; do
   run_suite "$s" default
 done
 # Second pass under a hostile tmux conf (base-index 1 / pane-base-index 1,
 # grove-168): the isolated servers never load a user's tmux.conf, so the
 # default pass structurally cannot catch literal pane-index targets.
-for s in workspace.sh cockpit.sh chat.sh; do
+for s in workspace.sh cockpit.sh chat.sh chat_hide.sh; do
   run_suite "$s" hostile
 done
 

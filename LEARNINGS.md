@@ -57,13 +57,6 @@
   verification only; before ever adding the paragraph back, grep a real
   worker transcript's `prompt_snapshot` for "operating autonomously".
   Rule: claude-code-facts §System prompt.
-- **2026-09-07 · A restart after compaction is a SessionStart with
-  `source: "compact"`, not a new session** (grove-289). Rule: never fold
-  it as `session_started` (that would flip the worker's glyph and inflate
-  its session count); it is its own event, `state.EvCompaction`, which
-  `gv cost --context` counts. The claim that `[1m]`-pinned sessions never
-  auto-compact is an unverified hypothesis — watch `compactions` /
-  `NeverCompacted` before relying on it. Rule: claude-code-facts §Hooks.
 
 ## tmux / git / detector internals (verified against source)
 
@@ -74,23 +67,36 @@
   `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
   WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
   table — one table alone misses half. Rule: tmux-discipline §3.
-- **2026-09-27 · `tmux kill-server` returns before its panes are gone, so
-  an immediate `rm -rf "$SCRATCH"` can race** (grove-383). Rule: wait for
-  the isolated socket to vanish, then retry the rm once — copy
-  `cleanup()` from `e2e/serve.sh`. Rule: shipping-gates §The gate.
-- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
-  before the child prompts** (grove-380). Rule: hold the answer back —
-  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`. Verified
-  alongside (tmux 3.6a): `new-window -n <name> <argv…>` execs argv with no
-  shell, `-e K=V` scopes env to that window, `-P -F '#{window_id}'`
-  returns the `@N` id; serve windows match by EXACT name
-  (`tmux.WindowIDExact`), never `matchesWindowName`. Rule: shipping-gates
-  §The gate.
-- **2026-09-27 · A shell alias fools `gv editor`'s already-running check**
-  (grove-359). Rule: detection matches the pane's foreground command
-  against `editor.command`'s binary, so an alias (`vi` → nvim) reads as
-  not running and a second editor opens — set `editor.command: nvim` (or
-  drop the alias) in your own config, not in gv.
+
+- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
+  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
+  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
+  `gv chat show` and wrong for a cockpit key that must keep the operator
+  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
+  afterwards is needed, and the re-tile does not move focus either.
+  `TestShowChatPaneFocus` pins both behaviors.
+- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
+  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
+  is not an error, so "did the command fail" cannot answer "does this pane
+  exist". `paneFacts` treats an empty answer as "no such pane" before
+  parsing; any new reader of a caller-supplied `%N` must do the same.
+
+- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
+  is ACTIVE, which is only the cockpit when the caller is sitting in it**
+  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
+  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
+  run from a phone, a worker window or a detached chat (`gv chat
+  hide`/`show`) must re-tile the cockpit window by its `@N` id
+  (`retileCockpit`) — the integration test keeps a worker window active
+  and asserts its layout is untouched.
+
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
+
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Rule: prose goes via `load-buffer` +
   `paste-buffer` + a separate `send-keys Enter`; a single picker character
@@ -135,34 +141,22 @@
   grep the launch line (`grep -o 'echo [^$]*\$(cat'`) and not the whole
   scrollback — the first cut of `e2e/dummy.sh`'s effort leg failed on a
   correct launch for exactly this reason.
-- **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
-  not the branch or the issues' label** (grove-383): the gv-keys train's
-  issues carry the label `gv-keys`, so `gv feature new keys --adopt
-  --branch feature/gv-keys-secrets` registers label `keys`, infers
-  nothing on grab, and every car silently forks from main. Pass
-  `--label <the issues' label>` whenever the slug differs from it; check
-  with `gh issue view <n> --json labels` first.
-
-- **2026-09-26 · a flag injected after the command head loses to the same
-  flag already in the configured command** (grove-142). `config.WithModel`
-  built the launch command as `head + " --model 'sonnet' " + rest`, so a
-  repo whose `claude:` line already carried its own `--model` (e.g.
-  `claude --dangerously-skip-permissions --model opus`) produced `claude
-  --model 'sonnet' --dangerously-skip-permissions --model opus` — the
-  claude CLI resolves repeated `--model` flags last-wins, so the
-  pre-existing config flag silently beat the pin every time, on both
-  `gv grab --model` and `gv adopt --model` (same `WithModel` call, two
-  call sites). `gv` still reported "model pinned" — nothing checked what
-  actually ran; only the ledger's `models:` field on a finished session
-  told the truth. Fixed in PR #295: `WithModel` now strips any existing
-  `--model`/`--model=<value>` out of the configured command before
-  injecting the pin, so the pin always wins regardless of what the
-  configured command already contains. Generalizes: when a function's job
-  is "make sure X wins," appending X is not enough if the base string can
-  already contain X — strip-then-inject, or inject last, never assume the
-  base is flag-free. Add a test for the exact repro shape
-  (`WithModel("claude --flag --model opus", "sonnet")` → sonnet wins)
-  whenever this pattern shows up elsewhere.
+- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
+  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
+  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
+  reproduced here): until someone finds out what the two runs share, run
+  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
+  not a red suite — do not "fix" sub.sh on the strength of it.
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
+- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
+- **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
+- **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.
 
 - **stdlib `flag` stops at the first positional** — `gv grab <url> --repo
   x` silently ignores `--repo` without a re-parse loop (`parseAnywhere`).

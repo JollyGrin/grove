@@ -64,6 +64,10 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.viewAgents())
 	b.WriteString("\n")
+	if lay := m.chatLayout(); lay.height > 0 {
+		b.WriteString(m.viewChats(lay))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.viewActivity(items, activityRows))
 	// The living grove (grove-63): the scene fills exactly the rows ACTIVITY
 	// yielded to it (rowBudgets), between the feed and the footer, no
@@ -298,6 +302,9 @@ func (m Model) viewAgents() string {
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		agentsTitle = sPanelTitle // tab moved focus to FEATURES (grove-377)
 	}
+	if m.focus == focusChats && len(m.chats) > 0 {
+		agentsTitle = sPanelTitle // … or to CHATS (grove-402)
+	}
 	body := agentsTitle.Render("AGENTS") + "\n" + strings.Join(rows, "\n")
 	return m.chromeBorder().Width(m.width - 2).Render(body)
 }
@@ -374,14 +381,20 @@ func (m Model) viewFooter() string {
 			m.sessionName(), len(m.localTasks))
 		// grove-203: chat sessions are their OWN tmux sessions, so park
 		// leaves them running. Say so here — this modal is the last thing
-		// on screen before the dashboard dies with the session.
+		// on screen before the dashboard dies with the session. A HIDDEN
+		// chat (grove-401) is one of these sessions, so it survives too —
+		// said in so many words, because "hidden" reads like "part of the
+		// cockpit that is about to die".
 		if n := len(m.parkChats); n > 0 {
-			prompt += fmt.Sprintf("· %d chat(s) KEEP RUNNING (%s) — gv park --chats reaps them ",
+			prompt += fmt.Sprintf("· %d chat(s) KEEP RUNNING, hidden too (%s) — gv park --chats reaps them ",
 				n, strings.Join(m.parkChats, " "))
 		}
 		line := " " + sBlocked.Render(prompt) +
 			sKey.Render("y") + sFoot.Render(" confirm · any other key cancels")
 		return truncPad(line, m.width)
+	}
+	if m.chatModal() {
+		return m.viewChatFooter()
 	}
 	if m.armedHost != "" {
 		// grove-199: the armed prompt REPLACES the legend for exactly one
@@ -399,14 +412,12 @@ func (m Model) viewFooter() string {
 	// so footerHeight is a constant 1. The flash is the only surface errors
 	// have — when it doesn't fit beside the included hints, optional hints
 	// yield (never the O/)/? trio), then the flash truncates as last resort.
-	hasTasks := len(m.board) > 0
-	hasFeatures := len(m.feats) > 0
-	line := footerLegend(m.width, hasTasks, hasFeatures)
+	line := m.legendFor(m.width)
 	if m.flash != "" {
 		flashW := len([]rune(m.flash))
 		room := m.width - lipgloss.Width(line) - 3
 		if flashW > room {
-			line = footerLegend(m.width-flashW-3, hasTasks, hasFeatures)
+			line = m.legendFor(m.width - flashW - 3)
 			room = m.width - lipgloss.Width(line) - 3
 		}
 		if room > 1 {
