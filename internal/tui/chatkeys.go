@@ -240,6 +240,47 @@ func (m Model) handleChatsKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
+// handleChatsClick is a left press on the dash (grove-517): on a CHATS row
+// it selects the row and focuses the box, then does what enter does there —
+// one dispatch, the same message. A chat already on screen is left as it is
+// (a click on its own pane focuses it), as a rail click on the shown chip is.
+// Anywhere else, and under any modal, a click does nothing.
+func (m Model) handleChatsClick(e tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.mode != modeList {
+		return m, nil
+	}
+	i, ok := m.chatHit(e.X, e.Y)
+	if !ok || i >= len(m.chatRows) {
+		return m, nil
+	}
+	m.focus, m.chatSel = focusChats, i
+	if !m.chatRows[i].Hidden {
+		return m, nil
+	}
+	next, cmd, _ := m.handleChatsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	return next, cmd
+}
+
+// mouseFilter runs ahead of Update (tea.WithFilter): a left press passes, the
+// wheel becomes ↑/↓ — it scrolls wherever the arrow keys do — and every other
+// report (release, drag motion, other buttons) is
+// dropped here, so it never costs an Update or a frame.
+func mouseFilter(_ tea.Model, msg tea.Msg) tea.Msg {
+	e, ok := msg.(tea.MouseMsg)
+	if !ok {
+		return msg
+	}
+	switch {
+	case e.Button == tea.MouseButtonWheelUp && e.Action == tea.MouseActionPress:
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case e.Button == tea.MouseButtonWheelDown && e.Action == tea.MouseActionPress:
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case e.Button == tea.MouseButtonLeft && e.Action == tea.MouseActionPress:
+		return msg
+	}
+	return nil
+}
+
 // chatInputIndent is the reply row's left margin inside the box.
 const chatInputIndent = 4
 
