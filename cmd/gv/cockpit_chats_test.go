@@ -244,3 +244,13 @@ func TestLastChatLineReadsOnlyTheTail(t *testing.T) {
 		t.Errorf("lastChatLine = %q", got)
 	}
 }
+
+// grove-504: the focus rail is never a chat, even when it sits in the
+// orchestrator dir.
+func TestCockpitChatPanesSkipsRail(t *testing.T) {
+	ws, orch := chatFixture(t)
+	panes := []tmux.LivePane{{Session: cockpitSessionForLabel(ws.Label), Command: "gv", Pane: "%5", Index: 3, Dir: orch, Rail: true}}
+	if got := cockpitChatPanes(ws, panes, nil); len(got) != 0 {
+		t.Fatalf("rail listed as a chat: %+v", got)
+	}
+}

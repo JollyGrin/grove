@@ -247,7 +247,9 @@ func ApplyLayout(session, name string) error {
 		}
 		return SelectLayout(session, name)
 	}
-	dir, _ := os.Getwd()
+	// $HOME, never the caller's cwd: a gv run from inside the orchestrator
+	// dir would otherwise park the rail where IsOrchestratorPane says "chat".
+	dir, _ := os.UserHomeDir()
 	if _, err := EnsureRail(session, dir, RailCommand(session)); err != nil {
 		return err
 	}

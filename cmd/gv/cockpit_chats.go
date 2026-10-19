@@ -136,7 +136,7 @@ func cockpitChatPanes(ws workspace.Workspace, panes []tmux.LivePane, isCockpit f
 	var found []cockpitChatPane
 	cockpit, orchDir := cockpitSessionForLabel(ws.Label), orchestratorDirAt(ws.Root)
 	for _, p := range panes {
-		if p.Session != cockpit {
+		if p.Session != cockpit || p.Rail {
 			continue
 		}
 		if p.Remote == "" && !chat.IsOrchestratorPane(p.Dir, orchDir) {

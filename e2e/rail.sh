@@ -145,6 +145,14 @@ for _ in $(seq 1 20); do
 done
 [ "$(rails | wc -l | tr -d ' ')" = 1 ] || fail "L back to focus must leave one rail, got: $(rails)"
 
+say "a build run from inside the orchestrator dir keeps the rail out of it (grove-504)"
+tmux kill-session -t '=grove-alpha'
+( cd "$ORCH" && "$GV" >/dev/null 2>&1 || true )
+tmux has-session -t grove-alpha 2>/dev/null || fail "grove-alpha not rebuilt"
+RP="$(tmux list-panes -t '=grove-alpha:cockpit' -F '#{pane_current_path} #{@grove_rail}' | awk 'NF==2 {print $1}')"
+[ -n "$RP" ] || fail "rebuilt cockpit has no rail"
+case "$RP" in "$ORCH"*) fail "rail cwd $RP is under the orchestrator dir" ;; esac
+
 say "rail process RSS at rest (KB)"
 RPID="$(tmux display-message -p -t "$(rails)" '#{pane_pid}')"
 sleep 3
