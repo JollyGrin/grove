@@ -671,9 +671,10 @@ func TestCockpitLayout(t *testing.T) {
 	}{
 		{"empty defaults to horizontal", "", "horizontal"},
 		{"horizontal", "horizontal", "horizontal"},
-		{"vertical", "vertical", "vertical"},
-		{"tiled", "tiled", "tiled"},
-		{"garbage falls back to horizontal", "sideways", "horizontal"},
+		{"focus", "focus", "focus"},
+		{"retired vertical forgiven to horizontal", "vertical", "horizontal"},
+		{"retired tiled forgiven to horizontal", "tiled", "horizontal"},
+		{"garbage falls back to horizontal", "garbage", "horizontal"},
 	}
 	for _, tc := range cases {
 		c := &Config{}
@@ -689,20 +690,20 @@ func TestCockpitLayout(t *testing.T) {
 	writeGlobal(t, `
 cockpit:
   effects: calm
-  layout: tiled
+  layout: horizontal
 `)
 	root := newWorkspace(t, `
 workspace:
   label: grid
 cockpit:
-  layout: vertical
+  layout: focus
 `)
 	c, err := LoadAt(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.CockpitLayout(); got != "vertical" {
-		t.Errorf("workspace cockpit.layout = %q, want vertical (workspace wins)", got)
+	if got := c.CockpitLayout(); got != "focus" {
+		t.Errorf("workspace cockpit.layout = %q, want focus (workspace wins)", got)
 	}
 	if c.Cockpit.Effects != "calm" {
 		t.Errorf("cockpit.effects = %q, want calm inherited from global", c.Cockpit.Effects)
