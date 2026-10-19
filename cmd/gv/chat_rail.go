@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -76,6 +77,7 @@ func cmdChatRail(args []string) error {
 var (
 	railWriter = chatrail.Writer{Run: tmux.Run}
 	railBeat   int
+	railBeatMu sync.Mutex // guards railBeat; TryLock so an overlapping refresh skips its beat
 )
 
 // railWriteEvery spaces the cockpit-side rebuild: the refresh tick is 1s,
@@ -87,6 +89,10 @@ const railWriteEvery = 5
 // timer of its own). Outside the focus layout, or with no rail pane, it does
 // nothing past one cheap layout read.
 func railTick(label, session string) {
+	if !railBeatMu.TryLock() {
+		return
+	}
+	defer railBeatMu.Unlock()
 	railBeat++
 	if label == "" || railBeat%railWriteEvery != 1 {
 		return

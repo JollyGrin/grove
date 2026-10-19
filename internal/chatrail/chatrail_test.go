@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -316,4 +317,20 @@ func TestReadClicks(t *testing.T) {
 	if len(got) != 2 || got[0] != [2]int{9, 0} || got[1] != [2]int{2, 1} {
 		t.Errorf("got %v", got)
 	}
+}
+
+// Overlapping refresh and focus commands share one Writer; run under -race.
+func TestWriterConcurrentWrites(t *testing.T) {
+	w := &Writer{Run: func(args ...string) (string, error) { return "", nil }}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				w.Write("grove-x", rows(1+(g+i)%3), 0, t0.Add(time.Duration(i)*time.Second))
+			}
+		}(g)
+	}
+	wg.Wait()
 }
