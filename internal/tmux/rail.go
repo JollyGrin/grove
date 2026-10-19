@@ -208,7 +208,7 @@ func RetileFocus(session string) error {
 			return err
 		}
 	}
-	if _, err := run("set-option", "-t", win, "-w", "main-pane-width", fmt.Sprintf("%d%%", cockpitFocusMainWidth)); err != nil {
+	if _, err := run("set-option", "-t", win, "-w", "main-pane-width", fmt.Sprintf("%d%%", focusDashWidth(session))); err != nil {
 		return err
 	}
 	if _, err := run("select-layout", "-t", win, "main-vertical"); err != nil {

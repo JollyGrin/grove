@@ -38,10 +38,11 @@ func ExactActive(session string) string { return Exact(session) + ":" }
 // session option nor config supplies one (grove-52): side-by-side columns.
 const defaultCockpitLayout = "horizontal"
 
-// cockpitFocusMainWidth is the dash pane's share of the window in the focus
-// (main-vertical) layout: 2/5 of the window, the shown chat + rail get the
-// rest (grove-518). horizontal never sets main-pane-width.
-const cockpitFocusMainWidth = 40
+// cockpitFocusMainWidth is the dash pane's default percent of the window in
+// the focus (main-vertical) layout, used when the session carries no
+// @grove_focus_dash_width (grove-522: cockpit.focus_dash_width seeds it).
+// horizontal never sets main-pane-width.
+const cockpitFocusMainWidth = 30
 
 // tmuxLayout maps a grove-facing layout name to tmux's. Trap: the names
 // invert — grove "horizontal" (panes in a side-by-side row) is tmux
@@ -74,6 +75,28 @@ func SelectLayout(session, name string) error {
 func SetCockpitLayout(session, name string) error {
 	_, err := run("set-option", "-t", ExactActive(session), "@grove_layout", name)
 	return err
+}
+
+// SetFocusDashWidth persists the focus layout's dash percent in a session
+// user-option (mechanism of @grove_layout) so every gv process's
+// RetileFocus agrees (grove-522).
+func SetFocusDashWidth(session string, pct int) error {
+	_, err := run("set-option", "-t", ExactActive(session), "@grove_focus_dash_width", strconv.Itoa(pct))
+	return err
+}
+
+// focusDashWidth reads @grove_focus_dash_width; cockpitFocusMainWidth when
+// unset, unreachable, or out of [15, 85].
+func focusDashWidth(session string) int {
+	out, err := run("show-options", "-t", ExactActive(session), "-v", "@grove_focus_dash_width")
+	if err != nil {
+		return cockpitFocusMainWidth
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 15 || n > 85 {
+		return cockpitFocusMainWidth
+	}
+	return n
 }
 
 // CockpitLayout reads the session's persisted layout name; "" when unset

@@ -1127,6 +1127,9 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	if err := tmux.SetCockpitLayout(session, cfg.CockpitLayout()); err != nil {
 		return err
 	}
+	if err := tmux.SetFocusDashWidth(session, cfg.FocusDashPercent()); err != nil {
+		return err
+	}
 	// Name the outer terminal tab after the workspace so several cockpits
 	// in separate tabs are tellable apart. Session-scoped: won't leak into
 	// worker windows or unrelated tmux sessions.
