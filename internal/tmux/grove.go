@@ -55,12 +55,12 @@ func tmuxLayout(name string) string {
 }
 
 // SelectLayout re-tiles the session's active window to the given grove
-// layout name. focus delegates to MainVertical so the dash keeps its
-// tested cockpitMainWidth share; the rest are plain select-layout calls. Targets the
+// layout name. focus delegates to RetileFocus (main-vertical at the dash's
+// cockpitMainWidth share, plus the rail's height — grove-486); the rest are plain select-layout calls. Targets the
 // bare session (its active window) exactly like MainVertical/SpawnPane.
 func SelectLayout(session, name string) error {
 	if name == "focus" {
-		return MainVertical(session, cockpitMainWidth)
+		return RetileFocus(session)
 	}
 	_, err := run("select-layout", "-t", ExactActive(session), tmuxLayout(name))
 	return err
@@ -509,9 +509,10 @@ func SetPaneRemoteBorder(pane string) error {
 //     falling back to "chat" for the host's own Claude — the pane is an ssh
 //     attachment, so its own title would be the ssh client's, not the agent's;
 //   - a local profiled pane (@grove_profile) shows "⚡ <profile>";
+//   - the focus-mode rail (@grove_rail, grove-486) shows "chats";
 //   - anything else falls back to whatever title the pane's foreground program
 //     set, so the no-profile local path is visually unchanged.
-const paneBorderFormat = "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
+const paneBorderFormat = "#{pane_index}: #{?#{@grove_rail},chats,#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}}"
 
 // ShowPaneBorders turns on a top pane-border status line, scoped to ONE window
 // via its target (e.g. session:cockpit) — never a global/session-wide option,
@@ -607,12 +608,15 @@ func PaneClosable(pane string, isCockpit CockpitCheck) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
 	}
-	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}")
+	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}\t#{@grove_rail}")
 	if err != nil {
 		return err
 	}
-	parts := strings.SplitN(strings.TrimSpace(info), "\t", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(strings.TrimSpace(info), "\t", 3)
+	if len(parts) == 3 && parts[2] != "" {
+		return ErrRail
+	}
+	if len(parts) < 2 {
 		return fmt.Errorf("unexpected pane info %q", info)
 	}
 	index, err := strconv.Atoi(parts[1])
@@ -947,7 +951,7 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}"
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{window_id}\t#{@grove_rail}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -965,6 +969,8 @@ type LivePane struct {
 	Dir         string // pane_current_path
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
+	Window      string // @N of the pane's window (grove-486)
+	Rail        bool   // the focus-mode rail pane (@grove_rail) — never a chat
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
@@ -996,6 +1002,8 @@ func ParsePanes(out string) []LivePane {
 			Dir:         paneField(f, 7),
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
+			Window:      paneField(f, 10),
+			Rail:        paneField(f, 11) != "",
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))

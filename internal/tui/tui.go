@@ -473,6 +473,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 		// loop or goroutine (grove-3). The read is a handful of sysctls; the
 		// sample lands in resource.jsonl (its own capped file, never folded by
 		// state.Load), giving the trajectory into a jetsam crash.
+		RailTick(session)
 		mem, _ := resource.Read()
 		workers := resource.LiveWorkers()
 		_ = resource.Log(stateDir, resource.Sample{
@@ -1202,7 +1203,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		next := nextLayout(cur)
 		_ = tmux.SetCockpitLayout(session, next)
-		_ = tmux.SelectLayout(session, next)
+		_ = tmux.ApplyLayout(session, next)
 		m.flash = "layout: " + next
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
@@ -1684,6 +1685,11 @@ var CloseWorkspace = func(stateDir, label string) error {
 // say what park is about to leave running. Unwired = none, and the modal
 // simply omits the line.
 var LiveChats = func(label string) []string { return nil }
+
+// RailTick is injected by cmd/gv: the focus-mode chat rail's writer
+// (grove-486). It is called from the existing refresh command — no
+// goroutine or timer of its own — and throttles itself.
+var RailTick = func(session string) {}
 
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
 // there); wired at startup to avoid an import cycle. Returns a flash line.

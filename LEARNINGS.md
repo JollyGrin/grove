@@ -67,6 +67,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- 2026-10-19 (grove-486): tmux rescales every pane PROPORTIONALLY when the window is resized — a rail sized to 4 rows on the headless 80x24 build balloons to ~17 once a real client attaches. `select-layout` also resets stacked panes to equal heights, so `resize-pane -y` must follow every re-tile; for the resize-on-attach case a `window-resized` window hook (`set-hook -w … "resize-pane -t %N -y 4"`) holds it with no watcher process. Also: `#{@x}` expands pane → window → session, so a SESSION option named like a PANE tag (`@grove_rail`) would make every pane read as tagged — keep the names distinct.
 - **2026-10-07 · `tmux show-options` takes ONE option name and never
   auto-starts a server** (grove-455). Rule: the read-only query is a single
   exec `tmux start-server \; show-options -g \; show-options -gw` (on a
