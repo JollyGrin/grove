@@ -25,6 +25,10 @@ func TestDecideSwap(t *testing.T) {
 		{"no target pane", with(func(in *SwapInput) { in.TargetPanes = 0 }), SwapDecision{Reason: SwapPanes}},
 		{"width differs", with(func(in *SwapInput) { in.TargetW = 80 }), SwapDecision{Reason: SwapSize}},
 		{"height differs", with(func(in *SwapInput) { in.TargetH = 24 }), SwapDecision{Reason: SwapSize}},
+		// grove-531: a direct-attach client would be left watching the
+		// previously shown chat — even at exactly the slot's size.
+		{"target attached elsewhere", with(func(in *SwapInput) { in.Attached = true }), SwapDecision{Reason: SwapAttached}},
+		{"attached beats size", with(func(in *SwapInput) { in.Attached, in.TargetW = true, 100 }), SwapDecision{Reason: SwapAttached}},
 		{"never synced (80x24)", with(func(in *SwapInput) { in.TargetW, in.TargetH = 80, 24 }), SwapDecision{Reason: SwapSize}},
 		// Precedence: the cheapest, most structural reason wins.
 		{"horizontal beats size", with(func(in *SwapInput) { in.Layout, in.TargetW = "horizontal", 80 }), SwapDecision{Reason: SwapNotFocus}},
@@ -64,6 +68,12 @@ func TestSwapInput(t *testing.T) {
 	remote.Remote = true
 	if in, _, _ := swapInput(append(panes, remote), "grove-alpha", "focus", "grove-chat-alpha-4"); !in.Remote {
 		t.Errorf("remote target: %+v", in)
+	}
+	// A target session with a client attached is flagged (grove-531).
+	att := hidden("grove-chat-alpha-5", "@8", 139, 45)
+	att.Attached = true
+	if in, _, _ := swapInput(append(panes, att), "grove-alpha", "focus", "grove-chat-alpha-5"); DecideSwap(in).Reason != SwapAttached {
+		t.Errorf("attached target: %+v", in)
 	}
 }
 

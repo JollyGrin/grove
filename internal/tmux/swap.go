@@ -30,6 +30,7 @@ const (
 	SwapNothingShown = "no single chat shown"
 	SwapPanes        = "target session holds more or less than one pane"
 	SwapSize         = "target pane is not slot-sized"
+	SwapAttached     = "target session has a client attached"
 )
 
 // SwapInput is everything DecideSwap decides from.
@@ -39,6 +40,7 @@ type SwapInput struct {
 	Shown       string // the local chat pane in the slot, "" when none
 	Slot        Slot   // that pane's size
 	TargetPanes int    // panes in the target's hidden session
+	Attached    bool   // a client is attached to the target's session
 	TargetW     int    // the target pane's size — the PANE, not its window:
 	TargetH     int    // a global pane-border-status makes them differ
 }
@@ -51,7 +53,10 @@ type SwapDecision struct {
 
 // DecideSwap picks the fast path (one swap-pane) only when it can be
 // invisible: focus, a local target alone in its session, a chat in the
-// slot, and the target's pane already exactly the slot's size.
+// slot, and the target's pane already exactly the slot's size. A target
+// someone is attached to directly is never swapped: the swap would leave
+// that client watching the previously shown chat in its place (grove-531);
+// the fallback's join takes the pane and ends that session instead.
 func DecideSwap(in SwapInput) SwapDecision {
 	switch {
 	case in.Layout != "focus":
@@ -62,6 +67,8 @@ func DecideSwap(in SwapInput) SwapDecision {
 		return SwapDecision{Reason: SwapNothingShown}
 	case in.TargetPanes != 1:
 		return SwapDecision{Reason: SwapPanes}
+	case in.Attached:
+		return SwapDecision{Reason: SwapAttached}
 	case in.TargetW != in.Slot.W || in.TargetH != in.Slot.H:
 		return SwapDecision{Reason: SwapSize}
 	}
@@ -115,6 +122,9 @@ func swapInput(panes []SizePane, cockpitSession, layout, target string) (SwapInp
 		in.TargetPanes++
 		if p.Remote {
 			in.Remote = true
+		}
+		if p.Attached {
+			in.Attached = true
 		}
 	}
 	return in, shown, tgt

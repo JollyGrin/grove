@@ -16,6 +16,11 @@
 # select-layout runs; across 6 swaps among 3 chats every chat keeps its
 # session name (@grove_chat_home) and its #510 name; a window knocked off
 # the slot's size falls back to break/join and is re-synced.
+# grove-531: a pty client attached straight to a hidden chat (or
+# switch-client'd into it) sees it at its own size; on detach the window is
+# re-pinned before the next swap, which stays fast; a second cockpit client
+# of another size re-sizes the slot and the hidden chats follow; focusing a
+# chat someone is attached to takes the slow path and lets the client go.
 # GROVE_E2E_TMUX_CONF=hostile adds base-index 1 / pane-base-index 1, a
 # user-level aggressive-resize + global window-size, and a global
 # pane-border-status (a lone pane a row shorter than its window).
@@ -460,6 +465,110 @@ NL="$(wc -l < "$LAYOUTS" | tr -d ' ')"
 waitfor 40 in_slot "$SC" || fail "after fallback: $SC did not take the slot"
 [ "$(wc -l < "$LAYOUTS" | tr -d ' ')" = "$NL" ] || fail "after fallback: the next swap was not fast"
 check_names after-fallback
+tmux set-hook -gu after-select-layout
+if ! panes | grep -qx "$T1PANE"; then   # the later legs want T1 shown
+  ( cd "$WS" && "$GV" chat focus "$(tmux display-message -p -t "$T1PANE" '#{session_name}')" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "refocus $T1PANE"; }
+fi
+
+say "grove-531: a direct attach follows the client; detach re-pins; a second cockpit client re-sizes the slot"
+# A pty client (script(1): BSD and util-linux spell it differently) at a
+# size that is not the slot's. Its tmux talks to this isolated server
+# through the exported TMUX_TMPDIR; TMUX is unset above.
+PTY_PIDS=""
+pty_attach() { # <cols> <rows> <session>
+  local cmd="stty cols $1 rows $2; exec tmux attach -t '=$3'"
+  if script --version 2>/dev/null | grep -q util-linux; then
+    script -qfc "$cmd" /dev/null > /dev/null 2>&1 &
+  else
+    script -q /dev/null sh -c "$cmd" > /dev/null 2>&1 &
+  fi
+  PTY_PIDS="$PTY_PIDS $!"
+}
+client_of() { tmux list-clients -F '#{client_name} #{client_session}' | awk -v s="$1" '$2 == s {print $1; exit}'; }
+has_client() { [ -n "$(client_of "$1")" ]; }
+win_of() { tmux display-message -p -t "$1" '#{window_id}'; }
+win_is() { [ "$(tmux display-message -p -t "$1" '#{window_width}x#{window_height}')" = "$2" ]; }
+unpinned() { [ -z "$(tmux show-options -w -t "$(win_of "$1")" window-size)" ]; }
+hidden_at_slot_but() { # <session>: hidden_at_slot, minus one attached chat
+  local sl; sl="$(slot_dims)"
+  [ -n "$sl" ] && [ "$(tmux list-panes -a -F '#{session_name} #{pane_width}x#{pane_height}' | awk -v s="$1" '$1 ~ /^grove-chat-alpha-/ && $1 != s {print $2}' | sort -u)" = "$sl" ]
+}
+fast_focus() { # <pane>: gv chat focus its session; assert the fast path (no select-layout, no repaint)
+  local ts nl cap
+  ts="$(tmux display-message -p -t "$1" '#{session_name}')"
+  cap="$(tmux capture-pane -p -t "$1")"
+  nl="$(wc -l < "$LAYOUTS" | tr -d ' ')"
+  ( cd "$WS" && "$GV" chat focus "$ts" ) > "$SCRATCH/fast.out" 2>&1 || { cat "$SCRATCH/fast.out"; fail "attach leg: gv chat focus $ts"; }
+  waitfor 40 in_slot "$1" || fail "attach leg: $1 ($ts) did not take the slot"
+  sleep 0.6
+  [ "$(wc -l < "$LAYOUTS" | tr -d ' ')" = "$nl" ] || fail "attach leg: focusing $ts ran a select-layout — the slow path"
+  [ "$(tmux capture-pane -p -t "$1")" = "$cap" ] || fail "attach leg: $1 repainted on its swap"
+}
+tmux set-hook -g after-select-layout "run-shell 'echo L >> $LAYOUTS'"
+waitfor 20 hidden_at_slot || fail "attach leg: hidden chats not at the slot: $(size_report)"
+AH="$(hid_opt | awk '{print $1}')"
+AP="$(tmux list-panes -s -t "=$AH" -F '#{pane_id}' | head -1)"
+SLOT0="$(slot_dims)"
+tmux show-hooks -t "$AP" | grep -q 'client-attached.*window-size' || fail "attach leg: $AH has no client-attached hook: $(tmux show-hooks -t "$AP")"
+tmux show-hooks -t "$AP" | grep -q 'client-detached.*sync-sizes' || fail "attach leg: $AH has no client-detached hook: $(tmux show-hooks -t "$AP")"
+tmux show-hooks -g | grep -Eq '^client-(attached|detached|session-changed)(\[[0-9]+\])? ' && fail "attach leg: a client hook went global: $(tmux show-hooks -g)"
+# 1. Direct attach at 100x30: the window follows the client, not the slot.
+pty_attach 100 30 "$AH"
+waitfor 30 has_client "$AH" || fail "attach leg: the pty client never attached to $AH"
+waitfor 20 unpinned "$AP" || fail "attach leg: $AH still pinned while attached: $(tmux show-options -w -t "$(win_of "$AP")" window-size)"
+waitfor 20 win_is "$AP" 100x29 || fail "attach leg: attached $AH is $(tmux display-message -p -t "$AP" '#{window_width}x#{window_height}'), want the client's 100x29"
+# A sync while attached (a cockpit resize, a re-tile) leaves it with its client.
+( cd "$WS" && "$GV" chat sync-sizes --session grove-alpha ) || fail "attach leg: sync-sizes"
+win_is "$AP" 100x29 || fail "attach leg: a sync re-pinned the attached $AH: $(tmux display-message -p -t "$AP" '#{window_width}x#{window_height}')"
+echo "  attached at 100x30: $AH follows the client"
+# 2. Detach: the client-detached hook re-pins it, before any swap.
+tmux detach-client -s "=$AH"
+waitfor 30 hidden_at_slot || fail "attach leg: $AH not back at the slot after detach: $(size_report)"
+[ "$(tmux show-options -wv -t "$(win_of "$AP")" window-size)" = manual ] || fail "attach leg: $AH not pinned after detach"
+fast_focus "$AP"
+echo "  detached: $AH back at the slot $SLOT0; the next swap is fast"
+# 3. A second client of another size on the cockpit session (desk +
+# laptop): the slot is whatever tmux gave the cockpit window; hidden chats
+# follow it and swaps stay fast. Then the same client switch-clients into a
+# hidden chat (gv's attach from inside tmux) and back out.
+# The grove-525 leg's resize-window left the cockpit window manual; give it
+# back to its clients first, as a real cockpit is.
+tmux set-option -wu -t "$W" window-size
+ncockpit() { tmux list-clients -F '#{client_session}' | grep -cx grove-alpha || true; }
+ncockpit_is() { [ "$(ncockpit)" = "$1" ]; }
+pty_attach 160 45 grove-alpha
+waitfor 30 ncockpit_is 1 || fail "attach leg: the 160x45 client never attached to the cockpit"
+pty_attach 120 40 grove-alpha
+waitfor 30 ncockpit_is 2 || fail "attach leg: the 120x40 client never attached to the cockpit"
+waitfor 30 hidden_at_slot || fail "attach leg: hidden chats did not follow the second client's slot: $(size_report)"
+SLOT1="$(slot_dims)"
+[ "$SLOT1" != "$SLOT0" ] || fail "attach leg: the 120x40 client did not re-size the cockpit's slot ($SLOT0)"
+echo "  two cockpit clients (160x45, 120x40): cockpit $(tmux display-message -p -t "$W" '#{window_width}x#{window_height}'), slot $SLOT0 -> $SLOT1, hidden chats follow"
+BH="$(hid_opt | awk '{print $1}')"
+BP="$(tmux list-panes -s -t "=$BH" -F '#{pane_id}' | head -1)"
+fast_focus "$BP"
+CH="$(hid_opt | awk '{print $1}')"
+CP="$(tmux list-panes -s -t "=$CH" -F '#{pane_id}' | head -1)"
+SW="$(tmux list-clients -F '#{client_name} #{client_session} #{client_width}x#{client_height}' | awk '$2 == "grove-alpha" && $3 == "120x40" {print $1}')"
+[ -n "$SW" ] || fail "attach leg: no 120x40 cockpit client: $(tmux list-clients -F '#{client_name} #{client_session} #{client_width}x#{client_height}')"
+tmux switch-client -c "$SW" -t "=$CH"
+waitfor 30 has_client "$CH" || fail "attach leg: switch-client into $CH did not land"
+waitfor 20 unpinned "$CP" || fail "attach leg: $CH still pinned after a switch-client into it"
+waitfor 30 hidden_at_slot_but "$CH" || fail "attach leg: with one cockpit client left, the other hidden chats did not follow its slot: $(size_report)"
+waitfor 20 win_is "$CP" 120x39 || fail "attach leg: switched-into $CH is $(tmux display-message -p -t "$CP" '#{window_width}x#{window_height}'), want the client's 120x39"
+echo "  switch-client into $CH: it follows that client (120x39); one cockpit client left: cockpit $(tmux display-message -p -t "$W" '#{window_width}x#{window_height}'), slot $(slot_dims), the other hidden chats follow"
+# 4. The cockpit wins a show: focusing a chat someone is attached to takes
+# the slow path (never a swap that would leave the client watching another
+# chat); the join ends that session and its client.
+NL="$(wc -l < "$LAYOUTS" | tr -d ' ')"
+( cd "$WS" && "$GV" chat focus "$CH" ) > "$SCRATCH/fast.out" 2>&1 || { cat "$SCRATCH/fast.out"; fail "attach leg: gv chat focus attached $CH"; }
+waitfor 40 in_slot "$CP" || fail "attach leg: attached $CP did not take the slot"
+[ "$(wc -l < "$LAYOUTS" | tr -d ' ')" -gt "$NL" ] || fail "attach leg: an attached target took the fast swap"
+has_client "$CH" && fail "attach leg: $CH still has a client after its chat was shown: $(tmux list-clients -F '#{client_name} #{client_session}')"
+waitfor 30 hidden_at_slot || fail "attach leg: hidden chats not at the slot after the attached show: $(size_report)"
+echo "  focusing an attached chat: slow path, the attach client is let go"
+for pid in $PTY_PIDS; do kill "$pid" 2>/dev/null || true; done
+tmux list-clients -F '#{client_name}' | while read -r c; do tmux detach-client -t "$c"; done
 tmux set-hook -gu after-select-layout
 if ! panes | grep -qx "$T1PANE"; then   # the later legs want T1 shown
   ( cd "$WS" && "$GV" chat focus "$(tmux display-message -p -t "$T1PANE" '#{session_name}')" ) > "$SCRATCH/churn.out" 2>&1 || { cat "$SCRATCH/churn.out"; fail "refocus $T1PANE"; }

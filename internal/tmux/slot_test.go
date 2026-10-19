@@ -27,9 +27,15 @@ func shownChat(w, h int) SizePane {
 	return SizePane{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%1", Index: 2, PaneW: w, PaneH: h}
 }
 
+// hidden is a hidden chat window that already carries the attach hooks
+// (grove-531); unhooked() strips them.
 func hidden(session, win string, w, h int) SizePane {
-	return SizePane{Session: session, WindowID: win, WindowName: "chat", WindowW: w, WindowH: h, Pane: "%" + win[1:] + "0", Index: 1, PaneW: w, PaneH: h}
+	return SizePane{Session: session, WindowID: win, WindowName: "chat", WindowW: w, WindowH: h, Pane: "%" + win[1:] + "0", Index: 1, PaneW: w, PaneH: h, Hooked: true}
 }
+
+func unhooked(p SizePane) SizePane { p.Hooked = false; return p }
+
+func attached(p SizePane) SizePane { p.Attached = true; return p }
 
 // bordered is a hidden one-pane window whose pane is a border row shorter.
 func bordered(session, win string, w, h int) SizePane {
@@ -76,6 +82,12 @@ func TestPlanHiddenSizes(t *testing.T) {
 			{"resize-window", "-t", "@1", "-x", "139", "-y", "46"},
 		}},
 		{"border row: pane already at the slot", append(slotCockpit(shownChat(139, 45)), bordered("grove-chat-alpha-1", "@1", 139, 46)), nil},
+		// grove-531: a window a client is attached to follows that client;
+		// the attach hooks ride the pin, or come alone when the size holds.
+		{"attached: left to follow its client", append(slotCockpit(shownChat(139, 45)), attached(hidden("grove-chat-alpha-1", "@1", 100, 29))), nil},
+		{"attached and unhooked: still left alone", append(slotCockpit(shownChat(139, 45)), attached(unhooked(hidden("grove-chat-alpha-1", "@1", 100, 29)))), nil},
+		{"unhooked: pin + hooks", append(slotCockpit(shownChat(139, 45)), unhooked(hidden("grove-chat-alpha-1", "@1", 80, 24))), append(pin("@1"), attachHooks("@1", "grove-alpha")...)},
+		{"unhooked at the slot: hooks only", append(slotCockpit(shownChat(139, 45)), unhooked(hidden("grove-chat-alpha-1", "@1", 139, 45))), attachHooks("@1", "grove-alpha")},
 		{"another cockpit's slot is not ours", append(slotCockpit(), SizePane{Session: "grove-beta", WindowName: "cockpit", Pane: "%8", Index: 2, PaneW: 139, PaneH: 45}, hidden("grove-chat-alpha-1", "@1", 80, 24)), nil},
 	}
 	for _, tc := range tests {
@@ -92,9 +104,12 @@ func TestPlanHiddenSizes(t *testing.T) {
 
 func TestPlanHiddenSizeReset(t *testing.T) {
 	registry := CockpitCheck(func(s string) bool { return s == "grove-alpha" })
-	panes := append(slotCockpit(shownChat(139, 45)), hidden("grove-chat-alpha-1", "@1", 139, 45), hidden("grove-chat-beta-1", "@4", 139, 45), hidden("grove-chat-alpha-2", "@2", 80, 24))
+	panes := append(slotCockpit(shownChat(139, 45)), hidden("grove-chat-alpha-1", "@1", 139, 45), hidden("grove-chat-beta-1", "@4", 139, 45), unhooked(hidden("grove-chat-alpha-2", "@2", 80, 24)))
 	want := [][]string{
 		{"set-option", "-wu", "-t", "@1", "window-size"},
+		{"set-hook", "-u", "-t", "@1", "client-attached"},
+		{"set-hook", "-u", "-t", "@1", "client-session-changed"},
+		{"set-hook", "-u", "-t", "@1", "client-detached"},
 		{"set-option", "-wu", "-t", "@2", "window-size"},
 	}
 	if got := PlanHiddenSizeReset(panes, "alpha", registry); !reflect.DeepEqual(got, want) {
@@ -103,13 +118,13 @@ func TestPlanHiddenSizeReset(t *testing.T) {
 }
 
 func TestParseSizePanes(t *testing.T) {
-	out := "grove-alpha\t@0\tcockpit\t200\t50\t%1\t2\t139\t45\t\t\tgrove-chat-alpha-2\t.\n" +
-		"grove-alpha\t@0\tcockpit\t200\t50\t%2\t3\t139\t4\t\t1\t\t.\n" +
-		"grove-chat-alpha-1\t@3\tchat\t80\t24\t%3\t0\t80\t24\thostA\t\t\t."
+	out := "grove-alpha\t@0\tcockpit\t200\t50\t%1\t2\t139\t45\t\t\tgrove-chat-alpha-2\t1\t0\t.\n" +
+		"grove-alpha\t@0\tcockpit\t200\t50\t%2\t3\t139\t4\t\t1\t\t1\t0\t.\n" +
+		"grove-chat-alpha-1\t@3\tchat\t80\t24\t%3\t0\t80\t24\thostA\t\t\t0\t1\t."
 	want := []SizePane{
-		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%1", Index: 2, PaneW: 139, PaneH: 45, Home: "grove-chat-alpha-2"},
-		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%2", Index: 3, PaneW: 139, PaneH: 4, Rail: true},
-		{Session: "grove-chat-alpha-1", WindowID: "@3", WindowName: "chat", WindowW: 80, WindowH: 24, Pane: "%3", PaneW: 80, PaneH: 24, Remote: true},
+		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%1", Index: 2, PaneW: 139, PaneH: 45, Home: "grove-chat-alpha-2", Attached: true},
+		{Session: "grove-alpha", WindowID: "@0", WindowName: "cockpit", WindowW: 200, WindowH: 50, Pane: "%2", Index: 3, PaneW: 139, PaneH: 4, Rail: true, Attached: true},
+		{Session: "grove-chat-alpha-1", WindowID: "@3", WindowName: "chat", WindowW: 80, WindowH: 24, Pane: "%3", PaneW: 80, PaneH: 24, Remote: true, Hooked: true},
 	}
 	if got := parseSizePanes(out); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
