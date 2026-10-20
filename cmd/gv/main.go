@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -183,7 +184,7 @@ const usage = `gv — grove
   gv statusline install|uninstall             wrap ~/.claude/settings.json's status line command so
                                               every session records per-account 5h/weekly usage
   gv hook <event>                             (internal) hook receiver
-  gv run-setup <repo>                         (internal) serialized worktree setup
+  gv run-setup <repo> [root] [ticket]         (internal) serialized worktree setup
 `
 
 // ambient is the workspace context resolved once at startup from cwd
@@ -1923,7 +1924,7 @@ func cmdGrab(args []string) error {
 	claudeCmd := grabClaudeCmd(claudeBin, promptPath, profile, acct)
 	if repo.Setup != "" {
 		exe, _ := os.Executable()
-		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
+		claudeCmd = fmt.Sprintf("%s run-setup %s %s %s && %s", exe, repoName, shellQuoteRoot(), task.ID, claudeCmd)
 	}
 	if err := tmux.SendKeys(claudePane, claudeCmd); err != nil {
 		return err
@@ -2399,12 +2400,18 @@ func cmdRunSetup(args []string) error {
 	// argv: <repo> [workspace-root]. The root travels explicitly because a
 	// worktree cwd may live outside the workspace and not walk up (plan
 	// review S-3); "" = legacy globals.
-	if len(args) < 1 || len(args) > 2 {
-		return fmt.Errorf("usage: gv run-setup <repo> [workspace-root]")
+	// The optional ticket (grove-538) is what a failed setup's
+	// setup_failed event is filed under; an older launch line without it
+	// behaves exactly as before and appends nothing.
+	if len(args) < 1 || len(args) > 3 {
+		return fmt.Errorf("usage: gv run-setup <repo> [workspace-root] [ticket]")
 	}
-	root := ""
-	if len(args) == 2 {
+	root, ticket := "", ""
+	if len(args) >= 2 {
 		root = args[1]
+	}
+	if len(args) == 3 {
+		ticket = args[2]
 	}
 	cfg, err := config.LoadAt(root)
 	if err != nil {
@@ -2431,9 +2438,67 @@ func cmdRunSetup(args []string) error {
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	fmt.Printf("gv: running setup: %s\n", repo.Setup)
-	cmd := exec.Command("sh", "-c", repo.Setup)
-	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
-	return cmd.Run()
+	return runSetupCmd(repo.Setup, ticket, config.StateDirAt(root), os.Stdin, os.Stdout, os.Stderr)
+}
+
+// setupTailBytes bounds what a setup's stderr leaves in memory — installs
+// can print megabytes, the failure reason is its last line.
+const setupTailBytes = 4096
+
+// tailBuffer keeps only the last `max` bytes written to it.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+// lastLine is the last non-empty line (\n or \r separated, so progress
+// bars count), at most 200 runes.
+func (t *tailBuffer) lastLine() string {
+	lines := strings.FieldsFunc(strings.ToValidUTF8(string(t.buf), ""), func(r rune) bool { return r == '\n' || r == '\r' })
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			if r := []rune(l); len(r) > 200 {
+				l = string(r[:200])
+			}
+			return l
+		}
+	}
+	return ""
+}
+
+// runSetupCmd runs the setup command with stderr teed into a bounded tail
+// buffer. A non-zero exit with a ticket appends setup_failed {exit, tail}
+// (grove-538) and returns the original error, so the launch string's
+// `&& claude` still short-circuits.
+func runSetupCmd(setup, ticket, stateDir string, stdin io.Reader, stdout, stderr io.Writer) error {
+	tail := &tailBuffer{max: setupTailBytes}
+	cmd := exec.Command("sh", "-c", setup)
+	cmd.Stdout, cmd.Stdin = stdout, stdin
+	cmd.Stderr = io.MultiWriter(stderr, tail)
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ticket != "" {
+		if aerr := state.Append(stateDir, state.Event{
+			Type: state.EvSetupFailed, Ticket: ticket,
+			Data: map[string]string{"exit": strconv.Itoa(ee.ExitCode()), "tail": tail.lastLine()},
+		}); aerr != nil {
+			fmt.Fprintf(stderr, "gv: could not record setup_failed: %v\n", aerr)
+		}
+	}
+	return err
 }
 
 // --- ls ---

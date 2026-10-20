@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-538 worker-state 04: `gv run-setup <repo> <root> <ticket>` appends `setup_failed` {exit, tail} on a non-zero setup exit (bounded 4 KiB stderr tail; old 2-arg launch lines append nothing); fold reads `tail`; ntfy high · warning; docs/plugins.md; dummy e2e. Not wired: the adopt launch string (still 2-arg) — follow-up.
 - [x] grove-536 worker-state 02: beat reads Claude's session file (internal/claudestate); capture-pane only for a worker with no matching file; rows render state.Resolve
 - [x] grove-537 worker-state 03: install `StopFailure` + `UserPromptSubmit` hooks → `stop_failed` / `prompt_submitted` (no prompt text; subagent + foreign dropped); doctor row now `len(hookEvents)` (6/6); docs/plugins.md + claude-code-facts updated
 - [x] grove-535 worker-state 01: `state.Resolve` — pure resolver (rules 1–6) behind `Task.Label()`; folds notification/stop_failed/prompt_submitted/setup_failed; Label byte-identical with empty Signals.
