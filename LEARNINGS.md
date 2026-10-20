@@ -42,6 +42,7 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-20 · Session status file has a fourth status and tears are possible (grove-534).** `<config dir>/sessions/<pid>.json` (2.1.304) reads `busy|idle|waiting|shell` (`shell` = idle with a live background shell), is rewritten in place (no rename; new files lack `status` for ~50 ms), survives `kill -9` (the next launch in that config dir sweeps it), and its `tmux` field is `session:@win.%pane` frozen at launch, absent outside tmux. Esc reaches `idle` in ~100 ms. Table: claude-code-facts §"Session status file".
 - **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
   worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
   and `.claude/settings.local.json` never reaches a fresh worktree**
@@ -69,13 +70,6 @@
   `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
   WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
   table — one table alone misses half. Rule: tmux-discipline §3.
-
-- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
-  tmux reports it as "File name too long"** (grove-401): an isolated
-  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
-  starts, and every call fails before connecting. Scratch tmux roots go
-  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
-  suite and `scratchServer` already do — the reason is now written down.
 
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Rule: prose goes via `load-buffer` +
