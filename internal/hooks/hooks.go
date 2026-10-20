@@ -27,6 +27,7 @@ type Payload struct {
 	Cwd                  string `json:"cwd"`
 	HookEventName        string `json:"hook_event_name"`
 	Message              string `json:"message"`
+	NotificationType     string `json:"notification_type"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	// Source is SessionStart's origin: startup | resume | clear | compact
 	// (verified on Claude Code 2.1.283, grove-339). "compact" means Claude
@@ -197,7 +198,10 @@ func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.
 		glyphWorker(task, state.Glyph(state.AgentWaiting, ""))
 		_ = state.Append(stateDir, state.Event{
 			Type: state.EvNotification, Ticket: task.Ticket,
-			Data: map[string]string{"message": p.Message, "session_id": p.SessionID},
+			Data: map[string]string{
+				"message": p.Message, "session_id": p.SessionID,
+				"notification_type": p.NotificationType,
+			},
 		})
 		notify.Desktop(task.Ticket+" needs input", p.Message)
 		notify.Push(task.Ticket+" needs input", p.Message, "high", "bell")
