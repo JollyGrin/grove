@@ -316,7 +316,7 @@ func TestInstallPreservesOvsEntries(t *testing.T) {
 			t.Errorf("%s: ovs entries = %d, want 1 (must survive byte-identical)", ev, got)
 		}
 	}
-	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
+	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd", "StopFailure", "UserPromptSubmit"} {
 		if got := count(s.Hooks[ev], "/gv hook"); got != 1 {
 			t.Errorf("%s: gv entries = %d, want exactly 1 after double install", ev, got)
 		}
@@ -332,7 +332,7 @@ func TestInstallPreservesOvsEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd"} {
+	for _, ev := range []string{"SessionStart", "Notification", "Stop", "SessionEnd", "StopFailure", "UserPromptSubmit"} {
 		if !got[ev] {
 			t.Errorf("installed() missing %s", ev)
 		}
@@ -993,5 +993,63 @@ func TestReceiveSessionStartNewIDWhenNotLive(t *testing.T) {
 				t.Errorf("session=%q paused=%v, want s-new registered", task.SessionID, task.Paused)
 			}
 		})
+	}
+}
+
+func TestReceiveStopFailureAndPromptSubmit(t *testing.T) {
+	stateDir, cwd := seedTask(t)
+	send := func(m map[string]any) {
+		t.Helper()
+		m["cwd"] = cwd
+		b, _ := json.Marshal(m)
+		ev := "stop-failure"
+		if m["hook_event_name"] == "UserPromptSubmit" {
+			ev = "prompt-submit"
+		}
+		if err := Receive(single(stateDir), ev, strings.NewReader(string(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := countLines(t, stateDir)
+
+	// Subagent and foreign-session payloads append nothing.
+	send(map[string]any{"session_id": "s1", "hook_event_name": "StopFailure", "error": "rate_limit", "agent_id": "a1"})
+	send(map[string]any{"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "x", "agent_id": "a1"})
+	if got := countLines(t, stateDir); got != base {
+		t.Fatalf("subagent payloads appended %d events", got-base)
+	}
+	refresh(t, stateDir)
+	// Record the worker's session, then a different session is foreign.
+	send(map[string]any{"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "secret prompt text"})
+	ev := lastEventIn(t, stateDir)
+	if ev.Type != state.EvPromptSubmitted || len(ev.Data) != 0 {
+		t.Errorf("prompt event = %+v, want prompt_submitted with no data", ev)
+	}
+	long := strings.Repeat("é", 500)
+	send(map[string]any{"session_id": "s1", "hook_event_name": "StopFailure", "error": "rate_limit", "error_details": long})
+	ev = lastEventIn(t, stateDir)
+	if ev.Type != state.EvStopFailed || ev.Data["error"] != "rate_limit" {
+		t.Fatalf("stop failure event = %+v", ev)
+	}
+	if n := len([]rune(ev.Data["details"])); n > stopFailedDetailsCap+1 {
+		t.Errorf("details = %d runes, want capped", n)
+	}
+}
+
+func TestReceiveStopFailureDropsForeignSession(t *testing.T) {
+	stateDir, cwd := seedTask(t)
+	start := payloadFor("SessionStart", "worker", cwd, "")
+	if err := Receive(single(stateDir), "session-start", strings.NewReader(start)); err != nil {
+		t.Fatal(err)
+	}
+	refresh(t, stateDir)
+	base := countLines(t, stateDir)
+	for _, ev := range []string{"stop-failure", "prompt-submit"} {
+		if err := Receive(single(stateDir), ev, strings.NewReader(payloadFor("X", "orch", cwd, ""))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := countLines(t, stateDir); got != base {
+		t.Errorf("foreign session appended %d events", got-base)
 	}
 }

@@ -228,7 +228,7 @@ server, a 2 ms poller logging every change, ~154k reads. Fixtures:
   with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
   the finished form. `esc to interrupt` is gone; the input caret is
   followed by U+00A0. No hook fires when a pane dies, and an API-error end
-  fires `StopFailure` (not installed by grove) — not `Stop`.
+  fires `StopFailure` (installed by grove since grove-537 → `stop_failed`) — not `Stop`.
 
 ## Profiles and config dirs
 

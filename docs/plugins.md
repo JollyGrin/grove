@@ -353,7 +353,8 @@ whole "produce" half; `gv watch` below is the "consume" half.
 | `pr_ci_failed` / `pr_conflicting` | high · `x` | yes |
 | `pr_ready` | default · `white_check_mark` | yes |
 | `pr_merged` | default · `tada` | yes |
-| `pr_opened` / `pr_updated` / `pr_closed` / `worker_recovered` | none | no |
+| `stop_failed` | high · `warning` | yes |
+| `pr_opened` / `pr_updated` / `pr_closed` / `worker_recovered` / `prompt_submitted` | none | no |
 
 `gv watch` (grove-205) is the supported subscription: grove does the
 tailing, the offset bookkeeping and the torn-line handling, and hands you
@@ -419,7 +420,12 @@ for the same ticket drops the pointer for good), (grove-252) the
 eleven delivery/liveness types in the table above: `pr_opened`,
 `pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`, `pr_merged`,
 `pr_closed`, `worker_waiting`, `worker_vanished`, `worker_errored`,
-`worker_recovered`, and (grove-289) `compaction` — data `{session_id}`,
+`worker_recovered`, (grove-537, additive) `stop_failed` — data `{error,
+details}`, from the `StopFailure` hook when an API error / rate limit /
+auth failure ends a turn without a `Stop` (`details` ≤200 runes) — and
+`prompt_submitted` — empty data, from `UserPromptSubmit`; the prompt text
+is never logged; both are in `--type`'s vocabulary but not the default set; subagent and foreign-session payloads are dropped for
+both — and (grove-289) `compaction` — data `{session_id}`,
 fired by a SessionStart with `source: "compact"` (a context-compaction
 restart, not a new session). It is in `--type`'s known vocabulary but
 NOT the default set: informational (`gv cost --context` is its read
