@@ -40,10 +40,16 @@ import (
 // inside workspaces, so pre-existing payloads are unchanged.
 type Row struct {
 	*state.Task
-	Host      string     `json:"host,omitempty"`
-	Workspace string     `json:"workspace,omitempty"`
-	Live      string     `json:"live"`
-	PR        *github.PR `json:"pr,omitempty"`
+	Host      string `json:"host,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	Live      string `json:"live"`
+	// State/StateDetail/StateSource are state.Resolve's answer (grove-539):
+	// the one worker state the cockpit and `gv ls` both show. Additive —
+	// Live and the Task's own agent/sentinel/liveness are unchanged.
+	State       string     `json:"state"`
+	StateDetail string     `json:"state_detail"`
+	StateSource string     `json:"state_source"`
+	PR          *github.PR `json:"pr,omitempty"`
 	// PRKnown is only present when a PR lookup was actually attempted for
 	// this row: false means the lookup errored or timed out (github.FetchAll
 	// dropped it into its unknown map, grove-251) — nil/absent means no

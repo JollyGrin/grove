@@ -39,7 +39,12 @@ type Observation struct {
 	// Live is the pane read (DetectLiveFrom); PaneContent is the bottom-30
 	// capture the liveness checks scan.
 	Live detect.LiveInfo
-	Now  time.Time
+	// Signals is what the beat saw outside the event log (claudestate.Observe).
+	// Signals.Claude, when set, is Claude's own session-file state: a
+	// `waiting` there is Claude's word, not a pane scrape, so the marker the
+	// event carries is its waitingFor.
+	Signals state.Signals
+	Now     time.Time
 }
 
 // Memory is the caller-owned hysteresis: first-seen timestamps per ticket
@@ -275,6 +280,10 @@ func deriveDelivery(pr *github.PR, prev string) (next, evType string, data map[s
 // --- Liveness -----------------------------------------------------------
 
 const (
+	// waitingHysteresis is kept for session-file waiting too (grove-539):
+	// the file is Claude's own state, but a prompt the operator answers at
+	// the desk within seconds is still not worth a push, and the file moves
+	// in ~100 ms (grove-534) so it cannot be what makes a flap rare.
 	waitingHysteresis  = 10 * time.Second
 	vanishedHysteresis = 60 * time.Second
 	bootGrace          = 120 * time.Second
@@ -324,8 +333,12 @@ func livenessTransitions(obs Observation, mem *Memory) []state.Event {
 		if prev == state.LivenessWaiting {
 			return nil
 		}
+		marker := detect.WaitingMarker(obs.Live.PaneContent)
+		if c := obs.Signals.Claude; c != nil {
+			marker = c.WaitingFor
+		}
 		return []state.Event{mkEvent(state.EvWorkerWaiting, t.Ticket, obs.Now,
-			map[string]string{"marker": detect.WaitingMarker(obs.Live.PaneContent)})}
+			map[string]string{"marker": marker})}
 	}
 	delete(mem.waitingSince, t.Ticket)
 

@@ -10,9 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -476,42 +474,13 @@ func snapshotSessions(fetch func(string) (*tmux.SessionSnapshot, error)) func(st
 // lives for this refresh only. signals feeds state.Resolve.
 func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo, readClaude func(map[string]bool) map[string]state.ClaudeStatus) (map[string]string, string, map[string]detect.LiveInfo, map[string]state.Signals) {
 	live := map[string]string{}
-	infos := make(map[string]detect.LiveInfo, len(active))
-	signals := make(map[string]state.Signals, len(active))
 	activeWindow := snapFor(session).ActiveWindow()
 	focused := ""
 
-	want := map[string]bool{}
+	infos, signals := claudestate.Observe(active, snapFor, detectFrom, readClaude)
 	for _, t := range active {
-		if pane, _, ok := snapFor(t.TmuxSession).ClaudePane(t.TmuxWindow); ok {
-			want[pane] = true
-		}
-	}
-	var files map[string]state.ClaudeStatus
-	if len(want) > 0 && readClaude != nil {
-		files = readClaude(want)
-	}
-
-	for _, t := range active {
+		info := infos[t.Ticket]
 		snap := snapFor(t.TmuxSession)
-		sig := state.Signals{
-			WindowExists: snap.WindowExists(t.TmuxWindow),
-			PaneCommand:  snap.ClaudePaneCommand(t.TmuxWindow),
-		}
-		var info detect.LiveInfo
-		pane, _, _ := snap.ClaudePane(t.TmuxWindow)
-		if c, ok := files[pane]; ok && sig.WindowExists && t.SessionID != "" && c.SessionID == t.SessionID {
-			c := c
-			sig.Claude = &c
-			info = detect.LiveInfo{Exists: true, HasClaude: true, Status: agentStatus(c.Status)}
-		} else {
-			info = detectFrom(snap, t.TmuxWindow)
-			if reason, _, ok := detect.ErrorMarker(info.PaneContent); ok {
-				sig.PaneError = reason
-			}
-		}
-		infos[t.Ticket] = info
-		signals[t.Ticket] = sig
 		if !info.Exists {
 			live[t.Ticket] = "gone"
 		} else {
@@ -525,21 +494,6 @@ func liveStates(active []*state.Task, session string, snapFor func(string) *tmux
 		}
 	}
 	return live, focused, infos, signals
-}
-
-// agentStatus maps Claude's session-file status onto the LIVE column's
-// vocabulary. shell (idle with a background shell alive) is not stuck on
-// the operator, so it reads idle.
-func agentStatus(s string) detect.AgentStatus {
-	switch s {
-	case "busy":
-		return detect.StatusBusy
-	case "waiting":
-		return detect.StatusWaiting
-	case "idle", "shell":
-		return detect.StatusIdle
-	}
-	return detect.StatusUnknown
 }
 
 // feedTail is the activity-feed tail bound — the folder keeps this many
@@ -1848,31 +1802,16 @@ func (m Model) spawnProfile(profile string) (tea.Model, tea.Cmd) {
 // and any CLAUDE_CONFIG_DIR a model profile exports. Sorted-free and small;
 // built per refresh, not cached.
 func (m Model) sessionDirs() []string {
-	var dirs []string
-	add := func(cfgDir string) {
-		if cfgDir == "" {
-			return
-		}
-		d := filepath.Join(cfgDir, "sessions")
-		for _, have := range dirs {
-			if have == d {
-				return
-			}
-		}
-		dirs = append(dirs, d)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		add(filepath.Join(home, ".claude"))
-	}
+	var extra []string
 	if m.cfg != nil {
-		add(m.cfg.ClaudeConfigDir)
+		extra = append(extra, m.cfg.ClaudeConfigDir)
 		for _, p := range m.cfg.ModelProfiles {
 			if p != nil {
-				add(p.Env["CLAUDE_CONFIG_DIR"])
+				extra = append(extra, p.Env["CLAUDE_CONFIG_DIR"])
 			}
 		}
 	}
-	return dirs
+	return claudestate.SessionDirs(extra...)
 }
 
 // labelOf is the row label for t: the resolver's answer from the last beat,

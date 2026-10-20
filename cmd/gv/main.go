@@ -26,6 +26,7 @@ import (
 	"github.com/JollyGrin/grove/internal/audit"
 	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/chat"
+	"github.com/JollyGrin/grove/internal/claudestate"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/connections"
 	"github.com/JollyGrin/grove/internal/cost"
@@ -2598,18 +2599,36 @@ func cmdLs(args []string) error {
 	}
 
 	costCache := cost.NewCache()
+	// grove-539: one snapshot per tmux session and one session-file read per
+	// fleet answer every task's window, pane and busy/idle/waiting; the
+	// capture-pane runs only for a worker with no session file. The old
+	// shape ran DetectLive (3-4 execs) plus ResolveWindowName per task.
+	snaps := map[string]*tmux.SessionSnapshot{}
+	snapFor := func(session string) *tmux.SessionSnapshot {
+		if snap, ok := snaps[session]; ok {
+			return snap
+		}
+		snap, _ := tmux.SnapshotSession(session)
+		snaps[session] = snap
+		return snap
+	}
+	now := time.Now()
 	rows := make([]lsRow, 0, len(tasks))
 	for _, f := range fleets {
-		for _, t := range state.Active(f.tasks) {
-			// Resolve the current window name (a P3 status glyph is a display
-			// suffix on the stable base) so the byte-comparable detect probe's
-			// exact name match still finds a live worker.
-			live := detect.DetectLive(t.TmuxSession, tmux.ResolveWindowName(t.TmuxSession, t.TmuxWindow))
+		fleetActive := state.Active(f.tasks)
+		infos, signals := claudestate.Observe(fleetActive, snapFor, detect.DetectLiveFrom,
+			func(want map[string]bool) map[string]state.ClaudeStatus {
+				return claudestate.Read(claudestate.SessionDirs(configDirs(f.cfg)...), want)
+			})
+		for _, t := range fleetActive {
+			live := infos[t.Ticket]
 			liveStr := "gone"
 			if live.Exists {
 				liveStr = live.Status.String()
 			}
-			row := lsRow{Task: t, Live: liveStr, PR: prs[t.Ticket], Workspace: f.label}
+			res := state.Resolve(t, signals[t.Ticket], now)
+			row := lsRow{Task: t, Live: liveStr, PR: prs[t.Ticket], Workspace: f.label,
+				State: res.State, StateDetail: res.Detail, StateSource: res.Source}
 			if prAttempted[t.Ticket] {
 				known := !prUnknown[t.Ticket]
 				row.PRKnown = &known
@@ -2726,6 +2745,9 @@ func cmdLs(args []string) error {
 			pr = "?" // lookup failed/timed out — never render as "no PR" (grove-251)
 		}
 		status := r.Label()
+		if r.State != "" {
+			status = state.Resolved{State: r.State, Detail: r.StateDetail, Source: r.StateSource}.Label()
+		}
 		if r.Paused {
 			status = "⏸ " + status // paused stays on the plate, visibly resumable (grove-90)
 		}

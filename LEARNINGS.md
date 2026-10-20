@@ -61,6 +61,7 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- 2026-10-20 (grove-539): **`gv ls` tmux execs per run, before → after.** Measured with a fake `tmux` on PATH logging argv, 3 tasks in one session: before 6 execs (2 `list-windows` per task — `ResolveWindowName` + `DetectLive`'s window lookup — and that is the FLOOR: a task whose window exists adds `list-panes` + `capture-pane` apiece), after 3 (1 `list-windows` + 1 `list-panes` for the session, 1 `capture-pane` for the one worker with no session file). Per task: ≥2 → 0 for a worker with a session file, 1 (capture only) for one without. The cockpit/supervise beat uses the same `claudestate.Observe`, so the beat's cost no longer grows with worker count except for file-less workers. Pinned by `TestLsResolverExecsAndJSON`.
 - 2026-10-19 (focus swap spike, tmux 3.6a): **`set -g window-size manual` crashes the tmux server on the next new window** — `new-session` (with or without `-x/-y`) or `new-window` after it prints `server exited unexpectedly` and every session on that server is gone (reproduced 2× on an isolated `-L` server, no client attached). Per-window `set -w -t <win> window-size manual` + `resize-window -x -y` is safe. Rule: never set `window-size` globally — on the operator's real server that line is a kill-server. Same spike: a `swap-pane` between two panes of IDENTICAL size sends no SIGWINCH, so Claude Code does not repaint (swapped-in screen byte-identical, ~5ms), while today's break-pane/join-pane into a differently-sized slot costs one full Claude repaint (~270ms on a short transcript). Design: docs/plans/2026-10-19-focus-same-size-swap-design.md.
 - 2026-10-19 (grove-487, tmux 3.6a): `#{pane_last}` is 1 for the window's previously active pane — the only pane recency tmux has (no per-pane activity time), and the right "which chat was I in" answer when `L` is typed in the dash (the dash is always the active pane then). `run()` trims its output, so a list-panes format whose LAST field is an empty `@option` loses its trailing tabs on the final line and a field-count check rejects that pane — end such a format with a literal `\t.`. Two quick `L` presses run two off-loop layout commands concurrently: an e2e that polls pane count and presses `L` again can race the first command's option write (`@grove_focus_hid`) — wait for the option, not the panes.
 - **2026-10-07 · `tmux show-options` takes ONE option name and never
@@ -115,19 +116,6 @@
   grep the launch line (`grep -o 'echo [^$]*\$(cat'`) and not the whole
   scrollback — the first cut of `e2e/dummy.sh`'s effort leg failed on a
   correct launch for exactly this reason.
-- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
-  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
-  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
-  reproduced here): until someone finds out what the two runs share, run
-  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
-  not a red suite — do not "fix" sub.sh on the strength of it.
-- **2026-09-28 · the cockpit flash never expires, and it takes its room
-  from the footer legend** (grove-403): `m.flash` is plain state — nothing
-  clears it on a beat, only the next assignment does. A flash left behind
-  by an earlier key therefore squeezes the legend's hints down to bare
-  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
-  e2e assertion on a hint LABEL fails on a narrow pane for that reason
-  alone; assert on the keys, or on a frame whose flash you control.
 - **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
 - **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
 - **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.

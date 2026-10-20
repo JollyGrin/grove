@@ -171,6 +171,11 @@ func (m Model) ticketColWidth() int {
 // rows; the widest age ("23h59m") is 6 cells, so 7 leaves a one-cell gap.
 const ageColW = 7
 
+// statusColW fits the resolver's label plus its detail ("waiting (permission
+// prompt)" truncates, "errored (rate_limit)" fits); it took the freed LIVE
+// column's 8 cells (grove-539).
+const statusColW = 19
+
 func (m Model) viewAgents() string {
 	w := m.width - 4
 	tw := m.ticketColWidth()
@@ -182,8 +187,8 @@ func (m Model) viewAgents() string {
 	if m.trainW > 0 {
 		train = pad("TRAIN", m.trainW)
 	}
-	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + train + pad("STATUS", 11) +
-		pad("LIVE", 8) + pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + pad("AGE", ageColW) + "TASK"
+	header := "   " + pad("TICKET", tw) + pad("REPO", 11) + train + pad("STATUS", statusColW) +
+		pad("PR", 8) + pad("CI", 4) + pad("PREVIEW", 9) + pad("AGE", ageColW) + "TASK"
 	rows := []string{sHeaderCol.Render(truncPad(header, w))}
 
 	if len(m.board) == 0 {
@@ -264,7 +269,6 @@ func (m Model) viewAgents() string {
 				glyphStyle = knockStyle(m.tick)
 			}
 		}
-		live := r.Live
 		line := cursor + glyphStyle.Render(glyph) + " " +
 			pad(t.Ticket, tw) +
 			pad(trunc(t.Repo, 10), 11)
@@ -275,15 +279,14 @@ func (m Model) viewAgents() string {
 			}
 			line += sChrome.Render(pad(slug, m.trainW))
 		}
-		line += st.Render(pad(statusText, 11)) +
-			sDim.Render(pad(live, 8)) +
+		line += st.Render(pad(statusText, statusColW)) +
 			sDelivery.Render(pad(pr, 8)) +
 			ciStyle.Render(pad(ci, 4)) +
 			sDelivery.Render(pad(preview, 9)) +
 			sChrome.Render(pad(age(t.Created), ageColW))
 		// Dimmed task-title hint in the leftover width — additive, never a
 		// formal column. Omit entirely on narrow panes rather than cramp.
-		consumed := 3 + tw + 11 + m.trainW + 11 + 8 + 8 + 4 + 9 + ageColW
+		consumed := 3 + tw + 11 + m.trainW + statusColW + 8 + 4 + 9 + ageColW
 		remaining := w - consumed
 		if r.hostTag != "" && remaining >= r.tagW {
 			// grove-178: the host tag leads the hint area so a merged board

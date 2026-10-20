@@ -3,6 +3,7 @@ package supervise
 import (
 	"time"
 
+	"github.com/JollyGrin/grove/internal/claudestate"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
@@ -24,6 +25,10 @@ type PollDeps struct {
 	RepoLookup RepoLookup
 	SnapFor    func(session string) (*tmux.SessionSnapshot, error)
 	DetectFrom func(snap *tmux.SessionSnapshot, base string) detect.LiveInfo
+	// ReadClaude reads Claude's own session files for the given pane ids
+	// (claudestate.Read in production); nil = no session-file signal, every
+	// worker falls back to the pane capture.
+	ReadClaude func(want map[string]bool) map[string]state.ClaudeStatus
 	FetchAll   func(lookups map[string][2]string) (prs map[string]*github.PR, unknown map[string]error)
 }
 
@@ -58,6 +63,10 @@ func Poll(deps PollDeps, mem *Memory, now time.Time) ([]state.Event, error) {
 		return snap
 	}
 
+	// grove-539: one session-file read per pass; capture-pane only for a
+	// worker whose pane has none (the cockpit's shape, claudestate.Observe).
+	infos, signals := claudestate.Observe(active, snapFor, deps.DetectFrom, deps.ReadClaude)
+
 	var evs []state.Event
 	for _, t := range active {
 		_, bad := unknown[t.Ticket]
@@ -65,7 +74,8 @@ func Poll(deps PollDeps, mem *Memory, now time.Time) ([]state.Event, error) {
 			Task:    t,
 			PR:      prs[t.Ticket],
 			PRKnown: !bad,
-			Live:    deps.DetectFrom(snapFor(t.TmuxSession), t.TmuxWindow),
+			Live:    infos[t.Ticket],
+			Signals: signals[t.Ticket],
 			Now:     now,
 		}
 		for _, ev := range Transitions(obs, mem) {
