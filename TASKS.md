@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-535 worker-state 01: `state.Resolve` — pure resolver (rules 1–6) behind `Task.Label()`; folds notification/stop_failed/prompt_submitted/setup_failed; Label byte-identical with empty Signals.
 - [x] grove-534 worker-state 00: spike — session status file verified on 2.1.304 (GO); facts in claude-code-facts, fixtures in internal/claudestate/testdata
 - [x] **grove-521** focus swaps: target lookup scoped to the cockpit's workspace, live rows only (`findLiveChat`; full report only on a miss, so archived refusals hold); rail viewer stamps `@grove_rail_pid` and redraws on SIGUSR1 after every write (2s tick kept as heartbeat). Fixture (12 ws, 260 archived): join 0.24→0.20s, rail redraw 1.29→0.30s.
 - [x] grove-517: click a CHATS row to show/focus it — bubbletea cell-motion mouse + a filter (left press passes, wheel → ↑/↓, the rest dropped before Update); a click = enter on that row, on-screen chats only selected; hit-test from chatLayout (PR #520)
