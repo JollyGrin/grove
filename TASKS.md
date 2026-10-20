@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-536 worker-state 02: beat reads Claude's session file (internal/claudestate); capture-pane only for a worker with no matching file; rows render state.Resolve
 - [x] grove-537 worker-state 03: install `StopFailure` + `UserPromptSubmit` hooks → `stop_failed` / `prompt_submitted` (no prompt text; subagent + foreign dropped); doctor row now `len(hookEvents)` (6/6); docs/plugins.md + claude-code-facts updated
 - [x] grove-535 worker-state 01: `state.Resolve` — pure resolver (rules 1–6) behind `Task.Label()`; folds notification/stop_failed/prompt_submitted/setup_failed; Label byte-identical with empty Signals.
 - [x] grove-534 worker-state 00: spike — session status file verified on 2.1.304 (GO); facts in claude-code-facts, fixtures in internal/claudestate/testdata
