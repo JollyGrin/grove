@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/claudestate"
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
 	"github.com/JollyGrin/grove/internal/state"
@@ -68,7 +70,10 @@ func cmdSupervise(args []string) error {
 		},
 		SnapFor:    tmux.SnapshotSession,
 		DetectFrom: detect.DetectLiveFrom,
-		FetchAll:   github.FetchAll,
+		ReadClaude: func(want map[string]bool) map[string]state.ClaudeStatus {
+			return claudestate.Read(claudestate.SessionDirs(configDirs(cfg)...), want)
+		},
+		FetchAll: github.FetchAll,
 	}
 	mem := supervise.NewMemory()
 
@@ -107,4 +112,21 @@ func emitSupervise(ev state.Event, asJSON bool) {
 		}
 	}
 	fmt.Fprintln(os.Stdout, line)
+}
+
+// configDirs lists the Claude config dirs a worker may run under besides
+// ~/.claude: the workspace's claude_config_dir and every model profile's
+// CLAUDE_CONFIG_DIR (the cockpit's Model.sessionDirs, minus the model).
+func configDirs(cfg *config.Config) []string {
+	var dirs []string
+	if cfg == nil {
+		return dirs
+	}
+	dirs = append(dirs, cfg.ClaudeConfigDir)
+	for _, p := range cfg.ModelProfiles {
+		if p != nil {
+			dirs = append(dirs, p.Env["CLAUDE_CONFIG_DIR"])
+		}
+	}
+	return dirs
 }

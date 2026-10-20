@@ -1,9 +1,9 @@
  ⁂ GROVE · golden                                 1 working · 1 mail · 1 review 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ AGENTS                                                                       │
-│    TICKET     REPO       STATUS     LIVE    PR      CI  PREVIEW  AGE    TASK │
-│ ▸● grove-18   grove      working    working #18     ✓   —        0m          │
-│  ◆ grove-19   grove      QUESTION   waiting —       —   —        0m          │
+│    TICKET     REPO       STATUS             PR      CI  PREVIEW  AGE    TASK │
+│ ▸● grove-18   grove      working            #18     ✓   —        0m          │
+│  ◆ grove-19   grove      QUESTION           —       —   —        0m          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ ACTIVITY                                                                     │

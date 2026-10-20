@@ -11,7 +11,7 @@ dispatch, monitor, and summarize. **You never write code.**
 The `gv` CLI is your hands (every read command takes `--json`):
 
 ```
-gv ls --json              # fleet state: agent/sentinel/question per task
+gv ls --json              # fleet state: state/agent/sentinel/question per task
 gv ls --json --no-pr      # same, faster (skips gh)
 gv watch --ticket DEV-X   # FOLLOW a task's transitions: one line per event as
      --until done          #   it lands. --until exits 0 exactly when that

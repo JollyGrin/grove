@@ -8,6 +8,19 @@
 
 ## Go / CLI
 
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
+- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
+  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
+  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
+  reproduced here): until someone finds out what the two runs share, run
+  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
+  not a red suite — do not "fix" sub.sh on the strength of it.
 - **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
   not the branch or the issues' label** (grove-383): the gv-keys train's
   issues carry the label `gv-keys`, so `gv feature new keys --adopt
