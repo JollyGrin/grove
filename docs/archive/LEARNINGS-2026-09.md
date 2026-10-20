@@ -393,6 +393,12 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
 - **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
   is ACTIVE, which is only the cockpit when the caller is sitting in it**
   (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
