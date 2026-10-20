@@ -12,6 +12,7 @@ package tui
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/state"
@@ -54,7 +55,7 @@ func TestLiveStatesOneSnapshotPerSessionOneDetectPerTask(t *testing.T) {
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 		{Ticket: "grove-99", TmuxSession: "grove-test", TmuxWindow: "repo · grove-99"},
 	}
-	live, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	live, focused, _, _ := liveStates(tasks, "grove-test", snapFor, detectFrom, nil)
 
 	// The batched contract: 3 tasks + the active-window read = ONE snapshot.
 	if fetches != 1 {
@@ -91,7 +92,7 @@ func TestLiveStatesFocusedGlyphTolerant(t *testing.T) {
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 		{Ticket: "grove-1", TmuxSession: "grove-test", TmuxWindow: "repo · grove-1"},
 	}
-	_, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	_, focused, _, _ := liveStates(tasks, "grove-test", snapFor, detectFrom, nil)
 	if focused != "grove-1" {
 		t.Errorf("focused = %q, want grove-1 (glyphed active window, sibling must not match)", focused)
 	}
@@ -115,11 +116,63 @@ func TestLiveStatesDeadSessionMemoized(t *testing.T) {
 		{Ticket: "grove-1", TmuxSession: "grove-test", TmuxWindow: "repo · grove-1"},
 		{Ticket: "grove-10", TmuxSession: "grove-test", TmuxWindow: "repo · grove-10"},
 	}
-	live, focused, _ := liveStates(tasks, "grove-test", snapFor, detectFrom)
+	live, focused, _, _ := liveStates(tasks, "grove-test", snapFor, detectFrom, nil)
 	if fetches != 1 {
 		t.Errorf("dead session fetched %d times, want 1 (nil memoized)", fetches)
 	}
 	if live["grove-1"] != "gone" || live["grove-10"] != "gone" || focused != "" {
 		t.Errorf("dead session: live=%v focused=%q, want all gone / no focus", live, focused)
+	}
+}
+
+// grove-536: a worker whose pane has a session file for its session costs
+// zero captures; only a worker without one falls back to capture-pane.
+func TestLiveStatesSessionFileSkipsCapture(t *testing.T) {
+	snap := tmux.ParseSessionSnapshot(
+		"@1\t1\tcockpit\n@2\t0\trepo · grove-1\n@3\t0\trepo · grove-2\n@4\t0\trepo · grove-3",
+		"@2\t%1\t0\t48\tclaude\n@3\t%3\t0\t42\tclaude\n@4\t%4\t0\t42\tclaude",
+	)
+	snapFor := snapshotSessions(func(string) (*tmux.SessionSnapshot, error) { return snap, nil })
+	captures := 0
+	detectFrom := func(s *tmux.SessionSnapshot, base string) detect.LiveInfo {
+		captures++
+		return detect.LiveInfo{Exists: true, HasClaude: true, Status: detect.StatusIdle, PaneContent: "x"}
+	}
+	reads := 0
+	files := map[string]state.ClaudeStatus{
+		"%1": {Status: "busy", SessionID: "s1"},
+		"%3": {Status: "waiting", WaitingFor: "permission prompt", SessionID: "s2"},
+		"%4": {Status: "busy", SessionID: "other"}, // a different session: not this task's signal
+	}
+	readClaude := func(want map[string]bool) map[string]state.ClaudeStatus {
+		reads++
+		for _, p := range []string{"%1", "%3"} {
+			if !want[p] {
+				t.Errorf("pane %s missing from wanted set %v", p, want)
+			}
+		}
+		return files
+	}
+	mk := func(n, sid string) *state.Task {
+		return &state.Task{Ticket: "grove-" + n, TmuxSession: "grove-test", TmuxWindow: "repo · grove-" + n,
+			SessionID: sid, Agent: state.AgentWorking}
+	}
+	tasks := []*state.Task{mk("1", "s1"), mk("2", "s2")}
+	live, _, infos, sigs := liveStates(tasks, "grove-test", snapFor, detectFrom, readClaude)
+	if captures != 0 || reads != 1 {
+		t.Errorf("all workers with files: %d captures, %d reads, want 0 and 1", captures, reads)
+	}
+	if live["grove-1"] != "busy" || live["grove-2"] != "waiting" || infos["grove-1"].PaneContent != "" {
+		t.Errorf("live=%v infos=%+v", live, infos)
+	}
+	if sigs["grove-2"].Claude == nil || state.Resolve(tasks[1], sigs["grove-2"], time.Time{}).Label() != "waiting (permission prompt)" {
+		t.Errorf("signals = %+v", sigs["grove-2"])
+	}
+
+	captures, reads = 0, 0
+	tasks = append(tasks, mk("3", "s3")) // file's sessionId differs → fallback
+	liveStates(tasks, "grove-test", snapFor, detectFrom, readClaude)
+	if captures != 1 || reads != 1 {
+		t.Errorf("one worker without a file: %d captures, %d reads, want 1 and 1", captures, reads)
 	}
 }

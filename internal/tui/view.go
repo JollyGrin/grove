@@ -212,7 +212,7 @@ func (m Model) viewAgents() string {
 			rows = append(rows, truncPad(line, w))
 			continue
 		}
-		label := t.Label()
+		label := m.labelOf(t)
 		st := statusStyle(label)
 		pr, ci, preview := "—", "—", "—"
 		ciStyle := sDim
@@ -440,7 +440,7 @@ func (m Model) viewDetail() string {
 	t := m.detail
 	w := m.width - 4
 
-	label := t.Label()
+	label := m.labelOf(t)
 	head := fmt.Sprintf("%s %s %s  %s",
 		statusStyle(label).Render(statusGlyph(label)),
 		sTitle.Render(t.Ticket),
