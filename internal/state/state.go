@@ -29,7 +29,7 @@ const (
 	// later tickets of the worker-state train.
 	EvStopFailed      = "stop_failed"      // data {error, details}
 	EvPromptSubmitted = "prompt_submitted" // UserPromptSubmit hook
-	EvSetupFailed     = "setup_failed"     // data {error}
+	EvSetupFailed     = "setup_failed"     // data {exit, tail} (grove-538); legacy {error}
 	EvSessionEnded    = "session_ended"
 	EvAttached        = "attached"
 	EvAnswered        = "answered"
@@ -428,7 +428,11 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 	case EvSetupFailed:
 		t.SetupFailed = true
-		t.SetupError = capRunes(d["error"], stopFailedCap)
+		reason := d["tail"]
+		if reason == "" {
+			reason = d["error"]
+		}
+		t.SetupError = capRunes(reason, stopFailedCap)
 	case EvCompaction:
 		t.Compactions++
 	case EvAgentStatus:

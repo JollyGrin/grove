@@ -349,7 +349,7 @@ whole "produce" half; `gv watch` below is the "consume" half.
 
 | event | ntfy priority · tag | desktop |
 |---|---|---|
-| `worker_waiting` / `worker_vanished` / `worker_errored` | high · `warning` | yes |
+| `worker_waiting` / `worker_vanished` / `worker_errored` / `setup_failed` | high · `warning` | yes |
 | `pr_ci_failed` / `pr_conflicting` | high · `x` | yes |
 | `pr_ready` | default · `white_check_mark` | yes |
 | `pr_merged` | default · `tada` | yes |
@@ -414,6 +414,7 @@ offset and read new lines on a timer). One record per line:
 Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
+`setup_failed` (grove-538: data `{exit, tail}` — appended by `gv run-setup` when a repo's `setup:` exits non-zero; `exit` is the code as a string, `tail` the last non-empty stderr line, ≤200 runes; additive),
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
 a forwarding pointer to the remote grove host; a later `task_untracked`
 for the same ticket drops the pointer for good), (grove-252) the

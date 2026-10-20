@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-538 worker-state 04: `gv run-setup <repo> <root> <ticket>` appends `setup_failed` {exit, tail} on a non-zero setup exit (bounded 4 KiB stderr tail; old 2-arg launch lines append nothing); fold reads `tail`; ntfy high · warning; docs/plugins.md; dummy e2e. Not wired: the adopt launch string (still 2-arg) — follow-up.
 - [x] grove-536 worker-state 02: beat reads Claude's session file (internal/claudestate); capture-pane only for a worker with no matching file; rows render state.Resolve
 - [x] grove-537 worker-state 03: install `StopFailure` + `UserPromptSubmit` hooks → `stop_failed` / `prompt_submitted` (no prompt text; subagent + foreign dropped); doctor row now `len(hookEvents)` (6/6); docs/plugins.md + claude-code-facts updated
 - [x] grove-535 worker-state 01: `state.Resolve` — pure resolver (rules 1–6) behind `Task.Label()`; folds notification/stop_failed/prompt_submitted/setup_failed; Label byte-identical with empty Signals.
@@ -40,25 +41,6 @@
 - [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
 - [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
 - [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
-- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
-      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
-      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
-      — an orchestrator may hide ITSELF when the operator asks it to get
-      out of the way (non-destructive, no second yes), while
-      hiding/showing/closing ANOTHER chat stays propose-then-act —
-      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
-      79b5290fc383; workspace brains are NOT refreshed by this car (they go
-      `stale` in `gv brains` once the train is released, and are merged
-      then by the usual `gv init --only orchestrator-md` three-way).
-      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
-      `host`; it gains the event-before-move limit. LEARNINGS: pane
-      identity across break/join, why not a 1-column shrink, the
-      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
-      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
-      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
-      usage strings only. Idea, not built: a tmux prefix binding for hide
-      (bindings are server-global — it would leak into non-grove
-      sessions).
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
