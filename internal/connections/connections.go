@@ -339,10 +339,10 @@ func checkHooksAt(path string) func(Env) Status {
 				wired++
 			}
 		}
-		if wired == 4 {
+		if wired == hooks.EventCount() {
 			return Status{State: StateOK}
 		}
-		return Status{State: StateMissing, Info: fmt.Sprintf("%d/4 events wired", wired)}
+		return Status{State: StateMissing, Info: fmt.Sprintf("%d/%d events wired", wired, hooks.EventCount())}
 	}
 }
 
