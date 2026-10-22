@@ -14,8 +14,9 @@ import (
 var labelRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // reserved cockpit session words: cockpit sessions are `grove-<label>`,
-// legacy sessions are `grove` and `grove-mobile`, and `dash` is a verb.
-var reserved = map[string]bool{"grove": true, "mobile": true, "dash": true}
+// legacy sessions are `grove` and `grove-mobile`, `dash` is a verb, and
+// `global` is the shared secrets namespace.
+var reserved = map[string]bool{"grove": true, "mobile": true, "dash": true, "global": true}
 
 // ValidateLabel rejects labels that would collide with cockpit session
 // names or break tmux session naming.

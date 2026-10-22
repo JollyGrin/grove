@@ -176,6 +176,11 @@ const usage = `gv — grove
                                               repo (feedback first), recent LEARNINGS.md entries, and
                                               entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
+  gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]]
+                                              age-encrypted secrets: init makes this host's identity,
+                                              recipient prints its public key, set reads the value from
+                                              stdin or a hidden prompt (never an argument), ls shows
+                                              names only — never a value
   gv account add <name> | ls [--json] | use <name|login> | rm <name> [--force] | token-path | shell-init
                                               Claude subscription accounts: add stores a ` + "`claude setup-token`" + `
                                               token read from stdin; use sets the default; shell-init prints
@@ -560,6 +565,8 @@ func main() {
 		err = cmdDoctor(args)
 	case "hooks":
 		err = cmdHooks(args)
+	case "keys":
+		err = cmdKeys(args)
 	case "run-setup":
 		err = cmdRunSetup(args)
 	case "help", "-h", "--help":
@@ -2253,6 +2260,7 @@ func cmdInit(args []string) error {
 		Scope:          scope,
 		DetectedLabel:  filepath.Base(root),
 		BrainState:     brainStateOf(root, f.ForceOrchestratorMD),
+		KeysIdentity:   keysIdentityPresent(),
 		Flags:          f,
 	}
 	steps, err := wizard.Build(in)
@@ -2344,6 +2352,10 @@ func cmdInit(args []string) error {
 		if err := refreshOrchestratorBrain(root, f.ForceOrchestratorMD); err != nil {
 			fmt.Fprintf(os.Stderr, "orchestrator-md: %v\n", err)
 		}
+	}
+
+	if err := initKeysStep(os.Stdout, a.InitKeys); err != nil {
+		fmt.Fprintf(os.Stderr, "keys: %v\n", err)
 	}
 
 	// The summary board: what's available, what would improve this repo.

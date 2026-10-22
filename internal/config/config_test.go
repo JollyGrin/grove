@@ -938,3 +938,15 @@ repos:
 		t.Errorf("workspace editor = %+v, want {true hx}", c.Editor)
 	}
 }
+
+// gv-keys: `global` is the shared secrets namespace, so a workspace may
+// not carry it as its label.
+func TestParseRejectsReservedGlobalLabel(t *testing.T) {
+	_, err := parse([]byte("workspace:\n  label: global\n"), "ws.yaml")
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("workspace.label: global must be a load error, got %v", err)
+	}
+	if _, err := parse([]byte("workspace:\n  label: canopy\n"), "ws.yaml"); err != nil {
+		t.Fatalf("ordinary label rejected: %v", err)
+	}
+}
