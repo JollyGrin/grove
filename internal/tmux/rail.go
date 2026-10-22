@@ -174,12 +174,14 @@ func EnsureRail(session, dir, cmd string) (string, error) {
 // tmux rescales every pane proportionally on resize, so a rail sized at
 // build time on a detached 80x24 session would balloon once a real client
 // attaches. A tmux hook, not a watcher — it is one command string tmux
-// runs, no process or goroutine of ours.
+// runs, no process or goroutine of ours. Its second command (grove-525)
+// re-sizes the hidden chats to the slot the resize just rescaled — after the
+// rail is back at its height, so the slot is read final.
 const railHook = "window-resized"
 
 func keepRailHeight(session, pane string) error {
 	_, err := run("set-hook", "-w", "-t", cockpitWindowTarget(session), railHook,
-		fmt.Sprintf("resize-pane -t %s -y %d", pane, RailHeight))
+		fmt.Sprintf("resize-pane -t %s -y %d ; %s", pane, RailHeight, SyncSizesCommand(session)))
 	return err
 }
 
@@ -205,8 +207,17 @@ func KillRail(session string) error {
 // RailHeight (tmux's layouts give stacked panes equal height, so the
 // resize after every re-tile is the whole trick), then focus the chat — or
 // the dash when there is none. The rail is kept the LAST pane so it is the
-// bottom of the right column.
+// bottom of the right column. Last, the hidden chats are sized to the slot
+// the re-tile produced (grove-525, SyncHiddenSizes).
 func RetileFocus(session string) error {
+	if err := retileFocus(session); err != nil {
+		return err
+	}
+	syncAfterRetile(session)
+	return nil
+}
+
+func retileFocus(session string) error {
 	win := cockpitWindowTarget(session)
 	panes, err := cockpitPanes(session)
 	if err != nil {

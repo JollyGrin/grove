@@ -74,6 +74,23 @@ popup, since-you-looked, status-bar diet, the prefix key table (#421),
 remote chats in focus (a remote chat is never minimized or swapped in), the
 AGENTS fold.
 
+## Train: focus-swap (cars done; its PR into main is the operator's call)
+
+Feature train `focus-swap` (branch `feature/focus-swap`; design + measured
+before/after: docs/plans/2026-10-19-focus-same-size-swap-design.md). Landed:
+#525 hidden chat windows pinned to the slot's PANE size (`gv chat
+sync-sizes`, internal; `internal/tmux/slot.go`) · #526 a focus swap is one
+`swap-pane` + `rename-session` with a stable `@grove_chat_home`
+(`internal/tmux/swap.go`; any precondition miss falls back to
+break/join) · #528 CHATS box sorted by stable name, shared with the rail ·
+#531 per-session attach/detach hooks so a direct attach follows its
+client, plus 80- vs slot-width chatweb captures · #533 the measurement
+(`e2e/focus-bench.sh`, not in all.sh) and the docs/skill wrap. Left: the
+train's PR into main; four pre-existing chatweb capture bugs drafted as
+issues in the grove-533 PR description (not filed); a hidden window a client
+`switch-client`s away from stays at that client's size until the next
+sync (one slow swap, never a wrong one).
+
 ## The end state you are building toward
 
 `gv init` on a stranger's repo → wizard → working fleet with local

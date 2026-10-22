@@ -115,15 +115,56 @@ func TestBuildChatLines(t *testing.T) {
 	}
 }
 
-func TestSortChatsShownThenHiddenByNumber(t *testing.T) {
-	rows := []ChatRow{chatHiddenRow(2), chatShownRow(3), chatWaitingRow(1), chatShownRow(1)}
-	sortChats(rows)
+// grove-528: one stable order by name for the box and the rail — shown
+// or hidden never moves a row.
+func TestSortChatsByStableName(t *testing.T) {
+	named := func(name string, hidden bool, n int) ChatRow {
+		return ChatRow{Pane: fmt.Sprintf("%%%d", n), Name: name, Hidden: hidden, N: n}
+	}
+	want := "cockpit·1 cockpit·3 chat-2 chat-10 cockpit·2 @h chat-1 @h"
+	for _, tc := range []struct {
+		name string
+		rows []ChatRow
+	}{
+		{"all shown", []ChatRow{named("chat-10", false, 4), named("chat-1", false, 7), named("cockpit·3", false, 3), named("chat-2", false, 5), named("cockpit·1", false, 1), named("cockpit·2", false, 6)}},
+		{"mixed", []ChatRow{named("chat-10", false, 4), named("chat-1", true, 7), named("cockpit·3", true, 3), named("chat-2", false, 5), named("cockpit·1", true, 1), named("cockpit·2", false, 6)}},
+		{"all hidden", []ChatRow{named("chat-10", true, 4), named("chat-1", true, 7), named("cockpit·3", true, 3), named("chat-2", true, 5), named("cockpit·1", true, 1), named("cockpit·2", true, 6)}},
+	} {
+		for i := range tc.rows {
+			if tc.rows[i].N >= 6 {
+				tc.rows[i].Host = "h"
+			}
+		}
+		sortChats(tc.rows)
+		var got []string
+		for _, r := range tc.rows {
+			got = append(got, ChatName(r))
+		}
+		if s := strings.Join(got, " "); s != want {
+			t.Errorf("%s: order = %s", tc.name, s)
+		}
+	}
+}
+
+// A refresh that flips Hidden on two rows keeps row order and the cursor on
+// its chat (grove-528).
+func TestChatsRefreshKeepsOrderAndCursor(t *testing.T) {
+	a := ChatRow{Pane: "%1", Name: "cockpit·1", N: 1}
+	b := ChatRow{Pane: "%2", Name: "cockpit·2", N: 2, Hidden: true}
+	c := ChatRow{Pane: "%3", Name: "chat-3", N: 3, Hidden: true}
+	m := chatsModel(t, fxOff, 120, 40, a, b, c)
+	m.chatSel = 1
+	a.Hidden, b.Hidden = true, false
+	m = withChats(t, m, c, b, a)
 	var got []string
-	for _, r := range rows {
+	for _, r := range m.chatRows {
 		got = append(got, ChatName(r))
 	}
-	if s := strings.Join(got, " "); s != "cockpit·1 cockpit·3 chat-1 chat-2" {
+	if s := strings.Join(got, " "); s != "cockpit·1 cockpit·2 chat-3" {
 		t.Errorf("order = %s", s)
+	}
+	if ChatName(m.chatRows[m.chatSel]) != "cockpit·2" {
+		t.Errorf("cursor on %s, want cockpit·2", ChatName(m.chatRows[m.chatSel]))
 	}
 }
 

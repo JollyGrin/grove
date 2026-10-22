@@ -11,8 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -176,33 +174,7 @@ func railChips(rows []tui.ChatRow) []chatrail.Chip {
 		chips = append(chips, c)
 	}
 	sort.SliceStable(chips, func(i, j int) bool {
-		ki, ni := chipOrder(chips[i].Name)
-		kj, nj := chipOrder(chips[j].Name)
-		if ki != kj {
-			return ki < kj
-		}
-		if ni != nj {
-			return ni < nj
-		}
-		return chips[i].Name < chips[j].Name
+		return tui.ChatLess(chips[i].Name, chips[j].Name)
 	})
 	return chips
-}
-
-// chipOrder ranks a chat name: local cockpit·N, local chat-N, then remote
-// (an "@host" suffix), each by number.
-func chipOrder(name string) (rank, n int) {
-	base, _, remote := strings.Cut(name, " @")
-	if num, ok := strings.CutPrefix(base, "cockpit·"); ok {
-		n, _ = strconv.Atoi(num)
-	} else if num, ok := strings.CutPrefix(base, "chat-"); ok {
-		rank = 1
-		n, _ = strconv.Atoi(num)
-	} else {
-		rank = 2
-	}
-	if remote {
-		rank += 3
-	}
-	return rank, n
 }

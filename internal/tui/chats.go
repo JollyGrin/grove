@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -139,16 +140,45 @@ func mergeChats(prev, fresh []ChatRow, deep bool) []ChatRow {
 	return fresh
 }
 
-// sortChats orders the box: the chats on screen first, then the hidden
-// ones, each by number — positions hold still under the cursor.
+// sortChats orders the box by stable name (ChatLess), the rail's order —
+// shown/hidden never moves a row, so positions hold still under the cursor.
 func sortChats(rows []ChatRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if a.Hidden != b.Hidden {
-			return !a.Hidden
-		}
-		return a.N < b.N
+		return ChatLess(ChatName(rows[i]), ChatName(rows[j]))
 	})
+}
+
+// ChatLess orders two chat names: local cockpit·N, local chat-N, then
+// remote, each by number. The CHATS box and the rail both sort with it
+// (grove-528), so the two lists never disagree.
+func ChatLess(a, b string) bool {
+	ka, na := chatOrder(a)
+	kb, nb := chatOrder(b)
+	if ka != kb {
+		return ka < kb
+	}
+	if na != nb {
+		return na < nb
+	}
+	return a < b
+}
+
+// chatOrder ranks a chat name: local cockpit·N, local chat-N, then remote
+// in the same order.
+func chatOrder(name string) (rank, n int) {
+	base, _, remote := strings.Cut(name, " @")
+	if num, ok := strings.CutPrefix(base, "cockpit·"); ok {
+		n, _ = strconv.Atoi(num)
+	} else if num, ok := strings.CutPrefix(base, "chat-"); ok {
+		rank = 1
+		n, _ = strconv.Atoi(num)
+	} else {
+		rank = 2
+	}
+	if remote {
+		rank += 3
+	}
+	return rank, n
 }
 
 // chatIsWaiting: the agent is blocked on a picker — by either field.

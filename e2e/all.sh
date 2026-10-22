@@ -61,7 +61,7 @@ done
 # Second pass under a hostile tmux conf (base-index 1 / pane-base-index 1,
 # grove-168): the isolated servers never load a user's tmux.conf, so the
 # default pass structurally cannot catch literal pane-index targets.
-for s in workspace.sh cockpit.sh chat.sh chat_hide.sh; do
+for s in workspace.sh cockpit.sh chat.sh chat_hide.sh focus.sh; do
   run_suite "$s" hostile
 done
 

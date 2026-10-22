@@ -59,7 +59,11 @@ minimized (hidden, as in §Hidden chats) behind a 4-row rail pane under it
 chat's name (`cockpit·1`, `chat-3`) is stamped on its pane
 (`@grove_chat_name`) before any move, so it never flips with focus —
 click a chip or `gv chat focus <session>` swaps the shown chat; `L` back
-restores exactly the chats focus minimized. `gv hooks install`
+restores exactly the chats focus minimized. In focus every hidden chat's
+pane is pinned to the slot's size, so a swap is one same-size `swap-pane`
+(no Claude repaint) and a chat keeps its `grove-chat-<label>-<n>` home for
+life; a client attached straight to a hidden chat un-pins it to follow
+that client, and its detach re-pins it. `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.
 Subscription accounts live in `<state>/accounts/` (`<name>.token` 0600 +
