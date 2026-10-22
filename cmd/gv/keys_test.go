@@ -196,3 +196,25 @@ func TestInitKeysStep(t *testing.T) {
 		t.Errorf("off must do nothing: %q %v", off.String(), err)
 	}
 }
+
+func TestParseKeysExec(t *testing.T) {
+	names, argv, err := parseKeysExec([]string{"A,B", "--", "sh", "-c", "x -- y"})
+	if err != nil || !reflect.DeepEqual(names, []string{"A", "B"}) || !reflect.DeepEqual(argv, []string{"sh", "-c", "x -- y"}) {
+		t.Errorf("got %v %v %v", names, argv, err)
+	}
+	for _, bad := range [][]string{nil, {"A"}, {"A", "true"}, {"A", "--"}, {"--", "true"}, {"A,", "--", "true"}, {"A", "B", "--", "true"}} {
+		if _, _, err := parseKeysExec(bad); err == nil {
+			t.Errorf("%v: want usage error", bad)
+		}
+	}
+}
+
+func TestEmptyArgWarning(t *testing.T) {
+	if w := emptyArgWarning([]string{"sh", "-c", `echo ""`}); w != "" {
+		t.Errorf("script-internal empty string warned: %q", w)
+	}
+	w := emptyArgWarning([]string{"curl", "-H", ""})
+	if !strings.Contains(w, "sh -c '") || !strings.Contains(w, "YOUR shell") {
+		t.Errorf("warning = %q", w)
+	}
+}

@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 
 	"github.com/JollyGrin/grove/internal/secrets"
 )
 
-const keysUsage = "usage: gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]]"
+const keysUsage = "usage: gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>"
 
 // keysArgs is the parsed tail of a `gv keys set|rm|ls` line.
 type keysArgs struct {
@@ -78,6 +80,9 @@ func cmdKeys(args []string) error {
 		return errors.New(keysUsage)
 	}
 	verb, rest := args[0], args[1:]
+	if verb == "exec" {
+		return keysExec(rest)
+	}
 	a, err := parseKeysArgs(rest)
 	if err != nil {
 		return err
@@ -220,4 +225,83 @@ func keysLs(asJSON bool) error {
 func keysIdentityPresent() bool {
 	_, err := os.Stat(secrets.IdentityPath())
 	return err == nil
+}
+
+const keysExecHelp = `usage: gv keys exec NAME[,NAME…] -- <cmd> [args…]
+
+Runs <cmd> with exactly the named secrets added to ITS environment — no shell,
+argv passed as-is. Output is the command's own. The exit code is the command's.
+
+The reference must be expanded inside the child, never by your shell:
+
+  # wrong — your shell expands $OPENROUTER_API_KEY (unset there) to ""
+  gv keys exec OPENROUTER_API_KEY -- curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/credits
+
+  # right — single quotes hand the reference to the child's sh
+  gv keys exec OPENROUTER_API_KEY -- sh -c 'curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/credits'
+`
+
+// parseKeysExec splits `NAME[,NAME…] -- cmd args…`. Everything after the
+// first `--` is the command, verbatim.
+func parseKeysExec(args []string) (names, argv []string, err error) {
+	sep := -1
+	for i, a := range args {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep < 0 || sep != 1 || len(args) < 3 {
+		return nil, nil, errors.New("usage: gv keys exec NAME[,NAME…] -- <cmd> [args…]  (gv keys exec --help)")
+	}
+	for _, n := range strings.Split(args[0], ",") {
+		if n == "" {
+			return nil, nil, fmt.Errorf("empty name in %q\nusage: gv keys exec NAME[,NAME…] -- <cmd> [args…]", args[0])
+		}
+		names = append(names, n)
+	}
+	return names, args[2:], nil
+}
+
+// emptyArgWarning is the caller-shell-expansion tell: an empty argument
+// is what `$NAME` becomes when the caller's shell expands it. "" when argv
+// has none.
+func emptyArgWarning(argv []string) string {
+	for _, a := range argv {
+		if a == "" {
+			return `gv keys exec: warning: an argument after -- is empty — if you wrote $NAME, YOUR shell expanded it (to "") before gv ran.
+  right: gv keys exec NAME -- sh -c 'curl -H "Authorization: Bearer $NAME" …'   (single quotes: the child's sh expands it)
+`
+		}
+	}
+	return ""
+}
+
+// keysExec resolves the named secrets, then replaces this process with
+// the command: the value exists here only between decrypt and exec.
+func keysExec(args []string) error {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Print(keysExecHelp)
+		return nil
+	}
+	names, argv, err := parseKeysExec(args)
+	if err != nil {
+		return err
+	}
+	label := ""
+	if ambient.ws != nil {
+		label = ambient.ws.Label
+	}
+	env, err := secrets.ExecEnv(label, names, os.Environ())
+	if err != nil {
+		return err
+	}
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return err
+	}
+	if w := emptyArgWarning(argv); w != "" {
+		fmt.Fprint(os.Stderr, w)
+	}
+	return syscall.Exec(path, argv, env)
 }
