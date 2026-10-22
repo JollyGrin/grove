@@ -14,17 +14,20 @@ import (
 	"github.com/JollyGrin/grove/internal/state"
 )
 
-// The FEATURES rail panel (feature trains Decision 5, grove-377): one
-// block per open feature between the header and AGENTS. It exists only
+// The TRAINS panel (feature trains Decision 5, grove-377; one line per
+// train since grove-490): one row per open feature between the header and
+// AGENTS. It exists only
 // while the workspace has an open feature — with none, every frame is
 // byte-identical to the pre-feature cockpit (testdata goldens).
 //
 // Data discipline (cockpit RAM rule): status is computed in assemble(),
 // never in View. The local half (car states off the fold) runs on every
 // refresh; the network half (queued issues, feature PR, behind/mergeable,
-// est) runs in featuresCmd only where PR refresh already runs — the 30s
-// PR beat and `r` — plus once when the open-feature set changes. No new
-// poll, goroutine, timer or cache.
+// est) runs in featuresCmd on its own 10min beat (grove-428, decoupled
+// from the 30s PR poll to stay inside the shared gh rate-limit budget)
+// and on `r` — plus once when the open-feature set changes. No new poll,
+// goroutine, timer or cache: featTickMsg reuses the same tick-and-rearm
+// shape as prTickMsg/tickMsg, just slower.
 
 // Panel focus: tab toggles while a feature is open.
 const (
@@ -32,12 +35,9 @@ const (
 	focusFeatures
 )
 
-// Height budget (Decision 5): at most maxExpanded features get their three
-// lines; below collapseBelow spare rows every feature is one title line.
-const (
-	maxExpanded   = 3
-	collapseBelow = 12
-)
+// maxBarCells caps a train's progress bar (grove-490): past it the
+// cells sample the cars evenly and the `n/total` count carries the rest.
+const maxBarCells = 12
 
 // statusesFn is feature.Statuses, swappable so a test can prove View
 // never computes status.
@@ -133,15 +133,19 @@ type carCell struct {
 	label  string
 }
 
-// featRow is one feature, fully derived in assemble: View only styles it.
+// featRow is one feature, fully derived in assemble: View only places it.
 type featRow struct {
-	slug   string
-	title  string // plain title-line text after the slug
-	base   string
-	cars   []carCell
-	dash   string // rail filler after each glyph (cellW-1 × ─)
-	labels string // plain label line, one cellW cell per car
-	hint   string // what needs the operator (the selected feature's line)
+	slug string
+	base string
+	cars []carCell // every car, landed included (the scene trellis)
+	// bar is the styled progress bar (grove-490), built once per
+	// assemble so the frame only concatenates it; meta the plain text
+	// after it: `3/7 · ↓3 main · serve ▶`.
+	bar  string
+	meta string
+	// waiting is today's `◆ #N is waiting on you` copy, "" unless a car
+	// is in question — the only line a train gets under its own.
+	waiting string
 	// trellis is the scene bracket's label, `<slug> landed/total`
 	// (grove-379) — built here so the scene never formats per frame.
 	trellis string
@@ -241,8 +245,8 @@ func featureHint(f *state.Feature, st *feature.Status) string {
 	return "nothing needs you — the train is rolling"
 }
 
-// buildFeatRow derives one feature's plain strings once per assemble —
-// the rail panel's and the lens's. tip is the branch sha ("" unknown);
+// buildFeatRow derives one feature's strings once per assemble — the
+// TRAINS row's and the lens's. tip is the branch sha ("" unknown);
 // merged marks the cars whose PR the last poll saw MERGED; sv/svOK the
 // serve status (grove-381, svOK false = unknown).
 func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[string]bool, sv serve.Status, svOK bool) featRow {
@@ -257,8 +261,8 @@ func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[s
 	r := featRow{
 		slug:    f.Slug,
 		base:    f.Base,
-		title:   fmt.Sprintf("%d/%d  ↓%s %s  %s  est $%.2f", st.Landed, st.Total, behind, f.Base, serveLabel(sv, svOK), st.EstUSD),
-		hint:    featureHint(f, st),
+		bar:     trainBar(st.Cars),
+		meta:    fmt.Sprintf("%d/%d · ↓%s %s · %s", st.Landed, st.Total, behind, f.Base, serveLabel(sv, svOK)),
 		trellis: fmt.Sprintf("%s %d/%d", f.Slug, st.Landed, st.Total),
 		label:   f.Label,
 		lens:    buildLens(f, st, tip, merged, svp),
@@ -266,21 +270,34 @@ func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[s
 	if st.PR != nil {
 		r.prURL = st.PR.URL
 	}
-	cellW := 3
 	for _, c := range st.Cars {
-		l := carLabel(c)
-		r.cars = append(r.cars, carCell{ticket: c.Ticket, state: c.State, label: l})
-		if n := len([]rune(l)) + 1; n > cellW {
-			cellW = n
+		r.cars = append(r.cars, carCell{ticket: c.Ticket, state: c.State, label: carLabel(c)})
+		if c.State == feature.CarQuestion {
+			r.waiting = featureHint(f, st) // a question outranks every other hint
 		}
 	}
-	r.dash = strings.Repeat("─", cellW-1)
-	var lb strings.Builder
-	for _, c := range r.cars {
-		lb.WriteString(pad(c.label, cellW))
-	}
-	r.labels = lb.String()
 	return r
+}
+
+// trainBar draws one cell per car, at most maxBarCells (evenly sampled
+// past that): ▰ landed, ▰ in the car's glyph colour while its PR is
+// open, ▱ queued or working.
+func trainBar(cars []feature.Car) string {
+	n := len(cars)
+	cells := min(n, maxBarCells)
+	var b strings.Builder
+	for i := 0; i < cells; i++ {
+		c := cars[i*n/cells]
+		switch {
+		case c.State == feature.CarLanded:
+			b.WriteString(carStyles[feature.CarLanded].Render("▰"))
+		case c.PR > 0:
+			b.WriteString(carStyles[c.State].Render("▰"))
+		default:
+			b.WriteString(sDim.Render("▱"))
+		}
+	}
+	return b.String()
 }
 
 // assembleFeatures rebuilds m.feats from the fold (every refresh) and the
@@ -288,7 +305,10 @@ func buildFeatRow(f *state.Feature, st *feature.Status, tip string, merged map[s
 func (m *Model) assembleFeatures() {
 	m.feats = m.feats[:0]
 	if len(m.features) == 0 {
-		m.focus, m.featSel, m.trainW = focusAgents, 0, 0
+		if m.focus == focusFeatures {
+			m.focus = focusAgents
+		}
+		m.featSel, m.trainW = 0, 0
 		m.clampLens()
 		return
 	}
@@ -338,89 +358,92 @@ func (m *Model) assembleFeatures() {
 	m.clampLens()
 }
 
-// featLayout is how the FEATURES panel spends its rows this frame.
+// featLayout is how the TRAINS panel spends its rows this frame.
 type featLayout struct {
-	height   int  // total panel rows incl. border; 0 = no panel
-	expanded bool // three lines per feature (+ hint) vs one title line
-	start    int  // first shown feature
-	shown    int
-	more     int // features behind the `+N more` line
+	height int // total panel rows incl. border; 0 = no panel
+	start  int // first shown train
+	shown  int
+	more   int // trains behind the `+N more` line
 }
 
 // featureLayout budgets the panel against the rows ACTIVITY and the scene
-// would otherwise get — ACTIVITY shrinks first. Pure arithmetic over the
-// model: no allocation, safe per frame.
+// would otherwise get — ACTIVITY shrinks first. One row per train plus
+// its waiting line (grove-490). Pure arithmetic over the model: no
+// allocation, safe per frame.
 func (m Model) featureLayout() featLayout {
-	n := len(m.feats)
-	if n == 0 {
+	if len(m.feats) == 0 {
 		return featLayout{}
 	}
-	spare := m.height - (len(m.board) + 4) - 5 - m.footerHeight()
-	lay := featLayout{shown: min(n, maxExpanded), expanded: true}
-	lay.more = n - lay.shown
-	lay.height = 3 + lay.shown*3 + 1 // border+title, 3 lines each, the hint
-	if lay.more > 0 {
-		lay.height++
+	// grove-402: the CHATS box takes its rows first; TRAINS budgets what is left.
+	room := m.spareRows() - m.chatLayout().height - 3 // content rows after border+title
+	if room < 1 {
+		return featLayout{}
 	}
-	if spare < collapseBelow || lay.height > spare {
-		room := spare - 3 // content rows left after border+title
-		if room < 1 {
-			return featLayout{}
-		}
-		lay = featLayout{expanded: false, shown: min(n, room)}
-		if lay.shown < n && room > 1 {
-			lay.shown = room - 1 // leave the +N more line
-		}
-		lay.more = n - lay.shown
-		lay.height = 3 + lay.shown
-		if lay.more > 0 && room > lay.shown {
-			lay.height++
-		}
-	}
-	if m.featSel >= lay.shown {
-		lay.start = m.featSel - lay.shown + 1
+	lay := m.fitTrains(0, room)
+	for m.featSel >= lay.start+lay.shown {
+		lay = m.fitTrains(lay.start+1, room) // scroll the selection into view
 	}
 	return lay
 }
 
-// viewFeatures renders the panel for the layout featureLayout chose.
+// fitTrains packs trains from start into room content rows, keeping one
+// for `+N more` while any train is left out; the first train always shows
+// (its waiting line is what gives way).
+func (m Model) fitTrains(start, room int) featLayout {
+	n := len(m.feats)
+	lay := featLayout{start: start}
+	rows := 0
+	for i := start; i < n; i++ {
+		need := 1
+		if m.feats[i].waiting != "" {
+			need++
+		}
+		reserve := 0
+		if n-(lay.shown+1) > 0 {
+			reserve = 1
+		}
+		if rows+need+reserve > room && lay.shown > 0 {
+			break
+		}
+		rows += need
+		lay.shown++
+	}
+	lay.more = n - lay.shown
+	if lay.more > 0 {
+		rows++
+	}
+	lay.height = 3 + min(rows, room)
+	return lay
+}
+
+// trainLine is one train's row: cursor, slug, bar, `3/7 · ↓3 main ·
+// serve ▶`. Pure over the pre-built row — the golden-tested render.
+func trainLine(f featRow, slugW int, selected bool) string {
+	cursor := " "
+	if selected {
+		cursor = sSelected.Render("▸")
+	}
+	return cursor + sTitle.Render(pad(f.slug, slugW)) + " " + f.bar + " " + sChrome.Render(f.meta)
+}
+
+// viewFeatures renders the TRAINS panel for the layout featureLayout chose.
 func (m Model) viewFeatures(lay featLayout) string {
-	w := m.width - 4
-	rows := make([]string, 0, lay.height)
-	for i := lay.start; i < lay.start+lay.shown; i++ {
+	w, limit := m.width-4, lay.height-3
+	rows := make([]string, 0, limit)
+	for i := lay.start; i < lay.start+lay.shown && len(rows) < limit; i++ {
 		f := m.feats[i]
-		cursor := " "
-		if i == m.featSel {
-			cursor = sSelected.Render("▸")
-		}
-		title := cursor + sTitle.Render(f.slug) + "  " + sChrome.Render(f.title)
-		if !lay.expanded {
-			var strip strings.Builder
-			for _, c := range f.cars {
-				strip.WriteString(carStyles[c.state].Render(carGlyphs[c.state]))
-			}
-			rows = append(rows, truncPad(title+"  "+strip.String()+sDim.Render(" ▷ ")+sChrome.Render(f.base), w))
-			continue
-		}
-		var rail strings.Builder
-		rail.WriteString("  ")
-		for _, c := range f.cars {
-			rail.WriteString(carStyles[c.state].Render(carGlyphs[c.state]))
-			rail.WriteString(sDim.Render(f.dash))
-		}
-		rail.WriteString(sDim.Render("▷ ") + sChrome.Render(f.base))
-		rows = append(rows, truncPad(title, w), truncPad(rail.String(), w), truncPad("  "+sChrome.Render(f.labels), w))
-		if i == m.featSel {
-			rows = append(rows, truncPad("  "+sQuestion.Render(f.hint), w))
+		rows = append(rows, truncPad(trainLine(f, m.trainW, i == m.featSel), w))
+		if f.waiting != "" && len(rows) < limit {
+			rows = append(rows, truncPad("  "+sQuestion.Render(f.waiting), w))
 		}
 	}
-	if lay.more > 0 && len(rows)+3 < lay.height {
+	if lay.more > 0 && len(rows) < limit {
 		rows = append(rows, truncPad(sDim.Render(fmt.Sprintf("  +%d more", lay.more)), w))
 	}
 	titleStyle, border := sPanelTitle, sPanel
 	if m.focus == focusFeatures {
 		titleStyle, border = sPanelTitleFocus, sPanelFocus
 	}
-	body := titleStyle.Render("FEATURES") + "\n" + strings.Join(rows, "\n")
+	body := titleStyle.Render("TRAINS") + "\n" + strings.Join(rows, "\n")
 	return border.Width(m.width - 2).Render(body)
 }

@@ -194,7 +194,7 @@ wait_dash() {
   done
   return 1
 }
-wait_dash 'FEATURES' || fail "cockpit shows no FEATURES panel: $CAP"
+wait_dash 'TRAINS' || fail "cockpit shows no TRAINS panel: $CAP"
 wait_dash 'serve untrusted' || fail "rail does not show the untrusted script: $CAP"
 tmux send-keys -t "$DASH" Tab
 sleep 0.5

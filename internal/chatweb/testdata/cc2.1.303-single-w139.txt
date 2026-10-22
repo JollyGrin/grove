@@ -1,0 +1,48 @@
+  Ran 1 shell command
+
+⏺ I ran touch x.txt in the foreground, and it completed without output. The file x.txt should now exist in the repository directory.
+
+✻ Cooked for 2s · done 9:35 PM
+
+❯ Run this exact bash command in the foreground (not in the background): python3 -c 'import time; time.sleep(40)'
+
+  Ran 1 shell command
+
+⏺ The command ran in the foreground and finished after the 40-second sleep, with no output.
+
+✻ Worked for 42s · done 9:36 PM
+
+❯ Write a single 300-word paragraph about the history of git worktrees. Plain prose, no lists, no headings, no tools.
+
+⏺ Git worktrees arrived in Git 2.5, released in July 2015, after Nathaniel Wilson's work on a git worktree command that let a single
+  repository hold several working directories at once. Before that, developers who needed two branches checked out at the same time had to
+  clone the repository again or juggle stashes and branch switches, which was slow for large projects and error-prone when a half-finished
+  change got in the way of an urgent fix. The new command kept one shared object database and one set of references while giving each
+  linked worktree its own index and HEAD, so a clone was no longer needed just to look at another branch. The first versions were fairly
+  minimal: git worktree add created a new directory tied to a branch, and git worktree list showed what existed. Over the following
+  releases the command gained more safeguards and conveniences. Git began refusing to check out the same branch in two worktrees unless
+  forced, which prevented silent conflicts over a shared ref. Later versions added git worktree remove, git worktree prune for cleaning up
+  entries whose directories had been deleted by hand, and git worktree lock for keeping a worktree on removable storage from being pruned.
+  Support for per-worktree configuration arrived with extensions.worktreeConfig, which let settings differ between checkouts while still
+  sharing the repository's common configuration. Tooling built on top of worktrees followed, including editor integrations and continuous
+  integration scripts that spin up disposable checkouts for each job. Today the feature is a standard part of many workflows, especially
+  for reviewing pull requests, running long builds in parallel with ongoing edits, and working on several releases at once without
+  repeatedly rebuilding the same project from scratch.
+
+✻ Brewed for 4s · done 9:36 PM
+
+❯ Use the AskUserQuestion tool to ask me which color I prefer, red or blue. Give each option a one-sentence description.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer, red or blue?
+
+❯ 1. Red
+     A warm, energetic color often associated with passion, urgency, or excitement.
+  2. Blue
+     A cool, calm color often associated with trust, stability, or the sky and sea.
+  3. Type something.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

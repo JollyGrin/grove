@@ -233,6 +233,44 @@ grep -q '"paused": *true' "$SCRATCH/ls-resumed.json" && fail "adopt did not clea
 # process on this machine. The "orphan" is a sleep we own, dressed in
 # claude-shaped args by the stub; the SIGTERM goes to its real pid.
 
+# --- Stop hook done gate (grove-441): evidence or no DONE ---
+
+say "done gate (block): a dirty worktree turns STATUS: DONE into a block decision"
+perl -pi -e 's/^(\s*)claude: echo$/$1claude: echo\n$1done_gate: block/' "$WCFG"
+grep -q 'done_gate: block' "$WCFG" || fail "done_gate not written"
+echo wip > "$WTDIR/scratch.txt"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — all wrapped up"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-block.out"
+grep -q '"decision":"block"' "$SCRATCH/gate-block.out" || fail "dirty DONE under done_gate: block did not block: $(cat "$SCRATCH/gate-block.out")"
+grep -q '1 uncommitted file' "$SCRATCH/gate-block.out" || fail "block reason does not name the dirty file count"
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" | grep -q '"sentinel":"done_unverified"' || fail "blocked DONE not recorded as done_unverified"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-gate.json"
+grep -q '"sentinel": *"done_unverified"' "$SCRATCH/ls-gate.json" || fail "gv ls --json missing done_unverified"
+
+say "done gate (block): a re-entry stop (stop_hook_active) is never blocked"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"STATUS: DONE — still claiming"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-active.out"
+[ -s "$SCRATCH/gate-active.out" ] && fail "stop_hook_active stop was blocked: $(cat "$SCRATCH/gate-active.out")" || true
+
+say "done gate (warn, the default): no block, verdict recorded"
+perl -pi -e 's/done_gate: block/done_gate: warn/' "$WCFG"
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"STATUS: DONE — all wrapped up"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-warn.out"
+[ -s "$SCRATCH/gate-warn.out" ] && fail "warn mode wrote a decision: $(cat "$SCRATCH/gate-warn.out")" || true
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" > "$SCRATCH/gate-warn.ev"
+grep -q '"sentinel":"done"' "$SCRATCH/gate-warn.ev" || fail "warn mode must keep the done sentinel"
+grep -q '"gate":"warn"' "$SCRATCH/gate-warn.ev" || fail "warn mode must record the gate verdict"
+grep -q '"gate_reason":"1 uncommitted file"' "$SCRATCH/gate-warn.ev" || fail "warn verdict missing the reason"
+
+say "done gate: the tolerant sentinel parser takes the LAST STATUS line and a bare STATUS: DONE"
+rm "$WTDIR/scratch.txt"
+perl -pi -e 's/^\s*done_gate: warn\n//' "$WCFG"
+grep -q done_gate "$WCFG" && fail "done_gate key not removed" || true
+printf '{"session_id":"s-pause-1","cwd":"%s","hook_event_name":"Stop","last_assistant_message":"I said STATUS: DONE — too early.\\n\\n**STATUS: BLOCKED**"}' \
+  "$WTDIR" | "$GV" hook stop > "$SCRATCH/gate-last.out"
+[ -s "$SCRATCH/gate-last.out" ] && fail "BLOCKED must never be gated" || true
+tail -n 1 "$GROVE_STATE_DIR/events.jsonl" | grep -q '"sentinel":"blocked"' || fail "last STATUS line (bold, bare BLOCKED) did not win"
+
 say "stub ps (empty table) so orphan scans are deterministic"
 STUBBIN="$SCRATCH/bin"
 mkdir -p "$STUBBIN"
@@ -325,7 +363,8 @@ tmux list-windows -t "$SESSION" > "$SCRATCH/windows2.out" 2>/dev/null || true
 grep -q task-001 "$SCRATCH/windows2.out" && fail "window survived untrack" || true
 
 say "re-grab after untrack (grove-146: --brief attaches an operator brief section)"
-"$GV" grab task-001 --brief "Only touch the staging config, do not deploy." >/dev/null
+# grove-435: --effort rides along so the done-path ledger row below carries it.
+"$GV" grab task-001 --brief "Only touch the staging config, do not deploy." --effort xhigh >/dev/null
 ls -d "$WT"/task-001-* >/dev/null || fail "re-grab did not recreate the worktree"
 grep -q '## Operator brief' "$PROMPT" || fail "prompt missing the Operator brief section"
 grep -q 'Only touch the staging config, do not deploy.' "$PROMPT" || fail "prompt missing the brief text"
@@ -349,10 +388,52 @@ mkdir -p "$PROJ"
 # Two models so the per-task model breakdown (grove-14) has a mix to show.
 # At current sonnet-5 pricing ($2/$10, grove-249) this totals ≈$0.0233;
 # the tiny haiku entry keeps it under $0.025 (still rounds to $0.02).
+#
+# grove-289: the fixture also carries a `gv cost --context` shape — (a) a
+# second assistant line sharing call 1's message/request id (dedup: still
+# one API call), (b) a Bash tool_use (`cat internal/x.go`, classifies
+# bash_read) sharing call 2's ids (a multi-block turn) plus its 2,000-char
+# /60-line tool_result, (c) a compact_boundary, (d) a genuinely new third
+# call sharing NO prior ids. Total: 3 deduped API calls. The (a)/(d)
+# duplicate lines' own usage numbers are irrelevant — Dedup keeps only the
+# first occurrence of each id pair — and call 3's usage is kept tiny so
+# the ledger snapshot below still rounds to $0.02.
+# 60 lines of 32 a's (33 decoded chars each with the JSON-escaped
+# newline) + a trailing 20 z's with no newline: 2,000 decoded chars, 60
+# decoded newlines — no JSON escaping needed (only a/z and literal \n).
+BASH_RESULT_LINE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+BASH_RESULT=""
+for _ in $(seq 1 60); do BASH_RESULT="${BASH_RESULT}${BASH_RESULT_LINE}"; done
+BASH_RESULT="${BASH_RESULT}zzzzzzzzzzzzzzzzzzzz"
 {
-  printf '%s\n' '{"timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
-  printf '%s\n' '{"timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:00:00.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","content":[{"type":"text","text":"looking"}],"usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:01:00.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","content":[{"type":"text","text":"looking too"}],"usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:00:30.000Z","requestId":"req-e2e","message":{"id":"msg-e2e","model":"claude-sonnet-5","content":[{"type":"text","text":"still call 1"}],"usage":{"input_tokens":1000,"output_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:01:30.000Z","requestId":"req-e2e2","message":{"id":"msg-e2e2","model":"claude-haiku-4-5","content":[{"type":"tool_use","id":"tu-e2e-1","name":"Bash","input":{"command":"cat internal/x.go"}}],"usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
+  printf '{"type":"user","timestamp":"2026-07-07T10:01:31.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-e2e-1","content":"%s"}]}}\n' "$BASH_RESULT"
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-07T10:02:00.000Z","compactMetadata":{"trigger":"auto","preTokens":150000,"postTokens":9000}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-07-07T10:03:00.000Z","requestId":"req-e2e3","message":{"id":"msg-e2e3","model":"claude-sonnet-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'
 } > "$PROJ/e2e-session.jsonl"
+
+say "gv cost --context: per-call decomposition, growth buckets, compactions"
+"$GV" cost --context task-001 --json > "$SCRATCH/cost-context.json"
+grep -q '"api_calls": 3' "$SCRATCH/cost-context.json" || fail "api_calls != 3"
+sed -n '/"compactions": \[/,/\]/p' "$SCRATCH/cost-context.json" | grep -q '"trigger": "auto"' \
+  || fail "compaction trigger != auto"
+sed -n '/"growth": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"bash_read": 0[,}]' \
+  && fail "growth.bash_read is zero"
+sed -n '/"growth": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"bash_read":' \
+  || fail "growth.bash_read missing"
+TOP_BUCKET="$(sed -n '/"top": \[/,/\]/p' "$SCRATCH/cost-context.json" | grep -m1 '"bucket"' | sed -E 's/.*"bucket": "([^"]+)".*/\1/')"
+[ "$TOP_BUCKET" = "bash_read" ] || fail "top[0].bucket = $TOP_BUCKET, want bash_read"
+sed -n '/"delegation": {/,/}/p' "$SCRATCH/cost-context.json" | grep -q '"calls": 0' \
+  || fail "delegation.calls != 0 before sub.jsonl exists"
+
+say "gv cost --context: delegation joins sub.jsonl once it exists"
+echo '{"time":"2026-07-07T10:04:00Z","v":1,"ticket":"task-001","lane":"x","model":"y","mode":"raw","input_chars":10,"input_tokens":3,"output_tokens":1,"cached_tokens":0,"turns":0,"ms":5,"exit":0,"prompt_head":"p"}' >> "$GROVE_STATE_DIR/sub.jsonl"
+"$GV" cost --context task-001 --json > "$SCRATCH/cost-context2.json"
+sed -n '/"delegation": {/,/}/p' "$SCRATCH/cost-context2.json" | grep -q '"calls": 1' \
+  || fail "delegation.calls != 1 after sub.jsonl append"
 
 say "seed another daemonized build child for the done path (grove-156)"
 perl -e 'sleep 300' -- "$WTDIR2" &
@@ -376,6 +457,8 @@ grep -q 'Describe the change' "$LEDGER" || fail "ledger row missing description 
 grep -q ',none,' "$LEDGER" || fail "ledger row missing PR outcome (no remote → none)"
 grep -q 'sonnet' "$LEDGER" || fail "ledger row missing per-model mix (grove-14 models column)"
 grep -q 'haiku' "$LEDGER" || fail "ledger row missing the second model in the mix"
+grep -q ',effort$' "$LEDGER" || fail "ledger header missing the effort column (grove-435)"
+grep -q ',xhigh$' "$LEDGER" || fail "ledger row missing the worker's --effort pin (grove-435)"
 
 say "spend ledger: history survives transcript + worktree deletion"
 rm -rf "$HOME/.claude/projects"
@@ -435,6 +518,176 @@ grep -q '"hooks-binary:' "$SCRATCH/doctor-hooks.json" \
 ("$GV" doctor > "$SCRATCH/doctor.out") || true
 grep -q 'no such binary' "$SCRATCH/doctor.out" \
   || fail "doctor did not flag the mismatched hook binary"
+
+# --- effort dial (grove-435) ---
+# The launched command is what the pane was typed: with `claude: echo` the
+# worker pane shows `echo --effort <l> "$(cat …)"` verbatim, so the pane's
+# scrollback is the one place the flag can be asserted exactly once.
+pane_text() { # $1 = ticket → every pane of its window, scrollback joined
+  local wid
+  tmux list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' > "$SCRATCH/effort-wins.txt"
+  wid="$(grep "$1" "$SCRATCH/effort-wins.txt" | head -1 | cut -d' ' -f1)"
+  [ -n "$wid" ] || fail "no worker window for $1"
+  : > "$SCRATCH/effort-pane.txt"
+  tmux list-panes -t "$wid" -F '#{pane_id}' > "$SCRATCH/effort-panes.txt"
+  while read -r p; do tmux capture-pane -p -S - -J -t "$p" >> "$SCRATCH/effort-pane.txt"; done < "$SCRATCH/effort-panes.txt"
+  tr -d '\n' < "$SCRATCH/effort-pane.txt" > "$SCRATCH/effort-pane.flat"
+}
+launch_line() { # $1 = ticket → the typed `echo … "$(cat …` launch line (the echo stub
+  local i             # prints its args back, so the pane carries the flags twice)
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pane_text "$1"
+    grep -q -- 'echo .*\$(cat' "$SCRATCH/effort-pane.flat" && break
+    sleep 0.5
+  done
+  grep -o -- 'echo [^$]*\$(cat' "$SCRATCH/effort-pane.flat" | head -1 > "$SCRATCH/effort-launch.txt"
+  [ -s "$SCRATCH/effort-launch.txt" ] || { cat "$SCRATCH/effort-pane.flat"; fail "no launch line typed into $1's pane"; }
+}
+effort_count() { # $1 = ticket, $2 = level → how many times `--effort <level>` is on the launch line
+  launch_line "$1"
+  grep -o -- "--effort $2" "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' '
+}
+mdtask() { printf -- '---\nid: %s\ntitle: %s\nstatus: todo\nlabels: []\n---\n\n%s\n' "$1" "$2" "$2" > "$DUMMY/.grove/tasks/$1.md"; }
+
+say "effort dial: a repo effort: key is the standing default (grove-435)"
+mdtask task-002 "effort from config"
+perl -pi -e 's/^(\s*)claude: echo$/$1claude: echo\n$1effort: medium/' "$WCFG"
+grep -q 'effort: medium' "$WCFG" || fail "repo effort key not written"
+"$GV" grab task-002 > "$SCRATCH/grab-effort-cfg.out"
+grep -q '→ effort medium (repo default)' "$SCRATCH/grab-effort-cfg.out" || fail "grab did not report the repo's effort default"
+[ "$(effort_count task-002 medium)" = "1" ] || { cat "$SCRATCH/effort-pane.flat"; fail "repo effort: medium must reach the launched command exactly once"; }
+
+say "effort dial: --effort pins one worker and beats the repo key"
+mdtask task-003 "effort from flag"
+"$GV" grab task-003 --effort low > "$SCRATCH/grab-effort-flag.out"
+grep -q '→ effort low (this worker only)' "$SCRATCH/grab-effort-flag.out" || fail "grab did not report the --effort pin"
+[ "$(effort_count task-003 low)" = "1" ] || { cat "$SCRATCH/effort-pane.flat"; fail "--effort low must reach the launched command exactly once"; }
+grep -q -- '--effort medium' "$SCRATCH/effort-launch.txt" && fail "the repo's effort: medium survived the --effort low pin" || true
+[ "$(grep -o -- '--effort' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "the launch line must carry --effort exactly once"; }
+
+# --- autocompact window (grove-440) ---
+say "autocompact: unset → no --autocompact on the launch line, and no event ever carries it"
+launch_line task-003
+grep -q -- '--autocompact' "$SCRATCH/effort-launch.txt" && { cat "$SCRATCH/effort-launch.txt"; fail "an unset autocompact: still put --autocompact on the launch line"; } || true
+
+say "autocompact: a repo autocompact: 150000 launches with --autocompact 150000 exactly once"
+mdtask task-010 "autocompact from config"
+perl -pi -e 's/^(\s*)effort: medium$/$1effort: medium\n$1autocompact: 150000/' "$WCFG"
+grep -q 'autocompact: 150000' "$WCFG" || fail "repo autocompact key not written"
+"$GV" grab task-010 > "$SCRATCH/grab-autocompact.out"
+grep -q '→ autocompact 150000 (repo default)' "$SCRATCH/grab-autocompact.out" || fail "grab did not report the repo's autocompact window"
+launch_line task-010
+[ "$(grep -o -- '--autocompact 150000' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "autocompact: 150000 must reach the launched command exactly once"; }
+[ "$(grep -o -- '--autocompact' "$SCRATCH/effort-launch.txt" | wc -l | tr -d ' ')" = "1" ] || { cat "$SCRATCH/effort-launch.txt"; fail "the launch line must carry --autocompact exactly once"; }
+grep -q -- '--effort medium' "$SCRATCH/effort-launch.txt" || fail "autocompact must stack with the repo's effort: default"
+grep -q '"autocompact":' "$GROVE_STATE_DIR/events.jsonl" && fail "autocompact is a launch-only passthrough: no event may carry it" || true
+
+say "autocompact: a value claude would refuse fails at config load, before anything exists"
+perl -pi -e 's/^(\s*)autocompact: 150000$/$1autocompact: 150k/' "$WCFG"
+mdtask task-011 "autocompact typo"
+("$GV" grab task-011 2>&1 || true) > "$SCRATCH/grab-autocompact-bad.out"
+grep -q 'autocompact "150k"' "$SCRATCH/grab-autocompact-bad.out" || { cat "$SCRATCH/grab-autocompact-bad.out"; fail "grab accepted an autocompact value claude would refuse"; }
+ls -d "$WT"/task-011-* >/dev/null 2>&1 && fail "a rejected autocompact: still created a worktree" || true
+perl -pi -e 's/^(\s*)autocompact: 150k$/$1autocompact: 150000/' "$WCFG"
+
+say "effort dial: an unknown level fails before anything exists"
+mdtask task-004 "effort typo"
+("$GV" grab task-004 --effort ultra 2>&1 || true) > "$SCRATCH/grab-effort-bad.out"
+grep -q 'unknown effort "ultra"' "$SCRATCH/grab-effort-bad.out" || fail "grab accepted an undocumented effort level"
+ls -d "$WT"/task-004-* >/dev/null 2>&1 && fail "a rejected --effort still created a worktree" || true
+
+say "effort dial: gv ls --json carries effort for pinned tasks and omits it otherwise"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-effort.json"
+python3 - "$SCRATCH/ls-effort.json" <<'PYEOF2' || fail "ls --json effort field wrong"
+import json, sys
+rows = {t['ticket']: t for t in json.load(open(sys.argv[1]))['tasks']}
+assert rows['task-002'].get('effort') == 'medium', rows['task-002']
+assert rows['task-003'].get('effort') == 'low', rows['task-003']
+assert 'task-004' not in rows, sorted(rows)
+PYEOF2
+"$GV" ls --json --no-pr --no-cost | grep -q '"effort": *"low"' || fail "ls --json missing the effort field"
+
+say "effort dial: adopt keeps the pin it was grabbed with, and --effort overrides it"
+"$GV" pause task-003 --force > "$SCRATCH/effort-pause.out"
+"$GV" adopt task-003 > "$SCRATCH/adopt-effort-keep.out"
+grep -q '→ effort low' "$SCRATCH/adopt-effort-keep.out" || fail "adopt did not keep the grabbed effort"
+"$GV" pause task-003 --force > "$SCRATCH/effort-pause2.out"
+"$GV" adopt task-003 --effort max > "$SCRATCH/adopt-effort-flag.out"
+grep -q '→ effort max' "$SCRATCH/adopt-effort-flag.out" || fail "adopt --effort did not override the stored pin"
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-effort2.json"
+grep -q '"effort": *"max"' "$SCRATCH/ls-effort2.json" || fail "ls --json did not pick up the adopt-time effort"
+
+say "effort dial: doctor warns when CLAUDE_CODE_EFFORT_LEVEL would override every pin"
+("$GV" doctor --json > "$SCRATCH/doctor-effort-ok.json") || true
+grep -q '"effort-override"' "$SCRATCH/doctor-effort-ok.json" || fail "doctor --json missing the effort-override row"
+python3 - "$SCRATCH/doctor-effort-ok.json" <<'PYEOF2' || fail "effort-override row must be ok with a clean env"
+import json, sys
+row = [r for r in json.load(open(sys.argv[1]))['rows'] if r['id'] == 'effort-override'][0]
+assert row['state'] == 'ok', row
+PYEOF2
+(CLAUDE_CODE_EFFORT_LEVEL=low "$GV" doctor --json > "$SCRATCH/doctor-effort-warn.json") || true
+python3 - "$SCRATCH/doctor-effort-warn.json" <<'PYEOF2' || fail "effort-override row must warn when the env var is set"
+import json, sys
+row = [r for r in json.load(open(sys.argv[1]))['rows'] if r['id'] == 'effort-override'][0]
+assert row['state'] == 'warn' and 'CLAUDE_CODE_EFFORT_LEVEL=low' in row['info'], row
+PYEOF2
+
+# --- claude accounts (grove-470): --account pins a worker to a token ---
+# The worker is a script that reports whether the token reached its env —
+# never the value. The token's content is a sentinel that must appear in no
+# pane, event, or --json output.
+say "accounts: grab --account runs the worker with the token exported"
+FAKE_CLAUDE="$SCRATCH/fake-claude.sh"
+cat > "$FAKE_CLAUDE" <<'SHEOF'
+#!/bin/sh
+echo "ACCT-TOKEN:${CLAUDE_CODE_OAUTH_TOKEN:+set}:${GROVE_ACCOUNT:-none}"
+SHEOF
+chmod +x "$FAKE_CLAUDE"
+perl -pi -e "s#^(\s*)claude: echo\$#\$1claude: $FAKE_CLAUDE#" "$WCFG"
+grep -q "claude: $FAKE_CLAUDE" "$WCFG" || fail "fake claude not written"
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+acct_out() { # $1 = ticket → the worker's last ACCT-TOKEN line
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pane_text "$1"
+    grep -q '^ACCT-TOKEN:' "$SCRATCH/effort-pane.txt" && break
+    sleep 0.5
+  done
+  grep -q ZZZSENTINEL "$SCRATCH/effort-pane.txt" && { cat "$SCRATCH/effort-pane.txt"; fail "the token value reached $1's pane"; } || true
+  grep '^ACCT-TOKEN:' "$SCRATCH/effort-pane.txt" | tail -1
+}
+mdtask task-020 "account pin"
+"$GV" grab task-020 --account alt > "$SCRATCH/grab-acct.out" || { cat "$SCRATCH/grab-acct.out"; fail "grab --account failed"; }
+grep -q '→ account alt (pinned to this worker)' "$SCRATCH/grab-acct.out" || fail "grab did not report the account pin"
+[ "$(acct_out task-020)" = "ACCT-TOKEN:set:alt" ] || { cat "$SCRATCH/effort-pane.txt"; fail "grab --account did not export the token"; }
+
+say "accounts: a missing account refuses before anything exists"
+mdtask task-021 "account typo"
+("$GV" grab task-021 --account nope 2>&1 || true) > "$SCRATCH/grab-acct-bad.out"
+grep -q 'no account "nope"' "$SCRATCH/grab-acct-bad.out" || { cat "$SCRATCH/grab-acct-bad.out"; fail "grab accepted a missing account"; }
+ls -d "$WT"/task-021-* >/dev/null 2>&1 && fail "a rejected --account still created a worktree" || true
+
+say "accounts: adopt keeps the pin"
+"$GV" pause task-020 --force > "$SCRATCH/acct-pause.out"
+"$GV" adopt task-020 > "$SCRATCH/adopt-acct-keep.out" || { cat "$SCRATCH/adopt-acct-keep.out"; fail "adopt of a pinned task failed"; }
+grep -q '→ account alt (pinned to this worker)' "$SCRATCH/adopt-acct-keep.out" || fail "adopt did not keep the account pin"
+[ "$(acct_out task-020)" = "ACCT-TOKEN:set:alt" ] || { cat "$SCRATCH/effort-pane.txt"; fail "adopt did not keep the token"; }
+
+say "accounts: adopt --account login strips the pin"
+"$GV" pause task-020 --force > "$SCRATCH/acct-pause2.out"
+"$GV" adopt task-020 --account login > "$SCRATCH/adopt-acct-login.out" || { cat "$SCRATCH/adopt-acct-login.out"; fail "adopt --account login failed"; }
+grep -q '→ account' "$SCRATCH/adopt-acct-login.out" && fail "adopt --account login still named an account" || true
+[ "$(acct_out task-020)" = "ACCT-TOKEN::none" ] || { cat "$SCRATCH/effort-pane.txt"; fail "adopt --account login still exported a token"; }
+"$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-acct.json"
+python3 - "$SCRATCH/ls-acct.json" <<'PYEOF2' || fail "ls --json account field wrong after the strip"
+import json, sys
+rows = {t['ticket']: t for t in json.load(open(sys.argv[1]))['tasks']}
+assert 'account' not in rows['task-020'], rows['task-020']
+PYEOF2
+grep -q ZZZSENTINEL "$GROVE_STATE_DIR/events.jsonl" "$SCRATCH/ls-acct.json" && fail "the token value reached events.jsonl or ls --json" || true
+grep -q '"account":"alt"' "$GROVE_STATE_DIR/events.jsonl" || fail "no event recorded the account pin"
+perl -pi -e "s#^(\s*)claude: \Q$FAKE_CLAUDE\E\$#\$1claude: echo#" "$WCFG"
+grep -q 'claude: echo' "$WCFG" || fail "claude stub not restored"
 
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null

@@ -98,7 +98,8 @@ proven live:
   ([issue #62](https://github.com/JollyGrin/grove/issues/62)) — not yet
   live, tracked as "coming soon" in the model-access matrix below.
 
-See [TASKS.md](TASKS.md) for the live phase board and
+See [TASKS.md](TASKS.md) for the status board, [docs/roadmap.md](docs/roadmap.md)
+for the open phases, and
 [CLAUDE.md](CLAUDE.md) for the one remaining coexistence caution
 (`gv hooks install` writes a shared settings file).
 
@@ -252,8 +253,9 @@ unless invoked: no daemon, no autostart, nothing in the cockpit starts it.
 | [docs/grove-cockpit-design.md](docs/grove-cockpit-design.md) | Cockpit UX: activity feed, parallel orchestrators |
 | [docs/grove-readiness-review.md](docs/grove-readiness-review.md) | Readiness review + the locked-decisions table (§5) |
 | [docs/seed-manifest.md](docs/seed-manifest.md) | Exactly what was copied from ovs + the generalization map |
-| [TASKS.md](TASKS.md) | Status board (phases 0–6) |
-| [LEARNINGS.md](LEARNINGS.md) | Verified surprises (seeded from ovs's generic entries) |
+| [TASKS.md](TASKS.md) | Status board — current month; older rows in [docs/archive/](docs/archive/) |
+| [docs/roadmap.md](docs/roadmap.md) | Open phases (1–6) and parked ideas |
+| [LEARNINGS.md](LEARNINGS.md) | Verified surprises — current month; older entries in [docs/archive/](docs/archive/) |
 
 ## Build
 

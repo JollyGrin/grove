@@ -18,8 +18,10 @@ import (
 )
 
 // Car states (feature trains Decision 4). ready = the worker reported done
-// or its PR is ready; landed = task_done after a task_created on this
-// feature.
+// or its PR is ready; landed = on a GitHub provider, a closed labelled
+// issue whose ticket branch has a PR merged into the feature branch
+// (grove-397); otherwise (and in union) task_done after a task_created on
+// this feature.
 const (
 	CarQueued   = "queued"
 	CarWorking  = "working"
@@ -88,6 +90,13 @@ type StatusInput struct {
 
 	// PR looks up the PR whose head is the feature branch.
 	PR func(f *state.Feature) (*github.PR, error)
+
+	// ClosedIssues and MergedPRs are the GitHub landed lookup (grove-397):
+	// the feature's closed labelled issues, and the PRs merged into its
+	// branch. They run with Issues (never under SkipQueued); nil or a
+	// failure falls back to landed-from-events alone.
+	ClosedIssues func(f *state.Feature) ([]*provider.Task, error)
+	MergedPRs    func(f *state.Feature) ([]github.MergedPR, error)
 }
 
 // Statuses computes Status for every open feature, keyed by slug. Lookup
@@ -109,8 +118,19 @@ func Statuses(in StatusInput) (map[string]*Status, error) {
 		st := &Status{Cars: []Car{}}
 		seen := map[string]bool{}
 
-		for _, c := range landed[slug] {
-			c.PR = prOf(in.Tasks[c.Ticket])
+		cars := landed[slug]
+		if !in.SkipQueued && in.ClosedIssues != nil && in.MergedPRs != nil {
+			gh, err := githubLanded(in, f)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("feature %s: landed lookup: %w", slug, err))
+			} else {
+				cars = unionLanded(cars, gh)
+			}
+		}
+		for _, c := range cars {
+			if c.PR == 0 {
+				c.PR = prOf(in.Tasks[c.Ticket])
+			}
 			st.Cars = append(st.Cars, c)
 			seen[c.Ticket] = true
 		}
@@ -228,14 +248,76 @@ func landedCars(events []state.Event) map[string][]Car {
 			State: CarLanded, LandedAt: &at})
 	}
 	for _, cars := range out {
-		sort.Slice(cars, func(i, j int) bool {
-			if !cars[i].LandedAt.Equal(*cars[j].LandedAt) {
-				return cars[i].LandedAt.Before(*cars[j].LandedAt)
-			}
-			return cars[i].Ticket < cars[j].Ticket
-		})
+		sortLanded(cars)
 	}
 	return out
+}
+
+// githubLanded asks GitHub which of f's cars landed: a closed issue with
+// the feature's label whose ticket branch (`<ticket>` or `<ticket>-…`,
+// grove's branch naming) has a PR merged into f.Branch. A closed issue
+// with no such PR was dropped, not landed. A ticket still tracked on this
+// feature stays an active car — it still owes `gv done`; one tracked
+// with no feature (grabbed before the feature was registered, grove-361)
+// or on another lands here, or it would show nowhere.
+func githubLanded(in StatusInput, f *state.Feature) ([]Car, error) {
+	issues, err := in.ClosedIssues(f)
+	if err != nil {
+		return nil, err
+	}
+	prs, err := in.MergedPRs(f)
+	if err != nil {
+		return nil, err
+	}
+	var out []Car
+	for _, is := range issues {
+		if t := in.Tasks[is.ID]; (tracked(t) && t.Feature == f.Slug) || !hasLabel(is.Labels, f.Label) {
+			continue
+		}
+		var hit *github.MergedPR
+		for i := range prs {
+			p := &prs[i]
+			if p.HeadRefName != is.ID && !strings.HasPrefix(p.HeadRefName, is.ID+"-") {
+				continue
+			}
+			if hit == nil || p.MergedAt.After(hit.MergedAt) {
+				hit = p
+			}
+		}
+		if hit == nil {
+			continue
+		}
+		at := hit.MergedAt
+		out = append(out, Car{Ticket: is.ID, Number: issueNumber(is.ID), Title: is.Title,
+			State: CarLanded, PR: hit.Number, LandedAt: &at})
+	}
+	return out, nil
+}
+
+// unionLanded merges event-landed and GitHub-landed cars: GitHub wins a
+// ticket both know; the result is in landing order.
+func unionLanded(events, gh []Car) []Car {
+	out := append([]Car(nil), gh...)
+	have := map[string]bool{}
+	for _, c := range gh {
+		have[c.Ticket] = true
+	}
+	for _, c := range events {
+		if !have[c.Ticket] {
+			out = append(out, c)
+		}
+	}
+	sortLanded(out)
+	return out
+}
+
+func sortLanded(cars []Car) {
+	sort.Slice(cars, func(i, j int) bool {
+		if !cars[i].LandedAt.Equal(*cars[j].LandedAt) {
+			return cars[i].LandedAt.Before(*cars[j].LandedAt)
+		}
+		return cars[i].Ticket < cars[j].Ticket
+	})
 }
 
 // carState maps one active task's shape to a car state. A ready PR wins;

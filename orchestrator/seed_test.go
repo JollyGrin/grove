@@ -75,6 +75,25 @@ func TestSeedTeachesSupervise(t *testing.T) {
 	}
 }
 
+// TestSeedTeachesCostContext (grove-289) guards duty 8's context-rot
+// rescue paragraph: it must point the orchestrator at `gv cost --context`
+// / the two `--analyze` flags, not the retired hand-derived
+// `cache_read_tokens ÷ turns` signal.
+func TestSeedTeachesCostContext(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv cost --context") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv cost --context` — restore it in duty 8's " +
+			"context-rot rescue section")
+	}
+	if !strings.Contains(ClaudeMd, "context: avg ≥ 200k") || !strings.Contains(ClaudeMd, "never compacted") {
+		t.Error("orchestrator/CLAUDE.md is missing the two `gv cost --analyze` context flags — " +
+			"restore them in duty 8's context-rot rescue section")
+	}
+	if strings.Contains(ClaudeMd, "cache_read_tokens ÷ turns") {
+		t.Error("orchestrator/CLAUDE.md still teaches the retired `cache_read_tokens ÷ turns` " +
+			"signal — grove-289 replaced it with `gv cost --context` / the --analyze flags")
+	}
+}
+
 // TestSeedTeachesLaneBilling guards the #234 lane-billing paragraph
 // (zai-plan vs openrouter-) against silent deletion.
 func TestSeedTeachesLaneBilling(t *testing.T) {
@@ -169,5 +188,86 @@ func TestSeedTeachesSupervisionMandate(t *testing.T) {
 	if n := strings.Count(sec, "\n"); n > 95 {
 		t.Errorf("`## Supervision mandate` is %d lines (want <= 95): it is resident in every "+
 			"orchestrator turn, so growth is paid on every request — tighten it", n)
+	}
+}
+
+// TestSeedTeachesChatHide guards the grove-405 chat-hide teaching: the two
+// verbs in the tools block, the one chat move an orchestrator makes without a
+// second confirmation (hiding ITSELF when the operator asks), and the opt-in
+// invariant — the seed must never tell a chat to hide by default.
+func TestSeedTeachesChatHide(t *testing.T) {
+	for _, want := range []string{"gv chat hide [<s>]", "gv chat show <s>"} {
+		if !strings.Contains(ClaudeMd, want) {
+			t.Errorf("orchestrator/CLAUDE.md is missing `%s` — restore it in the tools block", want)
+		}
+	}
+	if !strings.Contains(ClaudeMd, "Never hide yourself\n   unasked") {
+		t.Error("orchestrator/CLAUDE.md is missing the `Never hide yourself unasked` rule — " +
+			"chats are on screen by default (the chat-hide invariant); restore duty 3's " +
+			"\"Getting out of the way\" paragraph")
+	}
+	if !strings.Contains(ClaudeMd, "`chat hide`/`chat show` on another chat") {
+		t.Error("orchestrator/CLAUDE.md's Guardrails no longer list `chat hide`/`chat show` on " +
+			"another chat as propose-then-act — restore it")
+	}
+}
+
+// TestSeedTeachesEffort guards the grove-435 `--effort` teaching: the
+// effort dial is a one-off pin exactly like --model, and the orchestrator
+// must know it exists before it reaches for a cheaper model.
+func TestSeedTeachesEffort(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv grab DEV-X --effort E") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv grab DEV-X --effort E` — restore it in the tools block")
+	}
+	if !strings.Contains(ClaudeMd, "low|medium|high|xhigh|max") {
+		t.Error("orchestrator/CLAUDE.md no longer names the documented effort levels (low|medium|high|xhigh|max)")
+	}
+}
+
+// TestSeedTeachesEffortFirst (grove-436) guards the routing doctrine in
+// duty 3 Dispatch: effort on the default model is the first lever, a
+// model/lane change the second, and whichever is proposed is named with
+// its reason in the grab line. Scoped to the Duties section so deleting
+// the paragraph cannot hide behind a mention elsewhere.
+func TestSeedTeachesEffortFirst(t *testing.T) {
+	duties := seedSection(t, "Duties")
+	for _, want := range []string{
+		"Effort first, lane second",
+		"--effort",
+		"say which setting and why in the same grab line",
+		"never route on your own",
+	} {
+		if !strings.Contains(duties, want) {
+			t.Errorf("orchestrator/CLAUDE.md duty 3 Dispatch is missing %q — the effort-first "+
+				"routing doctrine (grove-436) has been trimmed; restore it", want)
+		}
+	}
+	if strings.Contains(ClaudeMd, "a cheap task on Sonnet") {
+		t.Error("orchestrator/CLAUDE.md still teaches model-first routing (`a cheap task on Sonnet`) — " +
+			"grove-436 replaced it with effort-first on the default model")
+	}
+}
+
+// TestSeedTeachesLearningsReview (grove-439) guards duty 11: the
+// orchestrator knows `gv learnings --json` exists, proposes one
+// promotion or retirement per note with the target file and text, and
+// touches no memory file or skill without the operator's yes.
+func TestSeedTeachesLearningsReview(t *testing.T) {
+	if !strings.Contains(ClaudeMd, "gv learnings --json") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv learnings --json` — restore it in the tools block")
+	}
+	duties := seedSection(t, "Duties")
+	for _, want := range []string{
+		"**Learnings review**",
+		"gv learnings --json",
+		"one promotion or retirement per note",
+		"target file and the exact text",
+		"Apply only on the operator's yes",
+		"Never edit a memory file or a skill unasked",
+	} {
+		if !strings.Contains(duties, want) {
+			t.Errorf("orchestrator/CLAUDE.md Duties is missing %q — the learnings-review duty "+
+				"(grove-439) has been trimmed; restore it", want)
+		}
 	}
 }

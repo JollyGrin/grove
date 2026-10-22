@@ -146,3 +146,25 @@ func TestTierForModel(t *testing.T) {
 		t.Errorf("unconfigured tier mapped to %q", got)
 	}
 }
+
+// TestTierForModelFable (grove-442): a Fable id names the "fable" tier when
+// the operator lists it, and with the default tier list answers "" (host
+// default) rather than collapsing onto opus — a revive must never silently
+// downgrade the lane.
+func TestTierForModelFable(t *testing.T) {
+	var c Config
+	for _, id := range []string{"claude-fable-5-1", "claude-fable-5", "fable"} {
+		if got := c.TierForModel(id); got != "" {
+			t.Errorf("default tiers: TierForModel(%q) = %q, want \"\" (host default, not a downgrade)", id, got)
+		}
+	}
+	c.Orchestrator.Models = []string{"fable", "opus", "sonnet", "haiku"}
+	for _, id := range []string{"claude-fable-5-1", "claude-fable-5", "fable", "Claude-Fable-5-1"} {
+		if got := c.TierForModel(id); got != "fable" {
+			t.Errorf("fable configured: TierForModel(%q) = %q, want \"fable\"", id, got)
+		}
+	}
+	if got := c.TierForModel("claude-opus-5-5"); got != "opus" {
+		t.Errorf("TierForModel(claude-opus-5-5) = %q, want \"opus\"", got)
+	}
+}

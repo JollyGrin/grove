@@ -20,7 +20,7 @@ var (
 	featOnlyRowHints = []hint{{"tab", "focus"}}
 	spawnHints       = []hint{{"O", "new chat"}, {")", "profiled chat"}, {"@", "remote chat"}}
 	globalHints      = []hint{
-		{"?", "help"}, {"L", "layout"}, {"$", "costs"},
+		{"?", "help"}, {"L", "focus/horizontal"}, {"$", "costs"},
 		{"*", "effects"}, {"X", "park"}, {"q", "quit"},
 	}
 )

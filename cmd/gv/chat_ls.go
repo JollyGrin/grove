@@ -35,7 +35,7 @@ import (
 // through to one of them.
 func cmdChat(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
+		return fmt.Errorf("usage: gv chat ls|tail|send|keys|close|hide|show|focus|restamp|serve …\n  gv chat ls [--workspace <label>] [--json]\n  gv chat tail <session> [--follow] [--since <n>]\n  gv chat send <session> \"<text>\"\n  gv chat keys <session> <chars>\n  gv chat close <session>\n  gv chat hide [<session-id>|<pane-id>]\n  gv chat show <session>|@<host>/<session>\n  gv chat focus <session>\n  gv chat restamp <session> [<session-id>]\n  gv chat serve [--port 3000] [--bind 127.0.0.1]")
 	}
 	switch args[0] {
 	case "ls":
@@ -48,12 +48,22 @@ func cmdChat(args []string) error {
 		return cmdChatKeys(args[1:])
 	case "close":
 		return cmdChatClose(args[1:])
+	case "hide":
+		return cmdChatHide(args[1:])
+	case "show":
+		return cmdChatShow(args[1:])
+	case "focus":
+		return cmdChatFocus(args[1:])
 	case "restamp":
 		return cmdChatRestamp(args[1:])
 	case "serve":
 		return cmdChatServe(args[1:])
+	case "rail":
+		return cmdChatRail(args[1:])
+	case "sync-sizes":
+		return cmdChatSyncSizes(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, restamp, serve)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail, sync-sizes)", args[0])
 	}
 }
 
@@ -135,8 +145,11 @@ type livePane struct {
 type chatRecord struct {
 	Row  chat.Row
 	Pane string // %id — the immutable paste target, "" for an archived row
-	Dir  string // the chat's cwd, which is its transcript project-dir key
-	PID  int    // the pane's process — the root of the walk that finds its agent
+	// Window is the tmux window id (@N) the pane lives in — the rail's
+	// on-screen test (grove-486). "" for a detached chat and an archived row.
+	Window string
+	Dir    string // the chat's cwd, which is its transcript project-dir key
+	PID    int    // the pane's process — the root of the walk that finds its agent
 	// ConfigDir is the Claude config dir Dir's project dir lives under —
 	// this chat's WORKSPACE answer, resolved once here and carried rather
 	// than re-derived (grove-227). "" is the ambient default, which is every
@@ -282,6 +295,21 @@ func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
 // Everything impure arrives in look, so the whole join is table-tested
 // without a tmux server or a real `ps`.
 func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
+	return chatRecordsOf(targets, look, true)
+}
+
+// liveChatRecords is the report without its archived rows (grove-521): the
+// focus/show paths can only move a chat that is running, and the archived
+// half is the expensive one — every transcript head in every brain dir.
+// A live pane's own transcript is read only when it wears no id yet (the
+// sole-candidate resolve needs the list), so its row may lack the label and
+// last-active time the full report carries; the identity fields are the
+// same.
+func liveChatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
+	return chatRecordsOf(targets, look, false)
+}
+
+func chatRecordsOf(targets []workspace.Workspace, look chatLookup, archived bool) []chatRecord {
 	configDirOf := configDirResolver()
 	var pending []livePane
 	for _, ws := range targets {
@@ -295,7 +323,8 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		}
 		cockpit := cockpitSessionForLabel(ws.Label)
 		for _, p := range look.panes {
-			if p.Session != cockpit || !chat.IsOrchestratorPane(p.Dir, orchDir) {
+			// The focus-mode rail (grove-486) is never a chat, whatever its cwd.
+			if p.Rail || p.Session != cockpit || !chat.IsOrchestratorPane(p.Dir, orchDir) {
 				continue
 			}
 			pending = append(pending, livePane{ws: ws, configDir: cfgDir, kind: chat.KindCockpit, n: p.Index, pane: p})
@@ -375,7 +404,10 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 	var recs []chatRecord
 	for _, lp := range pending {
 		id := lp.pane.ChatSession
-		sessions := scan(lp.configDir, lp.pane.Dir)
+		var sessions []transcript.Session
+		if archived || id == "" {
+			sessions = scan(lp.configDir, lp.pane.Dir)
+		}
 		if id == "" {
 			if s, ok := chat.Resolve(sessions, claimed, rivals[lp.pane.Dir]); ok {
 				id = s.ID
@@ -396,9 +428,12 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 			Session: lp.pane.Session, Workspace: lp.ws.Label, N: lp.n, Kind: lp.kind,
 			Command: lp.pane.Command, Attached: lp.pane.Attached, Created: lp.pane.Created,
 			SessionID: id, Label: label, LastActive: lastActive, Model: lp.pane.Model,
-		}.Row(), Pane: lp.pane.Pane, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
+		}.Row(), Pane: lp.pane.Pane, Window: lp.pane.Window, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
 	}
 	for _, ws := range targets {
+		if !archived {
+			break
+		}
 		cfgDir := configDirOf(ws)
 		for _, dir := range orchestratorProjectDirs(ws) {
 			for _, s := range scan(cfgDir, dir) {

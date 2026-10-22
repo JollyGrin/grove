@@ -1,0 +1,24 @@
+ ⁂ GROVE · golden                                 1 working · 1 mail · 1 review 
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ROW — act on the selected task                                               │
+│   j/k    move the selection up/down the fleet (or the FEATURES rail, when fo │
+│   tab    focus: cycle FEATURES → AGENTS → CHATS — a panel with nothing in it │
+│   s      serve (FEATURES focused, or in the lens): run the feature's .grove/ │
+│   enter  reply: open the task and type straight into its agent's pane        │
+│   a      attach: switch your tmux client to the task's window                │
+│   o      preview: open the PR's preview deploy (falls back to PR, then ticke │
+│   p      PR: open the task's pull request in the browser                     │
+│   t      task: open the ticket/issue in the browser                          │
+│   v      mark you're reviewing: silences re-pings while you read the PR (tog │
+│   n      nudge: send the agent a wake-up message                             │
+│   d      done: merged-check + full cleanup of the task — asks to confirm fir │
+│   @host  on a remote row the same keys steer over ssh: a/n relay the reply,  │
+│                                                                              │
+│ FEATURES — with a feature train focused (tab)                                │
+│   enter  lens: open the focused feature train full-screen — TRAIN, BRANCH, S │
+│   esc    back from the lens to the list (row keys there act on the selected  │
+│   m      in the lens: open the feature PR in the browser                     │
+│   l      land: finish every merged car of the feature — shows the plan, asks │
+│   … a taller pane shows the rest                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ esc or ? close

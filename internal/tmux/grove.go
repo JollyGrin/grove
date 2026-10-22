@@ -38,32 +38,31 @@ func ExactActive(session string) string { return Exact(session) + ":" }
 // session option nor config supplies one (grove-52): side-by-side columns.
 const defaultCockpitLayout = "horizontal"
 
-// cockpitMainWidth is the dash pane's share of the window in the vertical
-// (main-vertical) layout — the pre-grove-52 cockpit shape.
-const cockpitMainWidth = 55
+// cockpitFocusMainWidth is the dash pane's default percent of the window in
+// the focus (main-vertical) layout, used when the session carries no
+// @grove_focus_dash_width (grove-522: cockpit.focus_dash_width seeds it).
+// horizontal never sets main-pane-width.
+const cockpitFocusMainWidth = 30
 
 // tmuxLayout maps a grove-facing layout name to tmux's. Trap: the names
 // invert — grove "horizontal" (panes in a side-by-side row) is tmux
-// even-horizontal, whose dividers are vertical. Unknown falls back to the
-// default's tmux shape.
+// even-horizontal, whose dividers are vertical. focus is main-vertical
+// (dash main-left, chats stacked right); anything else — including the
+// retired vertical/tiled — falls back to the default's tmux shape.
 func tmuxLayout(name string) string {
-	switch name {
-	case "vertical":
+	if name == "focus" {
 		return "main-vertical"
-	case "tiled":
-		return "tiled"
-	default:
-		return "even-horizontal"
 	}
+	return "even-horizontal"
 }
 
 // SelectLayout re-tiles the session's active window to the given grove
-// layout name. vertical delegates to MainVertical so the dash keeps its
-// tested 55% share; the rest are plain select-layout calls. Targets the
+// layout name. focus delegates to RetileFocus (main-vertical at the dash's
+// cockpitFocusMainWidth share, plus the rail's height — grove-486); the rest are plain select-layout calls. Targets the
 // bare session (its active window) exactly like MainVertical/SpawnPane.
 func SelectLayout(session, name string) error {
-	if name == "vertical" {
-		return MainVertical(session, cockpitMainWidth)
+	if name == "focus" {
+		return RetileFocus(session)
 	}
 	_, err := run("select-layout", "-t", ExactActive(session), tmuxLayout(name))
 	return err
@@ -76,6 +75,28 @@ func SelectLayout(session, name string) error {
 func SetCockpitLayout(session, name string) error {
 	_, err := run("set-option", "-t", ExactActive(session), "@grove_layout", name)
 	return err
+}
+
+// SetFocusDashWidth persists the focus layout's dash percent in a session
+// user-option (mechanism of @grove_layout) so every gv process's
+// RetileFocus agrees (grove-522).
+func SetFocusDashWidth(session string, pct int) error {
+	_, err := run("set-option", "-t", ExactActive(session), "@grove_focus_dash_width", strconv.Itoa(pct))
+	return err
+}
+
+// focusDashWidth reads @grove_focus_dash_width; cockpitFocusMainWidth when
+// unset, unreachable, or out of [15, 85].
+func focusDashWidth(session string) int {
+	out, err := run("show-options", "-t", ExactActive(session), "-v", "@grove_focus_dash_width")
+	if err != nil {
+		return cockpitFocusMainWidth
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 15 || n > 85 {
+		return cockpitFocusMainWidth
+	}
+	return n
 }
 
 // CockpitLayout reads the session's persisted layout name; "" when unset
@@ -439,6 +460,20 @@ func WorkerWindowProfile(repoShort, ticket, profile string) string {
 	return base + " · " + r.Replace(profile)
 }
 
+// SetPaneAccount tags a chat pane with the account it was explicitly
+// pinned to (claude-accounts) as the pane user option @grove_account —
+// what `gv account rm` reads to refuse removing an account a live chat
+// runs on. A user option for @grove_profile's reason. An empty name
+// clears the option.
+func SetPaneAccount(pane, name string) error {
+	if name == "" {
+		_, err := run("set-option", "-p", "-t", pane, "-u", "@grove_account")
+		return err
+	}
+	_, err := run("set-option", "-p", "-t", pane, "@grove_account", name)
+	return err
+}
+
 // SetPaneProfile tags a pane with its model-profile name in a pane USER
 // OPTION (@grove_profile), so a profiled orchestrator pane is distinguishable
 // from the default (Anthropic) pane sharing the cockpit window. Unlike a pane
@@ -512,9 +547,10 @@ func SetPaneRemoteBorder(pane string) error {
 //     falling back to "chat" for the host's own Claude — the pane is an ssh
 //     attachment, so its own title would be the ssh client's, not the agent's;
 //   - a local profiled pane (@grove_profile) shows "⚡ <profile>";
+//   - the focus-mode rail (@grove_rail, grove-486) shows "chats";
 //   - anything else falls back to whatever title the pane's foreground program
 //     set, so the no-profile local path is visually unchanged.
-const paneBorderFormat = "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
+const paneBorderFormat = "#{pane_index}: #{?#{@grove_rail},chats,#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat},#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}}"
 
 // ShowPaneBorders turns on a top pane-border status line, scoped to ONE window
 // via its target (e.g. session:cockpit) — never a global/session-wide option,
@@ -610,12 +646,15 @@ func PaneClosable(pane string, isCockpit CockpitCheck) error {
 	if strings.TrimSpace(pane) == "" {
 		return fmt.Errorf("no pane id (are you inside a tmux pane?)")
 	}
-	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}")
+	info, err := run("display-message", "-p", "-t", pane, "-F", "#{session_name}\t#{pane_index}\t#{@grove_rail}")
 	if err != nil {
 		return err
 	}
-	parts := strings.SplitN(strings.TrimSpace(info), "\t", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(strings.TrimSpace(info), "\t", 3)
+	if len(parts) == 3 && parts[2] != "" {
+		return ErrRail
+	}
+	if len(parts) < 2 {
 		return fmt.Errorf("unexpected pane info %q", info)
 	}
 	index, err := strconv.Atoi(parts[1])
@@ -942,6 +981,10 @@ type ChatSession struct {
 	// grove-293: the model the chat was spawned to run (@grove_model), ""
 	// for a chat spawned before the tag existed. Additive, like the above.
 	Model string `json:"model,omitempty"`
+	// grove-510: the pane's name stamp and raw title (LivePane's). Not part
+	// of the audit contract.
+	Name  string `json:"-"`
+	Title string `json:"-"`
 }
 
 // paneListFormat asks list-panes for everything a chat report needs in one
@@ -950,7 +993,16 @@ type ChatSession struct {
 // first five fields are grove-203's original order — new fields are only
 // ever APPENDED, because a tmux too old to expand a variable, or a trailing
 // EMPTY field (an unstamped pane), simply shortens the line.
-const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}"
+//
+// The last field (grove-404) is a SESSION option: it resolves in a pane's
+// format context like session_* does, so every pane of a cockpit carries its
+// session's hidden-remote record and the CHATS box learns it from this same
+// call. Empty — and so absent — for every session with nothing hidden.
+// @grove_account (claude-accounts) sits between the two chat-hide fields so
+// every index older than it is unchanged.
+// window_id and @grove_rail (grove-486, the focus-mode rail pane) follow it;
+// window_id is never empty, so the session option is never a trailing field.
+const paneListFormat = "#{session_name}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{session_created}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}\t#{@grove_chat_session}\t#{@grove_model}\t#{@grove_remote}\t#{@grove_account}\t#{@grove_hidden_remote}\t#{window_id}\t#{@grove_rail}\t#{@grove_chat_name}\t#{pane_title}"
 
 // LivePane is one live pane of the whole server: which session it belongs
 // to, what it is running, where, and grove's own identity stamp. The single
@@ -968,12 +1020,30 @@ type LivePane struct {
 	Dir         string // pane_current_path
 	ChatSession string // @grove_chat_session, "" when unstamped
 	Model       string // @grove_model (grove-293), "" when untagged
+	Remote      string // @grove_remote (grove-199): the host a remote chat pane attaches to, "" for a local pane
+	Account     string // @grove_account (claude-accounts): the pinned account, "" when unpinned
+	// HiddenRemote is the pane's SESSION's @grove_hidden_remote (grove-404),
+	// raw — ParseHiddenRemotes reads it. The same value on every pane of a
+	// session; "" when nothing is hidden.
+	HiddenRemote string
+	Window       string // @N of the pane's window (grove-486)
+	Rail         bool   // the focus-mode rail pane (@grove_rail) — never a chat
+	// Name is the chat's stable name stamp (@grove_chat_name, grove-510):
+	// "cockpit·1", "chat-3" — frozen before a pane's first move, so the
+	// name follows the pane across break-pane / join-pane. "" = unstamped.
+	Name string
+	// Title is the raw pane title — Claude Code titles its pane with the
+	// session's short title (chatrail.PaneTitle reads it). Last field: a
+	// title may hold anything.
+	Title string
 }
 
 // Panes lists every pane on the server. A tmux that isn't running is an
-// empty list, not an error (SessionNames' rule).
+// empty list, not an error (SessionNames' rule). Exactly ONE tmux
+// invocation, through the exec seam — the cockpit's CHATS box rides it
+// every second (grove-402), so the count is pinned by a test.
 func Panes() []LivePane {
-	out, err := run("list-panes", "-a", "-F", paneListFormat)
+	out, err := execTmux("list-panes", "-a", "-F", paneListFormat)
 	if err != nil || out == "" {
 		return nil
 	}
@@ -999,6 +1069,16 @@ func ParsePanes(out string) []LivePane {
 			Dir:         paneField(f, 7),
 			ChatSession: paneField(f, 8),
 			Model:       paneField(f, 9),
+			Remote:      paneField(f, 10),
+			Account:     paneField(f, 11),
+
+			HiddenRemote: paneField(f, 12),
+			Window:       paneField(f, 13),
+			Rail:         paneField(f, 14) != "",
+			Name:         paneField(f, 15),
+		}
+		if len(f) > 16 {
+			p.Title = strings.Join(f[16:], "\t")
 		}
 		p.PID, _ = strconv.Atoi(paneField(f, 1))
 		p.Index, _ = strconv.Atoi(paneField(f, 6))
@@ -1072,6 +1152,7 @@ func ChatSessionsIn(panes []LivePane, label string, isCockpit CockpitCheck) []Ch
 			Session: p.Session, N: n, PID: p.PID, Command: p.Command,
 			Attached: p.Attached, Created: p.Created,
 			Pane: p.Pane, Dir: p.Dir, SessionID: p.ChatSession, Model: p.Model,
+			Name: p.Name, Title: p.Title,
 		})
 	}
 	sort.Slice(chats, func(i, j int) bool { return chats[i].N < chats[j].N })
@@ -1097,6 +1178,17 @@ func SetPaneChatSession(pane, id string) error {
 		return err
 	}
 	_, err := run("set-option", "-p", "-t", pane, "@grove_chat_session", id)
+	return err
+}
+
+// ChatNameOption is the pane option holding a chat's stable name (grove-510).
+const ChatNameOption = "@grove_chat_name"
+
+// SetPaneChatName stamps a chat pane with its stable name. A pane user
+// option rides the pane through break-pane and join-pane, which is the
+// point: the name stops tracking where the pane sits.
+func SetPaneChatName(pane, name string) error {
+	_, err := run("set-option", "-p", "-t", pane, ChatNameOption, name)
 	return err
 }
 
@@ -1285,4 +1377,473 @@ func NewWindowExec(session, name, dir string, env, argv []string) (string, error
 func KillWindowID(id string) error {
 	_, err := run("kill-window", "-t", id)
 	return err
+}
+
+// --- grove-401: hiding a cockpit chat pane, and showing it again ---
+//
+// Hidden is not a new state: the pane BECOMES an ordinary detached chat
+// session (grove-198 naming), so every reader that already knows
+// `grove-chat-<label>-<n>` — `gv chat ls/send/close`, `gv park --chats`, the
+// phone — handles it with no new work. The process keeps running, and the
+// pane keeps its %id and its @grove_* stamps across both moves.
+
+// cockpitWindow is the one window of a cockpit session that holds the
+// dashboard and its chat panes. Named, never indexed (grove-168).
+const cockpitWindow = "cockpit"
+
+// hidePlaceholder names the window a chat session is born with, which
+// exists only until the pane has been broken into the session: tmux cannot
+// create a session without a window, and break-pane cannot create a session.
+const hidePlaceholder = "placeholder"
+
+// PaneFacts is everything the hide guard decides from, read off one pane.
+type PaneFacts struct {
+	Session  string // session_name
+	Window   string // window_name
+	WindowID string // "@N"
+	Index    int    // pane_index, honoring the user's pane-base-index
+	First    int    // the window's lowest live pane index — the dashboard slot
+	Remote   string // @grove_remote, "" for a local pane
+	// RemoteSession is @grove_remote_session (grove-404): the host session a
+	// remote pane is attached to, "" on a local pane and on a remote pane
+	// spawned before the stamp existed.
+	RemoteSession string
+	Profile       string // @grove_profile
+}
+
+// cockpitChatPane is the positional half of the guard: nil when the pane
+// sits where a cockpit's chat panes sit — a registered cockpit's cockpit
+// window, past the dashboard slot — whatever it is attached to.
+func cockpitChatPane(p PaneFacts, isCockpit CockpitCheck) error {
+	if strings.HasPrefix(p.Session, chatSessionMarker) && !isCockpit.cockpit(p.Session) {
+		return fmt.Errorf("%s is already hidden — bring it back with `gv chat show %s`", p.Session, p.Session)
+	}
+	if p.Session != "grove" && !strings.HasPrefix(p.Session, "grove-") {
+		return fmt.Errorf("pane is in session %q, not a grove cockpit — only a cockpit's chat panes can be hidden (`gv chat ls` lists them)", p.Session)
+	}
+	if !isCockpit.cockpit(p.Session) {
+		return fmt.Errorf("session %q is not a registered workspace's cockpit — only a cockpit's chat panes can be hidden (`gv workspaces` lists the workspaces)", p.Session)
+	}
+	if p.Window != cockpitWindow {
+		return fmt.Errorf("pane is in window %q, not the cockpit window — worker windows are never hidden; park the workspace with `gv park` to free its memory", p.Window)
+	}
+	if p.Index == p.First {
+		return fmt.Errorf("pane %d is the window's first pane — the dashboard — refusing to hide it; hide a chat pane instead (`gv chat ls` lists them)", p.Index)
+	}
+	return nil
+}
+
+// hidablePane is the pure guard for HideChatPane: nil when the pane is a
+// cockpit chat pane that may be hidden, else a refusal that says what to do
+// instead. Order matters — the most specific reading of the pane answers
+// first, so a hidden chat hears "already hidden" and not "not a cockpit".
+// A nil CockpitCheck treats every grove-named session as a cockpit
+// (CockpitCheck's rule), which leaves the window and first-pane rules to do
+// the protecting.
+//
+// A REMOTE pane (grove-404) is hidable when it wears the stamp saying which
+// host session it shows. One spawned before the stamp existed is refused:
+// the session is never guessed from the pane's text.
+func hidablePane(p PaneFacts, isCockpit CockpitCheck) error {
+	if err := cockpitChatPane(p, isCockpit); err != nil {
+		return err
+	}
+	if p.Remote != "" && p.RemoteSession == "" {
+		return fmt.Errorf("this remote pane was attached before grove recorded which session on %s it shows, and that is never guessed from the pane — close it and re-attach with ssh -t <%s's ssh target> tmux attach -t '=<session>' (`gv chat ls`, run on %s, names the session), or spawn a fresh one with @", p.Remote, p.Remote, p.Remote)
+	}
+	return nil
+}
+
+// paneFactsFormat is one display-message for the whole guard. The count of
+// fields is fixed and no @option is last: run() trims its output, so a
+// trailing empty field would shorten the line.
+const paneFactsFormat = "#{session_name}\t#{window_name}\t#{@grove_remote}\t#{pane_index}\t#{@grove_remote_session}\t#{@grove_profile}\t#{window_id}"
+
+// parsePaneFacts is the pure half of paneFacts; First is filled by the caller.
+func parsePaneFacts(out string) (PaneFacts, error) {
+	f := strings.Split(strings.TrimSpace(out), "\t")
+	if len(f) != 7 || f[0] == "" || f[6] == "" {
+		return PaneFacts{}, fmt.Errorf("unexpected pane info %q", out)
+	}
+	index, err := strconv.Atoi(f[3])
+	if err != nil {
+		return PaneFacts{}, fmt.Errorf("parse pane index %q: %w", f[3], err)
+	}
+	return PaneFacts{Session: f[0], Window: f[1], Remote: f[2], Index: index, RemoteSession: f[4], Profile: f[5], WindowID: f[6]}, nil
+}
+
+// paneFacts reads a pane's facts. Fails closed like PaneClosable: a window
+// whose panes cannot be listed has no known dashboard slot.
+func paneFacts(pane string) (PaneFacts, error) {
+	if strings.TrimSpace(pane) == "" {
+		return PaneFacts{}, fmt.Errorf("no pane id (are you inside a tmux pane?)")
+	}
+	info, err := run("display-message", "-p", "-t", pane, "-F", paneFactsFormat)
+	if err != nil {
+		return PaneFacts{}, fmt.Errorf("no such pane %s: %w", pane, err)
+	}
+	// display-message answers a pane that does not exist with an empty line
+	// and exit 0 — not an error.
+	if strings.TrimSpace(info) == "" {
+		return PaneFacts{}, fmt.Errorf("no such pane %s — `gv chat ls` lists the chats", pane)
+	}
+	p, err := parsePaneFacts(info)
+	if err != nil {
+		return PaneFacts{}, err
+	}
+	out, err := run("list-panes", "-t", p.WindowID, "-F", "#{pane_index}")
+	if err != nil {
+		return PaneFacts{}, err
+	}
+	first, ok := lowestPaneIndex(out)
+	if !ok {
+		return PaneFacts{}, fmt.Errorf("cannot list panes of %s's window — refusing to move it", pane)
+	}
+	p.First = first
+	return p, nil
+}
+
+// PaneHidable reports whether pane may be hidden, and the facts it decided
+// from. Read-only — callers run it BEFORE any side effect so a refusal
+// leaves nothing half-done.
+func PaneHidable(pane string, isCockpit CockpitCheck) (PaneFacts, error) {
+	p, err := paneFacts(pane)
+	if err != nil {
+		return PaneFacts{}, err
+	}
+	return p, hidablePane(p, isCockpit)
+}
+
+// retileCockpit re-tiles ONE window to its session's chosen layout
+// (@grove_layout, or the package default when unset) — SpawnPane's re-tile,
+// aimed at the window's immutable id instead of the session's active window:
+// a hide or show run from a phone or a worker window must never re-tile
+// whatever window the operator happens to be looking at.
+func retileCockpit(session, windowID string) error {
+	layout := CockpitLayout(session)
+	if layout != "focus" {
+		_, err := run("select-layout", "-t", windowID, tmuxLayout(layout))
+		return err
+	}
+	// grove-486: focus has exactly one re-tile, RetileFocus (main-vertical
+	// at the dash's share, the rail re-held at its height), aimed at the
+	// cockpit window by NAME — never the session's active window. It also
+	// picks a pane to focus; a hide or show keeps whatever was active.
+	active, _ := run("display-message", "-p", "-t", windowID, "-F", "#{pane_id}")
+	if err := RetileFocus(session); err != nil {
+		return err
+	}
+	if active = strings.TrimSpace(active); active != "" {
+		_, err := run("select-pane", "-t", active)
+		return err
+	}
+	return nil
+}
+
+// HideChatPane moves a cockpit chat pane off-screen into its own detached
+// chat session and re-tiles the cockpit window. Returns the session the
+// pane now lives in.
+//
+// announce, when non-nil, runs once the session name is RESERVED and before
+// the pane moves — the caller's activity event, which therefore carries the
+// definitive name and lands before anything could disturb the calling
+// process (hide is run from inside the very pane it hides). An announce
+// error aborts the hide with nothing moved.
+func HideChatPane(pane, label string, isCockpit CockpitCheck, announce func(session string) error) (string, error) {
+	if label == "" {
+		return "", fmt.Errorf("no workspace label — chats belong to a registered workspace")
+	}
+	facts, err := PaneHidable(pane, isCockpit)
+	if err != nil {
+		return "", err
+	}
+	if facts.Remote != "" {
+		// Moving an ssh attachment into a chat session would list it as a
+		// local chat. A remote pane is hidden by closing it (HideRemotePane).
+		return "", fmt.Errorf("pane %d is an ssh attachment to %s, not a local chat — it is hidden by closing the attachment, not by moving it", facts.Index, facts.Remote)
+	}
+	// grove-525: in focus the pane being hidden is (normally) the one in the
+	// slot, so its size now is the slot's — the new hidden window is pinned
+	// to it right after break-pane, and the re-tile's sync corrects it if a
+	// chat is still on screen to measure.
+	slot, pin := Slot{}, CockpitLayout(facts.Session) == "focus"
+	if pin {
+		slot, pin = paneSlot(pane)
+	}
+	// grove-526: the chat hides into its own home session, stamped on the
+	// pane the first time it is hidden — so it keeps one name for life.
+	var home string
+	var sessions, homes []string
+	if panes, err := sizePanes(); err == nil {
+		sessions, homes = sessionsAndHomes(panes)
+		for _, p := range panes {
+			if p.Pane == pane {
+				home = p.Home
+			}
+		}
+	} else {
+		sessions = SessionNames()
+	}
+	session := PickHome(home, label, "", sessions, homes)
+	placeholder, err := run("new-session", "-d", "-s", session, "-n", hidePlaceholder, "-P", "-F", "#{window_id}")
+	if err != nil {
+		return "", err
+	}
+	placeholder = strings.TrimSpace(placeholder)
+	// From here a failure must not strand an empty chat session: it would be
+	// reported as a live chat by every reader of the naming scheme.
+	abort := func(err error) (string, error) {
+		_ = KillSession(session)
+		return "", err
+	}
+	if announce != nil {
+		if err := announce(session); err != nil {
+			return abort(err)
+		}
+	}
+	if _, err := run("break-pane", "-d", "-s", pane, "-t", ExactActive(session), "-n", chatWindow); err != nil {
+		return abort(err)
+	}
+	// The pane is in the chat session now; nothing below may kill the session.
+	if err := KillWindowID(placeholder); err != nil {
+		return session, err
+	}
+	if home != session {
+		if _, err := run("set-option", "-p", "-t", pane, ChatHomeOption, session); err != nil {
+			return session, err
+		}
+	}
+	out, err := run("display-message", "-p", "-t", pane, "-F", "#{window_id}\t#{window_width}\t#{window_height}\t#{pane_width}\t#{pane_height}")
+	if err != nil {
+		return session, err
+	}
+	f := strings.Split(strings.TrimSpace(out), "\t")
+	window := f[0]
+	if err := DisableAutoRename(window); err != nil {
+		return session, err
+	}
+	if pin {
+		w := hiddenWindow{id: window, panes: 1}
+		if len(f) == 5 {
+			w.w, _ = strconv.Atoi(f[1])
+			w.h, _ = strconv.Atoi(f[2])
+			w.pw, _ = strconv.Atoi(f[3])
+			w.ph, _ = strconv.Atoi(f[4])
+		}
+		if err := runPlan(pinWindowSize(w, slot, facts.Session)); err != nil {
+			return session, err
+		}
+	}
+	return session, retileCockpit(facts.Session, facts.WindowID)
+}
+
+// ChatFacts is everything the show guard decides from.
+type ChatFacts struct {
+	Session       string // the chat session named on the command line
+	Exists        bool   // it is a live tmux session
+	Panes         []string
+	Remote        string // @grove_remote of its pane, "" for a local chat
+	Home          string // @grove_chat_home of its first pane, "" when unstamped (grove-526)
+	Cockpit       string // the workspace's cockpit session
+	CockpitWindow string // that session's cockpit window "@N", "" when not running
+}
+
+// showableChat is the pure guard for ShowChatPane. A nil CockpitCheck reads
+// every grove-named session as a cockpit, so an uninjected caller can show
+// nothing — the protective direction, as in ParseChatSessions.
+func showableChat(c ChatFacts, isCockpit CockpitCheck) error {
+	if !strings.HasPrefix(c.Session, chatSessionMarker) || isCockpit.cockpit(c.Session) {
+		return fmt.Errorf("%s is not a hidden chat (a grove-chat-<label>-<n> session) — a chat already in the cockpit is already shown; `gv chat ls` lists them", c.Session)
+	}
+	if !c.Exists {
+		return fmt.Errorf("no live chat session %s — `gv chat ls` lists them", c.Session)
+	}
+	if n := len(c.Panes); n != 1 {
+		return fmt.Errorf("%s holds %d panes, not one — refusing to guess which is the chat; close the extra panes (or attach with tmux attach -t '=%s' and sort it out), then show it again", c.Session, n, c.Session)
+	}
+	if c.Remote != "" {
+		return fmt.Errorf("%s holds an ssh attachment to %s, not a local chat — refusing to join it; a hidden remote chat is shown with `gv chat show @%s/<session>`", c.Session, c.Remote, c.Remote)
+	}
+	if c.CockpitWindow == "" {
+		return fmt.Errorf("the cockpit %s is not running, so there is no window to show %s in — open the cockpit with `gv`, or attach with tmux attach -t '=%s'", c.Cockpit, c.Session, c.Session)
+	}
+	return nil
+}
+
+// chatFacts reads the show guard's facts. Every miss is a zero value the
+// guard turns into its own refusal, never an error here.
+func chatFacts(session, cockpitSession string) ChatFacts {
+	c := ChatFacts{Session: session, Cockpit: cockpitSession}
+	if session == "" || !SessionExists(session) {
+		return c
+	}
+	c.Exists = true
+	// -s: every pane of the SESSION, across windows — an operator who opened
+	// a second window in the chat split it just as surely.
+	if out, err := run("list-panes", "-s", "-t", Exact(session), "-F", "#{pane_id}\t#{@grove_remote}\t#{@grove_chat_home}"); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			f := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+			if f[0] == "" {
+				continue
+			}
+			if len(c.Panes) == 0 && len(f) == 3 {
+				c.Home = strings.TrimSpace(f[2])
+			}
+			c.Panes = append(c.Panes, strings.TrimSpace(f[0]))
+			if len(f) >= 2 && c.Remote == "" {
+				c.Remote = strings.TrimSpace(f[1])
+			}
+		}
+	}
+	if cockpitSession != "" && SessionExists(cockpitSession) {
+		c.CockpitWindow, _ = WindowIDExact(cockpitSession, cockpitWindow)
+	}
+	return c
+}
+
+// ChatShowable reports whether a chat session may be shown, and the facts
+// it decided from. Read-only, for the same reason as PaneHidable.
+func ChatShowable(session, cockpitSession string, isCockpit CockpitCheck) (ChatFacts, error) {
+	c := chatFacts(session, cockpitSession)
+	return c, showableChat(c, isCockpit)
+}
+
+// lastPaneID picks the highest-index pane out of list-panes "#{pane_id}
+// #{pane_index}" output — where a shown chat joins, so it lands after every
+// pane already there and never ahead of the dashboard.
+func lastPaneID(out string) (string, bool) {
+	best, bestIdx := "", -1
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		idx, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		if idx > bestIdx {
+			best, bestIdx = fields[0], idx
+		}
+	}
+	return best, bestIdx != -1
+}
+
+// ShowChatPane joins a detached chat's single pane into its workspace's
+// cockpit window and re-tiles it. The emptied chat session disappears by
+// itself. Returns the pane's %id, which is the one it had while hidden.
+//
+// announce runs after every check and before the pane moves (see
+// HideChatPane); an error from it aborts with nothing moved.
+func ShowChatPane(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error) (string, error) {
+	return showChatPane(session, cockpitSession, isCockpit, announce, true)
+}
+
+// ShowChatPaneUnfocused is ShowChatPane for a caller that must keep the
+// keyboard (grove-403: the cockpit's `h` on a hidden row): the pane joins
+// with -d, so whichever pane was active in the cockpit window stays active.
+func ShowChatPaneUnfocused(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error) (string, error) {
+	return showChatPane(session, cockpitSession, isCockpit, announce, false)
+}
+
+func showChatPane(session, cockpitSession string, isCockpit CockpitCheck, announce func(pane string) error, focus bool) (string, error) {
+	facts, err := ChatShowable(session, cockpitSession, isCockpit)
+	if err != nil {
+		return "", err
+	}
+	pane := facts.Panes[0]
+	out, err := run("list-panes", "-t", facts.CockpitWindow, "-F", "#{pane_id} #{pane_index}")
+	if err != nil {
+		return "", err
+	}
+	last, ok := lastPaneID(out)
+	if !ok {
+		return "", fmt.Errorf("no panes in %s's cockpit window", cockpitSession)
+	}
+	if announce != nil {
+		if err := announce(pane); err != nil {
+			return "", err
+		}
+	}
+	// grove-526: a chat hidden before homes existed takes the session it is
+	// leaving as its home, so its next hide lands back under the same name.
+	if facts.Home == "" {
+		if _, err := run("set-option", "-p", "-t", pane, ChatHomeOption, session); err != nil {
+			return "", err
+		}
+	}
+	join := []string{"join-pane", "-h"}
+	if !focus {
+		join = append(join, "-d")
+	}
+	if _, err := run(append(join, "-s", pane, "-t", last)...); err != nil {
+		// A crowded cockpit's last pane can be too narrow to split. -f asks
+		// for a full-height column of the WINDOW instead; the re-tile below
+		// evens the widths out either way.
+		if _, ferr := run(append(join, "-f", "-s", pane, "-t", last)...); ferr != nil {
+			return "", err
+		}
+	}
+	return pane, retileCockpit(cockpitSession, facts.CockpitWindow)
+}
+
+// FocusChatPane makes a cockpit chat pane the active pane of its window
+// (grove-403: `enter` on a CHATS row). Guarded by cockpitChatPane — where a
+// cockpit's chat panes sit, local or remote, stamped or not — so it can never
+// move the keyboard into a worker window or a foreign session.
+func FocusChatPane(pane string, isCockpit CockpitCheck) error {
+	p, err := paneFacts(pane)
+	if err != nil {
+		return err
+	}
+	if err := cockpitChatPane(p, isCockpit); err != nil {
+		return err
+	}
+	_, err = run("select-pane", "-t", pane)
+	return err
+}
+
+// GlobalOptions reads the named global tmux options as the sourced config
+// sets them, for `gv doctor`'s tmux-config rows (grove-169). Read-only:
+// one exec, `start-server ; show-options -g ; show-options -gw` — tmux 3.4
+// refuses more than one option name per show-options, and without the
+// start-server a serverless machine answers "error connecting" instead of
+// sourcing the config. On a machine with no server the started one exits
+// as soon as the query is served (no session keeps it alive; exit-empty is
+// the default). Both tables are listed because the four options doctor
+// cares about are split across them (base-index / renumber-windows are
+// session options, pane-base-index / allow-rename are window options).
+// Missing names are absent from the result; a failed exec yields nil.
+func GlobalOptions(names ...string) map[string]string {
+	out, err := run("start-server", ";", "show-options", "-g", ";", "show-options", "-gw")
+	if err != nil {
+		return nil
+	}
+	return parseGlobalOptions(out, names...)
+}
+
+// parseGlobalOptions is split from the exec so it can be tested against
+// canned show-options output. Each line is `name value`; the value keeps
+// everything after the first space, with one layer of surrounding
+// double quotes removed (tmux quotes values that contain spaces).
+func parseGlobalOptions(out string, names ...string) map[string]string {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	opts := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		name, value, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if name == "" || !want[name] {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+			value = value[1 : len(value)-1]
+		}
+		if _, seen := opts[name]; !seen {
+			opts[name] = value
+		}
+	}
+	return opts
 }

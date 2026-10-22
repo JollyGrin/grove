@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
@@ -85,6 +86,7 @@ func Core(env Env) []Connection {
 		conns = append(conns, providerConnections(env)...)
 		conns = append(conns, workerConnections(env)...)
 		conns = append(conns, agentsMdConnections(env)...)
+		conns = append(conns, memoryConnections(env)...)
 		conns = append(conns, remoteHostConnections(env)...)
 
 		conns = append(conns, Connection{
@@ -97,6 +99,18 @@ func Core(env Env) []Connection {
 			Check:       checkSubLane,
 		})
 	}
+
+	// grove-169: non-default tmux options, one row each, only when set —
+	// a default-config machine prints nothing here.
+	conns = append(conns, tmuxOptionConnections(env)...)
+
+	// grove-435: the effort dial is only as real as the environment lets
+	// it be — CLAUDE_CODE_EFFORT_LEVEL and a settings maxEffortLevel both
+	// override `--effort` without a word from claude.
+	conns = append(conns, effortConnection())
+
+	// claude-accounts: account rows, only when something is wrong.
+	conns = append(conns, accountConnections(env, time.Now())...)
 
 	// The orchestrator brain's seed-drift row (grove-190): the cockpit
 	// only ever seeds an ABSENT brain, so without this row a seed

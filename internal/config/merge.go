@@ -119,3 +119,23 @@ func StateDirAt(root string) string {
 	_ = os.MkdirAll(d, 0o755)
 	return d
 }
+
+// DoneGateAt is the hook receiver's tolerant read of repos.<repo>.done_gate
+// for the workspace rooted at root (grove-441): the same global+workspace
+// layering as LoadAt (repos is a wholesale key, so a workspace's repos
+// block replaces the global one), but no path validation and no error —
+// a broken repo entry or an unparseable file resolves to the default,
+// warn, exactly as NotifySettingsFrom never disables push. root == ""
+// reads the global file alone.
+func DoneGateAt(root, repo string) string {
+	global, _ := readLayer(filepath.Join(Dir(), "config.yaml"))
+	merged := global
+	if root != "" {
+		ws, _ := readLayer(filepath.Join(root, ".grove", "config.yaml"))
+		merged = deepMerge(global, ws, wholesaleKeys)
+	}
+	repos, _ := merged["repos"].(map[string]any)
+	r, _ := repos[repo].(map[string]any)
+	v, _ := r["done_gate"].(string)
+	return DoneGateMode(v)
+}

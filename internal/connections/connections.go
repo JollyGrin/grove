@@ -20,6 +20,8 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/state"
+	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
 )
 
@@ -91,6 +93,7 @@ type Env struct {
 	Getenv            func(key string) string
 	Stat              func(name string) (os.FileInfo, error)
 	ReadFile          func(name string) ([]byte, error)
+	ReadDir           func(name string) ([]os.DirEntry, error) // nil = no listing (the memory row reads "no notes")
 	Run               func(timeout time.Duration, name string, args ...string) error
 	Output            func(timeout time.Duration, name string, args ...string) (string, error) // stdout-capturing Run (remote-host probes)
 	HooksInstalled    func(paths []string) map[string]map[string]bool
@@ -108,6 +111,19 @@ type Env struct {
 	// testable without pinning the real seed's bytes.
 	OrchestratorDir  string
 	OrchestratorSeed string
+
+	// TmuxGlobalOptions reads the named global tmux options as the
+	// sourced config sets them (grove-169); nil drops the tmux-config
+	// rows (fake envs, and the real one when tmux is not installed —
+	// the binary row already covers that).
+	TmuxGlobalOptions func(names ...string) map[string]string
+
+	// AccountsStateDir is the grove state dir holding accounts/ (the
+	// claude-accounts rows); "" drops those rows (fake envs).
+	AccountsStateDir string
+	// AccountTasks folds every task an account pin could live in (the
+	// pinned-missing row); nil drops that row.
+	AccountTasks func() []*state.Task
 }
 
 // NewEnv builds the real-machine Env.
@@ -124,6 +140,7 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		Getenv:            os.Getenv,
 		Stat:              os.Stat,
 		ReadFile:          os.ReadFile,
+		ReadDir:           os.ReadDir,
 		Run:               run,
 		Output:            output,
 		HooksInstalled:    hooks.Installed,
@@ -133,6 +150,8 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		GOOS:              runtime.GOOS,
 		Home:              home,
 		OrchestratorSeed:  orchestrator.ClaudeMd,
+		TmuxGlobalOptions: tmux.GlobalOptions,
+		AccountsStateDir:  config.StateDir(),
 	}
 }
 

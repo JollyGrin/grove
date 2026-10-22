@@ -24,6 +24,7 @@ import (
 	"github.com/JollyGrin/grove/internal/feature"
 	"github.com/JollyGrin/grove/internal/fleet"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/resource"
 	"github.com/JollyGrin/grove/internal/serve"
@@ -45,6 +46,8 @@ const (
 	modeConfirmLand // the land plan, confirm-gated (grove-378)
 	modeServeReview // grove-381: the run.sh review modal
 	modeServeStop   // grove-381: stop a running serve? (footer confirm)
+	modeChatReply   // grove-403: the inline reply to a hidden chat
+	modeChatClose   // grove-403: close this chat? (footer confirm)
 )
 
 type refreshMsg struct {
@@ -79,6 +82,15 @@ type tickMsg struct{}
 // 'r' refresh, post-action refreshes) produce only a data-applying prsMsg,
 // never a prTickMsg, so they can't multiply this loop.
 type prTickMsg struct{}
+
+// featTickMsg is the feature network-pass beat (grove-428): the gh-backed
+// landed/queued/PR lookups in featuresCmd are expensive (3-4 `gh` calls per
+// open feature) and don't need the 30s PR-poll cadence, so they ride their
+// own, slower timer — one per 10min, re-armed ONLY by its own handler. The
+// 'r' key and the open-feature-set-changed pass (grove-377) still fire
+// featuresCmd ad-hoc, producing only a data-applying featuresMsg, never a
+// featTickMsg, so they can't multiply this loop.
+type featTickMsg struct{}
 type flashMsg string
 
 // remoteMsg is the one-shot answer to an R keypress (grove-178): every
@@ -95,6 +107,12 @@ type remoteMsg struct {
 type prsMsg struct {
 	prs     map[string]*github.PR
 	unknown map[string]bool
+	// grove-507: skipped means the beat was skipped for a nearly-empty
+	// GraphQL quota — no data, the handler keeps the last PRs and marks
+	// them stale. interval/low carry the quota plan back to the model.
+	skipped  bool
+	interval time.Duration
+	low      bool
 }
 type paneTailMsg string
 
@@ -157,7 +175,13 @@ type Model struct {
 	// column instead of the "no PR" dash, since m.prs holding no entry for
 	// it is otherwise ambiguous between the two.
 	prUnknown map[string]bool
-	events    []state.Event
+	// grove-507: the quota plan from the last poll — the next beat's
+	// interval (0 = the 30s default), whether to say "gh quota low", and
+	// whether the shown PRs are stale because the last beat was skipped.
+	prInterval time.Duration
+	prQuotaLow bool
+	prStale    bool
+	events     []state.Event
 
 	mem     resource.Mem // last memory reading (gauge)
 	workers int          // live worker count at that reading
@@ -181,9 +205,12 @@ type Model struct {
 	costs      costsMsg        // costs page data (grove-8)
 	bucketUnit cost.BucketUnit // chart granularity toggle
 	costCache  *cost.Cache     // transcript parse cache, shared across refreshes
-	costsTab   int             // SPEND | ACCOUNT (grove-87); $ always lands on SPEND
+	costsTab   int             // SPEND | ACCOUNT | CLAUDE (grove-87); $ always lands on SPEND
 	account    accountMsg      // ACCOUNT tab snapshot — one-shot on tab open / r, never polled
 	accountSel int             // cursor into account.keys (grove-104 key manager)
+	claude     claudeMsg       // CLAUDE tab snapshot — local usage files, on tab open / r, never polled
+	claudeSel  int             // cursor into claude.rows
+	claudeUse  string          // account the u confirm is armed for ("" = not armed)
 
 	flash string
 
@@ -267,6 +294,19 @@ type Model struct {
 	// featTips is the last PR-cadence pass's branch tip per feature.
 	featTips map[string]string
 
+	// The CHATS box (grove-402). chatRows is the last pass's rows, merged
+	// over the last costly pass (mergeChats); chats the lines the box
+	// renders, chatTitle its counter and chatNameW its CHAT column — all
+	// rebuilt only in assembleChats. chatSel is the cursor.
+	chatRows  []ChatRow
+	chats     []chatLine
+	chatTitle string
+	chatNameW int
+	chatSel   int
+	// chatTarget is the chat an open reply/close modal is bound to
+	// (grove-403) — the row as it was when the key was pressed.
+	chatTarget ChatRow
+
 	// The feature lens (grove-378): lensSlug is the lensed feature ("" =
 	// no lens open — modals return to the list), lensSel the car cursor.
 	// landSlug/landPlan are the land modal's plan, built from refresh data
@@ -313,7 +353,11 @@ func New(cfg *config.Config, stateDir, label string) Model {
 func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error) {
 	m := New(cfg, stateDir, label)
 	m.acquireSupervise()
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	// grove-517: clicks reach the CHATS box. Cell motion is the narrowest
+	// mode bubbletea offers (press/release, motion only while a button is
+	// held — never all-motion); mouseFilter drops all but the left press and
+	// the wheel before Update.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(mouseFilter))
 	out, err := p.Run()
 	if err != nil {
 		return nil, "", err
@@ -328,7 +372,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), tickEvery(time.Second), prTickEvery(30*time.Second))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
 }
 
 // --- commands ---
@@ -340,6 +384,15 @@ func tickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// prBeat is the interval the PR beat re-arms with: the quota plan from the
+// last poll, the 30s default before any poll has reported one.
+func (m Model) prBeat() time.Duration {
+	if m.prInterval > 0 {
+		return m.prInterval
+	}
+	return github.BeatNormal
+}
+
 // prTickEvery arms the single PR-poll beat. It carries no data — the handler
 // fans out to prsCmd — so it re-arms itself (via prTickMsg) without letting
 // ad-hoc prsMsg deliveries add another loop (grove-118, same class as
@@ -347,6 +400,19 @@ func tickEvery(d time.Duration) tea.Cmd {
 func prTickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return prTickMsg{} })
 }
+
+// featTickEvery arms the feature network-pass beat, decoupled from the 30s
+// PR-poll beat (grove-428): the gh-backed feature lookups are too expensive
+// to ride that cadence, so they get their own timer, re-armed only here.
+func featTickEvery(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return featTickMsg{} })
+}
+
+// featTickInterval is the feature network-pass cadence — a var, not a
+// literal, so a re-arm test can shrink it instead of blocking real minutes
+// on tea.Tick's timer (which starts counting the instant featTickEvery is
+// called, not when its Cmd is invoked).
+var featTickInterval = 10 * time.Minute
 
 // relayCmd delivers an inline reply off the update loop. PasteText settles
 // before its Enter and then verifies the submit landed (grove-144), which can
@@ -450,6 +516,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 		// loop or goroutine (grove-3). The read is a handful of sysctls; the
 		// sample lands in resource.jsonl (its own capped file, never folded by
 		// state.Load), giving the trajectory into a jetsam crash.
+		RailTick(session)
 		mem, _ := resource.Read()
 		workers := resource.LiveWorkers()
 		_ = resource.Log(stateDir, resource.Sample{
@@ -671,10 +738,26 @@ func remoteFlash(results []fleet.Result) string {
 	return fmt.Sprintf("remote fleet: %d row(s) from %d host(s)", rows, hosts)
 }
 
+// prsCmd is the beat's poll: it reads the GraphQL quota (cached), skips
+// outright when nearly empty, and otherwise goes through the shared PR
+// cache (grove-507). prsNowCmd is the operator's explicit refresh: it
+// bypasses the cache TTL and the quota skip.
 func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
+	return prsPoll(cfg, stateDir, tasks, false)
+}
+
+func prsNowCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
+	return prsPoll(cfg, stateDir, tasks, true)
+}
+
+func prsPoll(cfg *config.Config, stateDir string, tasks []*state.Task, force bool) tea.Cmd {
 	return func() tea.Msg {
 		if cfg == nil {
 			return prsMsg{}
+		}
+		interval, skip, low := github.BeatPlan(github.ReadQuota())
+		if skip && !force {
+			return prsMsg{skipped: true, interval: interval, low: low}
 		}
 		if tasks == nil {
 			// Read-only fallback (grove-126): the derived tasks.json is at
@@ -688,12 +771,12 @@ func prsCmd(cfg *config.Config, stateDir string, tasks []*state.Task) tea.Cmd {
 				lookups[t.Ticket] = [2]string{r.Path, t.Branch}
 			}
 		}
-		prs, unknownErrs := github.FetchAll(lookups)
+		prs, unknownErrs := github.CachedFetchAll(stateDir, lookups, github.PRCacheTTL, force, github.FetchAll)
 		unknown := make(map[string]bool, len(unknownErrs))
 		for k := range unknownErrs {
 			unknown[k] = true
 		}
-		return prsMsg{prs: prs, unknown: unknown}
+		return prsMsg{prs: prs, unknown: unknown, interval: interval, low: low}
 	}
 }
 
@@ -728,6 +811,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.mode == modeChatReply {
+			m.sizeChatInput()
+		}
 		// grove-53 cause (b): a shrink or a SIGWINCH replay on tmux re-attach
 		// leaves stale cells from the old geometry. Force one full repaint per
 		// resize so we always start from a clean slate — no per-frame cost.
@@ -741,7 +827,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
-		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), tickEvery(time.Second))
+		// grove-402: the CHATS box rides this beat — the cheap pass (one
+		// list-panes), the costly one only while the box is focused.
+		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), chatsCmd(m.label, m.focus == focusChats), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -867,6 +955,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case claudeMsg:
+		return m.applyClaude(msg), nil
+
+	case claudeUsedMsg:
+		if msg.err != nil {
+			m.flash = msg.err.Error()
+			return m, nil
+		}
+		m.flash = "✓ active account: " + msg.name + " (new launches and shell `claude`; live sessions keep theirs)"
+		return m.claudeRead()
+
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in
 		// ~/.config/grove/.env — refetch so the unset row becomes data.
@@ -890,9 +989,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The single PR-poll beat (grove-118, grove-24 pattern): kick a poll
 		// AND re-arm ONLY this timer. Ad-hoc prsMsg deliveries (below) never
 		// re-arm, so 'r' and other ad-hoc refreshes can't multiply the loop.
-		// grove-377: the feature status pass (queued issues, feature PR)
-		// rides this beat — nil, and free, with no open feature.
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), featuresCmd(m.cfg, m.stateDir, m.features), prTickEvery(30*time.Second))
+		// grove-428: the feature network pass moved off this beat onto its
+		// own, slower featTickMsg — it was riding this 30s cadence and
+		// burning the shared gh rate-limit budget for data that barely
+		// changes tick to tick.
+		// grove-402: the CHATS box's costly pass (ps, transcripts, the
+		// waiting capture) still rides this beat.
+		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), prTickEvery(m.prBeat()))
+
+	case featTickMsg:
+		// grove-428: the feature panel's gh-backed pass (landed/queued/PR
+		// lookups) on its own 10min beat, decoupled from the 30s PR poll.
+		// Ad-hoc featuresCmd calls (the 'r' key, the open-feature-set-changed
+		// pass in refreshMsg) never re-arm this timer, so they can't
+		// multiply the loop — same discipline as prTickMsg/tickMsg.
+		return m, tea.Batch(featuresCmd(m.cfg, m.stateDir, m.features), featTickEvery(featTickInterval))
 
 	case prsMsg:
 		// Data only — the poll loop lives on prTickMsg now (grove-118). This
@@ -902,6 +1013,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// fresh PR set against the last refresh's fold, PRKnown from the
 		// unknown map so a gh outage emits nothing. No pane read here (a
 		// zero LiveInfo is out of liveness scope by construction).
+		if msg.interval > 0 {
+			m.prInterval, m.prQuotaLow = msg.interval, msg.low
+		}
+		if msg.skipped {
+			// Quota nearly spent (grove-507): no data this beat. Keep the
+			// last PRs on screen, marked stale; never blank or error.
+			m.prStale = true
+			return m, nil
+		}
+		m.prStale = false
 		push := m.superviseObserve(m.localTasks, nil, msg.prs, msg.unknown, time.Now())
 		// J1 merge sparkle: a PR that flipped to MERGED between polls earns a
 		// short shimmer + footer flash. Detected by diffing old vs new — no new
@@ -928,6 +1049,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.assembleFeatures() // merged cars feed the lens and the land plan
 		}
 		return m, push
+
+	case chatsMsg:
+		// Data only (grove-402): never re-arms anything.
+		// The cursor follows its chat, not its index (grove-528).
+		sel := ""
+		if m.chatSel >= 0 && m.chatSel < len(m.chatRows) {
+			sel = ChatName(m.chatRows[m.chatSel])
+		}
+		m.chatRows = mergeChats(m.chatRows, msg.rows, msg.deep)
+		for i, r := range m.chatRows {
+			if sel != "" && ChatName(r) == sel {
+				m.chatSel = i
+				break
+			}
+		}
+		m.assembleChats()
+		m.holdChatTarget()
+		return m, nil
+
+	case chatActedMsg:
+		// grove-403: one key press, one answer, ONE pass of the box — the
+		// row flips now instead of on the next beat. Re-arms nothing.
+		m.flash = msg.flash
+		return m, chatsCmd(m.label, true)
 
 	case featuresMsg:
 		// Data only, like prsMsg: never re-arms anything.
@@ -1024,6 +1169,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case tea.MouseMsg:
+		return m.handleChatsClick(msg)
 	}
 	return m, nil
 }
@@ -1062,6 +1209,12 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeServeStop {
 		return m.handleServeStopKey(k)
 	}
+	if m.mode == modeChatReply {
+		return m.handleChatReplyKey(k)
+	}
+	if m.mode == modeChatClose {
+		return m.handleChatCloseKey(k)
+	}
 
 	// grove-199: while `@` is armed the next key is a REMOTE spawn key, so
 	// it intercepts everything — including the remote-row keys below and
@@ -1086,6 +1239,15 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "n", "a", "o", "p", "t", "v", "d", "m":
 			m.flash = "FEATURES focused — tab to AGENTS for task keys"
 			return m, nil
+		}
+	}
+
+	// grove-403: with CHATS focused h / enter / a / x act on the selected
+	// chat; task keys are refused rather than landing on the AGENTS cursor
+	// out of sight (grove-402). Everything else keeps its global meaning.
+	if m.focus == focusChats && len(m.chats) > 0 {
+		if nm, cmd, handled := m.handleChatsKey(k); handled {
+			return nm, cmd
 		}
 	}
 
@@ -1159,7 +1321,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "*": // cycle the effects knob (grove-22) — runtime only, not persisted
 		m.fx = cycleFx(m.fx)
 		m.flash = "effects: " + fxLabel(m.fx)
-	case "L": // cycle cockpit pane orientation (grove-52) — persisted in the
+	case "L": // toggle cockpit pane layout horizontal ↔ focus (grove-485) — persisted in the
 		// session option @grove_layout, which is the source of truth (read
 		// live: a Model copy would go stale across dash reconnects).
 		session := m.sessionName()
@@ -1169,8 +1331,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		next := nextLayout(cur)
 		_ = tmux.SetCockpitLayout(session, next)
-		_ = tmux.SelectLayout(session, next)
 		m.flash = "layout: " + next
+		return m, func() tea.Msg {
+			// off the tea loop: focus moves panes and rebuilds the rail (grove-487)
+			if err := ApplyLayout(session, next); err != nil {
+				return flashMsg("layout: " + next + " — " + err.Error())
+			}
+			return nil
+		}
 	case "O", "0": // "0" alias: the footer's O glyph reads as zero in many fonts
 		cfg := m.cfg
 		m.flash = "spawning orchestrator chat…"
@@ -1209,10 +1377,8 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.feats) > 0 {
 			m.flash = "s serves a feature — tab to FEATURES and pick one"
 		}
-	case "tab": // FEATURES ⇄ AGENTS (grove-377); inert with no open feature
-		if len(m.feats) > 0 {
-			m.focus = 1 - m.focus
-		}
+	case "tab": // FEATURES ⇄ AGENTS ⇄ CHATS (grove-377, grove-402); inert panels are skipped
+		m.focus = nextFocus(m.focus, len(m.feats) > 0, m.chatsVisible())
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -1291,13 +1457,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Local tasks only: PRs polled off a merged board would land a
 		// tombstone's handoff PR in m.prs and inflate the review count.
 		m.flash = "refreshing PRs…"
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
+		return m, tea.Batch(prsNowCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
 	case "?": // the cheat-sheet overlay (grove-60) — esc/? closes
 		m.mode = modeHelp
 		m.flash = ""
 	case "$", "c":
 		m.mode = modeCosts
 		m.costsTab = costsTabSpend // $ always lands on SPEND (grove-87)
+		m.claudeUse = ""
 		m.flash = ""
 		// snapshot=true: an open records one ledger row per active ticket
 		// (when recording is on) — the cheap periodic point between grabs
@@ -1652,6 +1819,15 @@ var CloseWorkspace = func(stateDir, label string) error {
 // simply omits the line.
 var LiveChats = func(label string) []string { return nil }
 
+// ApplyLayout is injected by cmd/gv: the layout switch plus the focus
+// minimize / restore (grove-487). The default is the bare tmux switch.
+var ApplyLayout = tmux.ApplyLayout
+
+// RailTick is injected by cmd/gv: the focus-mode chat rail's writer
+// (grove-486). It is called from the existing refresh command — no
+// goroutine or timer of its own — and throttles itself.
+var RailTick = func(session string) {}
+
 // SpawnOrchestrator is injected by cmd/gv (the cockpit plumbing lives
 // there); wired at startup to avoid an import cycle. Returns a flash line.
 var SpawnOrchestrator = func(cfg *config.Config) (string, error) {
@@ -1694,6 +1870,10 @@ var AttachTask = func(t *state.Task) error {
 func (m *Model) move(delta int) {
 	if m.focus == focusFeatures && len(m.feats) > 0 {
 		m.featSel = (m.featSel + delta + len(m.feats)) % len(m.feats)
+		return
+	}
+	if m.focus == focusChats && len(m.chats) > 0 {
+		m.chatSel = (m.chatSel + delta + len(m.chats)) % len(m.chats)
 		return
 	}
 	rows := len(m.board)
@@ -1794,13 +1974,11 @@ func (m Model) reviewRows() []*state.Task {
 	return append(fresh, marked...)
 }
 
-// doneBlurb extracts the agent's DONE paragraph for the review queue.
+// doneBlurb extracts the agent's DONE paragraph for the review queue —
+// one parser for every surface (hooks.ParseSentinel, grove-441).
 func doneBlurb(t *state.Task) string {
-	if i := strings.Index(t.LastMessage, "STATUS: DONE"); i >= 0 {
-		s := t.LastMessage[i:]
-		if j := strings.IndexAny(s, "—–-"); j >= 0 {
-			return strings.TrimSpace(strings.SplitN(s[j:], "\n", 2)[0])
-		}
+	if kind, text, ok := hooks.ParseSentinel(t.LastMessage); ok && kind == hooks.SentinelDone {
+		return text
 	}
 	return ""
 }

@@ -1,13 +1,13 @@
 ---
 name: claude-code-facts
-description: Use when working on anything that integrates with the Claude Code CLI — hook capture/classification, session resume and gv adopt, transcripts and cost estimation, model profiles / CLAUDE_CONFIG_DIR, or kickoff/relay behavior. Verified facts about how Claude Code actually behaves, so you don't re-derive them.
+description: Use when working on anything that integrates with the Claude Code CLI — hook capture/classification, session resume and gv adopt, transcripts and cost estimation, model profiles / CLAUDE_CONFIG_DIR, or kickoff/relay behavior. Verified facts, so you don't re-derive them.
 ---
 
 # Claude Code integration facts
 
 Everything below was verified live (dates + incident details in
-[LEARNINGS.md](../../../LEARNINGS.md) §"Claude Code behavior"). Trust
-these over intuition; re-verify only if a Claude Code major version
+LEARNINGS.md + `docs/archive/LEARNINGS-*.md` §"Claude Code behavior").
+Trust these over intuition; re-verify only if a Claude Code major version
 changes the behavior.
 
 ## Hooks (the source of truth for worker state)
@@ -36,10 +36,49 @@ changes the behavior.
   env has no reliable nesting marker (`CLAUDE_CODE_CHILD_SESSION=1` also
   shows up at the top level).
 - SessionStart `source` is one of `startup | resume | clear | compact`.
+  **`compact` fires after an auto or manual compaction, and plain-text
+  stdout from a SessionStart hook is added to Claude's context** (hooks
+  reference). A `compact` SessionStart is a restart of the SAME session,
+  not a new one: never fold it as `session_started` (that flips the
+  worker's glyph and inflates its session count) — it is its own event,
+  `state.EvCompaction`, which `gv cost --context` counts (grove-289).
+  Grove's receiver prints a ground-truth re-orientation on
+  that source only — ticket + acceptance criteria from the provider, `git
+  log`/`git status` in the worktree, the PR body via a 5s-bounded `gh pr
+  view` with a git-only fallback — never from the summary (grove-440);
+  `startup`/`resume`/`clear` print nothing. The project-root CLAUDE.md
+  survives compaction on its own: Claude Code re-reads it from disk and
+  re-injects it after `/compact` (memory docs), so a "when compacting,
+  preserve …" line there is the advisory half and the hook is the
+  deterministic half. `claude --autocompact <auto|100k–1M tokens>` caps
+  the window (`--help`, 2.1.292); grove passes a repo's `autocompact:`
+  through on grab/adopt.
+- **A Stop hook can refuse the stop**: print `{"decision":"block","reason":
+  "…"}` on stdout (exit 0) and Claude Code shows `reason` to the model,
+  which continues the turn instead of ending it. The re-entry Stop then
+  carries `stop_hook_active: true` — a blocking hook must pass that
+  through or it loops forever, and must bound itself besides (grove's
+  done gate: never on `stop_hook_active`, at most 2 consecutive blocks
+  per session, counter in `<state>/done-gate/<ticket>`, reset by any
+  non-DONE stop). Exit code 2 + stderr is the other block form; grove
+  uses the JSON so the exit code stays 0 on every path. Stop's stdout is
+  read as a decision; SessionStart's is plain context (the compact
+  re-orientation above) — the other receivers print nothing. The
+  decision/`stop_hook_active` shapes are from the hooks reference and
+  the captured 2.1.283 Stop payload; the first live `done_gate: block`
+  run is where to confirm the model actually continues.
 - **Hook commands pin an absolute binary path** (`os.Executable()` at
   `gv hooks install`). If the hooks point somewhere `gv update` does not
   write, every hook-side fix silently never ships. Check the path in
   `settings.json`.
+- **A command claude runs inherits the pane's tmux env** (grove-405,
+  verified from the Bash tool: `$TMUX` and `$TMUX_PANE` are both set; the
+  `!` prompt prefix spawns the same kind of child). Two consequences: a
+  verb can mean "this pane" with no argument (`!gv chat hide`, or an
+  orchestrator hiding itself), and every tmux call such a command makes
+  targets the REAL server unless it unsets `$TMUX` (tmux-discipline §1).
+  `$TMUX_PANE` is the pane claude was STARTED in — a `%N` id, so it stays
+  right after the pane is moved to another session.
 
 ## Sessions, resume, transcripts
 
@@ -148,9 +187,48 @@ changes the behavior.
   exists.
 - Plugins install at user scope, so skills load from any cwd under that
   profile; worktree placement doesn't matter.
+- **Auto memory is keyed on the git REPO, not the cwd** (grove-437,
+  verified 2026-10-07): every worktree shares
+  `<config dir>/projects/<encoded main checkout>/memory/`, so a worker's
+  notes are repo-wide, not per-worktree. `autoMemoryDirectory` is read
+  from any settings scope but must be absolute or `~/`-rooted (no
+  relative path), so relocating it beside `.grove/` means a committed
+  absolute path or one dir for every repo — grove's doctor row reads the
+  default location instead. The one per-repo private scope,
+  `.claude/settings.local.json`, never reaches a fresh worktree. A
+  headless `claude -p` session DOES carry the auto-memory system prompt
+  (`prompt_snapshot` has "persistent file-based memory"), so headless
+  dry runs are a valid probe of whether a kickoff makes workers write
+  memory.
 - Claude Code clobbers tmux pane titles on boot — see
   [tmux-discipline](../tmux-discipline/SKILL.md) §4 for the durable-tag
   pattern.
+
+## Accounts: subscription tokens (docs-verified 2026-10-07)
+
+Sources and quotes: docs/plans/2026-10-07-claude-accounts-design.md
+§Mechanism, §Sources. Not yet exercised against a second live
+subscription.
+
+- `claude setup-token` = the `/login` browser flow, then prints a
+  **one-year** OAuth token and saves it nowhere. `CLAUDE_CODE_OAUTH_TOKEN`
+  is auth source **5**, the stored `/login` is **7**, so the env token wins.
+  Sources 1–4 (cloud-provider vars, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_API_KEY`, `apiKeyHelper`) beat it, so a model-profile wrap
+  silently overrides a token.
+- A token session **can only make model requests**: no claude.ai
+  connectors, no Remote Control. Locally configured MCP servers still
+  work. `--bare` ignores the token. `/login` inside a token session
+  switches that session to the login.
+- Session history, settings and the login are per `CLAUDE_CONFIG_DIR`,
+  never per account. One config dir plus per-launch tokens = one shared
+  history across subscriptions. The docs' own multi-account recipe
+  (one dir per account) splits history.
+- Statusline stdin carries `rate_limits.{five_hour,seven_day}.
+  {used_percentage,resets_at}` for Pro/Max, only after the session's
+  first API response, and a window disappears once its `resets_at` passes.
+  This is the documented way to read 5h/weekly usage. `/api/oauth/usage`
+  (what `/usage` calls) appears only in the binary: undocumented.
 
 ## TUI chrome (what pane scrapers see)
 
@@ -190,6 +268,25 @@ height, and the box itself).
   an isolated server (tmux-discipline §1; keep `TMUX_TMPDIR` short —
   a long scratchpad path overflows the socket name) when the chrome moves
   again.
+
+## System prompt (what the harness already says, so kickoffs need not)
+
+- **Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy block into
+  the system prompt itself** — verified 2026-10-07 on three real worker
+  transcripts (grove-435/441/442): the `prompt_snapshot` attachment
+  before the first assistant line contains "You are operating
+  autonomously. The user is not watching in real time and cannot answer
+  questions mid-task, so asking 'Want me to…?' or 'Shall I…?' will block
+  the work …" plus the "check your last paragraph" and "Delivering work"
+  paragraphs from the migration guide. So a kickoff template's own
+  "do not ask for confirmation" line is a duplicate (grove-433 dropped it);
+  re-check with `grep -c 'operating autonomously'` on a worker transcript
+  if the Claude Code major version changes, and only then put the
+  paragraph back verbatim.
+- The `prompt_snapshot` attachment is the cheap way to answer "does the
+  harness already say X": `python3 -I` over the transcript, filter
+  `type == "attachment"` and `attachment.type == "prompt_snapshot"`, grep
+  the JSON — no proxy needed (docs/plans/2026-09-28-boot-cost-analytics-investigation.md).
 
 ## Costs
 

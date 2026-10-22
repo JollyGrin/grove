@@ -269,18 +269,24 @@ func (chatBackend) NewChatOptions(label string) ([]chatweb.NewChatOption, error)
 	if err != nil {
 		return nil, err
 	}
-	return chatNewOptions(cfg, ws.Root, claudeSettingsModel(cfg.ClaudeConfigDir)), nil
+	// claude-accounts: the account a non-profile spawn would run on. A
+	// refusal (an expired active token) is not the sheet's to show — the
+	// spawn itself refuses with the fix.
+	acct, _ := resolveChatAccount("", "", cfg)
+	return chatNewOptions(cfg, ws.Root, claudeSettingsModel(cfg.ClaudeConfigDir), acct.Name), nil
 }
 
 // chatNewOptions lists the sheet's rows in render order: the host default,
 // then one row per orchestrator.models tier on the host's own Claude, then
 // one per model profile at its default tier. Each names what it runs via
 // config.RunsModel over the exact bare launch its spawn would build.
-func chatNewOptions(cfg *config.Config, root, settingsModel string) []chatweb.NewChatOption {
+// account (claude-accounts) is the active account the host's own Claude
+// rows run on ("" = the login); profile rows never carry it.
+func chatNewOptions(cfg *config.Config, root, settingsModel, account string) []chatweb.NewChatOption {
 	launch := orchestratorLaunch(cfg, root)
-	opts := []chatweb.NewChatOption{{Runs: config.RunsModel(launch, nil, settingsModel)}}
+	opts := []chatweb.NewChatOption{{Runs: config.RunsModel(launch, nil, settingsModel), Account: account}}
 	for _, m := range cfg.OrchestratorModels() {
-		opts = append(opts, chatweb.NewChatOption{Model: m, Runs: config.RunsModel(config.PinModel(launch, m), nil, settingsModel)})
+		opts = append(opts, chatweb.NewChatOption{Model: m, Runs: config.RunsModel(config.PinModel(launch, m), nil, settingsModel), Account: account})
 	}
 	names, action := cfg.ResolveOrchestratorProfile()
 	if action == config.ProfilePick {

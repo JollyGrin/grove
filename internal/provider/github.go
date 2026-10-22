@@ -184,6 +184,28 @@ func (g *GitHub) ListLabeled(label string) ([]*Task, error) {
 	return tasks, nil
 }
 
+// ListClosedLabeled returns the closed issues carrying label — the
+// feature-status landed lookup (grove-397). One gh call.
+func (g *GitHub) ListClosedLabeled(label string) ([]*Task, error) {
+	out, err := g.run(g.repoPath, "issue", "list", "--state", "closed", "--label", label,
+		"--limit", fmt.Sprint(ghListLimit), "--json", "number,title,closedAt")
+	if err != nil {
+		return nil, err
+	}
+	var issues []ghIssue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parse gh issue list: %w", err)
+	}
+	tasks := make([]*Task, 0, len(issues))
+	for _, is := range issues {
+		is.State = "closed"
+		t := g.task(is)
+		t.Labels = []string{label} // the query filtered on it
+		tasks = append(tasks, t)
+	}
+	return tasks, nil
+}
+
 // ListCapped reports whether the last List filled the fetch limit.
 func (g *GitHub) ListCapped() bool { return g.capped }
 

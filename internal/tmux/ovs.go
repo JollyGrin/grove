@@ -4,10 +4,12 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -176,13 +178,26 @@ func polls(max, poll time.Duration) int {
 //	           evidence is a WARNING, not an error: the submit itself was
 //	           verified, and scraping stays garnish (grove-144's stance),
 //	           so the caller still records the event and surfaces warn.
+//
+// relayNonce makes each PasteText buffer name unique within a process.
+var relayNonce atomic.Uint64
+
+// relayBufferName returns a tmux buffer name unique to this call. tmux
+// buffers are server-global, so a fixed name let two concurrent relays
+// (cockpit answer + orchestrator `gv answer`) interleave load/paste/delete
+// and hand worker A worker B's text (grove-131/452).
+func relayBufferName() string {
+	return fmt.Sprintf("gv-relay-%d-%d", os.Getpid(), relayNonce.Add(1))
+}
+
 func PasteText(target, text string) (warn string, err error) {
 	capture := func() (string, error) { return CapturePane(target) }
 	styled := func() (string, error) { return capturePaneStyled(target) }
 	if err := waitOutCompact(target, capture, func() { time.Sleep(compactPoll) }); err != nil {
 		return "", err
 	}
-	load := exec.Command("tmux", "load-buffer", "-b", "gv-relay", "-")
+	buf := relayBufferName()
+	load := exec.Command("tmux", "load-buffer", "-b", buf, "-")
 	load.Stdin = strings.NewReader(text)
 	if out, err := load.CombinedOutput(); err != nil {
 		return "", &execError{op: "load-buffer", out: string(out), err: err}
@@ -191,7 +206,7 @@ func PasteText(target, text string) (warn string, err error) {
 	// paste mode (Claude's TUI does; a plain shell does not, and tmux then
 	// sends the buffer bare). The doc comment claimed this for a year while
 	// the flag was missing.
-	if _, err := run("paste-buffer", "-d", "-p", "-b", "gv-relay", "-t", target); err != nil {
+	if _, err := run("paste-buffer", "-d", "-p", "-b", buf, "-t", target); err != nil {
 		return "", err
 	}
 	time.Sleep(pasteSettle)

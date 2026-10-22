@@ -42,7 +42,7 @@ func TestFooterLegendOneLineAlways(t *testing.T) {
 func TestFooterLegendDropsByPriority(t *testing.T) {
 	prio := []string{
 		"help", "new chat", "profiled chat", "reply",
-		"layout", "costs", "effects", "park", "quit",
+		"focus/horizontal", "costs", "effects", "park", "quit",
 	}
 	for width := 41; width <= 220; width++ {
 		line := footerLegend(width, true, false)
@@ -69,7 +69,7 @@ func TestFooterLegendWideCanonical(t *testing.T) {
 	}
 	order := []string{
 		"reply", "new chat", "profiled chat",
-		"help", "layout", "costs", "effects", "park", "quit",
+		"help", "focus/horizontal", "costs", "effects", "park", "quit",
 	}
 	last := -1
 	for _, s := range order {
@@ -185,7 +185,7 @@ func TestFooterHeightAlwaysOne(t *testing.T) {
 	}
 	m.width = 220
 	out := m.viewFooter()
-	for _, want := range []string{"2 chat(s) KEEP RUNNING", "grove-chat-unbrewed-1", "gv park --chats"} {
+	for _, want := range []string{"2 chat(s) KEEP RUNNING", "hidden too", "grove-chat-unbrewed-1", "gv park --chats"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("park modal must name the surviving chats (%q):\n%s", want, out)
 		}

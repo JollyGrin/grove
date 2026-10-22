@@ -57,6 +57,8 @@ WCFG="$DUMMY/.grove/config.yaml"
 perl -pi -e 's/^(\s*)base: main$/$1base: main\n$1claude: echo/' "$WCFG"
 grep -q 'claude: echo' "$WCFG" || fail "claude stub not written"
 "$GV" grab task-001 > "$SCRATCH/grab.out"
+# grove-435: task-003 is grabbed later with an --effort pin; its `effort`
+# row field is asserted below, and its absence on the unpinned rows.
 
 say "feature trains (grove-372): open one, adopt one, close one — the operator's side"
 # A bare origin so feature new can push; added after the grab so the grab
@@ -102,7 +104,10 @@ grep -q 'gv feature ls' "$SCRATCH/fgone.out" || fail "closed-feature refusal doe
 grep -qx 'base: feature/trains (feature trains, from label trains)' "$SCRATCH/fgrab.out" || fail "grab did not name its inferred base"
 CAR_WT="$(sed -n 's/^→ worktree //p' "$SCRATCH/fgrab.out")"
 [ "$(git -C "$CAR_WT" rev-parse HEAD)" = "$TRAIN_SHA" ] || fail "car worktree did not fork from origin/feature/trains"
-"$GV" grab task-003 --feature none > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
+# claude-accounts 03: task-003 also rides an explicit --account pin; its
+# `account` row field and event key are asserted below.
+printf 'ZZZSENTINEL\n' | "$GV" account add alt > "$SCRATCH/acct-add.out" || fail "account add failed"
+"$GV" grab task-003 --feature none --effort low --account alt > "$SCRATCH/fnone.out" || fail "--feature none grab failed"
 grep -qx 'base: main (--feature none)' "$SCRATCH/fnone.out" || fail "--feature none did not name the repo base"
 
 say "feature status (grove-375): a landed car, an active car, a queued car"
@@ -115,6 +120,29 @@ printf -- '---\nid: task-005\ntitle: queued car\nstatus: todo\nlabels: [trains]\
 git fetch -q origin
 "$GV" feature ls --no-pr > "$SCRATCH/fls.out" || fail "feature ls failed"
 grep -E '^trains .* 1/3 +↓0 main ' "$SCRATCH/fls.out" > /dev/null || { cat "$SCRATCH/fls.out"; fail "feature ls does not show 1/3 and ↓0 main for trains"; }
+
+say "learnings fixture (grove-439): a scratch auto memory, a LEARNINGS.md, a skill that cites nothing"
+# autoMemoryDirectory in the repo's local settings scope relocates the
+# memory dir the verb reads — the same key and scope order as the doctor
+# row (docs/plugins.md). Two notes in the window (one feedback, one
+# nested-metadata reference), one old note, one malformed note.
+MEM="$SCRATCH/mem"
+mkdir -p "$MEM" "$DUMMY/.claude/skills/dummy-skill"
+printf '{"autoMemoryDirectory":"%s"}\n' "$MEM" > "$DUMMY/.claude/settings.local.json"
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf -- '- [Routing](no-routing.md) — never route unasked\n- [Watch](gv-watch.md) — the detector\n' > "$MEM/MEMORY.md"
+printf -- '---\nname: no-routing\ndescription: never route unasked\ntype: feedback\nmodified: %s\n---\n\nbody\n' "$NOW_ISO" > "$MEM/no-routing.md"
+printf -- '---\nname: gv-watch\ndescription: the detector\nmetadata:\n  type: reference\nmodified: %s\n---\n\nbody\n' "$NOW_ISO" > "$MEM/gv-watch.md"
+printf -- '---\ntype: user\nmodified: 2020-01-01\n---\nold\n' > "$MEM/old.md"
+printf -- '---\nname: broken\ntype: feedback\n\nnever closed\n' > "$MEM/broken.md"
+printf '# dummy skill\n\nnothing cited here\n' > "$DUMMY/.claude/skills/dummy-skill/SKILL.md"
+TODAY="$(date -u +%Y-%m-%d)"
+printf -- '# learnings\n\n## Go / CLI\n\n- **%s · A fresh fact.** Found in task-9; rule for the dummy-skill skill.\n- **2020-01-01 · An old fact.** Nothing named.\n' "$TODAY" > "$DUMMY/LEARNINGS.md"
+LEARN_BEFORE="$(cat "$DUMMY/LEARNINGS.md" "$DUMMY/.claude/skills/dummy-skill/SKILL.md" | cksum)"
+MEM_BEFORE="$(cd "$MEM" && cat MEMORY.md no-routing.md gv-watch.md old.md broken.md | cksum; ls -la "$MEM")"
+# The plugin below reads these only to assert the fixture round-trips;
+# the contract itself needs none of them.
+export MEM DUMMY TODAY
 
 # --- the plugin: knows ONLY the contract + the gv path -------------------
 # Everything below the line is what a gv-<surface> sidecar would do.
@@ -143,6 +171,15 @@ car = rows['task-002']
 assert (car['feature'], car['base']) == ('trains', 'feature/trains'), car
 for off in ('task-001', 'task-003'):
     assert 'feature' not in rows[off] and 'base' not in rows[off], rows[off]
+# grove-435: effort is additive — present only on the pinned worker.
+assert rows['task-003'].get('effort') == 'low', rows['task-003']
+for unpinned in ('task-001', 'task-002'):
+    assert 'effort' not in rows[unpinned], rows[unpinned]
+# claude-accounts 03: account is additive — a name, only on the pinned worker.
+assert rows['task-003'].get('account') == 'alt', rows['task-003']
+for unpinned in ('task-001', 'task-002'):
+    assert 'account' not in rows[unpinned], rows[unpinned]
+assert 'ZZZSENTINEL' not in open('$OUT/ls.json').read(), 'token value in gv ls --json'
 print(data['tasks'][0]['ticket'])
 ")"
 
@@ -176,6 +213,43 @@ assert isinstance(t['est_usd'], (int, float)), t
 assert 'serve' not in alld['gone'], alld  # serve rides on open rows only
 "
 
+# 2c. READ: gv cost --context --all --json (grove-289) — contract envelope.
+( cd "$ROOT" && "$GV" cost --context --all --json > "$OUT/cost-context.json" )
+python3 -c "
+import json
+data = json.load(open('$OUT/cost-context.json'))
+assert data['schema_version'] == 1, data
+"
+
+# 2d. READ: gv learnings --json (grove-439) — the promotion loop's read side.
+( cd "$ROOT" && "$GV" learnings --json --since 7d > "$OUT/learnings.json" )
+python3 -c "
+import json
+data = json.load(open('$OUT/learnings.json'))
+assert data['schema_version'] == 1, data
+rep = data['report']
+assert rep['since'].endswith('Z'), rep['since']
+repos = {r['repo']: r for r in rep['repos']}
+r = repos['dummy']
+m = r['memory']
+assert m['dir'] == '$MEM' and m['source'].endswith('/.claude/settings.local.json') and 'disabled' not in m, m
+assert m['notes_total'] == 4, m
+assert [i['file'] for i in m['index']] == ['no-routing.md', 'gv-watch.md'], m['index']
+notes = [n['file'] for n in m['notes']]
+assert notes[0] == 'no-routing.md' and set(notes) == {'no-routing.md', 'gv-watch.md', 'broken.md'}, notes
+by = {n['file']: n for n in m['notes']}
+assert by['no-routing.md']['type'] == 'feedback' and by['no-routing.md']['indexed'] is True and by['no-routing.md']['modified_by'] == 'frontmatter', by
+assert by['gv-watch.md']['type'] == 'reference', by['gv-watch.md']
+assert by['broken.md']['error'] and 'type' not in by['broken.md'], by['broken.md']
+assert any('broken.md' in w for w in m['warnings']), m
+assert r['learnings_file'] == '$DUMMY/LEARNINGS.md', r
+assert [e['date'] for e in r['entries']] == ['$TODAY'], r['entries']
+e = r['entries'][0]
+assert (e['section'], e['fact'], e['skills']) == ('Go / CLI', 'A fresh fact.', ['dummy-skill']), e
+assert r['skills'] == ['dummy-skill'], r['skills']
+assert [(c['skill'], c['date']) for c in r['candidates']] == [('dummy-skill', '$TODAY')], r['candidates']
+"
+
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.
 tail -n 50 "$ROOT/.grove/state/events.jsonl" > "$OUT/events.tail"
 python3 -c "
@@ -193,6 +267,9 @@ tc = {e['ticket']: e['data'] for e in created}
 assert tc['task-002']['feature'] == 'trains' and tc['task-002']['base'] == 'feature/trains', tc['task-002']
 for off in ('task-001', 'task-003'):
     assert 'feature' not in tc[off] and 'base' not in tc[off], tc[off]
+assert tc['task-003'].get('account') == 'alt', tc['task-003']
+assert 'account' not in tc['task-001'], tc['task-001']
+assert 'ZZZSENTINEL' not in open('$OUT/events.tail').read(), 'token value in events.jsonl'
 "
 
 # 4. STEER: mutations go through gv only.
@@ -207,6 +284,12 @@ EVENTS="$DUMMY/.grove/state/events.jsonl"
 EV_BEFORE=$(wc -l < "$EVENTS")
 "$SCRATCH/plugin.sh" "$GV" "$SCRATCH" > "$SCRATCH/plugin.out" || fail "plugin script failed"
 grep -q 'task-001' "$SCRATCH/plugin.out" || fail "plugin did not resolve the ticket"
+
+say "gv learnings mutated nothing: memory dir, LEARNINGS.md and the skill are byte-identical"
+LEARN_AFTER="$(cat "$DUMMY/LEARNINGS.md" "$DUMMY/.claude/skills/dummy-skill/SKILL.md" | cksum)"
+MEM_AFTER="$(cd "$MEM" && cat MEMORY.md no-routing.md gv-watch.md old.md broken.md | cksum; ls -la "$MEM")"
+[ "$LEARN_BEFORE" = "$LEARN_AFTER" ] || fail "gv learnings changed LEARNINGS.md or the skill"
+[ "$MEM_BEFORE" = "$MEM_AFTER" ] || fail "gv learnings changed the memory dir"
 
 say "steer landed as exactly one gv-appended, v-stamped answered event"
 [ "$(wc -l < "$EVENTS")" -eq "$((EV_BEFORE + 1))" ] || fail "expected exactly one new event"
@@ -225,6 +308,123 @@ tmux list-panes -t "$WIN" -F '#{pane_id}' > "$SCRATCH/panes.txt"
 while read -r p; do tmux capture-pane -p -S - -t "$p" >> "$SCRATCH/pane.txt"; done < "$SCRATCH/panes.txt"
 tr -d '\n' < "$SCRATCH/pane.txt" > "$SCRATCH/pane.flat"
 grep -q 'plugin-smoke-ping' "$SCRATCH/pane.flat" || fail "nudge text not delivered to the pane"
+
+say "hook: SessionStart source=compact records exactly one compaction event, no session_started (grove-289)"
+WTPATH="$(python3 -c "
+import json
+data = json.load(open('$SCRATCH/ls.json'))
+print(data['tasks'][0]['worktree'])
+")"
+EV_BEFORE_COMPACT=$(wc -l < "$EVENTS")
+SS_BEFORE_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
+python3 -c "
+import json
+print(json.dumps({'session_id': 's-compact-1', 'cwd': '$WTPATH', 'hook_event_name': 'SessionStart', 'source': 'compact'}))
+" | "$GV" hook session-start > "$SCRATCH/compact-stdout.txt"
+[ "$(wc -l < "$EVENTS")" -eq "$((EV_BEFORE_COMPACT + 1))" ] || fail "compact session-start did not append exactly one event"
+tail -n 1 "$EVENTS" > "$SCRATCH/last-compact-event.json"
+grep -q '"type":"compaction"' "$SCRATCH/last-compact-event.json" || fail "compact session-start did not append a compaction event"
+SS_AFTER_COMPACT=$(grep -c '"type":"session_started"' "$EVENTS" || true)
+[ "$SS_AFTER_COMPACT" -eq "$SS_BEFORE_COMPACT" ] || fail "compact session-start incorrectly appended session_started"
+
+say "hook: the compact SessionStart prints a ground-truth re-orientation (grove-440)"
+[ -s "$SCRATCH/compact-stdout.txt" ] || fail "compact session-start printed nothing to stdout"
+grep -q 'Task: task-001' "$SCRATCH/compact-stdout.txt" || { cat "$SCRATCH/compact-stdout.txt"; fail "re-orientation missing the ticket id"; }
+grep -q 'git log --oneline -8' "$SCRATCH/compact-stdout.txt" || { cat "$SCRATCH/compact-stdout.txt"; fail "re-orientation missing the git log block"; }
+grep -q 'git status --short' "$SCRATCH/compact-stdout.txt" || fail "re-orientation missing the git status block"
+grep -q 'STATUS contract' "$SCRATCH/compact-stdout.txt" || fail "re-orientation missing the STATUS contract line"
+
+say "gv ls --json: the task's compactions field is now 1"
+( cd "$DUMMY" && "$GV" ls --json --no-pr --no-cost > "$SCRATCH/ls-compacted.json" )
+grep -q '"compactions": 1' "$SCRATCH/ls-compacted.json" || fail "gv ls --json missing compactions: 1 after the compact restart"
+
+say "gv watch --replay --type compaction --json prints the compaction event"
+( cd "$DUMMY" && "$GV" watch --replay --type compaction --until compaction --json > "$SCRATCH/watch-compaction.json" )
+grep -q '"type":"compaction"' "$SCRATCH/watch-compaction.json" || fail "gv watch did not print the compaction event"
+
+say "gv account ls --json (claude-accounts): the accounts envelope, login row first, no token value"
+# alt was added above for task-003's --account pin, so it counts 1 pinned.
+"$GV" account use alt > /dev/null || fail "account use alt failed"
+"$GV" account ls --json > "$SCRATCH/accounts.json" || fail "account ls --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts.json" "$SCRATCH/acct-add.out" && fail "a token value reached account output"
+python3 -c "
+import json
+data = json.load(open('$SCRATCH/accounts.json'))
+assert data['schema_version'] == 1, data
+rows = data['accounts']
+assert [r['name'] for r in rows] == ['login', 'alt'], rows
+login, alt = rows
+assert login['active'] is False and login['connectors'] is True and login['token_age_days'] == 0 and login['expired'] is False, login
+assert alt['active'] is True and alt['connectors'] is False and alt['pinned'] == 1 and alt['token_age_days'] == 0 and alt['expired'] is False, alt
+assert set(alt) == {'name', 'active', 'token_age_days', 'pinned', 'connectors', 'expired'}, alt
+"
+say "gv account ls --usage --json (grove-473): recorded usage, a reset window, a no-data hint, no token value"
+ACCT_DIR=$(dirname "$("$GV" account token-path)") || fail "account token-path failed"
+mkdir -p "$ACCT_DIR/usage"
+printf '{"five_hour":{"used_percentage":42,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":1000},"seen_at":"2026-01-01T00:00:00Z"}\n' \
+  "$(( $(date +%s) + 7200 ))" > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+grep -q ZZZSENTINEL "$SCRATCH/accounts-usage.json" && fail "a token value reached account ls --usage output"
+python3 -c "
+import json
+rows = json.load(open('$SCRATCH/accounts-usage.json'))['accounts']
+login, alt = rows
+assert login['usage'] == {'hint': 'no session on this account yet'}, login
+u = alt['usage']
+assert set(u) == {'five_hour', 'seven_day', 'seen_at'}, u
+assert u['five_hour']['state'] == 'live' and u['five_hour']['used_percentage'] == 42 and 'resets_at' in u['five_hour'], u
+assert u['seven_day'] == {'state': 'reset', 'used_percentage': 0}, u
+assert u['seen_at'] == '2026-01-01T00:00:00Z', u
+"
+printf '{"seven_day":{"used_percentage":61},"seen_at":"2026-01-01T00:00:00Z"}\n' > "$ACCT_DIR/usage/alt.json"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+u = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]['usage']
+assert u['five_hour'] == {'state': 'unknown'}, u
+assert u['seven_day'] == {'state': 'live', 'used_percentage': 61, 'stale': True}, u
+"
+say "chat spawn (claude-accounts 04): orchestrator_spawned carries account only when pinned"
+# The orchestrator is stubbed so no real claude ever boots on the scratch
+# token; the chat runs in the isolated tmux server. The pane must read as
+# a LIVE claude (rm's in-use check skips a pinned pane whose claude has
+# exited), and tmux reports a shebang script as its interpreter — so the
+# stub is a copy of the bash BINARY named claude, running a script that
+# ignores claude's flags and stays up.
+grep -q '^orchestrator:' "$WCFG" && fail "workspace config grew an orchestrator: block — move the stub"
+mkdir -p "$SCRATCH/chatbin"
+cp "$(command -v bash)" "$SCRATCH/chatbin/claude"
+printf 'echo grove-471-chat\nsleep 600\n' > "$SCRATCH/chatbin/stub.sh"
+printf 'orchestrator:\n  claude: %s %s\n' "$SCRATCH/chatbin/claude" "$SCRATCH/chatbin/stub.sh" >> "$WCFG"
+"$GV" workspaces --json > "$SCRATCH/workspaces-label.json"
+WSLABEL="$(python3 -c "import json; print(json.load(open('$SCRATCH/workspaces-label.json'))['workspaces'][0]['label'])")"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" --account alt > "$SCRATCH/chat-pinned.out" ) || fail "orchestrator new --account alt failed"
+grep -q 'account alt (pinned to this chat) — a token session: no claude.ai connectors, no Remote Control' "$SCRATCH/chat-pinned.out" || fail "pinned chat did not say what a token session loses"
+( cd "$DUMMY" && "$GV" orchestrator new --workspace "$WSLABEL" > "$SCRATCH/chat-active.out" ) || fail "orchestrator new (active alt) failed"
+grep -q 'account alt (active)' "$SCRATCH/chat-active.out" || fail "active-account chat did not name its account"
+grep -q ZZZSENTINEL "$SCRATCH/chat-pinned.out" "$SCRATCH/chat-active.out" "$DUMMY/.grove/state/events.jsonl" && fail "a token value reached chat output or events"
+python3 -c "
+import json
+spawns = [e for e in map(json.loads, open('$DUMMY/.grove/state/events.jsonl')) if e.get('type') == 'orchestrator_spawned']
+assert len(spawns) == 2, spawns
+pinned, active = spawns
+assert pinned['data'].get('account') == 'alt', pinned
+assert 'account' not in active['data'], active
+"
+"$GV" account use login > /dev/null || fail "account use login failed"
+if "$GV" account rm alt > "$SCRATCH/acct-rm.out" 2>&1; then fail "rm of an account a live task pins succeeded"; fi
+grep -q 'task-003' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinning task"
+grep -q 'live chat(s) grove-chat-' "$SCRATCH/acct-rm.out" || fail "rm refusal does not name the pinned live chat"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
+[ -e "$ACCT_DIR/usage/alt.json" ] && fail "account rm left alt's usage record"
+printf 'tok\n' | "$GV" account add alt > /dev/null || fail "account re-add failed"
+"$GV" account ls --usage --json > "$SCRATCH/accounts-usage.json" || fail "account ls --usage --json failed"
+python3 -c "
+import json
+alt = json.load(open('$SCRATCH/accounts-usage.json'))['accounts'][1]
+assert alt['name'] == 'alt' and alt['usage'] == {'hint': 'no session on this account yet'}, alt
+"
+"$GV" account rm alt --force > /dev/null || fail "account rm alt --force failed"
 
 say "feature land (grove-376): plan, dry run, execute, skip reasons"
 # task-002 is the only active (not-done) car on trains; a stub gh answers

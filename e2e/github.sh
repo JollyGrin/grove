@@ -31,6 +31,17 @@ say "stub gh (records argv, serves canned JSON)"
 cat > "$SCRATCH/bin/gh" <<'EOF'
 #!/bin/sh
 echo "$PWD :: $*" >> "$GH_LOG"
+case "$*" in
+  # grove-397: the feature landed lookup — #361 closed and merged into the
+  # train, #362 closed with no PR (dropped), #363's PR merged into main.
+  *"issue list --state closed --label keys"*)
+    printf '[{"number":361,"title":"keys car","closedAt":"2026-09-20T10:00:00Z"},{"number":362,"title":"dropped","closedAt":"2026-09-21T10:00:00Z"},{"number":363,"title":"elsewhere","closedAt":"2026-09-21T10:00:00Z"}]'
+    exit 0 ;;
+  *"pr list --state merged --base feature/keys-secrets"*)
+    printf '[{"number":371,"headRefName":"alpha-361-keys-car","mergedAt":"2026-09-20T09:00:00Z"}]'
+    exit 0 ;;
+  *"pr list"*) printf '[]'; exit 0 ;;
+esac
 case "$1 $2" in
   "issue list")
     if [ "$GH_FULL_PAGE" = "1" ]; then
@@ -118,4 +129,21 @@ say "gh ran inside the right repo dirs"
 grep -q "$DUO/alpha :: issue view 7" "$GH_LOG" || fail "gh issue view did not run in alpha:
 $(cat "$GH_LOG")"
 
-say "PASS — github provider: canonical ids, verbs, short refs, dedup, cap note"
+say "feature ls: landed cars come from GitHub (grove-397)"
+git init -q --bare -b main "$SCRATCH/alpha-origin.git"
+git -C "$DUO/alpha" remote add origin "$SCRATCH/alpha-origin.git"
+git -C "$DUO/alpha" push -q origin main main:refs/heads/feature/keys-secrets
+( cd "$DUO" && "$GV" feature new keys --adopt --branch feature/keys-secrets --label keys --repo alpha > /dev/null ) || fail "adopt keys failed"
+( cd "$DUO" && "$GV" feature ls --json > "$SCRATCH/fls.json" 2> "$SCRATCH/fls.err" ) || fail "feature ls: $(cat "$SCRATCH/fls.err")"
+python3 -c "
+import json
+k = {f['slug']: f for f in json.load(open('$SCRATCH/fls.json'))['features']}['keys']
+assert [(c['ticket'], c['state'], c['pr'], c['landed_at']) for c in k['cars']] == [('alpha-361', 'landed', 371, '2026-09-20T09:00:00Z')], k['cars']
+assert (k['landed'], k['total']) == (1, 1), k
+" || fail "GitHub-landed car wrong: $(cat "$SCRATCH/fls.json")"
+grep -q "$DUO/alpha :: pr list --state merged --base feature/keys-secrets" "$GH_LOG" || fail "merged-PR lookup did not run in alpha"
+: > "$GH_LOG"
+( cd "$DUO" && "$GV" feature ls --json --no-queued > /dev/null 2>&1 ) || fail "feature ls --no-queued failed"
+grep -q 'state closed\|state merged' "$GH_LOG" && fail "--no-queued ran the landed lookup: $(cat "$GH_LOG")"
+
+say "PASS — github provider: canonical ids, verbs, short refs, dedup, cap note, GitHub-landed cars"

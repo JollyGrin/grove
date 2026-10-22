@@ -6,12 +6,29 @@
 #   base:          branch to fork from (default: main)
 #   setup:         run in fresh worktrees, serialized per-repo (optional)
 #   claude:        worker command (default: claude --dangerously-skip-permissions)
+#   effort:        default `--effort` for this repo's workers: low|medium|high|xhigh|max
+#                  (default: none = Claude Code's per-model default — high on
+#                  Fable 5.1/5, Opus 5, Sonnet 5, Opus 4.8/4.7; medium on
+#                  Opus 5.5 and Sonnet 5.5). `gv grab <id> --effort E` pins one
+#                  grab without a config edit; CLAUDE_CODE_EFFORT_LEVEL in the
+#                  launching env silently beats both — `gv doctor` warns.
+#   autocompact:   `--autocompact` window for this repo's workers: auto, or a
+#                  token count 100000–1000000 (default: unset = no flag,
+#                  Claude Code's own window). Recommended 150000 on Claude
+#                  lanes: a compaction re-orients in 2–10k tokens and the
+#                  SessionStart hook prints ground truth (ticket, acceptance
+#                  criteria, git log/status, PR handoff) after each one,
+#                  where a kill-and-restart takes 16–55 turns to pay back.
+#                  Leave unset on 1M-context third-party lanes (kimi).
 #   prompt:        kickoff template override (optional; embedded default otherwise)
 #                  for one-off ad-hoc instructions instead, use
 #                  `gv grab <id> --brief "<text>"` — appended as a final
 #                  "## Operator brief" section, no config edit needed
 #   provider:      per-repo task backend override (markdown|linear|github; default: global kind)
 #   model_profile: default model_profiles entry for this repo's workers (default: none = anthropic)
+#   done_gate:     Stop hook evidence gate for STATUS: DONE (off|warn|block; default warn)
+#                  warn logs + notifies when a DONE is claimed with a dirty worktree,
+#                  unpushed branch or no PR; block makes the worker finish first
 #   linear_labels: ticket labels that map to this repo for `gv grab` (linear provider)
 
 # Task backend. github: the repo's GitHub issues via `gh` (ids <repo>-<n>;
@@ -126,7 +143,7 @@ notify:
 cost:
   # stuck_turns: 30      # turns with no delivery movement before a stuck flag
   # pricing:             # per-model USD/MTok overrides (estimates only)
-  #   claude-sonnet-5: {input: 3, output: 15}
+  #   claude-sonnet-5-5: {input: 2, output: 10, cache_read: 0.20}
   #   z-ai/glm-5.2: {input: 0.42, output: 1.32}     # OpenRouter metered $, not an effort-estimate
   # Persistent spend ledger (<state>/ledger.csv): record snapshots so cost
   # history survives Claude Code transcript pruning (~30 days) and worktree

@@ -1,0 +1,605 @@
+# Grove — learnings archive · 2026-09
+
+> Rotated out of [LEARNINGS.md](../../LEARNINGS.md) by
+> `scripts/log-append.py` (grove-275). Same entry format and sections;
+> newest first within each section. The rules these entries taught live
+> in `.claude/skills/`; this is the dated record. Grep `LEARNINGS.md
+> docs/archive/LEARNINGS-*.md` for the full log.
+
+## Go / CLI
+
+- **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.
+- **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
+- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
+- **2026-09-28 · the cockpit flash never expires, and it takes its room
+  from the footer legend** (grove-403): `m.flash` is plain state — nothing
+  clears it on a beat, only the next assignment does. A flash left behind
+  by an earlier key therefore squeezes the legend's hints down to bare
+  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
+  e2e assertion on a hint LABEL fails on a narrow pane for that reason
+  alone; assert on the keys, or on a frame whose flash you control.
+- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
+  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
+  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
+  reproduced here): until someone finds out what the two runs share, run
+  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
+  not a red suite — do not "fix" sub.sh on the strength of it.
+- **2026-09-27 · `gv feature new --adopt` defaults the label to the SLUG,
+  not the branch or the issues' label** (grove-383): the gv-keys train's
+  issues carry the label `gv-keys`, so `gv feature new keys --adopt
+  --branch feature/gv-keys-secrets` registers label `keys`, infers
+  nothing on grab, and every car silently forks from main. Pass
+  `--label <the issues' label>` whenever the slug differs from it; check
+  with `gh issue view <n> --json labels` first.
+- **2026-09-26 · a flag injected after the command head loses to the same
+  flag already in the configured command** (grove-142). `config.WithModel`
+  built the launch command as `head + " --model 'sonnet' " + rest`, so a
+  repo whose `claude:` line already carried its own `--model` (e.g.
+  `claude --dangerously-skip-permissions --model opus`) produced `claude
+  --model 'sonnet' --dangerously-skip-permissions --model opus` — the
+  claude CLI resolves repeated `--model` flags last-wins, so the
+  pre-existing config flag silently beat the pin every time, on both
+  `gv grab --model` and `gv adopt --model` (same `WithModel` call, two
+  call sites). `gv` still reported "model pinned" — nothing checked what
+  actually ran; only the ledger's `models:` field on a finished session
+  told the truth. Fixed in PR #295: `WithModel` now strips any existing
+  `--model`/`--model=<value>` out of the configured command before
+  injecting the pin, so the pin always wins regardless of what the
+  configured command already contains. Generalizes: when a function's job
+  is "make sure X wins," appending X is not enough if the base string can
+  already contain X — strip-then-inject, or inject last, never assume the
+  base is flag-free. Add a test for the exact repro shape
+  (`WithModel("claude --flag --model opus", "sonnet")` → sonnet wins)
+  whenever this pattern shows up elsewhere.
+- **2026-09-26 · A shared-repo host turns "orphan" into "every sibling
+  workspace's live worker"** (grove-350, seen on groveremote). `gv audit`'s
+  `scanOrphans` walked every repo in `cfg.Repos` and subtracted only the
+  CALLING workspace's own tasks — fine on the Mac, where repos are
+  per-workspace, but wrong on a host like groveremote where the repo table
+  lives in the GLOBAL `~/.config/grove/config.yaml` and every workspace
+  deep-merge-inherits all of it (waterhouse/unbrewed/deanlol, see
+  `waterhouse-on-groveremote` memory). A worktree another workspace is
+  actively running is then "untracked" from the auditor's point of view:
+  32 of 36 reported orphans in the `runelite` workspace were live,
+  DIRTY, worker-attached trees. Fixed by unioning the tracked set with
+  every OTHER registered+alive workspace's tasks (`workspace.ActiveWorktrees`,
+  read via `state.Peek` — same fresh-not-derived read `FindTicket` already
+  used for ticket routing) and the legacy global state dir. `scanProcesses`
+  turned out NOT to share the bug: its `reapable` set only ever keys off
+  tickets already present in the calling workspace's own tasks map, and a
+  ticket has exactly one owning workspace (grove-191 routing), so a
+  sibling's worktree can never appear there. The registry read itself
+  stays at the `cmd/gv` call site, not inside `internal/audit` — mirrors
+  `FindTicket`'s shape (registry loaded by the caller, matching logic takes
+  a plain `[]workspace.Workspace`) so the audit package stays unit-testable
+  without a real `$HOME/.config/grove/registry.yaml`.
+- **2026-09-05 · A stub tmux pane for a liveness e2e must be a redrawing
+  loop, not an `echo`** (grove-253). Every prior scripted-tmux suite
+  (`watch.sh`, `dummy.sh`, …) sets a repo's `claude:` to plain `echo` —
+  it prints the kickoff prompt once and the pane goes back to a bare
+  shell, which is fine when the suite never reads pane CONTENT. `gv
+  supervise`'s liveness dimension (`detect.DetectLiveFrom`) reads exactly
+  that content, so `e2e/supervise.sh` needed a persistent process that
+  redraws a claude-shaped screen (idle prompt / an "Enter to select" menu
+  / a `429`+`API Error:` line) on command from a control file the script
+  rewrites mid-run — an infinite loop doing `printf '\033[H\033[2J'` +
+  the current mode's lines + `sleep 0.3`, driven by a plain file the test
+  writes between assertions. `pickPane`'s highest-index fallback resolves
+  it as "the claude pane" without the script needing to look like a real
+  `claude` process (`pane_current_command` reports `bash` either way,
+  same as every other worker pane in this suite family).
+- **2026-09-05 · A pure transition engine still needs exactly one
+  single-emitter lock, not "trust the caller"** (grove-253). Part 2
+  (`internal/supervise.Transitions`) is idempotent by construction — two
+  readers observing the same state emit nothing twice — but a headless `gv
+  supervise` loop and part 4's future cockpit driver are two *processes*
+  that could both run `state.Append` in the same tick, which is fine for
+  `events.jsonl` (flock-serialized) but means every consumer sees each
+  transition's human row printed twice. Rather than special-case "am I the
+  cockpit" logic, `gv supervise` takes a plain non-blocking
+  `flock(LOCK_EX|LOCK_NB)` on `<state>/supervise.lock` at startup and
+  writes its own pid into it; a second caller's `Flock` fails immediately
+  (no polling, no timeout) and it reads the pid back out to name the
+  holder in its error. The lock needs no cleanup path for a crashed
+  holder — `flock` is released by the kernel the instant the holding
+  process's last fd closes, crash or clean exit alike — so "stale lock
+  from a dead pid" was never a case to handle. Generalizes: any feature
+  that must run as at-most-one-instance-per-directory (this ticket, and
+  probably part 4) is this same four-line pattern, not a pidfile-plus-
+  liveness-check.
+- **2026-09-05 · An idempotent engine driven by a reader whose fold can
+  lag its own appends still double-emits — unless it remembers what it
+  emitted** (grove-254). `Transitions` diffs against the folded
+  `Task.Delivery`/`Task.Liveness`, which is airtight for `gv supervise`
+  (peek → append → peek, strictly serial). The cockpit is not serial: an
+  ad-hoc `refreshCmd` (an answer, a review, a done) can be in flight —
+  its fold read BEFORE the prsMsg handler appended `pr_opened` — and
+  deliver a task that still says `none` a tick later, so the engine would
+  derive and append the same `pr_opened` again. Rather than special-case
+  the cockpit, `supervise.Memory` now shadows the state of the last event
+  it emitted per ticket, stamped with the event time, and diffs against
+  the shadow only while it is strictly newer than the fold's own `At`; the
+  moment the fold carries the same stamp it is authoritative again (and a
+  fold that is newer than the shadow wins outright, so a headless holder's
+  appends are never masked). Two consequences worth keeping: the memory
+  is still never persisted (a restart's first observation is against the
+  real fold, which is correct), and `e2e/cockpit.sh` asserts "exactly
+  once" by counting types in `events.jsonl` after an `r` re-poll, not by
+  reading the screen. Generalizes: any bubbletea driver that appends from
+  one message handler and folds from another must dedupe on its own
+  emissions, because message arrival order is not read order.
+- **2026-09-05 · A transition engine must diff against folded state, not
+  emit on every observation** (grove-252). The naive shape — "poll PR/pane,
+  append what you see" — double-fires the instant two pollers exist (a
+  cockpit driver and an operator's own `gv supervise` loop) or a poller
+  restarts mid-fleet. `Transitions(Observation, *Memory)` instead compares
+  the freshly derived delivery/liveness state against `Task.Delivery`/
+  `Task.Liveness` (the fold of prior events) and emits only on an actual
+  change — re-observing the same state, from any number of concurrent
+  readers, emits nothing. The hysteresis timers (10s waiting-debounce, 60s
+  vanished-debounce + 120s boot grace) live in a caller-owned `Memory`
+  that is explicitly never persisted: a restart just re-arms the timers,
+  delaying the next transition by one debounce window rather than ever
+  fabricating or losing one. Generalizes past this ticket: any future
+  poll-derived dimension should fold-and-diff the same way, not append
+  raw snapshots.
+- **2026-09-05 · An unstreamed dimension gets re-derived once per
+  orchestrator, badly** (grove-252). `gv watch` (grove-205) streamed hook
+  events, but nothing streamed delivery (PR opened/CI failing/conflicting/
+  ready/merged) or the liveness a Stop hook cannot see (an AskUserQuestion
+  menu, a bare shell after a silent death, a 429 plan cap, a sleep-cut
+  turn — each leaves `agent: working` with no sentinel). The gap didn't
+  stay empty: `~/git/unbrewed/.grove/` grew **30** hand-rolled
+  `monitor-*.sh` scripts, each polling `gv ls --json` + `gh pr view` +
+  `tmux capture-pane` on its own 90–300s loop with its own hysteresis,
+  each written after `gv watch` already existed — because the thing they
+  needed to watch had no supported subscription. The sentinel histogram
+  on unbrewed makes the shape of the miss visible: 754 `done`, 24
+  `question`, 16 `blocked` — the states that actually need a human
+  (a stuck menu, a dead worker, a capped plan) essentially never produce
+  a hook sentinel at all. Fixed by building the missing half as a pure
+  engine (`internal/supervise.Transitions`) rather than another poller:
+  DESIGN.md principle 4 says the supervisor loop is "fixed and
+  enumerable, so it is code", and a dimension nobody streams is exactly
+  where ad-hoc bash accretes.
+- **2026-09-04 · A pricing table that silently prices a whole generation
+  at $0 stays invisible for five weeks unless the $0 path is loud**
+  (grove-249). `defaultRates` had no `claude-opus-5` key — `rateFor`'s
+  prefix match only strips a trailing `-<suffix>` and `claude-opus-4` is
+  not a `-`-boundary prefix of `claude-opus-5`, so every Opus 5 worker
+  (213 unbrewed rows, 19 waterhouse, 2 grove) resolved `cost_known:
+  false` and `est_usd: 0`. unbrewed's ledger read July $2,457 → August
+  $13 on unchanged ticket volume (154 tasks in August) — that drop was
+  the pricing gap, not savings, and nobody caught it because `fmtUSD`'s
+  `~$` prefix on unknown-cost rows reads as "approximately", not "this is
+  actually zero and wrong." Separately, `claude-fable-5-1` had no key
+  either but *did* resolve — by accident, riding `claude-fable-5`'s
+  prefix match — and silently used the wrong cache-read rate (10% of
+  input instead of Fable 5.1's actual 2.5%). Fix: add the missing/wrong
+  keys, and make unknowns loud instead of quiet — a `currentGeneration`
+  tripwire test asserts each current model id has an EXACT table entry
+  (not just a resolving `rateFor`), and `gv cost` / `gv cost --analyze`
+  now print an `⚠ unpriced: <model> — N tickets, M turns` footer instead
+  of leaving $0 rows to blend into the totals. Lesson: any code path that
+  can legitimately return "zero, and I don't actually know" must render
+  differently from "zero, confirmed" — a soft prefix marker is not
+  enough to get a human to look.
+- **2026-09-01 · A workspace brain can be perfectly in sync with the seed
+  and still be wrong** (grove-234). The field incident looked like brain
+  drift and was not: the workspace's stamp (`6794db4eb15a`) matched the
+  embedded seed byte for byte — the doc was current, the SEED was stale.
+  `orchestrator/CLAUDE.md` is hand-maintained and nothing ties it to the
+  verbs it documents, so `--host` (grove-176, nine verbs by grove-191) and
+  `--profile` (grove-36) shipped without ever reaching it; grove-189 DID
+  update the seed, which is the proof this is a remembered step, not an
+  enforced one. Two failures fell out of one dispatch: the chat concluded
+  "`gv grab` has no host flag" (it does — `internal/remote/remote.go`
+  intercepts `--host` BEFORE the verb's flagset, so it is absent from
+  every `-h` output, and a doc that isn't written is the only place to
+  learn it) and dispatched by raw `ssh`; and it grabbed on a per-token
+  `openrouter-*` lane while the flat-rate `zai-plan-*` twin was
+  configured, because the lane distinction lived only in config comments
+  and a repo-tracked skill marked "do NOT load for ordinary dispatch" —
+  neither of which exists in another workspace. Rule: a flag that changes
+  where work runs or who pays for it is not shipped until the seed says
+  so; grove-190's stamp answers "is this brain behind the seed?", never
+  "is the seed behind the binary?" (tripwire: #235).
+- **2026-09-01 · The release path filter is part of the "shipped"
+  definition** (grove-241). `release.yml` triggers on `cmd/**`,
+  `internal/**`, `go.mod`, `go.sum` — and not on `orchestrator/**`, even
+  though `orchestrator/CLAUDE.md` is embedded in the binary
+  (`//go:embed`), so a seed-only merge changes what every `gv init`
+  ships and what `gv brains` compares against yet cuts no release: the
+  fixed seed exists on main and reaches no machine until an unrelated Go
+  change happens to land. Field-proven 2026-09-01 on the #234 train —
+  PR #238 (seed content only) merged 12:10:51Z with no Release run, and
+  had it merged alone, `gv brains` everywhere would have reported every
+  workspace current against a seed the binary never got. An embedded
+  asset's directory missing from `on.push.paths` means
+  merged-but-never-shipped, invisible until something else releases; the
+  guard is a test (`orchestrator/release_test.go`) that reads the
+  workflow file and fails without the line.
+- **2026-09-01 · A parse-rule split between verbs is indistinguishable
+  from breakage until it is taught** (grove-242). `gv nudge grove-236
+  --host groveremote "rebase please..."` ran LOCALLY and failed
+  `no active task grove-236 — see gv ls`: the flag was never parsed and
+  nothing hinted why. The rule is deliberate, not a bug — relay verbs
+  parse `--host` prefix-only by design (payload may legitimately contain
+  `--host`, so `ExtractHostPrefix` stops at the first non-flag arg, the
+  ticket) while `grab` scans the whole argv (`ExtractHost`, any position
+  works). But the orchestrator had learned flag-order from the seed's own
+  tools block — `gv grab grove-N --host H`, flag-after-ticket — and
+  generalized it to a verb where the flag is silently swallowed into
+  message text. Fix is teaching, not parsing: the local "no active task"
+  error appends the position rule when the payload still carries a
+  literal `--host` (pure argv inspection at the call site; the parse is
+  untouched), and the seed's `--host` entry now says for answer/nudge the
+  flag must come BEFORE the ticket. A verb-surface split like this must
+  be taught in the seed or it reads as breakage.
+
+## Claude Code behavior (verified in ovs)
+
+- **2026-09-07 · A restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Rule: never fold
+  it as `session_started` (that would flip the worker's glyph and inflate
+  its session count); it is its own event, `state.EvCompaction`, which
+  `gv cost --context` counts. The claim that `[1m]`-pinned sessions never
+  auto-compact is an unverified hypothesis — watch `compactions` /
+  `NeverCompacted` before relying on it. Rule: claude-code-facts §Hooks.
+- **2026-09-26 · a nested `claude` fires the FULL hook set, SessionStart
+  included, each with its own session id; exempting SessionStart handed
+  it the task** (grove-339; incident on grove-317). Captured raw on Claude
+  Code 2.1.283 with `claude -p "reply OK"` run from inside another
+  session's Bash tool: SessionStart
+  (`{"session_id","transcript_path","cwd","hook_event_name","source":"startup"}`),
+  Stop (adds `prompt_id`, `permission_mode`, `stop_hook_active`,
+  `last_assistant_message`, `background_tasks`, `session_crons`) and
+  SessionEnd (`"reason":"other"`) all carry the nested session's own
+  non-empty id. So the ticket's suspect "print mode omits session_id" was
+  wrong. The hole was the grove-250 exemption: the nested SessionStart
+  re-pointed the task's `claude_session_id` at itself, its Stop then
+  passed the gate as `idle` ("OK"), and its SessionEnd as `dead`, while the
+  worker spun mid-turn. Worse, the real worker's later events were then
+  dropped as foreign. Now a SessionStart with a NEW id registers only
+  when the row is not live (setup after grab/adopt, dead, paused) or its
+  `source` is `clear`. The derived tasks.json can lag an adopt by a fold,
+  so a mismatch is re-checked with a read-only `state.Peek` fold before it
+  is dropped. The hook env carries no usable nesting marker:
+  `CLAUDE_CODE_CHILD_SESSION=1` was already set in a top-level session's
+  env too. **Second finding on the live host:** both `~/.claude` and
+  `~/.cc-work` `settings.json` point the hooks at `~/.local/bin/gv`, a
+  v0.1.3 binary from 2026-08-19, while `gv update` refreshes
+  `~/go/bin/gv` (v0.1.50). No grove-250 guard ran in production at all;
+  grove-317's `agent_status` records have no `session_id` field for that
+  reason. Hooks bake in `os.Executable()` at `gv hooks install` time, so
+  a re-install from the updated binary is the operator's fix.
+- **2026-09-26 · A one-shot pane capture reads a RUNNING Claude Code
+  2.1.283 turn as idle on about half its frames** (grove-300). The
+  spinner glyph cycles `· ✢ ✳ ✶ ✻ ✽` frame by frame, and the stats'
+  `thinking/thought` suffix comes and goes, so `classifyPaneOutput`'s ✢/✽
+  + stats checks miss e.g. `✶ Crunching… (2m 41s · ↓ 14.1k tokens)` and
+  fall through to idle on the prompt + hints below (the `Detector` hides
+  this behind its hash-change upgrade; a stateless read can't). The
+  stable marker is the SHAPE: glyph, a verb with `…`, then `(<digit>` —
+  `detect.Spinning`. The finished form is `✻ Baked for 55s · done 12:13
+  AM` (no ellipsis, no parens). `esc to interrupt` no longer shows at
+  all, so it now matches only as text the operator TYPED into the box —
+  and the input caret is followed by U+00A0, not a space. Also: Claude
+  Code 2.1.283 has a `StopFailure` hook event (turn ended by an API
+  error); grove doesn't install it — the upgrade path if the pane read
+  ever proves too weak for `turn errored`.
+- **2026-09-25 · Claude Code v2.1.282 draws its modals with NO │ box —
+  so grove-218's picker detector had silently stopped firing on
+  everything** (grove-308). Captured live in a scratch tmux server
+  (`internal/chatweb/testdata/cc2.1.282-*.txt`): the permission prompt,
+  the AskUserQuestion menu and the idle input box are all bare lines
+  between two `─` rules. `DetectPicker` required a `│` left edge, so the
+  phone never got a key row — the operator's "blocked by AskUserQuestion"
+  was detection, not the key set. The ticket's premise was also wrong in
+  the other direction: a **digit ANSWERS a single-select outright** (no
+  Enter), a **digit TOGGLES a multi-select row** (Space/Enter also toggle
+  the caret row; neither submits), and a multi-select (or any
+  multi-question call) is submitted by **Tab** to its `✔ Submit` page —
+  itself a numbered menu (`1. Submit answers / 2. Cancel`) with no
+  "Esc to cancel" footer. The single-select `Type something.` row's digit
+  moves the caret into an inline text input (paste + Enter answers it,
+  verified); the multi-select one is a checkbox with no input behind it.
+  So the phone needed `tab`, not Enter/Space. The unboxed rule anchors on
+  what the transcript never carries: the `❯` caret ON an option, plus the
+  modal's chrome (`Esc to cancel` below, or the `← … ✔ Submit →` tab bar
+  above). Knock-on, fixed the next day in grove-317 (§tmux below):
+  `internal/tmux`'s verified-submit (`inputBoxContent`/`pasteLanded`) also
+  keyed on `│` sides, so on this chrome it found no box and called every
+  relay landed — the grove-144 guard was a no-op until it learned the
+  `─`-rule input box.
+- **2026-09-07 · A session restart after compaction is a SessionStart with
+  `source: "compact"`, not a new session** (grove-289). Distinguishing it
+  matters for two reasons: folding it as `session_started` would flip a
+  worker's glyph and inflate its session count for something that isn't a
+  fresh pickup, and `gv cost --context`'s compaction count depends on
+  seeing it as its own event (`state.EvCompaction`) rather than losing it
+  inside `session_started`. The ticket's research draft additionally
+  claims sessions pinned to the `[1m]` cache tier never hit Claude Code's
+  auto-compact threshold in practice — plausible (a 1h cache write keeps
+  far more of the transcript "hot" before the context window fills), but
+  this session had no live long-running `[1m]`-pinned transcript to
+  independently reproduce that against; treat it as a hypothesis to watch
+  `gv cost --context`'s `compactions`/`NeverCompacted` flag for, not yet
+  independently confirmed here.
+- **2026-09-07 · `gv cost --context`'s growth shares are a 1.9 chars/token
+  estimate, not a token count** (grove-289; docs/plans/2026-09-06-token-
+  diet-research.md §7 — not present in this checkout, so treat the ratio
+  as inherited from that research rather than re-derived here). A
+  tool_result/tool_use/text block's byte length is the only number a
+  transcript actually carries; converting it to tokens for the `growth`
+  map (`internal/cost/context.go`) needs a constant, and 1.9 is what the
+  spec's research settled on for the mixed prose/code/log content grove
+  transcripts actually carry. Any consumer of `growth` (a plugin, the
+  orchestrator's context-rot duty) must read it as a relative-effort
+  share of `ctx_tokens`, never a precise count — the same "estimate, not
+  billing" caveat `gv cost`'s dollar figures already carry.
+- **2026-09-06 · `claude -p --bare` works with `ANTHROPIC_BASE_URL` +
+  `ANTHROPIC_AUTH_TOKEN` on any Anthropic-protocol endpoint, no OAuth
+  needed** (grove-288, verified against api.z.ai). `--bare` skips hooks,
+  CLAUDE.md, skills, and MCP, so a read-only agentic `gv sub --agentic`
+  call never touches this workspace's own context or config.
+- **2026-09-06 · `claude -p --output-format json` may print
+  `[claude-code:…]` warning lines before the JSON on a third-party lane**
+  (grove-288). A model slug the lane doesn't recognize (
+  `[claude-code:unrecognized_model]`) prints to stdout ahead of the JSON
+  payload — a consumer must skip to the first `{` rather than
+  `json.Unmarshal` stdout directly.
+- **2026-09-06 · GLM 5.3 Flash via the Anthropic protocol returns zero
+  text unless `thinking` is disabled** (grove-288, `gv sub` bake-off
+  against api.z.ai). A `/v1/messages` call with no `thinking` field (or
+  `thinking` enabled) came back with an empty `content` text block —
+  `gv sub`'s raw mode sends `"thinking":{"type":"disabled"}` by default
+  for exactly this reason (`sub.thinking: false`).
+- **2026-09-05 · the ntfy topic is `notify.ntfy` in `config.yaml`, not a
+  var in `.env`** (grove-273, correcting the ticket's own premise).
+  `internal/config.Notify` is `{ntfy, ntfy_body}` read out of
+  `~/.config/grove/config.yaml` — the GLOBAL file, always;
+  `~/.config/grove/.env` holds provider API keys only. Not the workspace
+  file, and that is the sharper trap: `notify` DOES merge field-wise
+  through `LoadAt` (merge.go:20 names it), but `NotifySettings` never
+  calls `LoadAt` — it is `NotifySettingsFrom(Dir()/config.yaml)`, and
+  `Dir()` is `$HOME/.config/grove` unconditionally (config.go:183 — no
+  env override, unlike `StateDir`). So the workspace layer governs
+  everything EXCEPT the push path, and a `notify:` block in a workspace's
+  `.grove/config.yaml` is read by nothing. A chat cannot call
+  `internal/notify`, so the seed teaches the equivalent `curl` — and it
+  has to read the topic from the right file or the push is silently never
+  sent (`notify.Push` returns early on an empty topic; every failure path
+  in it is silent by design). `ntfy_body: title-only` is the second var
+  and it matters: it drops the body, so the title must carry the meaning.
+- **2026-09-05 · `run_in_background` notifies on EXIT, so it can never
+  watch an unbounded stream** (grove-273; verified against the Bash/Monitor
+  tool contracts, not a live incident). `gv watch --json` with no
+  `--until` never exits — under `run_in_background` the agent gets exactly
+  zero notifications and simply waits, which looks identical to a quiet
+  fleet. The tool split is by NOTIFICATION COUNT, not by duration: one
+  notification when a command exits → `run_in_background` (the `--until`
+  form, which does exit); one notification per stdout line, indefinitely →
+  a Monitor. This is the whole reason an unattended supervision mandate
+  says "as a Monitor" out loud — an orchestrator that reaches for the
+  familiar background-Bash tool sleeps through the night it was woken to
+  work. Fixed the Monitoring section's wording (it had them backwards) and
+  spelled the mapping out in `## Supervision mandate`.
+- **2026-09-04 · hook attribution is cwd + session id; a Bash `cd` moves
+  the hook cwd** (grove-250; incident on unbrewed 2026-09-02). Hooks live
+  in the profile's global `settings.json`, so EVERY session fires them and
+  the receiver decides ownership — and it decided by cwd alone. Claude
+  Code's hook `cwd` is the Bash tool's persistent shell cwd, not the
+  directory the session launched in, so an orchestrator that ran one
+  `cd <worktree> && …` had its next Stop attributed to that worker:
+  `gv watch` emitted `idle` while the worker was 30 minutes into a busy
+  turn, `gv ls` showed the orchestrator's own chat reply as the worker's
+  `last_message`, and a stall monitor fired a false idle. The payload
+  already carried `session_id` and the task already recorded its worker's
+  (`claude_session_id`, folded from `session_started`); nothing compared
+  them. Now `stop`/`notification`/`session-end` at a tracked cwd are
+  dropped when the ids differ (silent, zero writes); a task with no
+  recorded id keeps cwd-only attribution so an unknown id never makes a
+  task unreachable. This fix first exempted `session-start` so an adopt's
+  fresh pickup could register — that exemption was the hole a nested
+  `claude -p` walked through, and grove-339 (above) replaced it: a new id
+  at SessionStart registers only when the row is not live or `source` is
+  `clear`. The brain rule "never `cd` into a tracked
+  worktree from the orchestrator" stays as belt; this is the braces.
+
+## tmux / git / detector internals (verified against source)
+
+- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
+  tmux reports it as "File name too long"** (grove-401): an isolated
+  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
+  starts, and every call fails before connecting. Scratch tmux roots go
+  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
+  suite and `scratchServer` already do — the reason is now written down.
+- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
+  is ACTIVE, which is only the cockpit when the caller is sitting in it**
+  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
+  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
+  run from a phone, a worker window or a detached chat (`gv chat
+  hide`/`show`) must re-tile the cockpit window by its `@N` id
+  (`retileCockpit`) — the integration test keeps a worker window active
+  and asserts its layout is untouched.
+- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
+  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
+  is not an error, so "did the command fail" cannot answer "does this pane
+  exist". `paneFacts` treats an empty answer as "no such pane" before
+  parsing; any new reader of a caller-supplied `%N` must do the same.
+- **2026-09-28 · `join-pane` without `-d` hands the joined pane the
+  keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
+  3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for
+  `gv chat show` and wrong for a cockpit key that must keep the operator
+  on the dashboard. `ShowChatPaneUnfocused` passes `-d`; no re-select
+  afterwards is needed, and the re-tile does not move focus either.
+  `TestShowChatPaneFocus` pins both behaviors.
+- **2026-09-28 · a SESSION user option expands in `list-panes -a -F`, on
+  every pane of that session — and its value lands in the line verbatim**
+  (grove-404, tmux 3.6a): `#{@opt}` in a pane's format context falls
+  through pane → window → session options, so per-session state can ride
+  a listing that is already being run instead of costing a `show-options`
+  of its own. Two consequences. The value is repeated on each of the
+  session's panes (worker windows included), so keep it short; and it is
+  NOT escaped, so a value holding a tab or a newline splits the very line
+  that carries it — which is why `@grove_hidden_remote` is
+  `host|session|profile` records joined by `,` with every field
+  percent-escaped, not the tab/newline form the ticket sketched. Reading
+  an unset user option with `show-options -v` is an error ("invalid
+  option"); `-qv` answers with an empty line instead.
+- **2026-09-28 · chat-hide: known limits, as shipped** (grove-405, each
+  read off the code on `feature/chat-hide`):
+  (a) `chat_hidden` / `chat_shown` are appended BEFORE the pane moves
+  (`HideChatPane` / `showChatPane` / `HideRemotePane` call `announce`
+  first — hide runs inside the pane it moves), so a tmux failure after the
+  append leaves an event for a move that did not happen; only a remote
+  show appends after its pane exists.
+  (b) There is no `gv chat send --host` relay, so a remote row has no
+  inline reply — `a` flashes "attach to reply".
+  (c) Showing a remote chat does no liveness check (that would be a dial
+  on a key press): a chat that ended on its host shows as ssh's own error
+  in the new pane.
+  (d) `@grove_hidden_remote` is read-modify-write with no lock: two
+  concurrent remote hides (or a hide racing a show) can lose a record. The
+  chat is unharmed on its host; only its hidden row is gone.
+  (e) The record lives on the cockpit SESSION, so `gv park` forgets every
+  hidden remote chat, and an attach pane spawned before grove-404 (no
+  `@grove_remote_session` stamp) cannot be hidden at all.
+  (f) The cockpit's chat keys run `chatReport()`, whose stamp-failure
+  warning is a bare `fmt.Fprintf(os.Stderr, …)` (`stampChatPane`) — inside
+  the tea loop that is a stray line on the alt screen, not a flash.
+- **2026-09-28 · `D="$(cd "$(mktemp -d …)" && pwd -P)"` is the WORKTREE
+  when mktemp fails — in zsh and macOS's `/bin/bash` 3.2** (grove-405; the
+  harness stopped two workers of this train on the `rm -rf "$D"` that
+  follows): mktemp prints nothing, `cd ""` stays put and exits 0, `pwd -P`
+  answers with the cwd. bash 5.3 refuses (`cd: null directory`), so the
+  same line is safe or fatal depending on which bash `env` finds. Safe
+  form in the tmux-discipline skill. `e2e/chat.sh`, `chat_hide.sh`,
+  `brains.sh` and `supervise.sh` still carry the nested form (a follow-up,
+  not changed by a docs car).
+- **2026-09-28 · Why hiding is a move and not a 1-column shrink**
+  (grove-405; rejected in the grove-401 ticket): `resize-pane -x 1` does
+  make a pane 1 column wide, but the next `select-layout main-vertical` —
+  which the cockpit runs on every spawn, close, hide and show — stretches
+  it straight back (verified: 119 → 1 → 119). It would also still cost a
+  border column per chat, and the ticket records Claude Code redrawing
+  junk at that width (not re-verified here).
+- **2026-09-28 · `break-pane` / `join-pane` keep the pane's `%N` id, its
+  pid and its pane user options** (grove-405, tmux 3.6a, re-verified on an
+  isolated socket; grove-401 built on it): a pane stamped `@grove_model
+  opus` came back from a round trip through another session as the same
+  `%1`, same pid, same stamp. That is the whole reason a hidden chat needs
+  no new state — it is the same pane in a different session, and
+  everything that finds a chat by `%N` or by stamp keeps working. What
+  does NOT travel is anything on the window or session: the pane lands in
+  a new window (auto-rename has to be disabled again), and the session
+  `break-pane -t` needs must already exist, hence the placeholder window
+  `HideChatPane` creates and kills.
+- **2026-09-27 · A shell alias fools `gv editor`'s already-running check**
+  (grove-359). Rule: detection matches the pane's foreground command
+  against `editor.command`'s binary, so an alias (`vi` → nvim) reads as
+  not running and a second editor opens — set `editor.command: nvim` (or
+  drop the alias) in your own config, not in gv.
+- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
+  before the child prompts** (grove-380). Rule: hold the answer back —
+  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`. Verified
+  alongside (tmux 3.6a): `new-window -n <name> <argv…>` execs argv with no
+  shell, `-e K=V` scopes env to that window, `-P -F '#{window_id}'`
+  returns the `@N` id; serve windows match by EXACT name
+  (`tmux.WindowIDExact`), never `matchesWindowName`. Rule: shipping-gates
+  §The gate.
+- **2026-09-27 · `tmux kill-server` returns before its panes are gone, so
+  an immediate `rm -rf "$SCRATCH"` can race** (grove-383). Rule: wait for
+  the isolated socket to vanish, then retry the rm once — copy
+  `cleanup()` from `e2e/serve.sh`. Rule: shipping-gates §The gate.
+- **2026-09-27 · `tmux kill-server` returns before the server's panes
+  are gone, so an e2e `rm -rf "$SCRATCH"` right after it can race**
+  (grove-377 saw it once in `e2e/plugin.sh`, grove-383 fixed it): every
+  assertion passed, then cleanup died on "rm: Directory not empty" because
+  a pane process was still writing under the scratch tree, and the suite
+  read red. Wait for the isolated socket
+  (`$TMUX_TMPDIR/tmux-$(id -u)/default`) to vanish, then retry the rm
+  once — `e2e/serve.sh`'s `cleanup()` already did; plugin.sh now does too.
+- **2026-09-27 · macOS `script(1)` drops a piped answer that arrives
+  before the child prompts** (grove-380): `e2e/serve.sh` drives the TTY
+  trust prompt with `printf 'y\n' | script -q /dev/null gv serve …`, and
+  gv read a bare EOF (the pane echoed `^Dy`) — so "y" became "no". Hold
+  the answer back (`{ sleep 1; printf 'y\n'; sleep 1; } | script …`) so
+  it lands after the prompt. Related, verified on tmux 3.6a: `new-window
+  -n <name> <argv…>` with more than one command argument execs argv
+  directly (no user shell), `-e K=V` sets the env for just that window,
+  and `-P -F '#{window_id}'` hands back the `@N` id — the serve window
+  needs none of SendKeys' quoting. Serve windows are matched by EXACT
+  name (`tmux.WindowIDExact`), not `matchesWindowName`: its " <glyph>"
+  tolerance would let `▶ keys` hit a `▶ keys 2`.
+- **2026-09-26 · A send into a modal CHOOSES the modal's default — and the
+  folder-trust dialog's default is `No, exit`** (grove-333). The relay is
+  paste + Enter; a modal eats the paste and takes the Enter as "confirm
+  the highlighted row". A phone-spawned chat in a new directory opens on
+  the trust dialog (2.1.283: unnumbered `❯ No, exit` / `Yes, I trust this
+  folder`, footer `Enter to confirm · Esc to cancel`), so the first thing
+  typed into it killed claude. Two lessons: (1) every Enter the binary
+  presses must be aimed — gate it on a fresh capture that shows no modal;
+  (2) detectors that answer the same question must be one function
+  (`DetectPicker` needed digits and said "not waiting" while
+  `ClassifyTurn` said "waiting"; `chatweb.Waiting` is now the one answer).
+  Verified on the live dialog (isolated tmux, scratch cwd): digits do
+  nothing there, `send-keys -l $'\x1b[B'` moves the caret, and Esc
+  ("Esc to cancel") exits claude exactly like `No, exit` — so esc is not
+  a safe dismiss for it either (the phone draws no esc on a select menu).
+- **2026-09-26 · Claude Code v2.1.282 dropped the input box's sides — and
+  the verified-submit guard went silent** (grove-317, third chrome change
+  under us after the spinner glyph and the bottom-chrome height): the box
+  is now bare lines between two full-width `─` rules, first line `❯ `. The
+  box finder only knew `│` sides / `╰` bottoms, so `inputBoxContent`
+  returned "" ⇒ `pasteLanded` said landed for **every** relay (grove-144
+  guard a no-op), and `outsideInputBox` returned the whole capture ⇒
+  `consumedEvidence` found the probe inside the still-unsent box and
+  called it consumed (grove-186 warning disabled too). Nothing failed
+  loudly — the permissive "no box ⇒ landed" fallback is exactly what made
+  it invisible. Fixed by recognising the unboxed shape (bottom-most rule
+  pair within `footerSlack`, body opening with `❯`; modals don't, so they
+  stay "no box"), tried before the boxed one. Also found: the idle box
+  shows a dim placeholder that a plain capture can't tell from text, and
+  `esc to interrupt` wasn't in the v2.1.283 footer mid-turn. Checked
+  because the orchestrator nudges busy workers constantly: a relay
+  mid-turn is QUEUED and drawn above the rules (`❯ <text>` +
+  `ctrl+x ctrl+s to send now`; the box shows `Press up to edit queued
+  messages`), so it reads as landed + consumed, with no false "never
+  submitted" and no spurious uptake warning. And the idle box's dim
+  (SGR 2) ghost prompt suggestion reads as TYPED text in a plain capture:
+  a short relay (`yes`) whose 24-rune probe matched a ghost (`yes, and
+  push`) after a fast turn would fail as "never submitted" though
+  delivered. The verify capture is now `-e`, with dim runs dropped
+  (a bare Enter on a ghost-only box submits nothing, so the retry was
+  never the danger). Regression:
+  real captures in `internal/tmux/testdata/` + `e2e/relay.sh` leg 3
+  (a stub drawing the v2 chrome — verified it fails on the old finder).
+  Lesson: a permissive fallback needs a tripwire per chrome generation,
+  or it silently becomes the main path.
+- **2026-09-05 · `mktemp -d /tmp/...` is not the scratch root on macOS —
+  `pwd -P` it** (grove-230, same class as grove-228's chat.sh bug):
+  `e2e/brains.sh` asserted against the raw `mktemp` path, but `gv brains`
+  prints the registry root realpath'd, and macOS's `/tmp` is a symlink to
+  `/private/tmp`. Every e2e scratch root must be resolved with
+  `SCRATCH="$(cd "$(mktemp -d ...)" && pwd -P)"` up front, not compared
+  against post-hoc.
+- **2026-09-05 · macOS login-shell panes run `path_helper` and silently
+  reorder PATH out from under a faked binary** (grove-230): `e2e/cockpit.sh`
+  faked `ssh` on `$PATH` and typed `gv dash` into a tmux pane via
+  `SendKeys`, but tmux spawns a pane's shell as a LOGIN shell whenever
+  `default-command` is empty — on macOS that runs `/etc/zprofile`, which
+  runs `/usr/libexec/path_helper` and rebuilds `PATH` from `/etc/paths`,
+  pushing the scratch bin (and its fake ssh) behind the real one. The
+  cockpit then shelled out to the REAL `ssh`, hit host-key verification,
+  and the `R` merge never saw the `@pc` row — read as a fixture/timing bug
+  for a week before the pane's own shell turned out to be the cause.
+  Linux has no `path_helper`, so this class is invisible on groveremote.
+  Fix is script-only: `tmux -f <conf> start-server` with
+  `set -g default-command "$SHELL"` (a non-empty default-command runs the
+  shell directly, skipping the login-shell flag and `/etc/zprofile`
+  entirely) before anything sends keys into a pane. Any e2e that fakes a
+  binary for a pane-launched process needs this — a session grep for
+  `command -v <faked-binary>` in a throwaway pane is the tripwire to add
+  alongside it.

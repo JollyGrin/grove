@@ -6,8 +6,8 @@ description: Use when writing or reviewing ANY code, script, or e2e test that to
 # tmux discipline
 
 Grove's workers and cockpit live on the operator's REAL tmux server. The
-rules below are ordered by blast radius. War stories + dates:
-[LEARNINGS.md](../../../LEARNINGS.md) §"tmux / git / detector internals".
+rules below are ordered by blast radius. War stories + dates: LEARNINGS.md
++ `docs/archive/LEARNINGS-*.md` §"tmux / git / detector internals".
 
 ## 1. Isolation: `$TMUX` beats `TMUX_TMPDIR` (the grove-7 crash)
 
@@ -23,6 +23,22 @@ grove worker) silently targets the **real server** unless it clears
   every session and worker on the machine (2026-07-07).
 - `tapes/run.sh` snapshots the real server's session list before/after as
   a canary — copy that pattern for new scripted-tmux suites.
+- **Never `set -g window-size`** — global `manual` crashes the server on
+  the next `new-session`/`new-window`, taking every session with it (focus
+  swap spike, 2026-10-19); set it per window only (`set -w -t <@win>`).
+- **A scratch dir is proven before it is removed** (grove-405). In
+  `D="$(cd "$(mktemp -d …)" && pwd -P)"` a failed `mktemp` prints nothing,
+  and `cd ""` STAYS PUT with exit 0 in zsh and in macOS's `/bin/bash` 3.2
+  (bash 5 errors) — so `D` is the directory you are standing in, the
+  worktree, and `rm -rf "$D"` deletes it. The harness stopped two workers
+  on exactly that line. Make the dir first and fail on it, resolve
+  second, guard the remove:
+
+  ```sh
+  D=$(mktemp -d /tmp/x.XXXXXX) || exit 1
+  D="$(cd "$D" && pwd -P)"        # /tmp → /private/tmp on macOS
+  case "$D" in /tmp/x.*|/private/tmp/x.*) rm -rf "$D" ;; esac
+  ```
 
 ## 2. Sending text to panes
 
@@ -47,7 +63,13 @@ grove worker) silently targets the **real server** unless it clears
   `CapturePaneBottom`: that helper takes the pane's bottom N *rows*, which
   are blank whenever the app draws from the top (it silently passed every
   relay until `e2e/relay.sh` caught it). Keep the check permissive —
-  unreadable pane or no recognizable box counts as landed.
+  unreadable pane or no recognizable box counts as landed — but a
+  permissive fallback needs a tripwire per chrome generation, or it
+  silently becomes the main path (grove-317: v2.1.282 unboxed the input,
+  the finder saw no box, and every relay read as landed for a month).
+  Pin each chrome generation with a real capture in
+  `internal/tmux/testdata/` and an `e2e/relay.sh` leg that fails on the
+  old finder.
 
 ## 3. Finding things: resolve, never assume
 
@@ -55,9 +77,9 @@ grove worker) silently targets the **real server** unless it clears
   panes renumber, and Claude's process title is its bare version string.
   All relay/detector/editor-inject paths go through `tmux.ClaudePane`.
 - **Pane indices depend on the user's `pane-base-index` — never write a
-  literal `.0`/`.1` target** (grove-168: the common `base-index 1` +
-  `pane-base-index 1` dotfiles pair made fresh installs die at the cockpit
-  build, and sent grab's claude command into the worktree shell). Resolve
+  literal `.0`/`.1` target** (grove-168: `base-index 1` + `pane-base-index
+  1` dotfiles killed the cockpit build and sent grab's claude command into
+  the worktree shell). Resolve
   the `%N` id at creation (`split-window -P -F '#{pane_id}'` —
   `SplitVerticalWindow`/`SpawnPane` return it) or via list-panes
   (`tmux.FirstPaneID` for "the window's first pane", `ClaudePaneTarget`
@@ -95,6 +117,42 @@ grove worker) silently targets the **real server** unless it clears
   ("no such session") and need `tmux.ExactActive` (`-t '=grove:'` — exact
   session, active window). Getting this wrong broke every cockpit build;
   `e2e/cockpit.sh` is the tripwire — actually run it.
+- **A re-tile or join aimed at `=session:` hits the ACTIVE window**
+  (grove-401). That is the cockpit only when the caller sits in it; a verb
+  reachable from a phone, a worker window or a detached chat resolves the
+  cockpit window to its `@N` id first (`WindowIDExact(session, "cockpit")`)
+  and targets that.
+- **Moving a pane keeps its identity** (grove-401/405, tmux 3.6a):
+  `break-pane` and `join-pane` carry the `%N` id, the pid and every pane
+  user option (`@grove_…`) across sessions — so a moved pane is
+  re-found by its `%N`, never re-resolved by position, and its stamps are
+  never re-applied. Window and session options do NOT travel: the window
+  it lands in is a new one (`DisableAutoRename` it again). To take a pane
+  off-screen, move it; never shrink it — a 1-column pane is stretched
+  back by the next `select-layout` and still costs a border.
+- **`resize-window -x/-y` itself sets that window's `window-size` to
+  `manual`** (grove-525), so un-pinning is always an explicit `set -wu -t
+  <@win> window-size`, and an e2e that resizes the cockpit pins it too.
+- **Match a slot by PANE size, never window size** (grove-526): under the
+  operator's `pane-border-status top` a lone pane is one row shorter than
+  its window, so a "same-size" `swap-pane` still resizes it and Claude
+  repaints.
+- **`display-message -p -t %N` on a missing pane prints an empty line and
+  exits 0** (grove-401) — treat an empty answer as "no such pane"; the exit
+  status will not tell you.
+- Reading options: `show-options` takes ONE option name (`-g a b c` is
+  "too many arguments") and never auto-starts a server — on a serverless
+  machine it answers "error connecting" instead of sourcing the config.
+  The read-only query is a single exec `tmux start-server \;
+  show-options -g \; show-options -gw` (a started server with no session
+  exits on its own; on a live one `start-server` is a no-op), and the
+  tables differ: `pane-base-index`/`allow-rename` are WINDOW options
+  (`-gw`), `base-index`/`renumber-windows` session options (`-g`)
+  (grove-455, tmux 3.4).
+- **Hooks go on grove-owned sessions, never global** (grove-531): a
+  per-session `client-attached`/`client-session-changed`/`client-detached`
+  shadows an operator's global hook for that session only, and no hook
+  fires on the session a client `switch-client`s AWAY from.
 - Commands typed into panes resolve via `PATH`, not via the binary that
   created the session. Any pane/hook command must embed the absolute
   `os.Executable()` path.
@@ -119,6 +177,12 @@ grove worker) silently targets the **real server** unless it clears
   Durable per-pane tags live in a tmux pane **user option**
   (`set-option -p @grove_…`) rendered via a conditional
   `pane-border-format` — foreground programs can't touch those.
+- **A session user option rides `list-panes -a -F` for free — unescaped**
+  (grove-404). `#{@opt}` in a pane format falls through to the pane's
+  SESSION, so per-session state needs no tmux call of its own on a tick.
+  The value lands in the line verbatim: never store a tab or newline in
+  one (percent-escape the fields), and append the field at the END of the
+  format — empty, it simply shortens the line.
 - Pane-scraping is liveness garnish; **hooks are truth**. Spinner glyphs
   and chrome layout have both changed under us — activity checks scan the
   full ~30-line capture, never a bottom window.
@@ -126,8 +190,7 @@ grove worker) silently targets the **real server** unless it clears
   (grove-205). Every kickoff template ends with the three `STATUS:
   QUESTION|BLOCKED|DONE — …` placeholder lines, so all three sentinels are
   in every worker's pane from second zero: a pane grep for any of them
-  fires instantly, on every task, forever (it filed two false DONEs in one
-  minute on 2026-08-29). The authoritative signal is the Stop hook's
+  fires instantly, on every task, forever. The authoritative signal is the Stop hook's
   classification of the agent's own last message —
   `gv watch [--ticket X] [--until done]` streams it, one flushed line per
   transition, default from-now. Three sub-rules:

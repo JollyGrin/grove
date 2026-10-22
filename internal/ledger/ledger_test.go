@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -282,5 +283,101 @@ func TestModelDeltaSpend(t *testing.T) {
 	}
 	if total < 4.99 || total > 5.01 { // excluded live and pre-since rows out
 		t.Errorf("total = %v, want 5.0", total)
+	}
+}
+
+// grove-435: the effort column rides at the end of the row and reads back;
+// a pre-grove-435 14-column row (models, no effort) still parses with an
+// empty Effort rather than being dropped.
+func TestEffortRoundtripAndLegacy14Columns(t *testing.T) {
+	dir := t.TempDir()
+	r := row("task-eff", time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), 1.0)
+	r.Models, r.Effort = "fable 100%", "low"
+	if err := Append(dir, r); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "2026-07-01T00:00:00Z,task-old,Old title,old desc,dummy,old-branch,merged,100,200,300,400,5,1.2500,fable 90% · haiku 10%\n"
+	f, err := os.OpenFile(Path(dir), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (14-column row dropped?)", len(got))
+	}
+	if got[0].Effort != "low" || got[0].Models != "fable 100%" {
+		t.Errorf("effort roundtrip = %+v, want effort low", got[0])
+	}
+	if got[1].Ticket != "task-old" || got[1].Effort != "" || got[1].Models != "fable 90% · haiku 10%" {
+		t.Errorf("legacy 14-column row mis-parsed: %+v", got[1])
+	}
+	raw, _ := os.ReadFile(Path(dir))
+	if !strings.HasPrefix(string(raw), "time,ticket,") || !strings.Contains(string(raw), ",models,effort\n") {
+		t.Errorf("header missing the effort column: %q", strings.SplitN(string(raw), "\n", 2)[0])
+	}
+}
+
+// errReader fails every Read with the same non-EOF error — the shape of a
+// persistent underlying I/O fault.
+type errReader struct{ n int }
+
+func (e *errReader) Read([]byte) (int, error) {
+	e.n++
+	return 0, errors.New("disk on fire")
+}
+
+func TestReadTerminatesOnIOError(t *testing.T) {
+	// grove-452 item 6: `continue` on a non-parse error re-read the same
+	// failure forever (gv cost at 100% CPU). The reader must return.
+	er := &errReader{}
+	done := make(chan struct{})
+	var rows []Row
+	var err error
+	go func() {
+		rows, err = readFrom(er)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readFrom spun on a persistent I/O error instead of returning")
+	}
+	if err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Fatalf("err = %v, want the underlying I/O error", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
+	}
+	if er.n > 2 {
+		t.Fatalf("reader called %d times, want it to give up on the first error", er.n)
+	}
+}
+
+func TestReadSkipsParseErrorsOnly(t *testing.T) {
+	// A true CSV parse error (bare quote mid-field) is still skipped: the
+	// reader advances past it and one torn line never hides later rows.
+	dir := t.TempDir()
+	if err := Append(dir, row("a", time.Now(), 1)); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(Path(dir), os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString(`bad "quote,x` + "\n")
+	f.Close()
+	if err := Append(dir, row("b", time.Now(), 2)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Ticket != "a" || got[1].Ticket != "b" {
+		t.Fatalf("got %+v, want rows a and b", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,10 +21,37 @@ type Repo struct {
 	Base         string   `yaml:"base"`
 	Setup        string   `yaml:"setup"`
 	Claude       string   `yaml:"claude"`
+	Effort       string   `yaml:"effort"`      // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
+	Autocompact  string   `yaml:"autocompact"` // per-repo --autocompact window for workers (grove-440; auto or 100000–1000000 tokens); empty = no flag, Claude Code's own window
 	Prompt       string   `yaml:"prompt"`
 	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
 	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
 	LinearLabels []string `yaml:"linear_labels"`
+	// DoneGate is the Stop hook's evidence gate for `STATUS: DONE` claims
+	// (grove-441): off | warn (default: log + desktop notify, never block)
+	// | block (Claude Code `decision: block`, capped so it cannot loop).
+	// Resolved through DoneGateMode; the hook reads it tolerantly via
+	// DoneGateAt.
+	DoneGate string `yaml:"done_gate"`
+}
+
+// Done-gate modes (grove-441). DoneGateWarn is the default for one release
+// so the operator can watch what WOULD be blocked before enabling block.
+const (
+	DoneGateOff   = "off"
+	DoneGateWarn  = "warn"
+	DoneGateBlock = "block"
+)
+
+// DoneGateMode resolves a repo's done_gate value: empty = warn; any other
+// unknown value also resolves to warn (parse rejects it, the tolerant hook
+// reader does not).
+func DoneGateMode(v string) string {
+	switch v {
+	case DoneGateOff, DoneGateBlock:
+		return v
+	}
+	return DoneGateWarn
 }
 
 // ModelProfile bundles what makes a non-Anthropic, Anthropic-API-compatible
@@ -132,12 +160,16 @@ type Config struct {
 	// render). Empty/unknown resolves to full in the TUI — a typo never
 	// breaks the cockpit, so parse() deliberately leaves it untouched.
 	// Layout is the pane orientation the cockpit window is built with
-	// (grove-52): horizontal (default, side-by-side columns) | vertical
-	// (main-vertical, dash-dominant left) | tiled. Resolved through
-	// CockpitLayout, which is equally typo-forgiving.
+	// (grove-52, grove-485): horizontal (default, side-by-side columns) |
+	// focus (main-vertical, dash-dominant left). Resolved through
+	// CockpitLayout, which is equally typo-forgiving — the retired
+	// vertical/tiled values read as horizontal.
 	Cockpit struct {
 		Effects string `yaml:"effects"`
 		Layout  string `yaml:"layout"`
+		// FocusDashWidth is the dash pane's fraction of the cockpit window
+		// in the focus layout (grove-522); see FocusDashPercent.
+		FocusDashWidth string `yaml:"focus_dash_width"`
 	} `yaml:"cockpit"`
 	Sub Sub `yaml:"sub"` // grove-288: gv sub defaults; field-wise merge, workspace overrides global
 }
@@ -155,14 +187,31 @@ func (c *Config) IdleAfter() time.Duration {
 
 // CockpitLayout resolves cockpit.layout to a valid grove layout name.
 // Empty/unknown falls back to horizontal (mirrors parseFx's forgiveness —
-// a typo in the config must never break the cockpit).
+// a typo in the config must never break the cockpit). The retired
+// "vertical" and "tiled" (grove-485) land here too: a stale config line
+// still builds a cockpit.
 func (c *Config) CockpitLayout() string {
-	switch c.Cockpit.Layout {
-	case "vertical", "tiled":
-		return c.Cockpit.Layout
-	default:
-		return "horizontal"
+	if c.Cockpit.Layout == "focus" {
+		return "focus"
 	}
+	return "horizontal"
+}
+
+// DefaultFocusDashWidth is cockpit.focus_dash_width when unset or invalid.
+const DefaultFocusDashWidth = 0.3
+
+// FocusDashPercent resolves cockpit.focus_dash_width (a fraction of the
+// cockpit window, e.g. 0.3) to a whole percent for tmux's main-pane-width.
+// Forgiving like CockpitLayout: unset, 0, outside [0.15, 0.85] — including
+// a percent-looking 30, which is rejected rather than guessed at — or a
+// non-numeric value falls back to 30. Held as a string so a typo never
+// fails the config decode.
+func (c *Config) FocusDashPercent() int {
+	f, err := strconv.ParseFloat(strings.TrimSpace(c.Cockpit.FocusDashWidth), 64)
+	if err != nil || f < 0.15 || f > 0.85 {
+		f = DefaultFocusDashWidth
+	}
+	return int(f*100 + 0.5)
 }
 
 // Sub configures `gv sub` — a read-only micro-task delegated to a cheaper
@@ -218,13 +267,19 @@ func Dir() string {
 // GROVE_STATE_DIR overrides it — used to point E2E tests at a scratch
 // dir so they never touch live fleet state.
 func StateDir() string {
-	d := os.Getenv("GROVE_STATE_DIR")
-	if d == "" {
-		home, _ := os.UserHomeDir()
-		d = filepath.Join(home, ".local", "state", "grove")
-	}
+	d := StateDirPath()
 	_ = os.MkdirAll(d, 0o755)
 	return d
+}
+
+// StateDirPath is StateDir without creating it — for read-only paths
+// (`gv account token-path`) that must leave the disk untouched.
+func StateDirPath() string {
+	if d := os.Getenv("GROVE_STATE_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "grove")
 }
 
 func expand(p string) string {
@@ -273,12 +328,21 @@ func parse(raw []byte, src string) (*Config, error) {
 		if r.Provider != "" && r.Provider != "markdown" && r.Provider != "linear" && r.Provider != "github" {
 			return nil, fmt.Errorf("repo %q: provider %q (want markdown, linear, or github)", name, r.Provider)
 		}
+		if r.DoneGate != "" && r.DoneGate != DoneGateOff && r.DoneGate != DoneGateWarn && r.DoneGate != DoneGateBlock {
+			return nil, fmt.Errorf("repo %q: done_gate %q (want off, warn, or block)", name, r.DoneGate)
+		}
 		r.Path = expand(r.Path)
 		if r.Base == "" {
 			r.Base = "main"
 		}
 		if r.Claude == "" {
 			r.Claude = "claude --dangerously-skip-permissions"
+		}
+		if err := CheckEffort(r.Effort); err != nil {
+			return nil, fmt.Errorf("repo %q: effort: %w", name, err)
+		}
+		if err := CheckAutocompact(r.Autocompact); err != nil {
+			return nil, fmt.Errorf("repo %q: %w", name, err)
 		}
 		if r.Prompt != "" {
 			r.Prompt = expand(r.Prompt)
@@ -424,7 +488,10 @@ func ValidEnvKey(s string) bool { return envKeyPattern.MatchString(s) }
 // opus/sonnet/haiku class it requested, so a profile can substitute its own
 // slug for that class. No --model flag (the common case — grab/orchestrator
 // launches rarely pin one) defaults to sonnet, Claude Code's own baseline
-// tier.
+// tier. A Fable pin (`fable`, `claude-fable-5-1`) takes the OPUS slot
+// (grove-442): a profile lane has no tier above opus, and the operator who
+// pinned Fable asked for the top of the lane — the old default dropped it
+// onto the lane's sonnet slug, a silent downgrade.
 func modelSlot(modeledCmd string) string {
 	m := modelFlagValue.FindStringSubmatch(modeledCmd)
 	if m == nil {
@@ -432,7 +499,7 @@ func modelSlot(modeledCmd string) string {
 	}
 	v := strings.ToLower(m[1])
 	switch {
-	case strings.Contains(v, "opus"):
+	case strings.Contains(v, "opus"), strings.Contains(v, "fable"):
 		return "opus"
 	case strings.Contains(v, "haiku"):
 		return "haiku"
@@ -472,7 +539,8 @@ func (p *ModelProfile) slugFor(slot string) string {
 // from the sourced file.
 //
 // Sets ANTHROPIC_MODEL to the slug for the class the modeled command
-// requested (opus/sonnet/haiku), plus all three ANTHROPIC_DEFAULT_*_MODEL
+// requested (opus/sonnet/haiku; a Fable pin is the lane's opus slot — see
+// modelSlot), plus all three ANTHROPIC_DEFAULT_*_MODEL
 // vars so an in-session `/model` switch still resolves to one of the
 // profile's own slugs rather than an Anthropic one.
 //
@@ -503,6 +571,27 @@ func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string 
 		shellQuote(p.Opus), shellQuote(p.Sonnet), shellQuote(p.Haiku),
 		modeledCmd,
 	)
+}
+
+// WrapAccount wraps an already-`WithModel`'d claude command so it runs on
+// a subscription account's token (claude-accounts design §Decision 5).
+// The pane's shell reads the token file itself, so the value never enters
+// the send-keys line, argv (`cat` only sees the path) or capture-pane; an
+// empty read refuses rather than falling back to the login. GROVE_ACCOUNT
+// carries the name (never a secret) for the statusline shim — the same
+// name shell-init derives from the token file's basename, since the store
+// keeps <name>.token (a resolver test pins the two together); an empty or
+// unreadable token prints why on stderr before the subshell fails. An empty
+// tokenPath returns cmd unchanged — the no-account path is byte-for-byte
+// today's. Never apply it to WrapProfile output: both end in `exec <cmd>
+// )`, so nesting renders `exec ( … )`; the resolver keeps accounts and
+// profiles apart (Decision 1). The caller preflights the file first.
+func WrapAccount(cmd, tokenPath, name string) string {
+	if tokenPath == "" {
+		return cmd
+	}
+	return fmt.Sprintf(`( t="$(cat %s)" && [ -n "$t" ] || { echo %s >&2; exit 1; }; export CLAUDE_CODE_OAUTH_TOKEN="$t" GROVE_ACCOUNT=%s && exec %s )`,
+		shellQuote(tokenPath), shellQuote("gv: account "+name+" token unreadable — gv account ls"), shellQuote(name), cmd)
 }
 
 // ProviderKindFor returns the effective task backend for a repo: its own

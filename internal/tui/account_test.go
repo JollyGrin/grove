@@ -173,7 +173,7 @@ func TestViewCostsTabsClampWidth(t *testing.T) {
 	}
 	for _, a := range snapshots {
 		for w := 24; w <= 100; w += 4 {
-			for _, tab := range []int{costsTabSpend, costsTabAccount} {
+			for _, tab := range []int{costsTabSpend, costsTabAccount, costsTabClaude} {
 				m := accountModel(w)
 				m.costsTab = tab
 				m.account = a
@@ -198,11 +198,13 @@ func TestCostsTabKeys(t *testing.T) {
 	if m.costsTab != costsTabAccount || cmd == nil {
 		t.Fatalf("tab → tab=%d cmd=%v, want ACCOUNT + fetch cmd", m.costsTab, cmd)
 	}
-	// tab again returns to SPEND without a fetch.
-	next, cmd = m.handleCostsKey(tea.KeyMsg{Type: tea.KeyTab})
+	// tab again reaches CLAUDE (claude.go), and once more returns to SPEND
+	// without a fetch.
+	next, _ = m.handleCostsKey(tea.KeyMsg{Type: tea.KeyTab})
+	next, cmd = next.(Model).handleCostsKey(tea.KeyMsg{Type: tea.KeyTab})
 	m = next.(Model)
 	if m.costsTab != costsTabSpend || cmd != nil {
-		t.Fatalf("tab tab → tab=%d cmd=%v, want SPEND + no cmd", m.costsTab, cmd)
+		t.Fatalf("tab ×3 → tab=%d cmd=%v, want SPEND + no cmd", m.costsTab, cmd)
 	}
 
 	// r on ACCOUNT refetches instead of toggling the ledger recorder.

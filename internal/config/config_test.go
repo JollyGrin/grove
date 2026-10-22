@@ -440,21 +440,49 @@ func TestWrapProfileMetacharInBaseURL(t *testing.T) {
 func TestWrapProfileSlotSelection(t *testing.T) {
 	p := &ModelProfile{
 		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
-		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
+		// Opus and Sonnet slugs differ so the slot choice is observable.
+		Opus: "z-ai/glm-5.2-top", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 	cases := []struct {
 		name, model, wantSlug string
 	}{
 		{"no model flag defaults to sonnet", "", "z-ai/glm-5.2"},
-		{"opus flag maps to opus slug", "opus", "z-ai/glm-5.2"},
+		{"opus flag maps to opus slug", "opus", "z-ai/glm-5.2-top"},
 		{"haiku flag maps to haiku slug", "haiku", "z-ai/glm-4.5-air"},
 		{"sonnet flag maps to sonnet slug", "sonnet", "z-ai/glm-5.2"},
+		// grove-442: a Fable pin takes the lane's top tier (opus slug), not
+		// the sonnet default it used to fall through to.
+		{"fable alias maps to opus slug", "fable", "z-ai/glm-5.2-top"},
+		{"fable id maps to opus slug", "claude-fable-5-1", "z-ai/glm-5.2-top"},
 	}
 	for _, tc := range cases {
 		modeled := WithModel("claude", tc.model)
 		got := WrapProfile(modeled, p, "/s/.env")
 		if !strings.Contains(got, "ANTHROPIC_MODEL="+shellQuote(tc.wantSlug)) {
 			t.Errorf("%s: got %q, want ANTHROPIC_MODEL=%s", tc.name, got, shellQuote(tc.wantSlug))
+		}
+	}
+}
+
+// grove-442: modelSlot's family classification, including Fable → opus
+// (the lane's top tier) and the sonnet default for everything else.
+func TestModelSlot(t *testing.T) {
+	cases := map[string]string{
+		"claude":                                 "sonnet",
+		WithModel("claude", "opus"):              "opus",
+		WithModel("claude", "claude-opus-5-5"):   "opus",
+		WithModel("claude", "fable"):             "opus",
+		WithModel("claude", "claude-fable-5-1"):  "opus",
+		WithModel("claude", "Claude-Fable-5-1"):  "opus",
+		WithModel("claude", "haiku"):             "haiku",
+		WithModel("claude", "claude-haiku-4-5"):  "haiku",
+		WithModel("claude", "sonnet"):            "sonnet",
+		WithModel("claude", "claude-sonnet-5-5"): "sonnet",
+		WithModel("claude --x", "z-ai/glm-5.2"):  "sonnet",
+	}
+	for cmd, want := range cases {
+		if got := modelSlot(cmd); got != want {
+			t.Errorf("modelSlot(%q) = %q, want %q", cmd, got, want)
 		}
 	}
 }
@@ -635,6 +663,23 @@ func TestHotkeyFor(t *testing.T) {
 	}
 }
 
+func TestFocusDashPercent(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", 30}, {"0.3", 30}, {"0.25", 25}, {"0.5", 50}, {"0.85", 85}, {"0.15", 15},
+		{"0", 30}, {"0.1", 30}, {"0.9", 30}, {"30", 30}, {"40", 30}, {"-0.3", 30}, {"wide", 30},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Cockpit.FocusDashWidth = tc.in
+		if got := c.FocusDashPercent(); got != tc.want {
+			t.Errorf("FocusDashPercent() with %q = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCockpitLayout(t *testing.T) {
 	cases := []struct {
 		name string
@@ -643,9 +688,10 @@ func TestCockpitLayout(t *testing.T) {
 	}{
 		{"empty defaults to horizontal", "", "horizontal"},
 		{"horizontal", "horizontal", "horizontal"},
-		{"vertical", "vertical", "vertical"},
-		{"tiled", "tiled", "tiled"},
-		{"garbage falls back to horizontal", "sideways", "horizontal"},
+		{"focus", "focus", "focus"},
+		{"retired vertical forgiven to horizontal", "vertical", "horizontal"},
+		{"retired tiled forgiven to horizontal", "tiled", "horizontal"},
+		{"garbage falls back to horizontal", "garbage", "horizontal"},
 	}
 	for _, tc := range cases {
 		c := &Config{}
@@ -661,20 +707,25 @@ func TestCockpitLayout(t *testing.T) {
 	writeGlobal(t, `
 cockpit:
   effects: calm
-  layout: tiled
+  layout: horizontal
+  focus_dash_width: 0.5
 `)
 	root := newWorkspace(t, `
 workspace:
   label: grid
 cockpit:
-  layout: vertical
+  layout: focus
+  focus_dash_width: 0.25
 `)
 	c, err := LoadAt(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.CockpitLayout(); got != "vertical" {
-		t.Errorf("workspace cockpit.layout = %q, want vertical (workspace wins)", got)
+	if got := c.FocusDashPercent(); got != 25 {
+		t.Errorf("workspace cockpit.focus_dash_width = %d%%, want 25 (workspace wins)", got)
+	}
+	if got := c.CockpitLayout(); got != "focus" {
+		t.Errorf("workspace cockpit.layout = %q, want focus (workspace wins)", got)
 	}
 	if c.Cockpit.Effects != "calm" {
 		t.Errorf("cockpit.effects = %q, want calm inherited from global", c.Cockpit.Effects)

@@ -1,12 +1,12 @@
 ---
 name: shipping-gates
-description: Use before running the build/test gate, writing shell assertions or e2e scripts, merging anything that touches the task lifecycle, or handing a change to the operator for manual testing. Covers the piped-gate trap, the dummy-data e2e pattern, throwaway builds, and merge verification.
+description: Use before running the build/test gate, writing shell assertions or e2e scripts, merging anything that touches the task lifecycle or TUI, adding a verb/flag the orchestrator would use, or handing a change to the operator to try. The piped-gate trap, BSD-safe e2e, the dummy-data pattern, throwaway builds, merge verification.
 ---
 
 # Shipping gates
 
 How changes in this repo get verified and handed over. War stories:
-[LEARNINGS.md](../../../LEARNINGS.md) §"Go / CLI" and §"Field notes".
+LEARNINGS.md + `docs/archive/LEARNINGS-*.md` §"Go / CLI" and §"Field notes".
 
 ## The gate
 
@@ -17,8 +17,7 @@ gofmt -l .                                        # must be empty
 
 - **Never pipe the gate.** `go test ./... | tail` reports the PIPE's exit
   status, not the tests' — two red runs merged to main that way in one
-  evening. Run bare and check `$?`; filter a saved log afterwards, never
-  inline.
+  evening. Run bare and check `$?`; filter a saved log afterwards.
 - The same trap in reverse: `cmd | grep -q` flakes under
   `set -o pipefail` (grep exits at first match, the producer SIGPIPEs).
   E2E assertions capture to a file first, then grep the file.
@@ -30,11 +29,19 @@ gofmt -l .                                        # must be empty
 - **Write e2e shell for BSD userland too — the operator runs it on a Mac.**
   No GNU-only flags (`touch -d @<epoch>` is GNU; BSD needs
   `-t YYYYMMDDhhmm.SS`), and resolve the scratch root with
-  `SCRATCH="$(cd "$(mktemp -d /tmp/…)" && pwd -P)"` — on macOS `/tmp` is a
-  symlink, so a tmux pane reports its cwd as `/private/tmp/…` and any
-  assertion against a bare `$SCRATCH` path fails on that alone. Both bit
+  `pwd -P` — on macOS `/tmp` is a symlink, so a tmux pane reports its cwd
+  as `/private/tmp/…` and any assertion against a bare `$SCRATCH` path
+  fails on that alone. Two steps, never the nested one-liner
+  (`"$(cd "$(mktemp -d …)" && pwd -P)"` resolves to the WORKTREE when
+  mktemp fails — tmux-discipline §1 has the safe form and the `rm -rf`
+  guard): `SCRATCH=$(mktemp -d /tmp/…) || exit 1`, then
+  `SCRATCH="$(cd "$SCRATCH" && pwd -P)"`. Both bit
   `e2e/chat.sh`, which read green on Linux while its whole `chat ls` half
   had never executed on the Mac (grove-228).
+  Mac). macOS `script(1)` drops a piped answer that arrives before the
+  child prompts (`printf 'y\n' | script …` read as a bare EOF, so "y"
+  became "no" — grove-380): hold the answer back,
+  `{ sleep 1; printf 'y\n'; sleep 1; } | script -q /dev/null …`.
 
 ## E2E: the dummy-data pattern
 
@@ -52,7 +59,7 @@ red, because nothing ran them; the panic had shipped in a fourth a day
 earlier). Details: docs/seed-manifest.md §Dummy-data E2E. Scripted-tmux
 suites must also follow the
 [tmux-discipline](../tmux-discipline/SKILL.md) isolation rules —
-including capturing panes with `-S` so a panic keeps its reason line.
+including capturing panes with `-S -` so a panic keeps its reason line.
 
 TUI render code: the first frame always renders with ZERO events (they
 load async), so any `[:budget]` slice must clamp to `len(data)`, and
@@ -70,26 +77,23 @@ widths — grove-79's panic lived only at heights the tests never visited.
   go build -o /tmp/gv-<ticket> ./cmd/gv
   ```
 
-  Hand over that path.
-
 - **After a merge, the operator's binary is refreshed with
   `gv update --yes` — never `go install ./cmd/gv`.** A push to main
-  auto-cuts a release within ~a minute, so the just-merged code is in
-  `gv update`'s reach almost immediately. `go install` stamps the binary
-  `dev`, which is precisely what `gv update` refuses (`ErrDevBuild`) —
-  every `go install` breaks the next update and invites another one. A
-  binary already stamped `dev` escapes once with
+  auto-cuts a release within ~a minute. `go install` stamps the binary
+  `dev`, which is precisely what `gv update` refuses (`ErrDevBuild`,
+  internal/update/update.go) — every `go install` breaks the next update.
+  A binary already stamped `dev` escapes once with
   `gv update --yes --force`, then plain `--yes` forever after.
 
 ## Verb surface → the orchestrator seed
 
-A new verb, flag, or lane that an orchestrator would ever be expected to use
-is not shipped until `orchestrator/CLAUDE.md` teaches it. The seed is the only
-doc every workspace's brain is born from, and a workspace brain can be
-perfectly in sync with the seed and still be wrong — sync is not currency.
-`orchestrator/seed_test.go` enforces the `--host` verb set mechanically;
-everything else is on you. Grep the seed for the flag you just added before
-you open the PR.
+A new verb, flag, or lane that an orchestrator would ever be expected to
+use is not shipped until `orchestrator/CLAUDE.md` teaches it. The seed is
+the only doc every workspace's brain is born from, and a workspace brain
+can be perfectly in sync with the seed and still be wrong — sync is not
+currency. `orchestrator/seed_test.go` enforces the `--host` verb set and
+a few load-bearing phrases mechanically; everything else is on you. Grep
+the seed for the flag you just added before you open the PR.
 
 ## Merging and cleanup
 
@@ -97,14 +101,4 @@ you open the PR.
   ancestry** — squash-merge breaks ancestry, so `git branch -d` refuses
   every time (use `-D` + remote delete once `gh` confirms the merge).
 - Docs go direct to main; code goes through a short-lived branch in a
-  worktree (`~/git/.worktrees/grove/<slug>`), commit per plan task,
-  `git merge --ff-only` to main.
-
-## Non-negotiables inherited from ovs
-
-- The binary never mutates a task backend's terminal state, and never
-  deletes worktrees/branches it didn't create.
-- `events.jsonl` is append-only (O_APPEND + flock); `tasks.json` is a
-  derived view — never writable state.
-- `~/git/thegrid/overstory-tui` is frozen. Never edit it; note backports
-  instead.
+  worktree (`~/git/.worktrees/grove/<slug>`), commit per plan task.

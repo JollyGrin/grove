@@ -303,7 +303,7 @@ func cmdServeInit(args []string) error {
 // serveInit is cmdServeInit's decision half, spawn injected for the test.
 // An existing run.sh is refused: redrafting over a reviewed script is the
 // operator's call (delete it first).
-func serveInit(cfg *config.Config, root string, spawn func(cfg *config.Config, brief, model string) (string, error)) (string, error) {
+func serveInit(cfg *config.Config, root string, spawn func(cfg *config.Config, brief, model, effort string) (string, error)) (string, error) {
 	path := serve.ScriptPath(root)
 	if _, err := os.Stat(path); err == nil {
 		return "", fmt.Errorf("%s already exists — review it with s in the cockpit or `gv serve <slug>`; delete it first to redraft", path)
@@ -313,7 +313,7 @@ func serveInit(cfg *config.Config, root string, spawn func(cfg *config.Config, b
 		repos = append(repos, r.Path)
 	}
 	sort.Strings(repos)
-	return spawn(cfg, serve.InitPrompt(root, repos), "")
+	return spawn(cfg, serve.InitPrompt(root, repos), "", "")
 }
 
 // wireServe injects the serve plumbing into the cockpit's `s` (grove-381).

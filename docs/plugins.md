@@ -58,17 +58,20 @@ payload under one named key.
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
 | `gv cost --ledger --json` | `rows` | array — durable per-ticket history |
 | `gv cost --analyze --json` | `report` | object — outcome-priced ledger + flags |
+| `gv cost --context [ticket…\|--all] --json` | `rows` | array — per-ticket `{ticket, report}` (grove-289): the per-call context decomposition — `api_calls`, `avg_ctx`/`p90_ctx`/`max_ctx`/`floor`/`floor_share`, `ctx_tokens`, `compactions`, `growth` (share of context by source bucket), `top` (the N biggest amplified reads/results), `delegation` (`gv sub` rollup, zero when `sub.jsonl` has none) — see Additive fields below |
 | `gv workspaces --json` | `workspaces` | array — `{root, label, scope}` |
-| `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, last_active, writable, waiting, model, turn}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id — minted by grove at spawn and stamped on the pane before the agent boots (grove-222), so a chat grove started carries it from second zero; it is **null** only when grove cannot know it without guessing (a pane grove did not spawn, sharing a project dir with another such pane) — a null is honest, never a placeholder to fill in from the newest transcript; `label` is the transcript's first prompt that is the operator's own words — harness wrappers (a local-command caveat, a slash command's echo, a `!` escape, a task notification) are skipped and system-reminder/pasted-content wrappers stripped, so a chat that only ever ran a slash command is titled by it (`/model`) (grove-315); `created` is BIRTH (a live row's tmux pane age, an archived row's transcript mtime) and `last_active` is the transcript's mtime on every kind — the last time the chat was actually spoken to, zero (`0001-01-01T00:00:00Z`) when the row has no transcript to read, where a client falls back to `created` (grove-228). **Age and order a chat list on `last_active`, not `created`** — a cockpit pane born four days ago and steered ten seconds ago is otherwise the oldest-looking row on the list. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input. `waiting` (grove-302, additive) is "needs you": true when a live `chat` row running claude shows a modal picker (a permission prompt or a question it is blocked on) in a pane capture — the same detection as `gv chat serve`'s picker strip; always false on `cockpit`/`archived` rows, a pane at a shell, and a capture that fails. Within a workspace and kind, rows order most recently active first, chat number only breaking ties (grove-302). Over HTTP, `gv chat serve` answers `GET /api/chats` with this envelope and pushes it, byte for byte, as the `chats` event of the SSE stream `GET /api/chats/events` — once on connect, then only when it changed, with a `:` keep-alive every ~25s; the stream's first event is `version` (a JSON string, the build stamp — also `GET /api/version` → `{"version": …}` in the envelope, `dev` unstamped) (grove-307, grove-286, additive). `model` (grove-293, additive) is the model a live chat was spawned to run, as grove resolved it at spawn — a tier (`opus`), a profile's slug, a host settings.json model, or the literal `account default`; `""` on archived rows and any pane grove did not tag. The phone's new-chat sheet is `GET /api/workspaces/<label>/models` → `{"models": [{profile, model, runs}]}` in the envelope: the host default (`profile` and `model` both `""`), then one row per `orchestrator.models` tier (default `opus`/`sonnet`/`haiku`), then one per model profile; `runs` is what that spawn will actually run, and `{profile, model}` is POSTed back verbatim to `POST /api/workspaces/<label>/new` (`model` optional, absent/`""` = host default; an unknown one is a 409 with the CLI's refusal). `turn` (grove-334, additive) is what a live `chat` row is DOING, off the same pane capture as `waiting`: `running` (spinner up), `idle` (claude at its prompt), `waiting` (a modal holds the turn — including one the picker cannot read, where `waiting` stays false), `errored` (a death marker at the pane's bottom), `unknown`, or `stopped` (the pane runs no claude); `""` on `cockpit`/`archived` rows and a failed capture. `busy` only ever means "a process is alive" — badge and order on `turn`. `GET /api/workspaces` → `{"workspaces": [label…]}` in the envelope lists every registered workspace `ls` enumerates, chats or not (grove-334); `GET /api/chats/<s>/pane` → `{"pane": "…"}` is the bottom 30 lines of one fresh capture of a live chat's pane as text, read-only (404 with the reason when it has none) — the escape hatch for a modal no client can parse. The chat stream's `picker` event carries `review` (additive, omitted when empty): on AskUserQuestion's Submit page, one `question → answer` string per pick |
+| `gv chat ls [--workspace L] [--json]` | `chats` | array — one row per orchestrator chat, from EVERY registered workspace unless `--workspace` narrows it: `{session, workspace, n, kind, session_id, label, command, busy, attached, created, last_active, writable, waiting, model, turn}` (grove-215). `kind` is `chat` (a live detached `grove-chat-<label>-<n>`), `cockpit` (the cockpit's own orchestrator pane) or `archived` (a transcript with no live pane); `session_id` is the Claude session id — minted by grove at spawn and stamped on the pane before the agent boots (grove-222), so a chat grove started carries it from second zero; it is **null** only when grove cannot know it without guessing (a pane grove did not spawn, sharing a project dir with another such pane) — a null is honest, never a placeholder to fill in from the newest transcript; `label` is the transcript's first prompt that is the operator's own words — harness wrappers (a local-command caveat, a slash command's echo, a `!` escape, a task notification) are skipped and system-reminder/pasted-content wrappers stripped, so a chat that only ever ran a slash command is titled by it (`/model`) (grove-315); `created` is BIRTH (a live row's tmux pane age, an archived row's transcript mtime) and `last_active` is the transcript's mtime on every kind — the last time the chat was actually spoken to, zero (`0001-01-01T00:00:00Z`) when the row has no transcript to read, where a client falls back to `created` (grove-228). **Age and order a chat list on `last_active`, not `created`** — a cockpit pane born four days ago and steered ten seconds ago is otherwise the oldest-looking row on the list. **Disable input off `writable`, never off your own reading of `kind`** — only a live `chat` row takes input. `waiting` (grove-302, additive) is "needs you": true when a live `chat` row running claude shows a modal picker (a permission prompt or a question it is blocked on) in a pane capture — the same detection as `gv chat serve`'s picker strip; always false on `cockpit`/`archived` rows, a pane at a shell, and a capture that fails. Within a workspace and kind, rows order most recently active first, chat number only breaking ties (grove-302). Over HTTP, `gv chat serve` answers `GET /api/chats` with this envelope and pushes it, byte for byte, as the `chats` event of the SSE stream `GET /api/chats/events` — once on connect, then only when it changed, with a `:` keep-alive every ~25s; the stream's first event is `version` (a JSON string, the build stamp — also `GET /api/version` → `{"version": …}` in the envelope, `dev` unstamped) (grove-307, grove-286, additive). `model` (grove-293, additive) is the model a live chat was spawned to run, as grove resolved it at spawn — a tier (`opus`), a profile's slug, a host settings.json model, or the literal `account default`; `""` on archived rows and any pane grove did not tag. The phone's new-chat sheet is `GET /api/workspaces/<label>/models` → `{"models": [{profile, model, runs, account?}]}` in the envelope: the host default (`profile` and `model` both `""`), then one row per `orchestrator.models` tier (default `opus`/`sonnet`/`haiku`), then one per model profile; `runs` is what that spawn will actually run; `account` (grove-471, additive) names the token account a host-Claude row's chat would run on — absent for the login and on profile rows — and such a chat has no claude.ai connectors or Remote Control, and `{profile, model}` is POSTed back verbatim to `POST /api/workspaces/<label>/new` (`model` optional, absent/`""` = host default; an unknown one is a 409 with the CLI's refusal). `turn` (grove-334, additive) is what a live `chat` row is DOING, off the same pane capture as `waiting`: `running` (spinner up), `idle` (claude at its prompt), `waiting` (a modal holds the turn — including one the picker cannot read, where `waiting` stays false), `errored` (a death marker at the pane's bottom), `unknown`, or `stopped` (the pane runs no claude); `""` on `cockpit`/`archived` rows and a failed capture. `busy` only ever means "a process is alive" — badge and order on `turn`. `GET /api/workspaces` → `{"workspaces": [label…]}` in the envelope lists every registered workspace `ls` enumerates, chats or not (grove-334); `GET /api/chats/<s>/pane` → `{"pane": "…"}` is the bottom 30 lines of one fresh capture of a live chat's pane as text, read-only (404 with the reason when it has none) — the escape hatch for a modal no client can parse. The chat stream's `picker` event carries `review` (additive, omitted when empty): on AskUserQuestion's Submit page, one `question → answer` string per pick |
 | `gv chat tail <s> [--follow] [--since N]` | *(none — a stream)* | JSONL, one transcript entry per line: `{seq, role, kind, text, tool, ts}` (grove-216). `role` is `user`/`assistant`; `kind` is `text`, `tool_use`, `tool_result`, `thinking` or `meta`; a `meta` entry (grove-315) is a harness wrapper Claude Code wrote as a `user` line — never the operator's prose — with `tool` naming the wrapper (`command` for a slash command, text `/model opus`; `task-notification` for a background agent/command finishing, text its summary; `bash` for a `!` escape's command line; `bash-output` for its stdout/stderr; `local-stdout` for a local command's output; `interrupt` for Claude Code's `[Request interrupted by user…]` notice, text without the brackets — it ENDS the turn (grove-334)) and `text` its cleaned inner text; a client should render it as chrome, not as something said. A real `text` entry has system-reminder and pasted-content wrappers stripped; `tool` is the tool's NAME (a `tool_result` is paired back to the `tool_use` it answers); `ts` is null on a line that carries no timestamp. `seq` is 1-based over EMITTED entries and stable for an append-only transcript, so `--since N` resumes exactly where a client stopped; `--follow` streams appends (~250ms poll). Read on any kind — an archived transcript and a cockpit pane are readable, only writing is gated. Entries are never truncated: a 200KB `tool_result` arrives whole |
-| `gv doctor --json` | `rows` | array — connection checks |
+| `gv doctor --json` | `rows` | array — connection checks; row ids are additive, e.g. `memory:<repo>` (grove-437) reports where that repo's workers' Claude Code auto memory resolves to, its note count and newest `modified` in `info`, `warn` when the surface is disabled |
+| `gv learnings [--since 14d] --json` | `report` | object — the read side of the learnings promotion loop (grove-439): `{since, repos}`, one row per configured repo — see "Since grove-439" below. Pure read: it never writes a memory file, `LEARNINGS.md` or a skill |
 | `gv hooks status --json` | `hooks` | array — one row per managed settings.json: `{path, events, mismatches}`; `events` maps each of the four hook events to whether a gv entry exists, `mismatches` (grove-348, additive, omitted when empty) lists gv entries whose command binary is not the running gv — `{event, binary, missing}` where `missing` means the binary path does not exist on disk (the hooks silently do nothing) |
+| `gv account ls --json` | `accounts` | array — Claude subscription accounts (claude-accounts design §Decision 7): `{name, active, email?, token_age_days, pinned, connectors, expired}`. The first row is always the implicit `login` (the interactive `/login`; `email` from `~/.claude.json` `oauthAccount`, omitted when unknown; `token_age_days` 0; `connectors` true). Every other row is a `claude setup-token` token account: `token_age_days` counts from the day it was added (tokens expire after one year), `connectors` false — a token session makes model requests only, no claude.ai connectors or Remote Control. `expired` is true once the token is 365+ days old (dead: re-run `claude setup-token` and `gv account add <name>`; `gv account use` refuses it); always false on `login`. `active` marks the one new launches and a shell `claude` use (exactly one row, unless the active record names a removed account — `gv doctor` flags that); `pinned` counts non-done tasks pinned to the account. Names only — no output ever carries a token value. With `--usage` (grove-473, additive) each row gains `usage: {five_hour?, seven_day?, seen_at?, hint?}` — the last 5-hour / weekly windows a session on that account showed its status line, as `gv statusline` recorded them (local files, no network; design §Decision 8). With data, both windows are present, each `{state, used_percentage?, resets_at?, stale?}` (`resets_at` RFC 3339). **Branch on `state`**: `live` — observed, `used_percentage` set, `resets_at` set when the reset time was recorded; `reset` — observed, and its `resets_at` has since passed: `used_percentage` 0, no `resets_at`, never the pre-reset number; `unknown` — no percentage was recorded (the window was never on the payload, or had no `used_percentage`): `used_percentage` absent — render no data, **never 0%**. `stale` (true only on a `live` window with no `resets_at`) means the sighting is older than the window itself, so the number cannot still be current. `seen_at` is the last sighting: **show its age beside the numbers**, they are not live. With no data, only `hint` is set (`no session on this account yet`, or an unreadable file) — render it, never a 0%. `gv account rm` deletes the account's usage record, so a re-added name starts with no data |
 | `gv brains --json` | `brains` | array — one row per REGISTERED workspace (not just the ones behind): `{label, root, state, have, want, command, note}` (grove-236). `state` is `current` · `stale` · `unstamped` · `absent` · `missing-root`; `have` is the seed stamp found on disk (empty when unstamped, absent or missing-root) and `want` is the stamp of the seed the running binary embeds; `command` is the `gv init --only orchestrator-md` line to run **from `root`**, empty when there is nothing to run (current, or a root that is gone). Pure read — the sweep never writes, and grove never overwrites a brain |
 | `gv watch --json` | *(none — a stream)* | one raw `events.jsonl` record per line, flushed as it lands; see React below |
 | `gv sub "<prompt>" [path…] --json` | `sub` | object — one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | array — usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | array — this workspace's `sub.jsonl` history, one `Record` per row (see below) |
-| `gv feature ls [--all] --json` | `features` | array — open feature trains, oldest first (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`. `--all` adds closed ones, which carry `closed: {reason, at}` (`reason` is `merged` or `abandoned`); an open row has no `closed` key. A slug re-opened after a close lists only its newest incarnation. Since grove-375 an **open** row also carries status (a closed row carries none of these keys): `cars` — array, `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}`, ordered landed (by `landed_at`) → active (by grab time) → queued (by `number`); `state` is `queued` (an open backend issue with the feature's label that no task tracks), `working`, `question` (waiting on the operator: a question, a block or a menu), `ready` (the worker reported done or its PR is ready/merged) or `landed` (a `task_done` followed its `task_created` on this feature — survives untrack and sweep); `number` is the ticket's trailing number (absent when it has none); `pr` the car's PR number, when known; `landed_at` only on landed cars; `after` (queued cars only, display only) lists the `#N`s from `depends on #N` lines in the issue body; `est_usd` the car's latest ledger estimate (0 when unrecorded). Then `landed` and `total` (counts over `cars`), `behind_base` (commits on `origin/<base>` missing from `origin/<branch>`, on the last FETCHED refs — nothing is fetched), `mergeable` (a local `git merge-tree` dry run of branch into base), both **absent** when the refs are not there locally; `pr` — `{number, url, state}` of the feature branch → base PR, absent when there is none; `est_usd` — the sum over `cars`. `--no-pr` skips the `pr` lookup and `--no-queued` skips the issue lookup (queued cars then simply don't appear); a failed lookup warns on stderr and leaves its field out. `serve` (grove-380): `{state, port?, url?, tip?, behind}` — `state` is `none` (never served), `untrusted` (`.grove/run.sh` exists and its sha256 is not the latest `run_script_trusted`), `stopped` (served before, window gone) or `running` (the exact `▶ <slug>` window exists at refresh; this wins over `untrusted`); `port`/`url`/`tip` come from the latest `feature_served`, and `behind` is true when that `tip` differs from `origin/<branch>` as last fetched |
+| `gv feature ls [--all] --json` | `features` | array — open feature trains, oldest first (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`. `--all` adds closed ones, which carry `closed: {reason, at}` (`reason` is `merged` or `abandoned`); an open row has no `closed` key. A slug re-opened after a close lists only its newest incarnation. Since grove-375 an **open** row also carries status (a closed row carries none of these keys): `cars` — array, `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}`, ordered landed (by `landed_at`) → active (by grab time) → queued (by `number`); `state` is `queued` (an open backend issue with the feature's label that no task tracks), `working`, `question` (waiting on the operator: a question, a block or a menu), `ready` (the worker reported done or its PR is ready/merged) or `landed` (a `task_done` followed its `task_created` on this feature — survives untrack and sweep; since grove-397, on a **GitHub** provider also any issue with the feature's label that is CLOSED and has a PR from its `<ticket>-…` branch MERGED into the feature branch — `landed_at` is then that PR's `mergedAt` and `pr` its number, GitHub wins when both know a car, a closed issue with no such PR is neither landed nor queued, and `--no-queued` or a failed lookup falls back to the event log alone); `number` is the ticket's trailing number (absent when it has none); `pr` the car's PR number, when known; `landed_at` only on landed cars; `after` (queued cars only, display only) lists the `#N`s from `depends on #N` lines in the issue body; `est_usd` the car's latest ledger estimate (0 when unrecorded). Then `landed` and `total` (counts over `cars`), `behind_base` (commits on `origin/<base>` missing from `origin/<branch>`, on the last FETCHED refs — nothing is fetched), `mergeable` (a local `git merge-tree` dry run of branch into base), both **absent** when the refs are not there locally; `pr` — `{number, url, state}` of the feature branch → base PR, absent when there is none; `est_usd` — the sum over `cars`. `--no-pr` skips the `pr` lookup and `--no-queued` skips the issue lookup (queued cars then simply don't appear); a failed lookup warns on stderr and leaves its field out. `serve` (grove-380): `{state, port?, url?, tip?, behind}` — `state` is `none` (never served), `untrusted` (`.grove/run.sh` exists and its sha256 is not the latest `run_script_trusted`), `stopped` (served before, window gone) or `running` (the exact `▶ <slug>` window exists at refresh; this wins over `untrusted`); `port`/`url`/`tip` come from the latest `feature_served`, and `behind` is true when that `tip` differs from `origin/<branch>` as last fetched |
 | `gv feature land <slug> [--json] [--yes]` | *(flat — no single key)* | object — `{schema_version, feature, land, skipped}`, plus `landed`/`failed` once a run actually executed (grove-376, Decision 6). `land` is an array, `{ticket, number, pr}`, of every tracked, not-done car whose PR is `MERGED` (the same `gh`-backed merge check `gv done`/`finishTask` uses — never git ancestry, since squash-merges break it). `skipped` is an array, `{ticket, number, reason}`, of every other car and why: `working` (no PR yet, still in progress), `PR open` (a PR exists but isn't merged), `no PR` (the car looks finished — done/ready — but no PR was found), or `queued` (an open backend issue under the feature's label, not yet grabbed). Without `--yes` this is a dry run — nothing runs, `landed`/`failed` are absent entirely, and (human mode) it prompts `land N? [y/N]`. With `--yes` (or a `y` at the prompt) it runs `finishTask` per `land` row — a failing row lands in `failed: [{ticket, error}]` and the rest still run — and `landed: [numbers]` names the issue numbers actually finished (`[]` when none, never omitted once a run executed). It never closes an issue or comments on one — that's the orchestrator's act, on the operator's order (Decision 8) |
 
 ```sh
@@ -113,6 +116,18 @@ Since grove-205 one more additive row field:
   "none"` — the absence of a sentinel — and omits the field, as do adopt
   and handoff, which clear the sentinel. Absent on rows from older logs.
   If you can hold a stream, prefer `gv watch`.
+
+Since grove-441 one more additive `sentinel` value, `done_unverified`:
+the worker claimed `STATUS: DONE` but the Stop hook's evidence gate
+(`repos.<name>.done_gate: block`) found the worktree dirty, the branch
+unpushed, or no PR — the row's label reads `done?`. Treat it as "not
+done": `gv watch --until done` does not fire on it. The `agent_status`
+record then carries additive data `gate` (`warn` | `block`),
+`gate_reason` (`3 uncommitted files / no PR for <branch>`) and
+`gate_decision` (`block`, or `pass:warn` | `pass:capped` |
+`pass:stop_hook_active` for an unverified DONE that was let through).
+Under the default `warn` the sentinel stays `done` and only those data
+keys reveal the verdict.
 
 Since grove-191 (workspace transparency) one more additive row field:
 
@@ -201,6 +216,118 @@ Since grove-373 (feature trains 02) two more additive row fields:
   whose base is its repo's configured `base:` — never read an absent
   `base` as `main`.
 
+Since grove-289 (`gv cost --context`): five additive fields on `gv cost
+--analyze --json`'s rows, one more `events.jsonl` type, and one additive
+task field:
+
+- `api_calls`, `avg_ctx`, `max_ctx`, `compactions`, `sub_calls` — the same
+  transcript walk `gv cost --context` runs, folded into the outcome-priced
+  ledger: deduped API-call count, mean/max per-call context size (tokens),
+  compaction count, and `gv sub` delegation-call count for the ticket.
+  `est_usd_per_call` (`cost.usd / api_calls`, omitted when `api_calls` is
+  0) rounds those two out. Two more deterministic flags ride the existing
+  `flags` array: `"context: avg ≥ 200k"` (`avg_ctx >= 200_000`) and
+  `"context: ≥150 calls, never compacted"` (`api_calls >= 150 &&
+  compactions == 0`).
+- The **orchestrator row** — both `gv cost --json` and `gv cost --analyze
+  --json` append one synthetic row for the ambient workspace's
+  orchestrator chats (every `orchestratorProjectDirs` transcript: the
+  brain dir plus one per model profile), a spend total no per-ticket row
+  ever showed before: `ticket: "orchestrator"`, `repo: <workspace label,
+  or "global">`, `done: false`, `outcome: "n/a"` (`--analyze` only), plus
+  the usual `cost` totals and a `sessions` field (the transcript file
+  count backing it). Present only when there is an ambient workspace —
+  omitted entirely on the legacy no-workspace path. The human table
+  prints it last, dimmed.
+- `compaction` — one `events.jsonl` record per SessionStart the worker's
+  Claude Code process fires with `source: "compact"` (a context-compaction
+  restart, not a new session): `data: {session_id}`. Folds into
+  `state.Task.Compactions` (below); no glyph change, no `session_started`
+  alongside it. The same hook prints a plain-text re-orientation to its
+  stdout (grove-440: ticket + acceptance criteria, `git log`/`git status`,
+  the PR body) that Claude Code adds to the worker's context — text for
+  the model, not a contract; the record's shape is unchanged.
+- `compactions` — additive `gv ls`/`gv cost --json` task field (via the
+  embedded task), the running count of `compaction` events folded for the
+  ticket. `omitempty`: present only when > 0.
+
+`gv cost --context`'s `report.growth` shares context by source bucket —
+`read_whole`, `read_targeted`, `bash_read`, `bash_build_test`, `bash_git`,
+`bash_gh`, `bash_gv_json`, `mcp`, `agent_report`, `edit_write`,
+`assistant_tool_input`, `assistant_text`, `prompt_nudge`, `other` — each
+value a **share of `ctx_tokens`**, not a token count: a block's
+chars-to-tokens conversion is the fixed **1.9 chars/token estimate**
+(docs/plans/2026-09-06-token-diet-research.md §7, LEARNINGS.md) — a
+relative-effort signal for judging a context cap, the deny gate, or `gv
+sub` a week later, never a precise count.
+
+Since grove-435 (model-fit 03) one more additive row field:
+
+- `effort` — the Claude Code `--effort` level the worker launched with:
+  `low`, `medium`, `high`, `xhigh` or `max`. Set from `gv grab|adopt
+  --effort <level>` or, with no flag, the repo's `effort:` config key.
+  **Absent** when neither pinned it — the worker then runs Claude Code's
+  own per-model default, which grove does not know; never read an absent
+  `effort` as any particular level. The same key rides the `task_created`
+  / `task_adopted` event data, and `gv cost --ledger` rows carry an
+  `effort` column (empty when unpinned).
+
+Since grove-470 (claude-accounts 03) one more additive row field:
+
+- `account` — the subscription account (`gv account ls`) the worker was
+  explicitly pinned to with `gv grab|adopt --account <name>`. A name,
+  never a token value. **Absent** when unpinned — the worker then ran on
+  whichever account was active at launch, or the interactive login, which
+  grove does not record; never read an absent `account` as `login`. `gv
+  adopt --account login` strips a pin. The same key rides the
+  `task_created` / `task_adopted` event data.
+
+Since grove-439 (model-fit 07): `gv learnings --json`, a new read verb,
+payload key `report`:
+
+- `since` — the window's start, RFC 3339 UTC (`--since` accepts `14d`,
+  `2w`, Go durations like `48h`; default `14d`).
+- `repos[]` — one per configured repo, sorted by name: `{repo, memory,
+  learnings_file?, entries, candidates, skills}`.
+  - `memory` — the repo's Claude Code auto memory, resolved exactly as
+    the `memory:<repo>` doctor row does (grove-437): `{dir, source?,
+    disabled?, notes_total, index, notes, warnings?}`. `source` is the
+    settings.json whose `autoMemoryDirectory` relocated it (absent on
+    the default path); `disabled` names what switched the surface off
+    (absent when enabled). `notes_total` counts every note in the dir;
+    `index[]` is `MEMORY.md` as `{title, file, hook?}` lines; `notes[]`
+    is only the notes newer than `since`, **`feedback`-type first**
+    (corrections and confirmed approaches), then newest first:
+    `{file, name, type?, description?, modified, modified_by, indexed,
+    error?}` — `type` is the frontmatter `type` (`user` · `feedback` ·
+    `project` · `reference`, read flat or under `metadata:`), `modified`
+    is the frontmatter `modified` when stamped else the file's mtime
+    (`modified_by` says which), `indexed` is whether `MEMORY.md` lists
+    it, and `error` is set on a note whose frontmatter opens and never
+    closes — such a note is always listed, never dropped. `warnings[]`
+    (omitted when empty) carries those errors and any index line naming
+    a missing file.
+  - `learnings_file` — the repo's `LEARNINGS.md` path; absent when the
+    repo keeps none (then `entries` and `candidates` are `[]`).
+  - `entries[]` — `LEARNINGS.md` entries dated on/after `since`, newest
+    first: `{date, section, fact, text, tickets?, skills?}` — `fact` is
+    the bold headline after the `YYYY-MM-DD ·`, `text` the whole entry
+    with continuation lines joined, `tickets` the `grove-N` ids it
+    mentions, `skills` the names from `.claude/skills/` it mentions.
+  - `candidates[]` — promotion candidates over **every** entry in the
+    file (not just the window): `{skill, date, fact, why}` for each
+    dated entry that names a skill whose `SKILL.md` cites none of the
+    entry's ticket ids, its date, or its headline. The rule has not
+    been distilled, so the orchestrator proposes it (duty 11).
+  - `skills[]` — the skill names found under the repo's
+    `.claude/skills/` (directories holding a `SKILL.md`).
+
+The memory directory is Claude Code's own; nothing in grove is written
+to make it appear. To point the verb at a scratch directory (the e2e
+does), set `autoMemoryDirectory` in the repo's
+`.claude/settings.local.json` — the same key, read in the same scope
+order, as the doctor row. There is no grove-side env override.
+
 ## React: `gv watch`, or tail `events.jsonl`
 
 `gv supervise [--interval 30s] [--once] [--json]` is what PRODUCES the
@@ -247,7 +374,7 @@ gv watch [--json] [--ticket X]... [--type agent_status,notification,…]
   the whole history. This is what makes a "before" snapshot impossible to
   sample late; do not rebuild one yourself.
 - **`--until <sentinel or event type>` exits 0 exactly when that transition
-  lands** — a sentinel (`question|blocked|done|none`) as before, or
+  lands** — a sentinel (`question|blocked|done|done_unverified|none`) as before, or
   (grove-252) a bare event type: `--until pr_merged`, `--until
   worker_waiting`. One notification, no polling arithmetic. A non-zero
   exit means the wait ended some other way — exit 0 always means the
@@ -288,11 +415,15 @@ Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
 a forwarding pointer to the remote grove host; a later `task_untracked`
-for the same ticket drops the pointer for good), and (grove-252) the
+for the same ticket drops the pointer for good), (grove-252) the
 eleven delivery/liveness types in the table above: `pr_opened`,
 `pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`, `pr_merged`,
 `pr_closed`, `worker_waiting`, `worker_vanished`, `worker_errored`,
-`worker_recovered`. `answered` may carry an
+`worker_recovered`, and (grove-289) `compaction` — data `{session_id}`,
+fired by a SessionStart with `source: "compact"` (a context-compaction
+restart, not a new session). It is in `--type`'s known vocabulary but
+NOT the default set: informational (`gv cost --context` is its read
+side), not actionable on its own. `answered` may carry an
 optional `data.op_id` (grove-186, additive): relayed `answer`/`nudge`
 hops (`--host`) stamp a client op id so a retried hop is a no-op on the
 remote — same id seen again ⇒ nothing pasted, no second event. Local
@@ -309,7 +440,13 @@ have no `session_id`; treat a missing one as unknown, never as foreign.
 `task_created` and `task_adopted` carry optional `data.feature` and
 `data.base` (grove-373, additive): written only when the task rides a
 feature train, so an off-train grab's record is byte-identical to before;
-`task_adopted` carries the stored pair through. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
+`task_adopted` carries the stored pair through. Both also carry optional
+`data.effort` (grove-435, additive): the `--effort` level the worker
+launched with, written only when pinned by flag or a repo `effort:` key.
+Both also carry optional `data.account` (grove-470, additive): the account
+name an explicit `--account` pinned the worker to — never a token value;
+on `task_adopted` an empty `account` is a pin stripped by `--account
+login`. Workspace-scoped (empty `ticket`): `feature_created` (grove-372: data
 `{slug, repo, branch, base, label}` — `gv feature new` opened a feature
 train; `branch` lives on origin, `base` is what it forks from and merges
 back to, `label` the issue label that marks its tickets), `feature_closed`
@@ -330,7 +467,7 @@ existence, so a window closed by hand has no stop record),
 chat ended from outside by `gv chat close` / the phone's End chat carries
 `reason: "ended"` plus `{session, workspace, session_id?}`, logged in the
 chat's own workspace before the kill), `orchestrator_spawned` (grove-198, additive: data
-`{workspace, session, session_id?, profile?, model?, op_id?, resume?, brief?}` — a detached
+`{workspace, session, session_id?, profile?, model?, op_id?, resume?, brief?, account?}` — a detached
 orchestrator chat started for a workspace by `gv orchestrator new
 --workspace <label>`, the receiving half of `--host`; `session` is its
 `grove-chat-<label>-<n>` tmux session and `op_id` the relayed hop's
@@ -346,7 +483,41 @@ agent as its first message; absent when the spawn carried none. `model`
 absent for the host default). `session_id` (grove-337, additive) is the
 Claude session id the chat runs on — minted for a fresh chat, the revived
 id for a `resume` — which is how a later revival finds the `model` to
-re-apply. New types will appear
+re-apply; `chat_hidden` / `chat_shown` (grove-401, additive: data
+`{session, pane, workspace, session_id?}` — `gv chat hide` moved a LOCAL
+cockpit chat pane off-screen into its own detached
+`grove-chat-<label>-<n>` tmux session, where it keeps running, and
+`gv chat show` joined a detached chat into its workspace's cockpit
+window. `session` is that chat session — the one the pane moved INTO on
+hide and OUT OF on show, which no longer exists once shown; `pane` is the
+tmux `%N` id, which survives both moves; `session_id` is the Claude
+session id, absent when the pane wears none. Logged in the chat's own
+workspace before the pane moves. Neither is a lifecycle event: the chat
+is the same process throughout, and `gv chat ls` simply reports it as
+`kind: chat` while hidden and `kind: cockpit` while shown — no row field
+was added or changed. `host` (grove-404, additive) marks the same two
+events for a REMOTE chat — one that runs on a configured host, whose
+cockpit pane is only a local `ssh … tmux attach`. There the hide CLOSED
+that local pane and the show opened a new one; nothing was sent to the
+host and the chat never stopped. With `host` present, `session` is the
+chat's tmux session ON that host, `pane` is the local attach pane — which
+does NOT survive the round trip, a shown remote chat has a new `%N` — and
+`session_id` is absent: the conversation's id is known to the host's own
+log, not this one. A remote chat is in no local `gv chat ls` row either
+way; absent `host` means the local move described above. `reason` (grove-487,
+additive) is `"focus"` when the move was the `focus` layout minimizing or
+restoring a chat (`L`, or a chat spawned while in focus) rather than an
+operator's hide/show; those events are appended AFTER the tmux move
+succeeded, so none is logged for a move that failed. Absent = a hand
+hide/show. Known limit
+(grove-405): except for a remote show, the record is appended BEFORE tmux
+acts, so a tmux failure after it leaves a `chat_hidden` / `chat_shown`
+for a move that did not happen — treat the pair as activity, and read
+where a chat IS from `gv chat ls --json`). `account` (grove-471, additive)
+is the claude account name — never a token — the chat was explicitly
+pinned to with `gv orchestrator new --account <name>`; absent when the
+chat runs on the active account or the login, so a revival resolves
+afresh. New types will appear
 over time — skip what you don't know.
 
 The last line may be torn mid-write; skip lines that fail to parse (grove
@@ -403,6 +574,26 @@ tmux pane, do bracketed-paste injection, and append the event for you:
 - `gv chat keys <session> <chars>` — one raw keystroke, no Enter, for the
   permission prompts and option pickers a prose box cannot drive. Same
   `writable` gate; a newline is refused (that is `send`'s job).
+- `gv chat hide [<session-id>|<%pane>]` / `gv chat show <session>`
+  (grove-401) — move a LOCAL cockpit chat pane off-screen into a detached
+  `grove-chat-<label>-<n>` session and back. The agent keeps running and
+  keeps its `session_id`; only the row's `session`, `kind` and `writable`
+  change, so **key a chat on `session_id`, never on `session`**. `hide`
+  with no argument hides the calling pane (`$TMUX_PANE`); a bare cockpit
+  session name that holds more than one chat is refused with the
+  candidates, never picked. `show` takes any detached chat of the
+  workspace, including one that was never in the cockpit, and needs the
+  workspace's cockpit running. Both refuse — non-zero, nothing moved — the
+  dashboard pane, worker windows, and a chat session an operator split
+  into several panes. A REMOTE (`@host`) chat pane (grove-404) is an ssh
+  attachment, so `hide <%pane>` closes it rather than moving it — the chat
+  keeps running on its host, which is told nothing — and
+  `show @<host>/<session>` opens a fresh attachment in the ambient
+  workspace's cockpit. Only a chat hidden from that cockpit can be shown
+  this way (the record lives on the cockpit's tmux session and goes when
+  the workspace is parked; the chat itself stays reachable over ssh). A
+  remote pane attached before grove-404 carries no record of which
+  session it shows and is refused, never guessed.
 - `gv chat restamp <session> [<session-id>]` — operator escape hatch
   (grove-222): re-point a live chat's identity stamp, or clear it (no id)
   so the next `gv chat ls` re-derives one. For the two cases nothing can

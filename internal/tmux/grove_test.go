@@ -12,8 +12,9 @@ func TestTmuxLayout(t *testing.T) {
 		want string
 	}{
 		{"horizontal", "horizontal", "even-horizontal"},
-		{"vertical", "vertical", "main-vertical"},
-		{"tiled", "tiled", "tiled"},
+		{"focus", "focus", "main-vertical"},
+		{"retired vertical falls back", "vertical", "even-horizontal"},
+		{"retired tiled falls back", "tiled", "even-horizontal"},
 		{"empty falls back to default", "", "even-horizontal"},
 		{"garbage falls back to default", "garbage", "even-horizontal"},
 	}
@@ -102,8 +103,9 @@ func TestPaneBorderFormat(t *testing.T) {
 	// OSC-proof carrier): a remote chat pane reads "@<host> · <profile>",
 	// falling back to "chat" for the host's own Claude, because an ssh-attach
 	// pane's own title belongs to the ssh client, not the agent.
-	want := "#{pane_index}: #{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat}," +
-		"#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}"
+	// grove-486: the focus-mode rail's arm is outermost — "chats".
+	want := "#{pane_index}: #{?#{@grove_rail},chats,#{?#{@grove_remote},@#{@grove_remote} · #{?#{@grove_profile},#{@grove_profile},chat}," +
+		"#{?#{@grove_profile},⚡ #{@grove_profile},#{pane_title}}}}"
 	if paneBorderFormat != want {
 		t.Errorf("paneBorderFormat = %q, want %q", paneBorderFormat, want)
 	}
@@ -426,5 +428,73 @@ func TestPlanEditor(t *testing.T) {
 		if got != c.want || pane != c.wantPane {
 			t.Errorf("%s: planEditor = (%v, %q), want (%v, %q)", c.name, got, pane, c.want, c.wantPane)
 		}
+	}
+}
+
+// grove-402: @grove_remote is APPENDED last, so every earlier field keeps
+// its index and a local pane (no tag — the trailing empty is trimmed) reads
+// back with no host.
+func TestParsePanesRemoteTag(t *testing.T) {
+	out := strings.Join([]string{
+		strings.Join([]string{"grove-g", "301", "ssh", "1", "1700000100", "%9", "2", "/ws", "", "", "groveremote"}, "\t"),
+		strings.Join([]string{"grove-g", "302", "claude", "1", "1700000100", "%10", "1", "/ws/o", "eeee", "opus"}, "\t"),
+	}, "\n")
+	panes := ParsePanes(out)
+	if len(panes) != 2 {
+		t.Fatalf("got %d panes, want 2", len(panes))
+	}
+	if panes[0].Remote != "groveremote" || panes[0].Model != "" || panes[0].ChatSession != "" {
+		t.Errorf("remote pane = %+v", panes[0])
+	}
+	if panes[1].Remote != "" || panes[1].Model != "opus" || panes[1].ChatSession != "eeee" {
+		t.Errorf("local pane = %+v", panes[1])
+	}
+}
+
+// grove-402: the cockpit's CHATS box calls Panes on the 1s beat, so the
+// whole server listing must stay exactly ONE tmux invocation.
+func TestPanesOneExec(t *testing.T) {
+	old := execTmux
+	defer func() { execTmux = old }()
+	var calls [][]string
+	execTmux = func(args ...string) (string, error) {
+		calls = append(calls, args)
+		return "grove-g\t301\tclaude\t1\t1700000100\t%9\t1\t/ws/o", nil
+	}
+	panes := Panes()
+	if len(panes) != 1 || panes[0].Pane != "%9" {
+		t.Fatalf("panes = %+v", panes)
+	}
+	if len(calls) != 1 || calls[0][0] != "list-panes" || calls[0][1] != "-a" {
+		t.Fatalf("Panes ran %v, want exactly one list-panes -a", calls)
+	}
+}
+
+// claude-accounts: @grove_account sits after @grove_remote (index 11), so an
+// account-pinned pane with no model tag keeps its place.
+func TestParsePanesAccountTag(t *testing.T) {
+	out := strings.Join([]string{
+		strings.Join([]string{"grove-chat-g-1", "201", "claude", "0", "1700000100", "%7", "1", "/ws/o", "eeee", "", "", "alt"}, "\t"),
+		strings.Join([]string{"grove-chat-g-2", "202", "claude", "0", "1700000100", "%8", "1", "/ws/o", "ffff", "opus"}, "\t"),
+	}, "\n")
+	panes := ParsePanes(out)
+	if panes[0].Model != "" || panes[0].Account != "alt" {
+		t.Errorf("pinned pane = %+v", panes[0])
+	}
+	if panes[1].Model != "opus" || panes[1].Account != "" {
+		t.Errorf("unpinned pane = %+v", panes[1])
+	}
+}
+
+// grove-510: the name stamp and the pane title are APPENDED, title last —
+// a title holding a tab keeps it, and the field order is unchanged.
+func TestParsePanesNameAndTitle(t *testing.T) {
+	line := strings.Join([]string{"grove-chat-x-4", "201", "claude", "0", "1700000100", "%7", "0", "/o", "id", "opus", "", "", "", "@3", "", "cockpit·1", "✳ Fix\tthe rail"}, "\t")
+	p := ParsePanes(line)
+	if len(p) != 1 || p[0].Name != "cockpit·1" || p[0].Title != "✳ Fix\tthe rail" || p[0].Window != "@3" || p[0].Rail {
+		t.Errorf("got %+v", p)
+	}
+	if !strings.HasSuffix(paneListFormat, "\t#{@grove_rail}\t#{"+ChatNameOption+"}\t#{pane_title}") {
+		t.Errorf("format must append the name stamp then the title: %q", paneListFormat)
 	}
 }

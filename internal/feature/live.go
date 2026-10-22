@@ -60,6 +60,34 @@ func LiveInput(cfg *config.Config, stateDir string, features map[string]*state.F
 			return prov.List()
 		},
 	}
+	// The GitHub landed lookup (grove-397) rides the queued pass; other
+	// providers leave both nil and landed comes from events alone.
+	ghRepo := func(f *state.Feature) (*config.Repo, *provider.GitHub, error) {
+		r := repo(f.Repo)
+		if r == nil {
+			return nil, nil, nil // Issues already reports it
+		}
+		prov, err := provider.FromConfigKind(cfg, cfg.ProviderKindFor(r), f.Repo, r.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		gh, _ := prov.(*provider.GitHub)
+		return r, gh, nil
+	}
+	in.ClosedIssues = func(f *state.Feature) ([]*provider.Task, error) {
+		_, gh, err := ghRepo(f)
+		if err != nil || gh == nil {
+			return nil, err
+		}
+		return gh.ListClosedLabeled(f.Label)
+	}
+	in.MergedPRs = func(f *state.Feature) ([]github.MergedPR, error) {
+		r, gh, err := ghRepo(f)
+		if err != nil || gh == nil {
+			return nil, err
+		}
+		return github.MergedInto(r.Path, f.Branch)
+	}
 	if withPR {
 		in.PR = func(f *state.Feature) (*github.PR, error) {
 			r := repo(f.Repo)

@@ -19,18 +19,20 @@ repo wins.
 
 | Command | Key | What |
 |---|---|---|
-| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373) |
+| `gv ls --json [--no-pr --no-cost]` | `tasks` | active fleet, one row per task; a feature-train car carries `feature` (slug) and `base` (its fork/PR branch), both absent off-train (grove-373); a worker pinned with `--effort` or a repo `effort:` carries `effort` (`low`\|`medium`\|`high`\|`xhigh`\|`max`), absent otherwise (grove-435); a worker pinned with `--account <name>` carries `account` (a name, never a token), absent when unpinned — never read absent as `login` (grove-470) |
 | `gv audit --json` | `report` | task-vs-reality classification |
 | `gv sweep --json` | `report` | proposed cleanup (dry-run, `{items, orphan_processes, worktree_processes, stale_prompts}`) |
 | `gv cost --json` / `--ledger` | `rows` | token/cost estimates / durable history |
 | `gv cost --analyze --json` | `report` | outcome-priced ledger |
+| `gv cost --context [ticket…\|--all] --json` | `rows` | per-ticket `{ticket, report}` (grove-289): per-call context size, `growth` by source bucket (share of `ctx_tokens`, 1.9 chars/token estimate), `compactions`, `top` amplified reads, `delegation` (`gv sub` rollup) |
 | `gv workspaces --json` | `workspaces` | registered groves: `{root, label, scope}` |
 | `gv doctor --json` | `rows` | connection checks |
+| `gv learnings [--since 14d] --json` | `report` | learnings promotion loop, read side (grove-439): `{since, repos[]}`; per repo `memory` = `{dir, source?, disabled?, notes_total, index[], notes[], warnings?}` (notes newer than `since`, `feedback` type first: `{file, name, type?, description?, modified, modified_by, indexed, error?}`), `learnings_file?`, `entries[]` `{date, section, fact, text, tickets?, skills?}` (dated in the window), `candidates[]` `{skill, date, fact, why}` (an entry naming a skill whose SKILL.md cites neither its ticket, date nor headline — over the whole file), `skills[]`. Pure read; scratch it via `autoMemoryDirectory` in the repo's `.claude/settings.local.json` |
 | `gv watch [--json]` | *(a stream)* | one event per flushed line — see React |
 | `gv sub "<prompt>" [path…] --json` | `sub` | one micro-task call's result: `{lane, model, mode, input_chars, input_tokens, output_tokens, cached_tokens, turns, ms, answer}` (grove-288) |
 | `gv sub --lanes --json` | `lanes` | usable `gv sub` lanes: `{name, host, haiku, sonnet, opus, billing, key_env, key_present}` |
 | `gv sub --ledger --json` | `rows` | this workspace's `sub.jsonl` history |
-| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one. Open rows add status (grove-375): `cars[]` `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}` (state `queued`/`working`/`question`/`ready`/`landed`; order landed → active → queued), `landed`, `total`, `behind_base?`, `mergeable?`, `pr?` `{number, url, state}`, `est_usd`; `--no-pr`/`--no-queued` skip the network lookups; `serve` = `{state: none\|untrusted\|stopped\|running, port?, url?, tip?, behind}` (grove-380) |
+| `gv feature ls [--all] --json` | `features` | open feature trains (grove-372): `{slug, repo, branch, base, label, created_at, closed?}`; `closed` = `{reason, at}`, present only with `--all` on a closed one. Open rows add status (grove-375): `cars[]` `{ticket, number, title, state, pr?, landed_at?, after?, est_usd}` (state `queued`/`working`/`question`/`ready`/`landed`; order landed → active → queued; on a GitHub provider `landed` is GitHub-derived — closed labelled issue + PR merged into the feature branch, grove-397 — with the event log as fallback), `landed`, `total`, `behind_base?`, `mergeable?`, `pr?` `{number, url, state}`, `est_usd`; `--no-pr`/`--no-queued` skip the network lookups; `serve` = `{state: none\|untrusted\|stopped\|running, port?, url?, tip?, behind}` (grove-380) |
 
 Human/TUI output is explicitly unstable — never parse it. `tasks.json` is
 a derived snapshot — never contractual, NEVER written.
@@ -64,15 +66,39 @@ row then carries `handed_off_to`; live rows carry `host`); and (grove-252)
 `worker_errored`, `worker_recovered` — the transition engine's delivery
 (PR-facing) and liveness (worker-facing, beyond what the Stop hook sees)
 dimensions, folded into row fields `delivery`/`liveness`
-(`{state, ...}`, absent means `none`/`ok`); see docs/plugins.md for the
-full per-type data table. `task_created`/`task_adopted` data carries
-`feature` + `base` only for a feature-train car. Workspace-scoped (empty ticket):
-`workspace_parked`, `orchestrator_closed`, `feature_created`
+(`{state, ...}`, absent means `none`/`ok`); and (grove-289) `compaction`
+— data `{session_id}`, fired by a SessionStart with `source: "compact"`
+(a restart after context compaction, not a new session); folds into the
+task's `compactions` count (`gv ls`/`gv cost --json`, omitted when 0). In
+`--type`'s known vocabulary, NOT the default set (informational). See
+docs/plugins.md for the full per-type data table. `task_created`/`task_adopted` data carries
+`feature` + `base` only for a feature-train car, and `effort` only when
+the worker launched with an `--effort` pin or a repo `effort:` default
+(grove-435), and `account` only when pinned by `--account` (an adopt
+writes `""` when `--account login` strips the pin; grove-470). Workspace-scoped (empty ticket):
+`workspace_parked`, `orchestrator_closed`, `orchestrator_spawned` (a
+detached chat; its data carries `account` only when pinned by
+`orchestrator new --account`, grove-471), `chat_hidden` / `chat_shown`
+(`{session, pane, workspace, session_id?}` — a local cockpit chat pane
+moved into a detached `grove-chat-*` session and back; same process, same
+`session_id`, only `gv chat ls`'s `session`/`kind`/`writable` change;
+with `host` present it was a REMOTE chat's local ssh-attach pane closed /
+re-opened — `session` is then the chat's session on that host),
+`feature_created`
 (`{slug, repo, branch, base, label}`), `feature_closed` (`{slug, reason}`,
 reason `merged`|`abandoned`), `feature_served` (`{slug, port, tip,
 window, url}`), `feature_serve_stopped` (`{slug}`), `run_script_trusted`
 (`{sha256}`, latest wins). Skip unknown types and lines
 that fail to parse (the last line may be torn mid-write).
+
+`gv cost --analyze --json` rows also carry (grove-289) `api_calls`,
+`avg_ctx`, `max_ctx`, `compactions`, `sub_calls`, `est_usd_per_call` (the
+same walk `gv cost --context` runs), two more deterministic flags
+(`avg_ctx >= 200_000`, `api_calls >= 150 && compactions == 0`), and one
+synthetic `ticket: "orchestrator"` row per ambient workspace (its
+orchestrator chats' spend, `done: false`, `outcome: "n/a"`, a `sessions`
+file count) — present on both `gv cost --json` and `gv cost --analyze
+--json`, omitted on the legacy no-workspace path.
 
 `<workspace-root>/.grove/state/sub.jsonl` (grove-288) is `gv sub`'s own
 append-only log, one `Record` per call: `{time, v, workspace, ticket,

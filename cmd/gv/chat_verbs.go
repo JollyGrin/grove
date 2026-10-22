@@ -52,11 +52,69 @@ import (
 // `gv chat tail` on a fresh chat stamps its pane exactly like the first `ls`
 // would.
 func findChat(target string) (chatRecord, error) {
+	// The focus-mode rail (grove-486) is a pane, not a chat: every verb that
+	// resolves a target refuses it by name rather than "no chat matches".
+	if tmux.IsRailPane(target) {
+		return chatRecord{}, tmux.ErrRail
+	}
 	recs, err := chatReport()
 	if err != nil {
 		return chatRecord{}, err
 	}
 	return matchChat(recs, target)
+}
+
+// findLiveChat is findChat for the paths that MOVE a chat — focus and show
+// (grove-521): a swap happens inside one workspace and an archived
+// transcript has no pane, so it resolves against the live rows of one
+// workspace — label, or the one the target names (`grove-chat-<label>-<n>`,
+// `grove-<label>`) — and never reads an archived transcript. A target that
+// names no workspace (a session id) is matched against every workspace's
+// live rows. Only a miss pays for the full report over the same workspaces,
+// so an archived target still gets its own refusal, not "no match".
+func findLiveChat(target, label string) (chatRecord, error) {
+	if tmux.IsRailPane(target) {
+		return chatRecord{}, tmux.ErrRail
+	}
+	list, err := workspace.LoadRegistry()
+	if err != nil {
+		return chatRecord{}, err
+	}
+	if label == "" {
+		label = targetWorkspaceLabel(target, list)
+	}
+	targets, err := chatWorkspaces(list, label)
+	if err != nil {
+		return chatRecord{}, err
+	}
+	isCockpit, err := cockpitSessionCheck()
+	if err != nil {
+		return chatRecord{}, err
+	}
+	look := liveChatLookup(isCockpit)
+	if rec, err := matchChat(liveChatRecords(targets, look), target); err == nil {
+		return rec, nil
+	}
+	return matchChat(chatRecords(targets, look), target)
+}
+
+// targetWorkspaceLabel is the registered workspace a target names by its
+// session: a workspace's cockpit session or one of its chat sessions. ""
+// for anything else (a session id, a prefix, an unregistered label).
+func targetWorkspaceLabel(target string, list []workspace.Workspace) string {
+	for _, ws := range list {
+		if ws.Label == "" {
+			continue
+		}
+		if target == cockpitSessionForLabel(ws.Label) {
+			return ws.Label
+		}
+		n, ok := strings.CutPrefix(target, "grove-chat-"+ws.Label+"-")
+		if ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			return ws.Label
+		}
+	}
+	return ""
 }
 
 // matchChat is findChat's second half: chat.Match over a report's rows.

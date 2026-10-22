@@ -176,3 +176,22 @@ func TestGitHubListLabeled(t *testing.T) {
 		t.Errorf("tasks = %+v", tasks[0])
 	}
 }
+
+func TestGitHubListClosedLabeled(t *testing.T) {
+	var got []string
+	g := NewGitHub("/r", "grove")
+	g.run = func(dir string, args ...string) ([]byte, error) {
+		got = args
+		return []byte(`[{"number":361,"title":"keys","closedAt":"2026-09-20T10:00:00Z"}]`), nil
+	}
+	tasks, err := g.ListClosedLabeled("keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := strings.Join(got, " "); !strings.Contains(a, "--state closed") || !strings.Contains(a, "--label keys") {
+		t.Errorf("gh args %v", got)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "grove-361" || tasks[0].Status != "closed" || tasks[0].Labels[0] != "keys" {
+		t.Errorf("tasks = %+v", tasks)
+	}
+}
