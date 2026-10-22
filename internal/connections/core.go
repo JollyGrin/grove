@@ -112,6 +112,9 @@ func Core(env Env) []Connection {
 	// claude-accounts: account rows, only when something is wrong.
 	conns = append(conns, accountConnections(env, time.Now())...)
 
+	// gv-keys: identity health + unresolved profile tokens, conditional.
+	conns = append(conns, keysConnections(env)...)
+
 	// The orchestrator brain's seed-drift row (grove-190): the cockpit
 	// only ever seeds an ABSENT brain, so without this row a seed
 	// improvement would silently never reach an already-seeded workspace.

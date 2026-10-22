@@ -309,6 +309,11 @@ func parse(raw []byte, src string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", src, err)
 	}
+	if c.Workspace.Label == "global" {
+		// gv-keys: `global` is the shared secrets namespace; a workspace
+		// carrying the label would read and write it as its own.
+		return nil, fmt.Errorf("parse %s: workspace.label %q is reserved (the shared secrets namespace) — pick another label", src, c.Workspace.Label)
+	}
 	if c.Provider.Kind == "" {
 		c.Provider.Kind = "markdown"
 	}

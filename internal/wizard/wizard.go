@@ -46,7 +46,7 @@ type Step struct {
 }
 
 // StepIDs is the --only namespace, in run order.
-var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "orchestrator-md", "workspace"}
+var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "orchestrator-md", "keys", "workspace"}
 
 // Flags are the prompt twins. Empty string / false = not provided.
 type Flags struct {
@@ -80,6 +80,7 @@ type Input struct {
 	Scope          string   // workspace scope: repo | parent
 	DetectedLabel  string   // default workspace label (root basename)
 	BrainState     string   // orchestrator brain state, for the step's Current column
+	KeysIdentity   bool     // this host already has an age identity (gv-keys)
 	Flags          Flags
 }
 
@@ -179,6 +180,13 @@ func Build(in Input) ([]Step, error) {
 			Current: in.BrainState,
 			On:      resolveOrchestratorMD(f),
 		},
+		{
+			ID:      "keys",
+			Kind:    KindConfirm,
+			Title:   "generate this host's age identity for encrypted secrets (gv keys) — local, idempotent, never overwrites",
+			Current: keysWord(in.KeysIdentity),
+			On:      true,
+		},
 	}
 
 	// Parent scope: per-repo steps don't apply (children register as
@@ -187,7 +195,7 @@ func Build(in Input) ([]Step, error) {
 		var kept []Step
 		for _, s := range steps {
 			switch s.ID {
-			case "workspace", "provider", "ntfy", "hooks", "orchestrator-md":
+			case "workspace", "provider", "ntfy", "hooks", "orchestrator-md", "keys":
 				kept = append(kept, s)
 			}
 		}
@@ -265,8 +273,8 @@ func resolveOrchestratorMD(f Flags) bool {
 
 // Answers extracts the final decisions from (possibly runner-edited) steps.
 type Answers struct {
-	Label, Base, Setup, Worker, Provider, Ntfy       string
-	InstallHooks, RunAgentsMD, RefreshOrchestratorMD bool
+	Label, Base, Setup, Worker, Provider, Ntfy                 string
+	InstallHooks, RunAgentsMD, RefreshOrchestratorMD, InitKeys bool
 }
 
 func Collect(steps []Step) Answers {
@@ -291,6 +299,8 @@ func Collect(steps []Step) Answers {
 			a.RunAgentsMD = s.On
 		case "orchestrator-md":
 			a.RefreshOrchestratorMD = s.On
+		case "keys":
+			a.InitKeys = s.On
 		}
 	}
 	return a
@@ -349,6 +359,13 @@ func hooksPathsLabel(paths []string) string {
 func boolWord(b bool) string {
 	if b {
 		return "installed"
+	}
+	return ""
+}
+
+func keysWord(present bool) string {
+	if present {
+		return "present"
 	}
 	return ""
 }

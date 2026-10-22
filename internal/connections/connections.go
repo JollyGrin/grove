@@ -20,6 +20,7 @@ import (
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/hooks"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/orchestrator"
@@ -124,6 +125,12 @@ type Env struct {
 	// AccountTasks folds every task an account pin could live in (the
 	// pinned-missing row); nil drops that row.
 	AccountTasks func() []*state.Task
+
+	// KeysIdentityPath is this host's age identity file (gv-keys); ""
+	// drops the keys rows (fake envs). KeysHeld names every secret stored
+	// in any namespace — directory listing only, never a value.
+	KeysIdentityPath string
+	KeysHeld         func() map[string]bool
 }
 
 // NewEnv builds the real-machine Env.
@@ -152,6 +159,11 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		OrchestratorSeed:  orchestrator.ClaudeMd,
 		TmuxGlobalOptions: tmux.GlobalOptions,
 		AccountsStateDir:  config.StateDir(),
+		KeysIdentityPath:  secrets.IdentityPath(),
+		KeysHeld: func() map[string]bool {
+			held, _ := secrets.Held()
+			return held
+		},
 	}
 }
 

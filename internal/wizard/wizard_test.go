@@ -200,7 +200,7 @@ func TestWorkspaceStepAndParentScope(t *testing.T) {
 	}
 	// The orchestrator brain is workspace-wide — a parent workspace has a
 	// cockpit and a brain too, so its step survives the narrowing.
-	if strings.Join(ids, " ") != "workspace provider ntfy hooks orchestrator-md" {
+	if strings.Join(ids, " ") != "workspace provider ntfy hooks orchestrator-md keys" {
 		t.Errorf("parent scope steps = %v", ids)
 	}
 
@@ -255,5 +255,34 @@ func TestProviderOptionsIncludeGithubForGithubRemotes(t *testing.T) {
 	steps2, _ := Build(in2)
 	if strings.Contains(strings.Join(step(t, steps2, "provider").Options, " "), "github") {
 		t.Error("no github remote → no github option")
+	}
+}
+
+// The keys step offers this host's age identity (gv-keys). Generating one
+// is local and idempotent, so it is ON by default — --yes included — and
+// the Current column says whether one exists already.
+func TestKeysStep(t *testing.T) {
+	steps, err := Build(freshInput(t, Flags{Yes: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := step(t, steps, "keys")
+	if k.Kind != KindConfirm || !k.On || k.Current != "" {
+		t.Errorf("fresh host keys step = %+v, want ON confirm with empty Current", k)
+	}
+	if !Collect(steps).InitKeys {
+		t.Error("Collect must carry the keys answer")
+	}
+
+	in := freshInput(t, Flags{Yes: true})
+	in.KeysIdentity = true
+	have, _ := Build(in)
+	if got := step(t, have, "keys").Current; got != "present" {
+		t.Errorf("Current with an identity = %q, want present", got)
+	}
+
+	only, err := Build(freshInput(t, Flags{Only: "keys", Yes: true}))
+	if err != nil || len(only) != 1 || only[0].ID != "keys" {
+		t.Errorf("--only keys = %v %v", only, err)
 	}
 }
