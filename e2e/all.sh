@@ -16,8 +16,9 @@ fail=0
 # polls `gh` every beat, and 5 cockpits once exhausted the 5000/hr GraphQL
 # limit). A guard `gh` goes first on PATH for every suite: it records the
 # call and fails it, so a suite that reaches for the real gh can't
-# spend quota (GROVE_E2E_STRICT_GH=1 turns any hit red). Suites that stub their own gh prepend
-# it ahead of the guard, so the guard only ever sees an unstubbed call.
+# spend quota. Strict by default (grove-540): any hit turns the run red;
+# GROVE_E2E_STRICT_GH=0 opts out. Suites stub gh themselves (gh-stub.sh or
+# their own), ahead of the guard, so it only ever sees an unstubbed call.
 GUARD_BIN="$LOGS/guard-bin"
 GUARD_HITS="$LOGS/gh-guard-hits.log"
 mkdir -p "$GUARD_BIN"
@@ -65,13 +66,12 @@ for s in workspace.sh cockpit.sh chat.sh chat_hide.sh focus.sh; do
   run_suite "$s" hostile
 done
 
-# Unstubbed gh calls were blocked above, so no suite spent live quota. Many
-# older suites still reach for gh and tolerate it failing — list them so the
-# leak is visible; GROVE_E2E_STRICT_GH=1 makes any hit a failure.
+# Unstubbed gh calls were blocked above, so no suite spent live quota. List
+# them; any hit is a failure unless GROVE_E2E_STRICT_GH=0.
 if [ -s "$GUARD_HITS" ]; then
   printf '\nnote: unstubbed gh calls were blocked (suite: count):\n'
   sed 's/^\[\([^]]*\)\].*/\1/' "$GUARD_HITS" | sort | uniq -c
-  [ "${GROVE_E2E_STRICT_GH:-}" = 1 ] && fail=1
+  [ "${GROVE_E2E_STRICT_GH:-1}" = 0 ] || fail=1
 fi
 
 if [ "$fail" -eq 0 ]; then

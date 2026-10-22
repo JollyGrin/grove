@@ -39,6 +39,7 @@ real_tmux() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR tmux list-sessions -F '#{s
 REAL_TMUX_BEFORE="$(real_tmux)"
 
 export HOME="$SCRATCH/home"
+. "$(dirname "$0")/gh-stub.sh"; install_gh_stub "$SCRATCH"   # grove-540: never reach the real gh
 export HISTFILE=/dev/null
 export LESSHISTFILE=-
 # $TMUX beats TMUX_TMPDIR — unset or every tmux call hits the REAL server.

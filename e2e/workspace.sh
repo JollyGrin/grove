@@ -18,6 +18,7 @@ GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
 export HOME="$SCRATCH/home"
+. "$(dirname "$0")/gh-stub.sh"; install_gh_stub "$SCRATCH"   # grove-540: never reach the real gh
 # Hermetic scratch HOME: a pane shell flushes .bash_history into it as it
 # DIES — i.e. during cleanup's rm -rf, which then fails "Directory not
 # empty" and (as the EXIT trap's last command) becomes this suite's exit
