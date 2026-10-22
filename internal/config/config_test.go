@@ -374,9 +374,11 @@ func TestWithModel(t *testing.T) {
 	}
 }
 
+const testSource = `eval "$(/x/gv keys env --profile p)"`
+
 func TestWrapProfileNilPassthrough(t *testing.T) {
 	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/x.txt)"`
-	if got := WrapProfile(cmd, nil, "/secrets/.env"); got != cmd {
+	if got := WrapProfile(cmd, nil, testSource); got != cmd {
 		t.Errorf("WrapProfile(nil profile) = %q, want unchanged %q", got, cmd)
 	}
 }
@@ -389,7 +391,7 @@ func TestWrapProfileOrdering(t *testing.T) {
 		BaseURL: "https://openrouter.ai/api", AuthTokenEnv: "OPENROUTER_API_KEY",
 		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
-	got := WrapProfile(modeled, p, "/home/x/.config/grove/.env")
+	got := WrapProfile(modeled, p, testSource)
 	if !strings.Contains(got, "exec "+modeled) {
 		t.Errorf("wrap does not exec the already-modeled command intact:\n%s", got)
 	}
@@ -404,9 +406,9 @@ func TestWrapProfileQuotingAndShape(t *testing.T) {
 		Haiku:        "z-ai/glm-4.5-air",
 	}
 	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/prompt.txt)"`
-	got := WrapProfile(cmd, p, "/home/x/.config/grove/.env")
+	got := WrapProfile(cmd, p, testSource)
 
-	if !strings.HasPrefix(got, "( . '/home/x/.config/grove/.env' && export") {
+	if !strings.HasPrefix(got, "( "+testSource+" && export") {
 		t.Errorf("does not self-source secrets file first: %s", got)
 	}
 	if !strings.Contains(got, "ANTHROPIC_BASE_URL='https://openrouter.ai/api'") {
@@ -431,7 +433,7 @@ func TestWrapProfileQuotingAndShape(t *testing.T) {
 
 func TestWrapProfileMetacharInBaseURL(t *testing.T) {
 	p := &ModelProfile{BaseURL: "https://example.com/a'b", AuthTokenEnv: "X", Sonnet: "m"}
-	got := WrapProfile("claude", p, "/s/.env")
+	got := WrapProfile("claude", p, testSource)
 	if !strings.Contains(got, shellQuote("https://example.com/a'b")) {
 		t.Errorf("base_url metachar not safely quoted: %s", got)
 	}
@@ -457,7 +459,7 @@ func TestWrapProfileSlotSelection(t *testing.T) {
 	}
 	for _, tc := range cases {
 		modeled := WithModel("claude", tc.model)
-		got := WrapProfile(modeled, p, "/s/.env")
+		got := WrapProfile(modeled, p, testSource)
 		if !strings.Contains(got, "ANTHROPIC_MODEL="+shellQuote(tc.wantSlug)) {
 			t.Errorf("%s: got %q, want ANTHROPIC_MODEL=%s", tc.name, got, shellQuote(tc.wantSlug))
 		}
@@ -500,7 +502,7 @@ func TestWrapProfileEnvOrderingAndPrecedence(t *testing.T) {
 			"ANTHROPIC_BASE_URL":              "https://evil.example.com",
 		},
 	}
-	got := WrapProfile("claude", p, "/s/.env")
+	got := WrapProfile("claude", p, testSource)
 
 	iCompact := strings.Index(got, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=")
 	iEnable := strings.Index(got, "ENABLE_TOOL_SEARCH=")
@@ -531,18 +533,18 @@ func TestWrapProfileNoEnvByteIdentical(t *testing.T) {
 		Opus: "z-ai/glm-5.2", Sonnet: "z-ai/glm-5.2", Haiku: "z-ai/glm-4.5-air",
 	}
 	cmd := `claude --dangerously-skip-permissions "$(cat /tmp/prompt.txt)"`
-	want := "( . '/home/x/.config/grove/.env' && export ANTHROPIC_BASE_URL='https://openrouter.ai/api' " +
+	want := "( " + testSource + " && export ANTHROPIC_BASE_URL='https://openrouter.ai/api' " +
 		`ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_MODEL='z-ai/glm-5.2' ` +
 		"ANTHROPIC_DEFAULT_OPUS_MODEL='z-ai/glm-5.2' ANTHROPIC_DEFAULT_SONNET_MODEL='z-ai/glm-5.2' " +
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL='z-ai/glm-4.5-air' && exec " + cmd + " )"
 
-	if got := WrapProfile(cmd, p, "/home/x/.config/grove/.env"); got != want {
+	if got := WrapProfile(cmd, p, testSource); got != want {
 		t.Errorf("no env: output changed:\ngot:  %s\nwant: %s", got, want)
 	}
 
 	pEmpty := *p
 	pEmpty.Env = map[string]string{}
-	if got := WrapProfile(cmd, &pEmpty, "/home/x/.config/grove/.env"); got != want {
+	if got := WrapProfile(cmd, &pEmpty, testSource); got != want {
 		t.Errorf("empty env: map output changed:\ngot:  %s\nwant: %s", got, want)
 	}
 }
@@ -948,5 +950,55 @@ func TestParseRejectsReservedGlobalLabel(t *testing.T) {
 	}
 	if _, err := parse([]byte("workspace:\n  label: canopy\n"), "ws.yaml"); err != nil {
 		t.Fatalf("ordinary label rejected: %v", err)
+	}
+}
+
+func TestLoadSecretRefEnv(t *testing.T) {
+	setHome(t)
+	writeGlobal(t, `
+model_profiles:
+  p:
+    base_url: https://x
+    auth_token_env: A_KEY
+    sonnet: s
+    env:
+      EXTRA: "secret:OPENROUTER_API_KEY"
+      ESC: "literal:secret:x"
+      LIT: plain
+`)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.ModelProfiles["p"]
+	if p.Name != "p" {
+		t.Errorf("Name = %q, want p", p.Name)
+	}
+	got := WrapProfile("claude", p, testSource)
+	for _, want := range []string{`EXTRA="$OPENROUTER_API_KEY"`, `ESC='secret:x'`, `LIT='plain'`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("wrap missing %s:\n%s", want, got)
+		}
+	}
+	names := ProfileSecretNames(p)
+	if strings.Join(names, ",") != "A_KEY,OPENROUTER_API_KEY" {
+		t.Errorf("ProfileSecretNames = %v", names)
+	}
+}
+
+func TestLoadSecretRefInvalidName(t *testing.T) {
+	setHome(t)
+	writeGlobal(t, `
+model_profiles:
+  kimi:
+    base_url: https://x
+    auth_token_env: A_KEY
+    sonnet: s
+    env:
+      EXTRA: "secret:not a name"
+`)
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), `"kimi"`) || !strings.Contains(err.Error(), `"EXTRA"`) {
+		t.Fatalf("want load error naming profile and key, got %v", err)
 	}
 }

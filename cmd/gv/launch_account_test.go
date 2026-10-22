@@ -77,7 +77,7 @@ func TestWrapWorkerNeverNests(t *testing.T) {
 	if strings.Contains(got, "CLAUDE_CODE_OAUTH_TOKEN") || strings.Contains(got, "exec (") {
 		t.Fatalf("profile and account wraps nested: %s", got)
 	}
-	if want := config.WrapProfile("claude", p, config.SecretsPath()); got != want {
+	if want := config.WrapProfile("claude", p, profileSource(p)); got != want {
 		t.Fatalf("wrapWorker(profile) = %s, want the profile wrap alone", got)
 	}
 }

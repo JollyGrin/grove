@@ -70,6 +70,9 @@ type ModelProfile struct {
 	// Exported before the built-ins in WrapProfile, so a profile's env can
 	// never shadow the dedicated base_url/auth_token_env/slug fields.
 	Env map[string]string `yaml:"env"`
+	// Name is the profile's key in model_profiles, set by parse — the
+	// launch wrap hands it to `gv keys env --profile`. Never in the YAML.
+	Name string `yaml:"-"`
 }
 
 // Host is one named remote grove host (grove-176, the remote-overflow
@@ -360,9 +363,13 @@ func parse(raw []byte, src string) (*Config, error) {
 		if p == nil {
 			continue
 		}
-		for k := range p.Env {
+		p.Name = name
+		for k, v := range p.Env {
 			if !envKeyPattern.MatchString(k) {
 				return nil, fmt.Errorf("model profile %q: invalid env key %q (want %s)", name, k, envKeyPattern.String())
+			}
+			if ref, ok := SecretRef(v); ok && !envKeyPattern.MatchString(ref) {
+				return nil, fmt.Errorf("model profile %q: env %q: invalid secret name %q (want %s)", name, k, ref, envKeyPattern.String())
 			}
 		}
 	}
@@ -530,18 +537,59 @@ func (p *ModelProfile) slugFor(slot string) string {
 	return p.Sonnet
 }
 
+const (
+	secretPrefix  = "secret:"
+	literalPrefix = "literal:"
+)
+
+// SecretRef reports whether an env value is a `secret:NAME` reference and
+// returns NAME (unvalidated — parse checks it). `literal:` escapes: a value
+// starting with it is never a reference.
+func SecretRef(v string) (name string, ok bool) {
+	if strings.HasPrefix(v, secretPrefix) {
+		return strings.TrimPrefix(v, secretPrefix), true
+	}
+	return "", false
+}
+
+// ProfileSecretNames is the set of secret names a launch under p must
+// resolve: the auth token's name plus every `secret:NAME` env reference,
+// sorted and de-duplicated.
+func ProfileSecretNames(p *ModelProfile) []string {
+	if p == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var names []string
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	add(p.AuthTokenEnv)
+	for _, v := range p.Env {
+		if n, ok := SecretRef(v); ok {
+			add(n)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // WrapProfile wraps an already-`WithModel`'d claude command so it runs
 // against a model profile's backend instead of the operator's own Claude
 // sub. p == nil returns modeledCmd unchanged — the no-profile path is
 // byte-for-byte today's behavior.
 //
-// The wrap self-sources secretsPath (~/.config/grove/.env) rather than
-// relying on inherited environment — validated by experiment that a fresh
-// tmux pane does not inherit an interactive shell's export (grove-36 design
-// §2.1). `export … ; exec` (never `env NAME=$VAR`) keeps the expanded
-// token out of argv and out of `tmux capture-pane`; base_url and every
-// slug are shell-quoted, the token stays a bare $NAME so it expands only
-// from the sourced file.
+// The wrap runs source — a shell snippet that populates the environment
+// (`eval "$(gv keys env --profile P)"`, built by the caller) — rather than
+// relying on inherited environment: a fresh tmux pane does not inherit an
+// interactive shell's export (grove-36 design §2.1). `export … ; exec`
+// (never `env NAME=$VAR`) keeps the expanded token out of argv and out of
+// `tmux capture-pane`; base_url and every slug are shell-quoted, the token
+// and every `secret:NAME` env value stay a bare "$NAME" so they expand only
+// from what source exported.
 //
 // Sets ANTHROPIC_MODEL to the slug for the class the modeled command
 // requested (opus/sonnet/haiku; a Fable pin is the lane's opus slot — see
@@ -552,7 +600,7 @@ func (p *ModelProfile) slugFor(slot string) string {
 // p.Env entries (grove-103) are exported first, in sorted key order for
 // deterministic output, followed by the six built-ins — so a profile's env
 // map can never shadow the dedicated base_url/auth_token_env/slug fields.
-func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string {
+func WrapProfile(modeledCmd string, p *ModelProfile, source string) string {
 	if p == nil {
 		return modeledCmd
 	}
@@ -565,14 +613,19 @@ func WrapProfile(modeledCmd string, p *ModelProfile, secretsPath string) string 
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			extra.WriteString(k + "=" + shellQuote(p.Env[k]) + " ")
+			v := p.Env[k]
+			if ref, ok := SecretRef(v); ok {
+				extra.WriteString(k + "=\"$" + ref + "\" ")
+				continue
+			}
+			extra.WriteString(k + "=" + shellQuote(strings.TrimPrefix(v, literalPrefix)) + " ")
 		}
 	}
 	return fmt.Sprintf(
-		"( . %s && export %sANTHROPIC_BASE_URL=%s ANTHROPIC_AUTH_TOKEN=\"$%s\" ANTHROPIC_MODEL=%s "+
+		"( %s && export %sANTHROPIC_BASE_URL=%s ANTHROPIC_AUTH_TOKEN=\"$%s\" ANTHROPIC_MODEL=%s "+
 			"ANTHROPIC_DEFAULT_OPUS_MODEL=%s ANTHROPIC_DEFAULT_SONNET_MODEL=%s ANTHROPIC_DEFAULT_HAIKU_MODEL=%s "+
 			"&& exec %s )",
-		shellQuote(secretsPath), extra.String(), shellQuote(p.BaseURL), p.AuthTokenEnv, shellQuote(slug),
+		source, extra.String(), shellQuote(p.BaseURL), p.AuthTokenEnv, shellQuote(slug),
 		shellQuote(p.Opus), shellQuote(p.Sonnet), shellQuote(p.Haiku),
 		modeledCmd,
 	)

@@ -8,6 +8,15 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
+  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
+  and `.claude/settings.local.json` never reaches a fresh worktree**
+  (grove-437). Rule: treat auto memory as one surface per repo;
+  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
+  reads the default location rather than relocating it. A headless
+  `claude -p` run carries the auto-memory system prompt, so it is a valid
+  probe of whether a kickoff makes workers write memory. Rule:
+  claude-code-facts §Profiles.
 - **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd, so
   every worktree shares `<config dir>/projects/<encoded main checkout>/
   memory/` — and the one settings scope that is per-repo and private,

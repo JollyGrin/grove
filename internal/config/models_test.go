@@ -118,7 +118,7 @@ func TestRunsModel(t *testing.T) {
 	// The label and the spawn cannot disagree: RunsModel's profile answer is
 	// the ANTHROPIC_MODEL WrapProfile exports for the same launch.
 	launch := PinModel("claude --x", "opus")
-	if w := WrapProfile(launch, p, "/dev/null"); !strings.Contains(w, "ANTHROPIC_MODEL='glm-5'") {
+	if w := WrapProfile(launch, p, testSource); !strings.Contains(w, "ANTHROPIC_MODEL='glm-5'") {
 		t.Fatalf("WrapProfile disagrees with RunsModel: %s", w)
 	}
 }
