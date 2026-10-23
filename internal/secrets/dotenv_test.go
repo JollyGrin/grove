@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/JollyGrin/grove/internal/config"
 )
 
 const dotenvSample = `# provider keys
@@ -45,26 +43,24 @@ func writeEnv(t *testing.T, home, body string) string {
 	return p
 }
 
-func TestResolveLegacyEnv(t *testing.T) {
+// grove-370: the plaintext .env is no longer a resolution source.
+func TestResolveIgnoresLegacyEnv(t *testing.T) {
 	home, _ := scratch(t)
 	if _, _, err := InitIdentity(); err != nil {
 		t.Fatal(err)
 	}
-	if config.SecretsPath() != filepath.Join(home, ".config", "grove", ".env") {
-		t.Fatalf("SecretsPath = %s", config.SecretsPath())
+	if LegacyEnvPath() != filepath.Join(home, ".config", "grove", ".env") {
+		t.Fatalf("LegacyEnvPath = %s", LegacyEnvPath())
 	}
 	writeEnv(t, home, "ONLY_ENV=from-dotenv\nBOTH=from-dotenv\n")
 	if err := Set(Global, "BOTH", []byte("from-store")); err != nil {
 		t.Fatal(err)
 	}
-	if got := Resolve("", "ONLY_ENV"); got != "from-dotenv" {
-		t.Errorf("env-only name = %q", got)
+	if got := Resolve("", "ONLY_ENV"); got != "" {
+		t.Errorf("env-only name = %q, want unresolved", got)
 	}
 	if got := Resolve("", "BOTH"); got != "from-store" {
-		t.Errorf("store must win over .env, got %q", got)
-	}
-	if _, ns, _ := Lookup("", "ONLY_ENV"); ns != "legacy-env" {
-		t.Errorf("namespace = %q", ns)
+		t.Errorf("store value = %q", got)
 	}
 }
 

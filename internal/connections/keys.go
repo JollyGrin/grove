@@ -106,14 +106,16 @@ func storedGlobal(env Env) map[string]bool {
 
 // legacyEnvConnection is keys:legacy-env (gv-keys 07): warn while the
 // pre-store ~/.config/grove/.env holds a name the encrypted store lacks.
-// Names only — the file is parsed, never echoed. Ticket 10 removes it.
+// Names only — the file is parsed, never echoed. Nothing falls back to
+// the file any more (grove-370): until it is imported its names resolve
+// to nothing.
 func legacyEnvConnection(env Env) Connection {
 	return Connection{
 		ID:          "keys:legacy-env",
 		Kind:        KindFile,
 		Severity:    SeverityWarn,
 		RequiredFor: []string{"grab", "keys"},
-		Title:       "legacy .env secrets imported into the encrypted store",
+		Title:       "plaintext .env still present — import and remove it",
 		Fix:         "gv keys import --rm",
 		Check: func(e Env) Status {
 			path := legacyEnvPath(e)
@@ -130,9 +132,11 @@ func legacyEnvConnection(env Env) Connection {
 			}
 			sort.Strings(missing)
 			if len(missing) > 0 {
-				return Status{State: StateWarn, Info: path + " holds " + strings.Join(missing, ", ") + " not in the encrypted store"}
+				return Status{State: StateWarn, Info: path + " holds " + strings.Join(missing, ", ") + " not in the encrypted store — nothing reads the file any more; import and remove it"}
 			}
-			return Status{State: StateOK, Info: path + " — every name is in the store; delete it with gv keys import --rm"}
+			// Nothing reads the file any more, so a copy left behind is
+			// plaintext secrets for no purpose.
+			return Status{State: StateWarn, Info: path + " still present — every name is in the store; remove it with gv keys import --rm"}
 		},
 	}
 }

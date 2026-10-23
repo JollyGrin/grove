@@ -3,6 +3,7 @@ package secrets
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -38,15 +39,11 @@ func ParseDotenv(raw []byte) map[string]string {
 	return out
 }
 
-// legacyEnv is the one-release fallback (gv-keys design §3): a name the
-// store and the process env lack is read from ~/.config/grove/.env.
-// Ticket gv-keys 10 removes it, with the openrouter copy of the parser.
-func legacyEnv(name string) string {
-	raw, err := os.ReadFile(config.SecretsPath())
-	if err != nil {
-		return ""
-	}
-	return ParseDotenv(raw)[name]
+// LegacyEnvPath is the pre-store plaintext secrets file. Nothing resolves
+// from it any more (grove-370): it is only what `gv keys import` reads and
+// what doctor points at.
+func LegacyEnvPath() string {
+	return filepath.Join(config.Dir(), ".env")
 }
 
 // Has reports whether ns holds name, without decrypting anything.

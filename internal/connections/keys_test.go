@@ -192,7 +192,7 @@ func TestKeysLegacyEnvRow(t *testing.T) {
 		in     string
 	}{
 		{"unimported name", "A_KEY=1\nB_KEY=2\n", []string{"global/A_KEY"}, StateWarn, "B_KEY"},
-		{"all imported", "A_KEY=1\n", []string{"global/A_KEY"}, StateOK, ""},
+		{"all imported, file left", "A_KEY=1\n", []string{"global/A_KEY"}, StateWarn, "still present"},
 		{"file absent", "", []string{"global/A_KEY"}, StateOK, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
