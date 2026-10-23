@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
-const keysUsage = "usage: gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>"
+const keysUsage = "usage: gv keys init | recipient | set NAME [--type TEXT] [--reveal N] [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>"
 
 // keysArgs is the parsed tail of a `gv keys set|rm|ls` line.
 type keysArgs struct {
@@ -25,6 +26,8 @@ type keysArgs struct {
 	workspace bool
 	label     string // the optional L after --workspace
 	json      bool
+	typ       string // --type
+	reveal    int    // --reveal
 }
 
 // parseKeysArgs reads NAME plus the namespace flags. `--workspace` takes
@@ -39,6 +42,20 @@ func parseKeysArgs(args []string) (keysArgs, error) {
 			a.global = true
 		case arg == "--json":
 			a.json = true
+		case arg == "--type" || arg == "--reveal":
+			if i+1 >= len(args) {
+				return a, fmt.Errorf("%s needs a value", arg)
+			}
+			i++
+			if arg == "--type" {
+				a.typ = args[i]
+				break
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 0 {
+				return a, fmt.Errorf("--reveal wants a non-negative number, got %q", args[i])
+			}
+			a.reveal = n
 		case arg == "--workspace":
 			a.workspace = true
 			if len(a.pos) > 0 && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
@@ -116,7 +133,7 @@ func cmdKeys(args []string) error {
 		if err != nil {
 			return err
 		}
-		return keysSet(ns, a.pos[0])
+		return keysSet(ns, a.pos[0], a.typ, a.reveal)
 	case "ls":
 		if len(a.pos) != 0 {
 			return errors.New("usage: gv keys ls [--json]")
@@ -232,7 +249,7 @@ func readSecretValue(name string) ([]byte, error) {
 	return b, nil
 }
 
-func keysSet(ns, name string) error {
+func keysSet(ns, name, typ string, reveal int) error {
 	if !secrets.ValidName(name) {
 		return fmt.Errorf("invalid secret name %q (want ^[A-Za-z_][A-Za-z0-9_]*$)", name)
 	}
@@ -240,10 +257,14 @@ func keysSet(ns, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := secrets.Set(ns, name, val); err != nil {
+	previewErr, err := secrets.SetWithMeta(ns, name, val, typ, reveal)
+	if err != nil {
 		return err
 	}
 	fmt.Printf("✓ stored %s in %s\n", name, ns)
+	if previewErr != nil {
+		fmt.Printf("• no preview stored: %v\n", previewErr)
+	}
 	return nil
 }
 
@@ -268,7 +289,11 @@ func keysLs(asJSON bool) error {
 		if r.Shadowed {
 			mark = "  (shadowed by this workspace)"
 		}
-		fmt.Printf("%-28s %-14s %d recipient(s)%s\n", r.Name, r.Namespace, r.Recipients, mark)
+		preview := r.Preview
+		if preview == "" {
+			preview = "***"
+		}
+		fmt.Printf("%-28s %-14s %-24s %-26s %d recipient(s)%s\n", r.Name, r.Namespace, r.Type, preview, r.Recipients, mark)
 	}
 	return nil
 }

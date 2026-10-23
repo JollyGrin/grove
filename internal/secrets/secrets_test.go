@@ -398,7 +398,7 @@ func TestListAndRemove(t *testing.T) {
 	if _, _, err := InitIdentity(); err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range []Entry{{"B_KEY", "thegrid"}, {"A_KEY", Global}, {"Z_KEY", Global}, {"A_KEY", "thegrid"}} {
+	for _, e := range []Entry{{Name: "B_KEY", Namespace: "thegrid"}, {Name: "A_KEY", Namespace: Global}, {Name: "Z_KEY", Namespace: Global}, {Name: "A_KEY", Namespace: "thegrid"}} {
 		if err := Set(e.Namespace, e.Name, []byte("v")); err != nil {
 			t.Fatal(err)
 		}
@@ -409,7 +409,7 @@ func TestListAndRemove(t *testing.T) {
 	os.MkdirAll(filepath.Join(StoreDir(), "Not_A_Label"), 0o700)
 	os.WriteFile(filepath.Join(StoreDir(), "Not_A_Label", "X.age"), []byte("x"), 0o600)
 
-	want := []Entry{{"A_KEY", Global}, {"Z_KEY", Global}, {"A_KEY", "thegrid"}, {"B_KEY", "thegrid"}}
+	want := []Entry{{Name: "A_KEY", Namespace: Global}, {Name: "Z_KEY", Namespace: Global}, {Name: "A_KEY", Namespace: "thegrid"}, {Name: "B_KEY", Namespace: "thegrid"}}
 	got, err := List()
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("List = %v %v\nwant %v", got, err, want)

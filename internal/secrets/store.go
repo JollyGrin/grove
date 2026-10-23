@@ -25,6 +25,8 @@ const (
 type Entry struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
+	Type      string `json:"type,omitempty"`
+	Preview   string `json:"preview,omitempty"`
 }
 
 func nsDir(ns string) string            { return filepath.Join(StoreDir(), ns) }
@@ -152,7 +154,11 @@ func List() ([]Entry, error) {
 			if !ok || f.IsDir() || !ValidName(name) {
 				continue
 			}
-			out = append(out, Entry{Name: name, Namespace: d.Name()})
+			m, err := ReadMeta(d.Name(), name)
+			if err != nil {
+				m = Meta{} // a bad sidecar must not hide the secret
+			}
+			out = append(out, Entry{Name: name, Namespace: d.Name(), Type: m.Type, Preview: m.Preview})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -176,7 +182,13 @@ func Remove(ns, name string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%s in %s: %w", name, ns, ErrNotFound)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(metaPath(ns, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Recipients lists ns's recipient strings (comments dropped). A namespace

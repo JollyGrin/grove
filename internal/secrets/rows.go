@@ -6,6 +6,8 @@ type Row struct {
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
 	Recipients int    `json:"recipients"`
+	Type       string `json:"type"`
+	Preview    string `json:"preview"`
 	// Shadowed marks a global row that the ambient workspace's own
 	// namespace overrides under the same name.
 	Shadowed bool `json:"shadowed"`
@@ -43,6 +45,8 @@ func Rows(label string) ([]Row, error) {
 			Name:       e.Name,
 			Namespace:  e.Namespace,
 			Recipients: n,
+			Type:       e.Type,
+			Preview:    e.Preview,
 			Shadowed:   e.Namespace == Global && label != Global && inLabel[e.Name],
 		})
 	}
