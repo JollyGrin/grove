@@ -106,9 +106,11 @@ notify:
 # Model profiles (grove-36): run a worker or orchestrator against any
 # Anthropic-API-compatible backend instead of the operator's own Claude sub —
 # OpenRouter's "Anthropic Skin" (native /v1/messages) is the reference case.
-# Secrets are NEVER stored here: auth_token_env names an env VAR (read from
-# ~/.config/grove/.env, perms 600), never the key itself. Absent/empty =
-# today's behavior, byte-for-byte.
+# Secrets are NEVER stored here: auth_token_env names a stored secret
+# (`gv keys set OPENROUTER_API_KEY`; a process env var of that name wins),
+# and an env: value written `secret:NAME` resolves from the same store at
+# launch — never the key itself. Absent/empty = today's behavior,
+# byte-for-byte.
 #   gv grab <ticket> --repo myapp --profile openrouter-glm
 #   gv orchestrator new --profile openrouter-glm
 # model_profiles:
@@ -126,6 +128,7 @@ notify:
 #     haiku:  "k3[1m]"
 #     env:    # backend-specific vars beyond the six built-ins; built-ins win on collision
 #       CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
+#       SOME_BACKEND_TOKEN: "secret:SOME_BACKEND_TOKEN"   # resolved from `gv keys`
 #       ENABLE_TOOL_SEARCH: "false"
 
 # gv sub (grove-288): hand a read-only micro-task ("summarise this file",

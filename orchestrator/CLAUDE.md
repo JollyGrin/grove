@@ -128,6 +128,10 @@ gv chat show <s>          # bring a hidden chat back beside the dashboard
 gv cost --json            # per-ticket token/cost ESTIMATES + done rollup (pure read)
 gv cost --analyze --json  # outcome-priced ledger: cost joined to PR outcome,
                            #   steering counts, flags (stuck / steering / outlier)
+gv keys ls --json         # stored secrets (pure read): name, namespace, recipient
+                           #   count, shadowed, type, masked preview. NEVER values.
+                           #   Read "Secrets" below before touching any other
+                           #   `gv keys` verb
 gv doctor                 # environment preflight
 ```
 
@@ -143,6 +147,30 @@ State lives in the workspace's `.grove/state/` (`tasks.json` view,
 `events.jsonl` history) and repo mapping in its `.grove/config.yaml`;
 outside a workspace, the global `~/.local/state/grove/` and
 `~/.config/grove/config.yaml` apply.
+
+## Secrets — `gv keys`
+
+API keys live age-encrypted in the store (`~/.config/grove/secrets/`);
+a profile or config names them (`secret:NAME`, `auth_token_env`), it never
+holds them. You may READ `gv keys ls --json` — names, namespaces, types and
+masked previews — to answer "is the key there?", to check what a lane
+needs before proposing a `--profile` grab (duty 3), and in the unstick and
+cost-analysis duties (a worker stuck on a 401 or a missing key; a lane
+whose key is absent). Everything else is the operator's:
+
+- `set`, `env`, `push` and `exec` are **operator-confirmed**. Never run
+  one unheard. A chat that needs a key present on a host proposes the
+  exact `gv keys push --host H` line; a chat that needs to CALL something
+  with a key proposes the exact `gv keys exec NAME -- …` line and runs it
+  only on the yes — the value stays hidden, but the command (a `curl -X
+  POST` with a live key) is the outward-facing action.
+- In `exec`, the child's own shell must expand the reference: put the
+  command in `sh -c '… $NAME …'` with single quotes, or the caller's
+  shell expands it to nothing.
+- Never ask for a key's value in chat, never echo one, never run
+  `gv keys exec K -- printenv K` or anything else that prints it, and
+  never write one to a file, a ticket or a PR. The identity under
+  `~/.local/state/grove/age/` is never copied, read or pushed.
 
 ## Monitoring — how to know a task changed state
 
@@ -395,7 +423,9 @@ When both merge: summary push, same summary in chat, end your turn.
 
 4. **Unstick** — "what's DEV-X stuck on?" → read its question/last_message
    from `gv ls --json`, capture its pane if needed, investigate the ticket,
-   propose the unblock message; send it only on confirmation.
+   propose the unblock message; send it only on confirmation. A worker
+   failing on auth or a missing key: check `gv keys ls --json` (read-only)
+   before guessing — then propose the fix; never run `set`/`push` yourself.
 5. **Ticket sharpening** — when a ticket scores poorly, say exactly why
    (missing acceptance criteria, ambiguous scope, unstated repo) and draft
    the clarifying edit. the operator's main job is writing grabbable tickets; tell
@@ -422,7 +452,8 @@ When both merge: summary push, same summary in chat, end your turn.
    shapes that burn tokens (compare label/size vs cost via the backlog),
    stuck suspects (many turns, no PR), steering-heavy tickets (the
    kickoff prompt or ticket spec was under-specified), low cache-read
-   share (context thrash), and the $-per-merged-PR trend. **Propose,
+   share (context thrash), and the $-per-merged-PR trend. A lane whose
+   key is absent from `gv keys ls --json` explains an idle lane. **Propose,
    never apply**: suggested edits to LEARNINGS.md, kickoff templates, or
    ticket-writing habits go to the operator as drafts — they approve before
    anything is written. One insight per proposal, with the ledger rows
@@ -543,7 +574,8 @@ When both merge: summary push, same summary in chat, end your turn.
 
 - **Propose, then act on confirmation.** Never `grab`, `answer`, `nudge`,
   `done`, `pause`, `handoff`, `untrack`, `adopt`, interactive `sweep`,
-  `chat close`, `chat hide`/`chat show` on another chat, or mutate the task
+  `chat close`, `chat hide`/`chat show` on another chat, `keys set`/`env`/
+  `push`/`exec` (Secrets), or mutate the task
   backend (Linear, GitHub issues, task files) without the operator's
   explicit yes in this chat. Hiding your OWN pane when the operator asks
   you to get out of the way needs no second yes (duty 3). Read-only commands

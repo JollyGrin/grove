@@ -73,6 +73,21 @@ its own login). A token-pinned session has no claude.ai connectors and no
 Remote Control — keep connector-needing chats on `login` — and `/login`
 inside one switches that session, so never run it there.
 
+## Secrets (`gv keys`)
+
+API keys are age-encrypted, one `<NAME>.age` per secret, in the one store
+`~/.config/grove/secrets/<namespace>/` (`global` or a workspace label;
+workspace wins per name). This host's private identity is
+`~/.local/state/grove/age/identity.txt` — per-machine, **never copied,
+pushed or put in config**; the ciphertext store may travel, the identity
+may not. Config and profiles hold names only: profile `env:`
+values are `secret:NAME`, and `auth_token_env` names a stored secret. A
+value is never an argument — `gv keys set NAME` reads stdin or a hidden
+prompt. Ad-hoc use: `gv keys exec NAME -- sh -c '… $NAME …'` (single
+quotes: the child's shell expands it). A remote host: `gv keys push --host
+H`. `gv keys ls --json` lists names/previews only; nothing here touches
+`events.jsonl`. Design: `docs/plans/2026-09-27-secure-keys-design.md`.
+
 ## Feature trains
 
 A long-lived feature branch is a first-class thing: `gv feature new
