@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/kimi"
 	"github.com/JollyGrin/grove/internal/openrouter"
+	"github.com/JollyGrin/grove/internal/secrets"
 )
 
 func TestRunwaySpecModes(t *testing.T) {
@@ -246,23 +249,23 @@ func TestAccountKeyRows(t *testing.T) {
 		"anthropic-ish":  {},                                   // no auth var → no row
 		"nil-profile":    nil,
 	}
-	rows := accountKeyRows(profiles, func(v string) string {
+	rows := accountKeyRows(profiles, func(v string) keyState {
 		if v == "OPENROUTER_API_KEY" {
-			return "sk-or-v1-f9b1234567890abcdefa6a"
+			return keyState{shown: "sk-or-v1-f9b...a6a", ns: "global"}
 		}
-		return ""
+		return keyState{}
 	})
 	if len(rows) != 2 {
 		t.Fatalf("rows = %+v, want 2", rows)
 	}
 	// Sorted by var name: KIMI first.
-	if rows[0].envVar != "KIMI_API_KEY" || rows[0].masked != "" {
+	if rows[0].envVar != "KIMI_API_KEY" || rows[0].shown != "" {
 		t.Errorf("row 0 = %+v, want unset KIMI_API_KEY", rows[0])
 	}
 	if got := strings.Join(rows[0].profiles, ","); got != "kimi" {
 		t.Errorf("row 0 profiles = %q", got)
 	}
-	if rows[1].envVar != "OPENROUTER_API_KEY" || rows[1].masked != "sk-or-v1-f9b...a6a" {
+	if rows[1].envVar != "OPENROUTER_API_KEY" || rows[1].shown != "sk-or-v1-f9b...a6a" || rows[1].ns != "global" {
 		t.Errorf("row 1 = %+v, want masked OPENROUTER_API_KEY", rows[1])
 	}
 	// Shared var: both profile names, sorted.
@@ -270,7 +273,7 @@ func TestAccountKeyRows(t *testing.T) {
 		t.Errorf("row 1 profiles = %q", got)
 	}
 
-	if got := accountKeyRows(nil, func(string) string { return "" }); len(got) != 0 {
+	if got := accountKeyRows(nil, func(string) keyState { return keyState{} }); len(got) != 0 {
 		t.Errorf("zero profiles → %+v, want zero rows", got)
 	}
 }
@@ -295,7 +298,7 @@ func keyRowsModel(width int) Model {
 	m := accountModel(width)
 	m.account.keys = []keyRow{
 		{envVar: "KIMI_API_KEY", profiles: []string{"kimi"}},
-		{envVar: openrouter.EnvVar, profiles: []string{"openrouter-glm"}, masked: "sk-or-v1-f9b...a6a"},
+		{envVar: openrouter.EnvVar, profiles: []string{"openrouter-glm"}, shown: "sk-or-v1-f9b...a6a", ns: "global"},
 	}
 	return m
 }
@@ -376,7 +379,7 @@ func TestAccountKeyRowsKimiBase(t *testing.T) {
 		"kimi-token":     {AuthTokenEnv: "MOONSHOT_API_KEY", BaseURL: "https://api.moonshot.ai/v1"},
 		"openrouter-glm": {AuthTokenEnv: "OPENROUTER_API_KEY", BaseURL: "https://openrouter.ai/api"},
 	}
-	rows := accountKeyRows(profiles, func(string) string { return "" })
+	rows := accountKeyRows(profiles, func(string) keyState { return keyState{} })
 	if len(rows) != 3 {
 		t.Fatalf("rows = %+v, want 3", rows)
 	}
@@ -415,7 +418,7 @@ func TestFuelSpec(t *testing.T) {
 func kimiFuelModel(width int) Model {
 	m := keyRowsModel(width)
 	m.account.keys[0] = keyRow{
-		envVar: "KIMI_CODE_API_KEY", profiles: []string{"kimi"}, masked: "sk-kimi-abc1...f9a",
+		envVar: "KIMI_CODE_API_KEY", profiles: []string{"kimi"}, shown: "sk-kimi-abc1...f9a", ns: "global",
 		fuelBase: "https://api.kimi.com/coding",
 		fuel: []kimi.Window{
 			{Label: "5h", Used: 304, Limit: 800, ResetHint: "resets in 2h 20m"},
@@ -481,5 +484,90 @@ func TestHyperlinkWrapsOSC8(t *testing.T) {
 	}
 	if !strings.Contains(accountModel(80).viewAccountFooter(), "\x1b]8;;"+openrouter.CreditsURL) {
 		t.Error("account footer missing the OSC 8 top-up link")
+	}
+}
+
+// scratchStore points HOME and GROVE_STATE_DIR at temp dirs and creates an
+// identity, so secrets.Set works without touching the real store.
+func scratchStore(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GROVE_STATE_DIR", t.TempDir())
+	if _, _, err := secrets.InitIdentity(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// grove-366: a row with a stored preview shows it, one without shows
+// `set · <type>`, and the namespace tag renders; the value never does.
+func TestViewKeyRowsPreviewAndSetText(t *testing.T) {
+	m := accountModel(110)
+	m.account.keys = []keyRow{
+		{envVar: "STRIPE_KEY", profiles: []string{"a"}, shown: "rk_live_8723***6AE2", ns: "global"},
+		{envVar: "KIMI_API_KEY", profiles: []string{"kimi"}, shown: "set · Kimi key", ns: "demo"},
+		{envVar: "PLAIN_KEY", profiles: []string{"p"}, shown: "set", ns: "env"},
+	}
+	out := m.viewAccount()
+	for _, want := range []string{"rk_live_8723***6AE2", "global", "set · Kimi key", "demo", "env"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("view missing %q", want)
+		}
+	}
+	if got := setText(secrets.Row{Type: "T"}); got != "set · T" {
+		t.Errorf("setText type = %q", got)
+	}
+	if got := setText(secrets.Row{}); got != "set" {
+		t.Errorf("setText bare = %q", got)
+	}
+}
+
+// keyLookup resolves through the store and pairs the sidecar text with the
+// namespace that supplied the value; the secret itself never leaves it.
+func TestKeyLookupFromStore(t *testing.T) {
+	scratchStore(t)
+	const secret = "sk-supersecretvalue-0123456789abcdef"
+	if _, err := secrets.SetWithMeta(secrets.Global, "A_KEY", []byte(secret), "Alpha", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secrets.SetWithMeta(secrets.Global, "B_KEY", []byte(secret), "Beta", 0); err != nil {
+		t.Fatal(err)
+	}
+	look := keyLookup("demo")
+	a, b, c := look("A_KEY"), look("B_KEY"), look("MISSING_KEY")
+	if !strings.HasPrefix(a.shown, "sk-") || a.ns != "global" || strings.Contains(a.shown, "supersecret") {
+		t.Errorf("A_KEY = %+v, want a masked preview in global", a)
+	}
+	if b.shown != "set · Beta" || b.ns != "global" {
+		t.Errorf("B_KEY = %+v, want `set · Beta`", b)
+	}
+	if c.shown != "" {
+		t.Errorf("MISSING_KEY = %+v, want unset", c)
+	}
+}
+
+// pasteKeyCmd writes secrets/global/<VAR>.age, no .env line, and reports
+// a keySavedMsg carrying `set` (no preview was opted into).
+func TestPasteKeyCmdWritesStore(t *testing.T) {
+	scratchStore(t)
+	orig := readClipboard
+	t.Cleanup(func() { readClipboard = orig })
+	readClipboard = func() ([]byte, error) { return []byte("  pasted-value-xyz-0123456789\n"), nil }
+
+	msg := pasteKeyCmd("KIMI_API_KEY")()
+	saved, ok := msg.(keySavedMsg)
+	if !ok {
+		t.Fatalf("msg = %#v, want keySavedMsg", msg)
+	}
+	if saved.varName != "KIMI_API_KEY" || saved.shown != "set" {
+		t.Errorf("saved = %+v", saved)
+	}
+	if _, err := os.Stat(filepath.Join(secrets.StoreDir(), "global", "KIMI_API_KEY.age")); err != nil {
+		t.Errorf("no global .age file: %v", err)
+	}
+	if got := secrets.Resolve("", "KIMI_API_KEY"); got != "pasted-value-xyz-0123456789" {
+		t.Errorf("resolve = %q", got)
+	}
+	if _, err := os.Stat(config.SecretsPath()); err == nil {
+		t.Error("paste must not write the legacy .env")
 	}
 }

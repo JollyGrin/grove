@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/JollyGrin/grove/internal/config"
-	"github.com/JollyGrin/grove/internal/openrouter"
+	"github.com/JollyGrin/grove/internal/secrets"
 )
 
 // Lane is a resolved model_profiles backend plus the model slug gv sub
@@ -121,11 +121,11 @@ func profileNames(cfg *config.Config) []string {
 }
 
 // Key resolves the lane's credential via the process env first, then the
-// profile secrets file (~/.config/grove/.env).
-func (l Lane) Key(secretsPath string) (string, error) {
-	key := openrouter.Key(secretsPath, l.TokenEnv)
+// key store (workspace label's namespace, then global).
+func (l Lane) Key(label string) (string, error) {
+	key := secrets.Resolve(label, l.TokenEnv)
 	if key == "" {
-		return "", fmt.Errorf("%w: %s not set (process env or %s)", ErrNoKey, l.TokenEnv, secretsPath)
+		return "", fmt.Errorf("%w: %s not set (process env or key store) — run `gv keys set %s`", ErrNoKey, l.TokenEnv, l.TokenEnv)
 	}
 	return key, nil
 }

@@ -111,10 +111,9 @@ model_profiles:
 sub:
   lane: e2e-flat
 EOF
-cat > "$HOME/.config/grove/.env" <<'EOF'
-export E2E_KEY=sekret
-EOF
-chmod 600 "$HOME/.config/grove/.env"
+# grove-366: the lane key lives in the age key store (global namespace).
+"$GV" keys init >/dev/null
+printf 'sekret' | "$GV" keys set E2E_KEY --global >/dev/null
 
 # A scratch "project" dir standing in for a worker's cwd — never the real
 # repo — so gv sub's relative path args resolve inside SCRATCH only.
@@ -270,7 +269,18 @@ grep -q "openrouter-fake" "$SCRATCH/lanes.out" || fail "lanes missing openrouter
 grep -q "flat" "$SCRATCH/lanes.out" || fail "lanes missing flat billing"
 grep -q "paid" "$SCRATCH/lanes.out" || fail "lanes missing paid billing"
 
-say "gv doctor --json: sub:lane ok with .env present, warn without"
+say "gv sub --lanes --json: key_present true for a name only in the store"
+(cd "$PROJ" && "$GV" sub --lanes --json) > "$SCRATCH/lanes.json"
+python3 - "$SCRATCH/lanes.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+rows = d if isinstance(d, list) else d.get("lanes", d.get("rows", []))
+r = [x for x in rows if x["name"] == "e2e-flat"][0]
+assert r["key_present"] is True, r
+print("ok")
+PY
+
+say "gv doctor --json: sub:lane ok with the key in the store, warn without"
 set +e
 (cd "$PROJ" && "$GV" doctor --json) > "$SCRATCH/doctor-ok.json" 2>&1
 set -e
@@ -282,7 +292,7 @@ assert rows["sub:lane"]["state"] == "ok", rows.get("sub:lane")
 print("ok")
 PY
 
-mv "$HOME/.config/grove/.env" "$HOME/.config/grove/.env.bak"
+"$GV" keys rm E2E_KEY --global >/dev/null
 set +e
 (cd "$PROJ" && "$GV" doctor --json) > "$SCRATCH/doctor-warn.json" 2>&1
 set -e
@@ -293,10 +303,10 @@ rows = {r["id"]: r for r in d["rows"]}
 assert rows["sub:lane"]["state"] == "warn", rows.get("sub:lane")
 print("ok")
 PY
-mv "$HOME/.config/grove/.env.bak" "$HOME/.config/grove/.env"
+printf 'sekret' | "$GV" keys set E2E_KEY --global >/dev/null
 
-say "no secret anywhere in the scratch dir except .env and req.jsonl"
-LEAKED="$(grep -rl "sekret" "$SCRATCH" 2>/dev/null | grep -v -e '/\.env$' -e '/req\.jsonl$' || true)"
+say "no secret anywhere in the scratch dir except req.jsonl"
+LEAKED="$(grep -rl "sekret" "$SCRATCH" 2>/dev/null | grep -v -e '/req\.jsonl$' || true)"
 [ -z "$LEAKED" ] || fail "secret leaked into: $LEAKED"
 
 say "PASS — gv sub raw + agentic, gates, ledger, lanes, doctor all green"

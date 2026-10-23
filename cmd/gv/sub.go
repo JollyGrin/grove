@@ -13,6 +13,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/openrouter"
+	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/sub"
 )
@@ -132,8 +133,7 @@ func cmdSub(args []string) error {
 		mode = "agentic"
 	}
 
-	secretsPath := config.SecretsPath()
-	key, err := lane.Key(secretsPath)
+	key, err := lane.Key(wsLabel())
 	if err != nil {
 		return subFail(subExitUsage, "%s", err)
 	}
@@ -280,7 +280,7 @@ type subLaneRow struct {
 }
 
 func subLanes(cfg *config.Config, asJSON bool) error {
-	secretsPath := config.SecretsPath()
+	label := wsLabel()
 	names := make([]string, 0, len(cfg.ModelProfiles))
 	for n := range cfg.ModelProfiles {
 		names = append(names, n)
@@ -297,13 +297,13 @@ func subLanes(cfg *config.Config, asJSON bool) error {
 		if strings.HasPrefix(n, "openrouter-") {
 			billing = "paid"
 		}
-		key := openrouter.Key(secretsPath, p.AuthTokenEnv)
+		key := secrets.Resolve(label, p.AuthTokenEnv)
 		rows = append(rows, subLaneRow{
 			Name: n, Host: p.BaseURL, Haiku: p.Haiku, Sonnet: p.Sonnet, Opus: p.Opus,
 			Billing: billing, KeyEnv: p.AuthTokenEnv, KeyOK: key != "",
 		})
 	}
-	anthropicKey := openrouter.Key(secretsPath, "ANTHROPIC_API_KEY")
+	anthropicKey := secrets.Resolve(label, "ANTHROPIC_API_KEY")
 	rows = append(rows, subLaneRow{
 		Name: "anthropic", Host: "https://api.anthropic.com", Haiku: "claude-haiku-4-5",
 		Billing: "flat", KeyEnv: "ANTHROPIC_API_KEY", KeyOK: anthropicKey != "",

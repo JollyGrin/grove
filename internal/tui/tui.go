@@ -968,9 +968,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keySavedMsg:
 		// Paste flow succeeded (grove-87): the key is saved in
-		// ~/.config/grove/.env — refetch so the unset row becomes data.
-		m.flash = "✓ " + msg.varName + " saved to ~/.config/grove/.env (" + msg.masked + ")"
-		return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
+		// the key store (global) — refetch so the unset row becomes data.
+		m.flash = "✓ " + msg.varName + " saved to the key store (" + msg.shown + ")"
+		return m, accountCmd(m.cfg, m.stateDir, m.label, m.localTasks, m.costCache)
 
 	case almanacMsg:
 		// A one-shot snapshot (grove-63 S4) — never re-fired by the 1s tick,
