@@ -42,7 +42,6 @@
 - [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
 - [x] **grove-504** — focus rail never a CHATS row: `cockpitChatPanes` skips `p.Rail`; `ApplyLayout` starts the rail in `$HOME`, not the caller's cwd; unit test + `e2e/rail.sh` leg (build from inside the orchestrator dir).
 - [x] grove-491: focus-mode 07 — docs wrap for the train: CLAUDE.md §Layout (two layouts, `L`, focus hides chats, `gv chat focus`), orchestrator seed (`gv chat focus` in tools, focus note under Dispatch-and-dismiss; brains go stale until `gv init --only orchestrator-md`), grove-cockpit-design Status 2026-10, HANDOFF train section. plugins.md already carries `reason:"focus"` (grove-487); no new tmux skill rule (no LEARNINGS entry on status/status-format).
-- [x] grove-489: focus-mode 05 — click a rail box to focus that chat. The rail process (gv itself) turns on SGR mouse reporting, `chatrail.Hit` hit-tests from the same `layout()` the drawing uses, a left release calls `focusChat` in-process (box inverts for the tick; a chat closed since the draw flashes `gone`, nothing mutated). `@grove_rail_rows` rows gain a trailing session field. No tmux binding added. Rail RSS ≈ 14 MB. e2e/focus.sh drives the click by typing the SGR bytes into the rail pane.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
