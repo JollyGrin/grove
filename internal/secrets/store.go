@@ -91,7 +91,8 @@ func Resolve(label, name string) string {
 }
 
 // Lookup is Resolve with the reason: it also reports which namespace
-// answered ("env" for the process environment). A name the workspace
+// answered ("env" for the process environment, "legacy-env" for the
+// ~/.config/grove/.env fallback, which is last). A name the workspace
 // namespace holds but this host cannot decrypt is an error, never a
 // silent fall-through to global — that would launch with the wrong key.
 func Lookup(label, name string) (value, namespace string, err error) {
@@ -126,6 +127,9 @@ func Lookup(label, name string) (value, namespace string, err error) {
 			return "", "", err
 		}
 		return string(b), ns, nil
+	}
+	if v := legacyEnv(name); v != "" {
+		return v, "legacy-env", nil
 	}
 	return "", "", fmt.Errorf("%s: %w", name, ErrNotFound)
 }

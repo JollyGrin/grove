@@ -13,13 +13,14 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/JollyGrin/grove/internal/account"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
-const keysUsage = "usage: gv keys init | recipient | set NAME [--type TEXT] [--reveal N] [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…> | push --host H [--global | --workspace [L]] | reseal [--global | --workspace [L]]"
+const keysUsage = "usage: gv keys init | recipient | set NAME [--type TEXT] [--reveal N] [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…> | push --host H [--global | --workspace [L]] | reseal [--global | --workspace [L]] | import [PATH] [--rm] [--force] [--reveal N]"
 
 // keysArgs is the parsed tail of a `gv keys set|rm|ls` line.
 type keysArgs struct {
@@ -114,6 +115,8 @@ func cmdKeys(args []string) error {
 		return keysReseal(rest)
 	case "receive":
 		return keysReceive(os.Stdin, os.Stdout)
+	case "import":
+		return keysImport(os.Stdout, rest)
 	}
 	a, err := parseKeysArgs(rest)
 	if err != nil {
@@ -512,4 +515,119 @@ func keysExec(args []string) error {
 		fmt.Fprint(os.Stderr, w)
 	}
 	return syscall.Exec(path, argv, env)
+}
+
+// legacyEnvPresent reports whether the pre-store secrets file exists.
+func legacyEnvPresent() bool {
+	_, err := os.Stat(config.SecretsPath())
+	return err == nil
+}
+
+// keysImportStep is the wizard's import step: encrypt the legacy .env and
+// the account tokens, delete nothing.
+func keysImportStep(w io.Writer) error {
+	return keysImport(w, nil)
+}
+
+// keysImport moves the plaintext secrets into the encrypted store: every
+// assignment of PATH (default ~/.config/grove/.env) and every account
+// token file, into the global namespace. Prints names, never values.
+func keysImport(w io.Writer, args []string) error {
+	var path string
+	var rm, force bool
+	reveal := 0
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--rm":
+			rm = true
+		case a == "--force":
+			force = true
+		case a == "--reveal":
+			if i+1 >= len(args) {
+				return errors.New("--reveal needs a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 0 {
+				return fmt.Errorf("--reveal wants a non-negative number, got %q", args[i])
+			}
+			reveal = n
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("unknown flag %s\n%s", a, keysUsage)
+		case path == "":
+			path = a
+		default:
+			return errors.New("usage: gv keys import [PATH] [--rm] [--force] [--reveal N]")
+		}
+	}
+	explicit := path != ""
+	if path == "" {
+		path = config.SecretsPath()
+	}
+	if _, _, err := secrets.InitIdentity(); err != nil {
+		return err
+	}
+	report := func(res []secrets.ImportResult) {
+		for _, r := range res {
+			switch r.Status {
+			case secrets.ImportStored:
+				fmt.Fprintf(w, "✓ imported %s\n", r.Name)
+				if r.PreviewErr != nil {
+					fmt.Fprintf(w, "• no preview stored for %s: %v\n", r.Name, r.PreviewErr)
+				}
+			case secrets.ImportSkipped:
+				fmt.Fprintf(w, "• skipped %s — already in the store (--force to overwrite)\n", r.Name)
+			default:
+				fmt.Fprintf(w, "✗ %s: %v\n", r.Name, r.Err)
+			}
+		}
+	}
+
+	envRes, envErr := secrets.ImportDotenv(path, force, reveal)
+	switch {
+	case envErr == nil:
+		fmt.Fprintf(w, "%s:\n", path)
+		report(envRes)
+	case errors.Is(envErr, os.ErrNotExist) && !explicit:
+		// No .env is fine — tokens may still be waiting.
+	default:
+		return envErr
+	}
+
+	accts := account.Open(config.StateDir())
+	tokRes, err := accts.ImportTokens(force, reveal, rm)
+	if err != nil {
+		return err
+	}
+	if len(tokRes) > 0 {
+		fmt.Fprintln(w, "account tokens:")
+		report(tokRes)
+	}
+	if envErr != nil && len(tokRes) == 0 {
+		return fmt.Errorf("nothing to import — %s does not exist and no account tokens are stored", path)
+	}
+
+	if !rm {
+		if envErr == nil {
+			fmt.Fprintf(w, "• %s is kept — delete it with `gv keys import --rm` once workers run clean\n", path)
+		}
+		return nil
+	}
+	if envErr == nil {
+		envOK := true
+		for _, r := range envRes {
+			if r.Status != secrets.ImportStored {
+				envOK = false
+			}
+		}
+		if !envOK {
+			fmt.Fprintf(w, "• %s kept — a name was skipped or failed; fix that (or --force) and rerun with --rm\n", path)
+		} else if err := os.Remove(path); err != nil {
+			return err
+		} else {
+			fmt.Fprintf(w, "✓ deleted %s\n", path)
+		}
+	}
+	fmt.Fprintln(w, "• a `set -a; . ~/.config/grove/.env` line in a shell rc now reads nothing — remove it")
+	return nil
 }

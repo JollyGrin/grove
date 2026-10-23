@@ -286,3 +286,27 @@ func TestKeysStep(t *testing.T) {
 		t.Errorf("--only keys = %v %v", only, err)
 	}
 }
+
+// The keys-import step exists only while ~/.config/grove/.env does; --yes
+// leaves it ON (import, never delete — the step has no delete path).
+func TestKeysImportStep(t *testing.T) {
+	steps, _ := Build(freshInput(t, Flags{Yes: true}))
+	for _, s := range steps {
+		if s.ID == "keys-import" {
+			t.Fatal("step present with no .env")
+		}
+	}
+	in := freshInput(t, Flags{Yes: true})
+	in.LegacyEnv = true
+	steps, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := step(t, steps, "keys-import")
+	if k.Kind != KindConfirm || !k.On || !strings.Contains(k.Title, "gv keys import --rm") {
+		t.Errorf("step = %+v", k)
+	}
+	if !Collect(steps).ImportKeys {
+		t.Error("Collect must carry the import answer")
+	}
+}

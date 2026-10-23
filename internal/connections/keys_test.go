@@ -181,3 +181,54 @@ func TestKeysHostRow(t *testing.T) {
 		t.Errorf("no stored secrets must mean no row, got %+v", rows)
 	}
 }
+
+func TestKeysLegacyEnvRow(t *testing.T) {
+	envPath := "/home/u/.config/grove/.env"
+	for _, tc := range []struct {
+		name   string
+		file   string // "" = absent
+		stored []string
+		want   State
+		in     string
+	}{
+		{"unimported name", "A_KEY=1\nB_KEY=2\n", []string{"global/A_KEY"}, StateWarn, "B_KEY"},
+		{"all imported", "A_KEY=1\n", []string{"global/A_KEY"}, StateOK, ""},
+		{"file absent", "", []string{"global/A_KEY"}, StateOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]os.FileMode{idPath: 0o600, "/state/age": 0o700}
+			e := keysEnv(files, []string{"A_KEY"}, nil, nil)
+			e.KeysStored = func() []string { return tc.stored }
+			e.ReadFile = func(p string) ([]byte, error) {
+				if p == envPath && tc.file != "" {
+					return []byte(tc.file), nil
+				}
+				return nil, os.ErrNotExist
+			}
+			var row *Connection
+			for _, c := range keysConnections(e) {
+				if c.ID == "keys:legacy-env" {
+					c := c
+					row = &c
+				}
+			}
+			if row == nil {
+				t.Fatal("no keys:legacy-env row")
+			}
+			st := row.Check(e)
+			if st.State != tc.want || !strings.Contains(st.Info, tc.in) {
+				t.Errorf("got %v %q, want %v containing %q", st.State, st.Info, tc.want, tc.in)
+			}
+			if tc.want == StateWarn && (row.Fix != "gv keys import --rm" || strings.Contains(st.Info, "A_KEY")) {
+				t.Errorf("fix %q / info %q", row.Fix, st.Info)
+			}
+		})
+	}
+	// A machine that never used keys and has no .env: no row at all.
+	e := keysEnv(nil, nil, nil, nil)
+	for _, c := range keysConnections(e) {
+		if c.ID == "keys:legacy-env" {
+			t.Error("row on a machine with no keys and no .env")
+		}
+	}
+}

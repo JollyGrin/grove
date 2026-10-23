@@ -302,3 +302,73 @@ func TestParseNSFlags(t *testing.T) {
 		t.Error("reseal must not take --host")
 	}
 }
+
+// gv-keys 07: import reports names only, keeps the file without --rm,
+// deletes it with --rm, skips stored names, and moves account tokens.
+func TestKeysImport(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROVE_STATE_DIR", state)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	path := filepath.Join(home, ".config", "grove", ".env")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "# c\nexport A_KEY=alpha-secret-value-1\nB_KEY=bravo-secret-value-2\nC_KEY=\"charlie-secret-value-3\"\nD_KEY='delta-secret-value-4'\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(state, "accounts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "accounts", "alt.token"), []byte("sk-ant-oat01-zzzsentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := keysImport(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != body {
+		t.Error("file changed without --rm")
+	}
+	for _, n := range []string{"A_KEY", "B_KEY", "C_KEY", "D_KEY", "CLAUDE_ACCOUNT_ALT"} {
+		if !secrets.Has(secrets.Global, n) || !strings.Contains(out.String(), n) {
+			t.Errorf("%s not imported/printed:\n%s", n, out.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "grove", "secrets", "global", "CLAUDE_ACCOUNT_ALT.age")); err != nil {
+		t.Error(err)
+	}
+	if s := out.String(); strings.Contains(s, "secret-value") || strings.Contains(s, "zzzsentinel") {
+		t.Errorf("a value reached stdout:\n%s", s)
+	}
+
+	out.Reset() // everything stored → skipped; --rm must keep the files
+	if err := keysImport(&out, []string{"--rm"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "skipped A_KEY") {
+		t.Errorf("want a skip message:\n%s", out.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Error("--rm deleted a file with skipped names")
+	}
+
+	out.Reset()
+	if err := keysImport(&out, []string{"--rm", "--force", "--reveal", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("--rm --force must delete the .env")
+	}
+	if _, err := os.Stat(filepath.Join(state, "accounts", "alt.token")); !os.IsNotExist(err) {
+		t.Error("--rm --force must delete the .token")
+	}
+	if !strings.Contains(out.String(), "set -a;") {
+		t.Errorf("missing rc reminder:\n%s", out.String())
+	}
+	if err := keysImport(&out, nil); err == nil {
+		t.Error("nothing left to import must error")
+	}
+}

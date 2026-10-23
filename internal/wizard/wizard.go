@@ -46,7 +46,7 @@ type Step struct {
 }
 
 // StepIDs is the --only namespace, in run order.
-var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "orchestrator-md", "keys", "workspace"}
+var StepIDs = []string{"repo", "setup", "worker", "provider", "ntfy", "hooks", "agents-md", "orchestrator-md", "keys", "keys-import", "workspace"}
 
 // Flags are the prompt twins. Empty string / false = not provided.
 type Flags struct {
@@ -81,6 +81,7 @@ type Input struct {
 	DetectedLabel  string   // default workspace label (root basename)
 	BrainState     string   // orchestrator brain state, for the step's Current column
 	KeysIdentity   bool     // this host already has an age identity (gv-keys)
+	LegacyEnv      bool     // ~/.config/grove/.env exists (gv-keys import step)
 	Flags          Flags
 }
 
@@ -188,6 +189,15 @@ func Build(in Input) ([]Step, error) {
 			On:      true,
 		},
 	}
+	if in.LegacyEnv {
+		steps = append(steps, Step{
+			ID:      "keys-import",
+			Kind:    KindConfirm,
+			Title:   "import ~/.config/grove/.env into the encrypted store (the file is kept; delete it with `gv keys import --rm` once workers run clean)",
+			Current: "present",
+			On:      true,
+		})
+	}
 
 	// Parent scope: per-repo steps don't apply (children register as
 	// path+base entries); workspace-wide steps remain.
@@ -195,7 +205,7 @@ func Build(in Input) ([]Step, error) {
 		var kept []Step
 		for _, s := range steps {
 			switch s.ID {
-			case "workspace", "provider", "ntfy", "hooks", "orchestrator-md", "keys":
+			case "workspace", "provider", "ntfy", "hooks", "orchestrator-md", "keys", "keys-import":
 				kept = append(kept, s)
 			}
 		}
@@ -273,8 +283,8 @@ func resolveOrchestratorMD(f Flags) bool {
 
 // Answers extracts the final decisions from (possibly runner-edited) steps.
 type Answers struct {
-	Label, Base, Setup, Worker, Provider, Ntfy                 string
-	InstallHooks, RunAgentsMD, RefreshOrchestratorMD, InitKeys bool
+	Label, Base, Setup, Worker, Provider, Ntfy                             string
+	InstallHooks, RunAgentsMD, RefreshOrchestratorMD, InitKeys, ImportKeys bool
 }
 
 func Collect(steps []Step) Answers {
@@ -301,6 +311,8 @@ func Collect(steps []Step) Answers {
 			a.RefreshOrchestratorMD = s.On
 		case "keys":
 			a.InitKeys = s.On
+		case "keys-import":
+			a.ImportKeys = s.On
 		}
 	}
 	return a

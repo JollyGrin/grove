@@ -2265,6 +2265,7 @@ func cmdInit(args []string) error {
 		DetectedLabel:  filepath.Base(root),
 		BrainState:     brainStateOf(root, f.ForceOrchestratorMD),
 		KeysIdentity:   keysIdentityPresent(),
+		LegacyEnv:      legacyEnvPresent(),
 		Flags:          f,
 	}
 	steps, err := wizard.Build(in)
@@ -2360,6 +2361,11 @@ func cmdInit(args []string) error {
 
 	if err := initKeysStep(os.Stdout, a.InitKeys); err != nil {
 		fmt.Fprintf(os.Stderr, "keys: %v\n", err)
+	}
+	if a.ImportKeys {
+		if err := keysImportStep(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "keys import: %v\n", err)
+		}
 	}
 
 	// The summary board: what's available, what would improve this repo.
