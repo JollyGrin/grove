@@ -96,7 +96,7 @@ func Core(env Env) []Connection {
 			Severity:    SeverityWarn,
 			RequiredFor: []string{"sub"},
 			Title:       "gv sub lane key present",
-			Fix:         "add export <VAR>=… to ~/.config/grove/.env",
+			Fix:         "gv keys set <VAR>",
 			Check:       checkSubLane,
 		})
 	}
@@ -180,7 +180,7 @@ func checkConfig(e Env) Status {
 // checkSubLane reports whether `gv sub`'s configured lane (grove-288) has
 // a resolvable credential. An empty sub.lane means gv sub is disabled —
 // that's fine, not a warning. Otherwise the lane's token env var must
-// resolve from the process env or the secrets file for the row to pass.
+// resolve from the process env, the key store or the legacy secrets file for the row to pass.
 func checkSubLane(e Env) Status {
 	if e.Cfg.Sub.Lane == "" {
 		return Status{State: StateOK, Info: "gv sub not configured (sub.lane empty)"}
@@ -196,11 +196,14 @@ func checkSubLane(e Env) Status {
 	if e.Getenv(tokenEnv) != "" {
 		return Status{State: StateOK, Info: tokenEnv + " set"}
 	}
+	if (e.Resolve != nil && e.Resolve(tokenEnv) != "") || (e.KeysHeld != nil && e.KeysHeld()[tokenEnv]) {
+		return Status{State: StateOK, Info: tokenEnv + " in the key store"}
+	}
 	secretsPath := filepath.Join(e.Home, ".config", "grove", ".env")
 	if envFileHasVar(e, secretsPath, tokenEnv) {
 		return Status{State: StateOK, Info: tokenEnv + " in " + secretsPath}
 	}
-	return Status{State: StateWarn, Info: fmt.Sprintf("%s not set (process env or %s)", tokenEnv, secretsPath)}
+	return Status{State: StateWarn, Info: fmt.Sprintf("%s not set (process env, key store or %s)", tokenEnv, secretsPath)}
 }
 
 // envFileHasVar tolerantly parses a `export NAME=value` secrets file

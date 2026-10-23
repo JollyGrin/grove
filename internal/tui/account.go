@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/JollyGrin/grove/internal/kimi"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/openrouter"
+	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -50,12 +52,14 @@ type accountMsg struct {
 }
 
 // keyRow is one env var the key manager shows: which profiles reference it
-// and its masked value when it resolves (process env or the secrets file).
-// masked "" = not set. The full key is never carried — masks only.
+// and what to show for its value when it resolves (process env or the key
+// store). shown "" = not set; otherwise it is the opt-in preview or
+// `set · <type>` / `set`. The value itself is never carried.
 type keyRow struct {
 	envVar   string
 	profiles []string // sorted profile names sharing this var
-	masked   string
+	shown    string
+	ns       string // namespace tag: "global", a workspace label, or "env"
 
 	// Kimi Code plan fuel (grove-133): fuelBase is the profile base_url
 	// when a profile on this row targets the plan endpoint ("" = not a
@@ -84,9 +88,9 @@ func (a accountMsg) hasOpenRouter() bool {
 
 // accountKeyRows builds the key-manager rows: one per distinct
 // auth_token_env (several profiles may share one var), sorted by var name.
-// resolve maps a var name to its key ("" = unset); only the mask survives
-// into the row.
-func accountKeyRows(profiles map[string]*config.ModelProfile, resolve func(string) string) []keyRow {
+// lookup maps a var name to its key-store state; only the namespace and
+// display text survive into the row, never the value.
+func accountKeyRows(profiles map[string]*config.ModelProfile, lookup func(string) keyState) []keyRow {
 	byVar := map[string][]string{}
 	for name, p := range profiles {
 		if p == nil || strings.TrimSpace(p.AuthTokenEnv) == "" {
@@ -103,10 +107,7 @@ func accountKeyRows(profiles map[string]*config.ModelProfile, resolve func(strin
 	for _, v := range vars {
 		names := byVar[v]
 		sort.Strings(names)
-		masked := ""
-		if k := resolve(v); k != "" {
-			masked = openrouter.Mask(k)
-		}
+		st := lookup(v)
 		// Kimi Code plan rows get fuel gauges (grove-133): first profile
 		// (sorted, so deterministic) whose base_url targets the plan wins.
 		base := ""
@@ -116,21 +117,57 @@ func accountKeyRows(profiles map[string]*config.ModelProfile, resolve func(strin
 				break
 			}
 		}
-		rows = append(rows, keyRow{envVar: v, profiles: names, masked: masked, fuelBase: base})
+		rows = append(rows, keyRow{envVar: v, profiles: names, shown: st.shown, ns: st.ns, fuelBase: base})
 	}
 	return rows
 }
 
+// keyState is what the key manager learns about one var: shown is ""
+// when unresolved, else the preview or `set · <type>` / `set`.
+type keyState struct{ shown, ns string }
+
+// keyLookup resolves each var through secrets.Resolve for label and pairs
+// it with the sidecar preview/type (names only, no decrypt) of the
+// namespace that supplied it. A value from the process env has no
+// sidecar and renders plain `set`.
+func keyLookup(label string) func(string) keyState {
+	meta := map[[2]string]secrets.Row{}
+	if rows, err := secrets.Rows(label); err == nil {
+		for _, r := range rows {
+			meta[[2]string{r.Namespace, r.Name}] = r
+		}
+	}
+	return func(v string) keyState {
+		val, ns, err := secrets.Lookup(label, v)
+		if err != nil || val == "" {
+			return keyState{}
+		}
+		return keyState{shown: setText(meta[[2]string{ns, v}]), ns: ns}
+	}
+}
+
+// setText is the row's value text: the opt-in preview when stored, else
+// `set · <type>`, else `set`.
+func setText(r secrets.Row) string {
+	switch {
+	case r.Preview != "":
+		return r.Preview
+	case r.Type != "":
+		return "set · " + r.Type
+	}
+	return "set"
+}
+
 // keySavedMsg reports the paste-key flow persisted a key; the handler
 // flashes the masked form and re-fetches the tab.
-type keySavedMsg struct{ varName, masked string }
+type keySavedMsg struct{ varName, shown string }
 
 // accountCmd assembles the ACCOUNT snapshot off the tea loop. The grove
 // side (windows + per-model totals) always computes — live transcripts via
 // the shared cache plus ledger deltas for pruned tickets, the same pipeline
 // costsCmd charts. The OpenRouter side degrades to dashes on a missing key
 // or failed fetch; never an error state, never blocks the tab.
-func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache *cost.Cache) tea.Cmd {
+func accountCmd(cfg *config.Config, stateDir, label string, tasks []*state.Task, cache *cost.Cache) tea.Cmd {
 	return func() tea.Msg {
 		msg := accountMsg{fetched: true}
 		now := time.Now()
@@ -158,24 +195,23 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 		msg.estDay, msg.estWeek, msg.estMonth, msg.estYear = cost.WindowSums(points, now)
 		msg.byModel = cost.SortedModelSpend(byModel)
 
-		// Key rows read the secrets file here — on tab open / r / after save,
+		// Key rows read the key store here — on tab open / r / after save,
 		// exactly like the OpenRouter fetch (cockpit RAM rule: no cache).
-		secrets := config.SecretsPath()
 		var profiles map[string]*config.ModelProfile
 		if cfg != nil {
 			profiles = cfg.ModelProfiles
 		}
-		msg.keys = accountKeyRows(profiles, func(v string) string { return openrouter.Key(secrets, v) })
+		msg.keys = accountKeyRows(profiles, keyLookup(label))
 
 		// Kimi Code plan fuel (grove-133): one-shot quota fetch per kimi
 		// row whose key resolves — same cadence as the OpenRouter calls,
 		// never polled. Any failure degrades to a dash gauge with a hint.
 		for i := range msg.keys {
 			r := &msg.keys[i]
-			if r.fuelBase == "" || r.masked == "" {
+			if r.fuelBase == "" || r.shown == "" {
 				continue
 			}
-			ws, err := kimi.Usages(r.fuelBase, openrouter.Key(secrets, r.envVar))
+			ws, err := kimi.Usages(r.fuelBase, secrets.Resolve(label, r.envVar))
 			if err != nil {
 				r.fuelHint = err.Error()
 				continue
@@ -192,7 +228,7 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 		if !msg.hasOpenRouter() {
 			return msg
 		}
-		key := openrouter.Key(secrets, openrouter.EnvVar)
+		key := secrets.Resolve(label, openrouter.EnvVar)
 		if key == "" {
 			return msg
 		}
@@ -211,18 +247,31 @@ func accountCmd(cfg *config.Config, stateDir string, tasks []*state.Task, cache 
 	}
 }
 
+// readClipboard is the paste flow's clipboard seam (tests stub it); only
+// macOS has pbpaste.
+var readClipboard = func() ([]byte, error) {
+	if runtime.GOOS != "darwin" {
+		return nil, errNoPbpaste
+	}
+	return exec.Command("pbpaste").Output()
+}
+
+var errNoPbpaste = errors.New("no pbpaste")
+
 // pasteKeyCmd is the connect flow (grove-87, generalized grove-104): read
-// the clipboard and persist the candidate as varName in the profile
-// secrets file. OpenRouter keys are validated live against /api/v1/key
-// first; other providers have no assumed API, so their keys save as
-// pasted. An unreadable or rejected key is never saved, and the full key
-// never renders — flashes carry the masked form at most.
+// the clipboard and persist the candidate as varName in the key store's
+// global namespace (keys are billing accounts, not per-workspace).
+// OpenRouter keys are validated live against /api/v1/key first; other
+// providers have no assumed API, so their keys save as pasted. An
+// unreadable or rejected key is never saved, and the full key never
+// renders — the saved flash carries the stored preview or `set`, nothing
+// derived from the value.
 func pasteKeyCmd(varName string) tea.Cmd {
 	return func() tea.Msg {
-		if runtime.GOOS != "darwin" {
-			return flashMsg("paste needs pbpaste (macOS) — set " + varName + " in ~/.config/grove/.env instead")
+		out, err := readClipboard()
+		if errors.Is(err, errNoPbpaste) {
+			return flashMsg("paste needs pbpaste (macOS) — run `gv keys set " + varName + "` instead")
 		}
-		out, err := exec.Command("pbpaste").Output()
 		if err != nil {
 			return flashMsg("clipboard read failed: " + err.Error())
 		}
@@ -235,10 +284,16 @@ func pasteKeyCmd(varName string) tea.Cmd {
 				return flashMsg("key rejected (" + err.Error() + ") — not saved")
 			}
 		}
-		if err := openrouter.SaveKey(config.SecretsPath(), varName, key); err != nil {
-			return flashMsg("save failed: " + err.Error())
+		// SetWithMeta (Set + sidecar) so a re-paste drops the previous
+		// key's stored preview instead of showing it for the new value.
+		if _, err := secrets.SetWithMeta(secrets.Global, varName, []byte(key), "", 0); err != nil {
+			return flashMsg("save failed: " + err.Error() + " (gv keys init?)")
 		}
-		return keySavedMsg{varName: varName, masked: openrouter.Mask(key)}
+		shown := "set"
+		if m, err := secrets.ReadMeta(secrets.Global, varName); err == nil {
+			shown = setText(secrets.Row{Type: m.Type, Preview: m.Preview})
+		}
+		return keySavedMsg{varName: varName, shown: shown}
 	}
 }
 
@@ -416,10 +471,12 @@ func (m Model) viewKeyRows(w int) string {
 			cur = sKey.Render("▸ ")
 		}
 		val := sWaiting.Render(pad("not set — enter to paste", 26))
-		if r.masked != "" {
-			val = sWorking.Render(pad(r.masked, 26))
+		tag := ""
+		if r.shown != "" {
+			val = sWorking.Render(pad(r.shown, 26))
+			tag = sDim.Render(pad(r.ns, 8))
 		}
-		line := cur + pad(r.envVar, 22) + val + sDim.Render(strings.Join(r.profiles, ", "))
+		line := cur + pad(r.envVar, 22) + val + tag + sDim.Render(strings.Join(r.profiles, ", "))
 		rows = append(rows, truncPad(line, w))
 		if r.fuelBase != "" {
 			rows = append(rows, viewFuelRows(r, w)...)
@@ -490,9 +547,9 @@ func viewConnectPrompt(w int) string {
 	lines := []string{
 		sPanelTitleFocus.Render("CONNECT OPENROUTER"),
 		truncPad(sChrome.Render("no API key found — balance and the OPENROUTER column need one"), w),
-		truncPad(sChrome.Render("set ")+sDelivery.Render("OPENROUTER_API_KEY")+
-			sChrome.Render(" in ~/.config/grove/.env (worker profiles source the same file), or"), w),
-		truncPad(sKey.Render("p")+sChrome.Render(" — paste key from clipboard (validated live, then saved there)"), w),
+		truncPad(sChrome.Render("run ")+sDelivery.Render("gv keys set OPENROUTER_API_KEY")+
+			sChrome.Render(", or"), w),
+		truncPad(sKey.Render("p")+sChrome.Render(" — paste key from clipboard (validated live, then saved in the key store)"), w),
 	}
 	return strings.Join(lines, "\n")
 }

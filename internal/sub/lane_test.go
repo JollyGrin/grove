@@ -2,12 +2,11 @@ package sub
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/secrets"
 )
 
 func cfgWithProfiles(profiles map[string]*config.ModelProfile) *config.Config {
@@ -147,24 +146,26 @@ func TestResolveLaneAnthropic(t *testing.T) {
 }
 
 func TestLaneKeyMissing(t *testing.T) {
-	dir := t.TempDir()
-	envPath := filepath.Join(dir, ".env")
-	if err := os.WriteFile(envPath, []byte("export OTHER_KEY=x\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GROVE_STATE_DIR", t.TempDir())
+	t.Setenv("MISSING_VAR", "")
 	l := Lane{Name: "x", TokenEnv: "MISSING_VAR"}
-	_, err := l.Key(envPath)
+	_, err := l.Key("")
 	if !errors.Is(err, ErrNoKey) {
 		t.Fatalf("err = %v, want ErrNoKey", err)
 	}
-	if !strings.Contains(err.Error(), "MISSING_VAR") || !strings.Contains(err.Error(), envPath) {
-		t.Fatalf("err = %v, want it to name the var and the file", err)
+	if !strings.Contains(err.Error(), "MISSING_VAR") || !strings.Contains(err.Error(), "gv keys set") {
+		t.Fatalf("err = %v, want it to name the var and `gv keys set`", err)
 	}
 
-	if err := os.WriteFile(envPath, []byte("export MISSING_VAR=sekret\n"), 0o600); err != nil {
+	// A name held only by the store resolves.
+	if _, _, err := secrets.InitIdentity(); err != nil {
 		t.Fatal(err)
 	}
-	key, err := l.Key(envPath)
+	if err := secrets.Set(secrets.Global, "MISSING_VAR", []byte("sekret")); err != nil {
+		t.Fatal(err)
+	}
+	key, err := l.Key("")
 	if err != nil || key != "sekret" {
 		t.Fatalf("key=%q err=%v, want sekret", key, err)
 	}

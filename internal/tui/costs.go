@@ -113,7 +113,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// never re-fires it; r refetches manually.
 		switch m.costsTab {
 		case costsTabAccount:
-			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
+			return m, accountCmd(m.cfg, m.stateDir, m.label, m.localTasks, m.costCache)
 		case costsTabClaude:
 			return m.claudeRead()
 		}
@@ -164,7 +164,7 @@ func (m Model) handleCostsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if m.costsTab == costsTabAccount {
 			m.flash = "refreshing account…"
-			return m, accountCmd(m.cfg, m.stateDir, m.localTasks, m.costCache)
+			return m, accountCmd(m.cfg, m.stateDir, m.label, m.localTasks, m.costCache)
 		}
 		on := !m.costs.recording
 		if err := ledger.SetRecording(m.stateDir, on); err != nil {

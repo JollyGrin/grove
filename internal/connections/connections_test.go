@@ -642,6 +642,20 @@ func TestSubLaneRow(t *testing.T) {
 		t.Errorf("key via secrets file = %+v, want ok", st)
 	}
 
+	// key only in the key store — ok.
+	st = checkSubLane(Env{
+		Cfg: baseCfg("flat-x"), Getenv: noEnv,
+		Resolve: func(k string) string {
+			if k == "FLAT_X_KEY" {
+				return "shh"
+			}
+			return ""
+		},
+	})
+	if st.State != StateOK || !strings.Contains(st.Info, "key store") {
+		t.Errorf("key via store = %+v, want ok", st)
+	}
+
 	// no key anywhere — warn.
 	st = checkSubLane(Env{
 		Cfg: baseCfg("flat-x"), Getenv: noEnv, Home: "/home/u",

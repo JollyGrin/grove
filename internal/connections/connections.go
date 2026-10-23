@@ -134,6 +134,10 @@ type Env struct {
 	// KeysStored names every stored secret as "namespace/NAME" (the
 	// keys:host rows compare it with a remote's `keys ls --json`).
 	KeysStored func() []string
+	// Resolve maps a secret name to its value through the key store (env
+	// first, then the store; "" = unresolved). nil = the store is not
+	// consulted (fake envs); the legacy .env fallback still applies.
+	Resolve func(name string) string
 }
 
 // NewEnv builds the real-machine Env.
@@ -175,6 +179,9 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 			}
 			return out
 		},
+		// Doctor carries no workspace label: the global namespace plus the
+		// process env; KeysHeld covers a name held only by a workspace.
+		Resolve: func(name string) string { return secrets.Resolve("", name) },
 	}
 }
 
