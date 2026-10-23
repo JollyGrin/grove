@@ -218,3 +218,66 @@ func TestEmptyArgWarning(t *testing.T) {
 		t.Errorf("warning = %q", w)
 	}
 }
+
+func TestKeysEnv(t *testing.T) {
+	home := keysScratch(t)
+	t.Setenv("A_KEY", "")
+	t.Setenv("B_KEY", "")
+	old := ambient.ws
+	ambient.ws = nil // global config + global namespace
+	t.Cleanup(func() { ambient.ws = old })
+	cfgDir := filepath.Join(home, ".config", "grove")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `model_profiles:
+  p:
+    base_url: https://x
+    auth_token_env: A_KEY
+    sonnet: s
+    env:
+      EXTRA: "secret:B_KEY"
+      LIT: plain
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.Set(secrets.Global, "A_KEY", []byte("aaa")); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.Set(secrets.Global, "UNREFERENCED", []byte("zzz")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := keysEnv(&out, []string{"--profile", "p"})
+	if err == nil || !strings.Contains(err.Error(), "B_KEY") || !strings.Contains(err.Error(), "gv keys set NAME") || !strings.Contains(err.Error(), "global") {
+		t.Fatalf("missing name must be named with the fix, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("failed call wrote %q — never a partial environment", out.String())
+	}
+
+	if err := secrets.Set(secrets.Global, "B_KEY", []byte("bbb")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := keysEnv(&out, []string{"--profile", "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "export A_KEY='aaa'\nexport B_KEY='bbb'\n"; out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestKeysEnvRefusesTerminal(t *testing.T) {
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("no controlling terminal")
+	}
+	defer tty.Close()
+	err = keysEnv(tty, []string{"--profile", "p"})
+	if err == nil || !strings.Contains(err.Error(), "refuses a terminal") {
+		t.Fatalf("want terminal refusal, got %v", err)
+	}
+}

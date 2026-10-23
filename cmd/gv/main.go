@@ -189,6 +189,7 @@ const usage = `gv — grove
                                               every session records per-account 5h/weekly usage
   gv hook <event>                             (internal) hook receiver
   gv run-setup <repo>                         (internal) serialized worktree setup
+  gv keys env --profile P                     (internal) export lines for a profile's secrets; refuses a terminal
 `
 
 // ambient is the workspace context resolved once at startup from cwd

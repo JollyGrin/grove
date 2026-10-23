@@ -273,12 +273,32 @@ func resolveLaunchAccount(ticket, flag, pinned, profileName string, cfg *config.
 	})
 }
 
+// profileSource is the shell snippet WrapProfile runs to populate the
+// launch environment: the profile's secrets, decrypted by `gv keys env` at
+// launch time (absolute path and workspace root, the run-setup precedent — a
+// pane's PATH is no guarantee and its cwd may not walk up to the workspace). `eval` of an empty string succeeds, so a failing `keys env`
+// is turned into `false`: the subshell stops before `exec` and the pane
+// drops to a shell with the naming error on screen, never to a launch on
+// the operator's own Claude login.
+func profileSource(p *config.ModelProfile) string {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "gv"
+	}
+	root := ""
+	if ambient.ws != nil {
+		root = " --workspace-root " + config.ShellQuote(ambient.ws.Root)
+	}
+	return fmt.Sprintf(`eval "$(%s keys env --profile %s%s || echo false)"`,
+		config.ShellQuote(exe), config.ShellQuote(p.Name), root)
+}
+
 // wrapWorker applies exactly one launch wrap to a composed claude command:
 // the model profile's, else the account's — never both, since each ends in
 // `exec <cmd> )` (design §Decision 1). With neither, cmd is unchanged.
 func wrapWorker(cmd string, profile *config.ModelProfile, acct account.Resolved) string {
 	if profile != nil {
-		return config.WrapProfile(cmd, profile, config.SecretsPath())
+		return config.WrapProfile(cmd, profile, profileSource(profile))
 	}
 	return config.WrapAccount(cmd, acct.TokenPath, acct.Name)
 }

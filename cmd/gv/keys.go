@@ -11,7 +11,9 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/secrets"
+	"github.com/JollyGrin/grove/internal/workspace"
 )
 
 const keysUsage = "usage: gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>"
@@ -83,6 +85,9 @@ func cmdKeys(args []string) error {
 	if verb == "exec" {
 		return keysExec(rest)
 	}
+	if verb == "env" {
+		return keysEnv(os.Stdout, rest)
+	}
 	a, err := parseKeysArgs(rest)
 	if err != nil {
 		return err
@@ -132,6 +137,52 @@ func cmdKeys(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown keys verb %q\n%s", verb, keysUsage)
+}
+
+// keysEnv is the internal verb the launch wrap evals: the export lines for
+// exactly the secrets one profile references. Never to a terminal — the
+// output is plaintext. A missing name is a non-zero exit that names it, so
+// the wrap stops before `exec`.
+func keysEnv(w io.Writer, args []string) error {
+	if (len(args) != 2 && len(args) != 4) || args[0] != "--profile" || (len(args) == 4 && args[2] != "--workspace-root") {
+		return errors.New("usage: gv keys env --profile NAME [--workspace-root DIR]  (internal: the launch wrap evals it)")
+	}
+	// A worker's cwd is its worktree, which may live outside the workspace
+	// and not walk up (the run-setup precedent): the root travels in argv.
+	if len(args) == 4 {
+		ambient.ws = workspace.Find(args[3])
+	}
+	if f, ok := w.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return errors.New("gv keys env prints secrets in plain text and refuses a terminal; it is meant for the launch wrap (eval \"$(gv keys env --profile NAME)\")")
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return err
+	}
+	_, p, err := cfg.ResolveProfile(args[1], nil)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("no model profile %q", args[1])
+	}
+	label := ""
+	if ambient.ws != nil {
+		label = ambient.ws.Label
+	}
+	out, err := secrets.ExportLines(label, config.ProfileSecretNames(p))
+	if err != nil {
+		if errors.Is(err, secrets.ErrNotFound) {
+			ns := "global"
+			if label != "" {
+				ns = label + ", global"
+			}
+			return fmt.Errorf("profile %q: %w — searched process env, %s; set it with `gv keys set NAME` (on a remote host: `gv keys push --host`)", args[1], err, ns)
+		}
+		return fmt.Errorf("profile %q: %w", args[1], err)
+	}
+	_, err = io.WriteString(w, out)
+	return err
 }
 
 // keysInit generates this host's identity (idempotent) and says what it
