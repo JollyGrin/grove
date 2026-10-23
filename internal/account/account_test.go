@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -287,5 +288,80 @@ func TestExpiredTokens(t *testing.T) {
 	}
 	if !got["dead"] || got["live"] || got["login"] {
 		t.Fatalf("Expired by row = %v, want only dead", got)
+	}
+}
+
+// gv-keys 07: tokens move into the encrypted store, and the seam keeps
+// answering — first with the file kept, then with it gone.
+func TestImportTokens(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROVE_STATE_DIR", state)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	if _, _, err := secrets.InitIdentity(); err != nil {
+		t.Fatal(err)
+	}
+	s := Open(state)
+	const tok = "sk-ant-oat01-secrettokenvalue"
+	if _, err := s.Add("my-alt", strings.NewReader(tok), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.ImportTokens(false, 0, false)
+	if err != nil || len(res) != 1 || res[0].Name != "CLAUDE_ACCOUNT_MY_ALT" || res[0].Status != secrets.ImportStored {
+		t.Fatalf("res = %+v err = %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "grove", "secrets", "global", "CLAUDE_ACCOUNT_MY_ALT.age")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.tokenPath("my-alt")); err != nil {
+		t.Error("without rm the .token file stays")
+	}
+	check := func(when string) {
+		p, err := s.TokenSource("my-alt")
+		if err != nil {
+			t.Fatalf("%s: %v", when, err)
+		}
+		if raw, _ := os.ReadFile(p); strings.TrimSpace(string(raw)) != tok {
+			t.Errorf("%s: token via %s = %q", when, p, raw)
+		}
+		if _, err := s.Preflight("my-alt"); err != nil {
+			t.Errorf("%s: preflight: %v", when, err)
+		}
+	}
+	check("file kept")
+
+	if _, err := s.ImportTokens(false, 0, true); err != nil { // skipped → file stays
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.tokenPath("my-alt")); err != nil {
+		t.Error("a skipped name must keep its file")
+	}
+	if _, err := s.ImportTokens(true, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.tokenPath("my-alt")); !os.IsNotExist(err) {
+		t.Error("--rm --force must delete the .token")
+	}
+	check("file removed")
+	accts, _ := s.List()
+	if len(accts) != 1 || accts[0].Name != "my-alt" || accts[0].Minted.IsZero() {
+		t.Errorf("List = %+v", accts)
+	}
+
+	// Renewal updates the store and never re-creates the plaintext file.
+	if _, err := s.Add("my-alt", strings.NewReader("sk-ant-oat01-renewed"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.tokenPath("my-alt")); !os.IsNotExist(err) {
+		t.Error("renewal re-created the plaintext file")
+	}
+	if v := secrets.Resolve("", "CLAUDE_ACCOUNT_MY_ALT"); v != "sk-ant-oat01-renewed" {
+		t.Errorf("store after renewal = %q", v)
+	}
+	if _, err := s.Remove("my-alt"); err != nil {
+		t.Fatal(err)
+	}
+	if secrets.Has(secrets.Global, "CLAUDE_ACCOUNT_MY_ALT") {
+		t.Error("Remove left the secret")
 	}
 }

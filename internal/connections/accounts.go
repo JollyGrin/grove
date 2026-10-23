@@ -68,6 +68,17 @@ func accountConnections(env Env, now time.Time) []Connection {
 				fmt.Sprintf("mode %#o — anyone with that access can spend this subscription", fi.Mode().Perm()))
 		}
 	}
+	// gv-keys 07: a token still on disk and not in the encrypted store.
+	if env.KeysStored != nil {
+		have := storedGlobal(env)
+		for _, a := range accts {
+			if fi, err := env.Stat(a.TokenPath); err == nil && fi.Mode().IsRegular() && !have[account.SecretName(a.Name)] {
+				row("account-token-unimported:"+a.Name, "account "+a.Name+" token in the encrypted store",
+					"gv keys import --rm",
+					"token is a plaintext file at "+a.TokenPath+", not in the encrypted store")
+			}
+		}
+	}
 	if active, err := s.Active(); err == nil && active != "" {
 		if _, err := s.TokenSource(active); err != nil {
 			row("account-active-missing", "active account exists",

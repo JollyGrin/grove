@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-367 gv-keys 07: `gv keys import [PATH] [--rm] [--force] [--reveal N]` (`.env` via `secrets.ParseDotenv` + account tokens → `CLAUDE_ACCOUNT_<NAME>`), `Resolve` legacy `.env` fallback, doctor `keys:legacy-env` + `account-token-unimported:*`, wizard `keys-import` step (PR into `feature/gv-keys-secrets`)
 - [x] gv-keys 09 docs + brains: CLAUDE.md "Secrets (`gv keys`)", orchestrator seed Secrets section (`ls --json` read-only; `set`/`env`/`push`/`exec` operator-confirmed), config.example.yaml `secret:NAME`, plugins.md `gv keys ls --json` envelope (grove-369, 2026-10-23): docs-only close of the gv-keys train (feature/gv-keys-secrets); seed bytes changed, so every workspace's brain reads stale until `gv init --only orchestrator-md`.
 - [x] grove-368 gv-keys 08: `gv keys push --host H` / `receive` / `reseal` — ciphertext + sidecars to a remote over existing ssh (`remote.RunWithInput`, `keys` Supported but only recipient/receive relay), `keys:host:<H>` doctor row, e2e/keys.sh fake-ssh leg. PR → `feature/gv-keys-secrets` (grove-368, 2026-10-23).
 - [x] grove-366: gv-keys 06 — ACCOUNT tab, `gv sub`/`--lanes` and doctor `sub:lane` read via `secrets.Resolve` (rows: namespace tag + preview else `set · <type>`); paste saves to `secrets/global/<VAR>.age`. `SaveKey`/`Key`/`Mask`/`SecretsPath` stay for ticket 10.

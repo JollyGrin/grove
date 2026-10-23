@@ -13,6 +13,7 @@ package openrouter
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/JollyGrin/grove/internal/secrets"
 	"net/http"
 	"os"
 	"strings"
@@ -65,26 +66,7 @@ func keyFromFile(path, varName string) string {
 	if err != nil {
 		return ""
 	}
-	key := ""
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		v, ok := strings.CutPrefix(line, varName+"=")
-		if !ok {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-			v = v[1 : len(v)-1]
-		}
-		if v != "" {
-			key = v
-		}
-	}
-	return key
+	return secrets.ParseDotenv(raw)[varName]
 }
 
 // SaveKey persists key as the varName assignment in envPath, creating the

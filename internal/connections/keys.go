@@ -14,6 +14,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/remote"
+	"github.com/JollyGrin/grove/internal/secrets"
 )
 
 // keysConnections returns keys:identity (when an identity exists, or
@@ -41,6 +42,10 @@ func keysConnections(env Env) []Connection {
 			Fix:         "gv keys init",
 			Check:       checkKeysIdentity,
 		})
+	}
+
+	if len(held) > 0 || statErr == nil || envFileExists(env) {
+		conns = append(conns, legacyEnvConnection(env))
 	}
 
 	if env.Cfg == nil {
@@ -73,6 +78,63 @@ func keysConnections(env Env) []Connection {
 		})
 	}
 	return conns
+}
+
+func legacyEnvPath(env Env) string { return filepath.Join(env.Home, ".config", "grove", ".env") }
+
+func envFileExists(env Env) bool {
+	if env.Stat == nil {
+		return false
+	}
+	_, err := env.Stat(legacyEnvPath(env))
+	return err == nil
+}
+
+// storedGlobal is the set of names the global namespace holds.
+func storedGlobal(env Env) map[string]bool {
+	out := map[string]bool{}
+	if env.KeysStored == nil {
+		return out
+	}
+	for _, s := range env.KeysStored() {
+		if n, ok := strings.CutPrefix(s, secrets.Global+"/"); ok {
+			out[n] = true
+		}
+	}
+	return out
+}
+
+// legacyEnvConnection is keys:legacy-env (gv-keys 07): warn while the
+// pre-store ~/.config/grove/.env holds a name the encrypted store lacks.
+// Names only — the file is parsed, never echoed. Ticket 10 removes it.
+func legacyEnvConnection(env Env) Connection {
+	return Connection{
+		ID:          "keys:legacy-env",
+		Kind:        KindFile,
+		Severity:    SeverityWarn,
+		RequiredFor: []string{"grab", "keys"},
+		Title:       "legacy .env secrets imported into the encrypted store",
+		Fix:         "gv keys import --rm",
+		Check: func(e Env) Status {
+			path := legacyEnvPath(e)
+			raw, err := e.ReadFile(path)
+			if err != nil {
+				return Status{State: StateOK, Info: "no " + path}
+			}
+			have := storedGlobal(e)
+			var missing []string
+			for n := range secrets.ParseDotenv(raw) {
+				if !have[n] {
+					missing = append(missing, n)
+				}
+			}
+			sort.Strings(missing)
+			if len(missing) > 0 {
+				return Status{State: StateWarn, Info: path + " holds " + strings.Join(missing, ", ") + " not in the encrypted store"}
+			}
+			return Status{State: StateOK, Info: path + " — every name is in the store; delete it with gv keys import --rm"}
+		},
+	}
 }
 
 // checkKeysIdentity: present, the file 0600 and its directory 0700.

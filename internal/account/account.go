@@ -7,8 +7,9 @@
 // Interim storage (Decision 4) lives under <state dir>/accounts/:
 // <name>.token (0600), <name>.minted (the add date, standing in for the
 // token's mint date), and `active` holding a bare name. The dir is 0700.
-// Every reader of a token goes through TokenSource, the one seam gv-keys
-// 07 swaps for the secrets store.
+// Every reader of a token goes through TokenSource, the one seam: it
+// answers from the encrypted secrets store (`gv keys import` moves tokens
+// there as CLAUDE_ACCOUNT_<NAME>) and falls back to the file.
 //
 // The invariant: a token VALUE never leaves this package's files — no
 // error, listing, or --json row carries it. Names are public; values are
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 )
 
@@ -154,6 +156,10 @@ func (s Store) Add(name string, r io.Reader, now time.Time) (replaced bool, err 
 	if _, err := os.Stat(s.tokenPath(name)); err == nil {
 		replaced = true
 	}
+	inStore := stored(name)
+	if inStore {
+		replaced = true
+	}
 	// The mint record goes first, and is rolled back if the token swap
 	// fails: a new token must never carry the old date (it would hide
 	// expiry), and a failed add must leave the old token's date intact.
@@ -161,7 +167,20 @@ func (s Store) Add(name string, r io.Reader, now time.Time) (replaced bool, err 
 	if err := writeFile0600(s.mintedPath(name), []byte(now.UTC().Format(time.RFC3339)+"\n")); err != nil {
 		return false, err
 	}
-	if err := writeFile0600(s.tokenPath(name), []byte(tok+"\n")); err != nil {
+	// A token already in the store is renewed there (TokenSource prefers
+	// it) and no plaintext file is re-created.
+	var werr error
+	if inStore {
+		werr = secrets.Set(secrets.Global, SecretName(name), []byte(tok))
+		if werr == nil {
+			if err := os.Remove(s.tokenPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				werr = err
+			}
+		}
+	} else {
+		werr = writeFile0600(s.tokenPath(name), []byte(tok+"\n"))
+	}
+	if err := werr; err != nil {
 		if mintedErr == nil {
 			_ = writeFile0600(s.mintedPath(name), oldMinted)
 		} else {
@@ -175,6 +194,30 @@ func (s Store) Add(name string, r io.Reader, now time.Time) (replaced bool, err 
 // List returns every configured account, sorted by name. A missing store
 // is an empty list.
 func (s Store) List() ([]Account, error) {
+	out, err := s.listFiles()
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, a := range out {
+		have[a.Name] = true
+	}
+	// A token imported then removed from disk lives only in the store; its
+	// .minted record (not a secret) is what names it here.
+	if entries, err := os.ReadDir(s.Dir); err == nil {
+		for _, e := range entries {
+			name, ok := strings.CutSuffix(e.Name(), ".minted")
+			if ok && !have[name] && ValidateName(name) == nil && stored(name) {
+				out = append(out, s.account(name))
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// listFiles is the accounts whose token is a file on disk.
+func (s Store) listFiles() ([]Account, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -190,7 +233,6 @@ func (s Store) List() ([]Account, error) {
 		}
 		out = append(out, s.account(name))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -228,8 +270,86 @@ func (s Store) Names() []string {
 }
 
 func (s Store) exists(name string) bool {
+	if stored(name) {
+		return true
+	}
 	fi, err := os.Stat(s.tokenPath(name))
 	return err == nil && fi.Mode().IsRegular()
+}
+
+// SecretName is the encrypted-store name holding account name's token
+// (gv keys import): upper-cased, `-` → `_`.
+func SecretName(name string) string {
+	return "CLAUDE_ACCOUNT_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+}
+
+func stored(name string) bool { return secrets.Has(secrets.Global, SecretName(name)) }
+
+// materialize writes the stored token to a 0600 file under the runtime
+// dir (tmpfs where XDG_RUNTIME_DIR is set) so the launching shell can
+// `cat` it — WrapAccount reads a path. "" when the store cannot answer.
+func (s Store) materialize(name string) (string, error) {
+	tok := secrets.Resolve("", SecretName(name))
+	if tok == "" {
+		return "", nil
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), fmt.Sprintf("grove-%d", os.Getuid()))
+	}
+	dir = filepath.Join(dir, "grove-accounts")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, name+".token")
+	return p, writeFile0600(p, []byte(tok+"\n"))
+}
+
+// ImportTokens moves every <name>.token into the global secrets store as
+// CLAUDE_ACCOUNT_<NAME>. Results are keyed by the store name, never the
+// value. With rm, a token file is deleted only for a name imported by this
+// call — a skipped name keeps its file, so a differing value is never lost.
+// The .minted record is written first if absent: it is what names the
+// account once the file is gone.
+func (s Store) ImportTokens(force bool, reveal int, rm bool) ([]secrets.ImportResult, error) {
+	accts, err := s.listFiles()
+	if err != nil {
+		return nil, err
+	}
+	vals := map[string]string{}
+	byStore := map[string]string{}
+	for _, a := range accts {
+		raw, err := os.ReadFile(a.TokenPath)
+		if err != nil {
+			return nil, err
+		}
+		tok := strings.TrimSpace(string(raw))
+		if tok == "" {
+			continue
+		}
+		vals[SecretName(a.Name)] = tok
+		byStore[SecretName(a.Name)] = a.Name
+	}
+	res := secrets.ImportValues(vals, force, reveal)
+	if rm {
+		for _, r := range res {
+			if r.Status == secrets.ImportStored {
+				if _, err := os.Stat(s.mintedPath(byStore[r.Name])); err != nil {
+					a := s.account(byStore[r.Name])
+					if err := writeFile0600(s.mintedPath(a.Name), []byte(a.Minted.UTC().Format(time.RFC3339)+"\n")); err != nil {
+						return res, err
+					}
+				}
+				if err := os.Remove(s.tokenPath(byStore[r.Name])); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return res, err
+				}
+			}
+		}
+	}
+	return res, nil
 }
 
 func (s Store) notFound(name string) error {
@@ -290,8 +410,13 @@ func (s Store) Remove(name string) (wasActive bool, err error) {
 	if !s.exists(name) {
 		return false, s.notFound(name)
 	}
-	if err := os.Remove(s.tokenPath(name)); err != nil {
+	if err := os.Remove(s.tokenPath(name)); err != nil && !(errors.Is(err, os.ErrNotExist) && stored(name)) {
 		return false, err
+	}
+	if stored(name) {
+		if err := secrets.Remove(secrets.Global, SecretName(name)); err != nil {
+			return false, err
+		}
 	}
 	_ = os.Remove(s.mintedPath(name))
 	if err := os.Remove(s.UsagePath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -308,14 +433,23 @@ func (s Store) Remove(name string) (wasActive bool, err error) {
 
 // TokenSource is the seam every token reader goes through: the path of
 // name's token file, which the launching shell reads (`cat`) so the value
-// never enters argv or a send-keys line. gv-keys 07 swaps the storage
-// behind it.
+// never enters argv or a send-keys line. A token held in the encrypted
+// store (gv keys import) is decrypted to a 0600 file on the runtime dir.
 func (s Store) TokenSource(name string) (string, error) {
 	if err := ValidateName(name); err != nil {
 		return "", err
 	}
 	if !s.exists(name) {
 		return "", s.notFound(name)
+	}
+	// The encrypted store first, the plaintext file second (the one-release
+	// window; gv-keys ticket 10 drops the file).
+	if stored(name) {
+		if p, err := s.materialize(name); err != nil {
+			return "", err
+		} else if p != "" {
+			return p, nil
+		}
 	}
 	return s.tokenPath(name), nil
 }
