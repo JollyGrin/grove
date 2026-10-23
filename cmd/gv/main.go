@@ -4221,7 +4221,7 @@ func cmdAdopt(args []string) error {
 	claudeCmd := adoptClaudeCmd(claudeBin, promptPath, sessionID, *manual, profile, acct)
 	if freshWorktree && repo.Setup != "" {
 		exe, _ := os.Executable()
-		claudeCmd = fmt.Sprintf("%s run-setup %s %s && %s", exe, repoName, shellQuoteRoot(), claudeCmd)
+		claudeCmd = fmt.Sprintf("%s run-setup %s %s %s && %s", exe, repoName, shellQuoteRoot(), task.ID, claudeCmd)
 	}
 	if err := tmux.SendKeys(claudePane, claudeCmd); err != nil {
 		return err
