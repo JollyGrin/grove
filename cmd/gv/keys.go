@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -13,11 +14,12 @@ import (
 	"golang.org/x/term"
 
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/remote"
 	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
 
-const keysUsage = "usage: gv keys init | recipient | set NAME [--type TEXT] [--reveal N] [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>"
+const keysUsage = "usage: gv keys init | recipient | set NAME [--type TEXT] [--reveal N] [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…> | push --host H [--global | --workspace [L]] | reseal [--global | --workspace [L]]"
 
 // keysArgs is the parsed tail of a `gv keys set|rm|ls` line.
 type keysArgs struct {
@@ -104,6 +106,14 @@ func cmdKeys(args []string) error {
 	}
 	if verb == "env" {
 		return keysEnv(os.Stdout, rest)
+	}
+	switch verb {
+	case "push":
+		return keysPush(rest)
+	case "reseal":
+		return keysReseal(rest)
+	case "receive":
+		return keysReceive(os.Stdin, os.Stdout)
 	}
 	a, err := parseKeysArgs(rest)
 	if err != nil {
@@ -265,6 +275,10 @@ func keysSet(ns, name, typ string, reveal int) error {
 	if previewErr != nil {
 		fmt.Printf("• no preview stored: %v\n", previewErr)
 	}
+	// Push is never automatic — a hint only, when others hold this namespace.
+	if rs, err := secrets.Recipients(ns); err == nil && len(rs) > 1 {
+		fmt.Printf("• %d other recipients — gv keys push --host … to sync\n", len(rs)-1)
+	}
 	return nil
 }
 
@@ -295,6 +309,124 @@ func keysLs(asJSON bool) error {
 		}
 		fmt.Printf("%-28s %-14s %-24s %-26s %d recipient(s)%s\n", r.Name, r.Namespace, r.Type, preview, r.Recipients, mark)
 	}
+	return nil
+}
+
+// parseNSFlags reads `[--global | --workspace [L]]` (plus --host for push)
+// where --workspace takes the next non-flag word as its label — unlike
+// parseKeysArgs there is no NAME to disambiguate against.
+func parseNSFlags(args []string, allowHost bool) (a keysArgs, host string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; {
+		case arg == "--global":
+			a.global = true
+		case arg == "--workspace":
+			a.workspace = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				a.label = args[i]
+			}
+		case allowHost && arg == "--host":
+			if i+1 >= len(args) {
+				return a, "", errors.New("--host needs a value")
+			}
+			i++
+			host = args[i]
+		case allowHost && strings.HasPrefix(arg, "--host="):
+			host = strings.TrimPrefix(arg, "--host=")
+		default:
+			return a, "", fmt.Errorf("unexpected argument %q\n%s", arg, keysUsage)
+		}
+	}
+	if a.global && a.workspace {
+		return a, "", errors.New("--global and --workspace are mutually exclusive")
+	}
+	return a, host, nil
+}
+
+func keysReseal(args []string) error {
+	a, _, err := parseNSFlags(args, false)
+	if err != nil {
+		return err
+	}
+	ns, err := a.namespace()
+	if err != nil {
+		return err
+	}
+	n, err := secrets.Reseal(ns)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✓ resealed %d secrets in %s\n", n, ns)
+	return nil
+}
+
+// keysReceive is the remote half of push: ciphertext on stdin, the count
+// of secrets on stdout. Refuses a terminal — nobody types this.
+func keysReceive(in *os.File, w io.Writer) error {
+	if term.IsTerminal(int(in.Fd())) {
+		return errors.New("gv keys receive is internal: it reads a payload from stdin (gv keys push --host H sends it)")
+	}
+	n, err := secrets.Receive(in)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, n)
+	return nil
+}
+
+// keysPush shares one namespace with host H over the existing ssh hop.
+// Namespace defaults to global, not the ambient workspace: the remote has
+// no ambient workspace either (the relay does not cd).
+func keysPush(args []string) error {
+	a, host, err := parseNSFlags(args, true)
+	if err != nil {
+		return err
+	}
+	if host == "" {
+		return errors.New("usage: gv keys push --host H [--global | --workspace [L]]")
+	}
+	ns := secrets.Global
+	if a.workspace {
+		if ns, err = a.namespace(); err != nil {
+			return err
+		}
+	}
+	cfg, err := loadCfg()
+	if err != nil {
+		return err
+	}
+	res, err := secrets.Push(ns, host,
+		func() (string, error) {
+			var out, errb bytes.Buffer
+			code, err := remote.RunDetached(cfg, host, "keys", []string{"recipient"}, &out, &errb)
+			if err != nil {
+				return "", err
+			}
+			if code != 0 {
+				return "", secrets.RemoteErr(host, "recipient", code, errb.String())
+			}
+			return secrets.ParseRemoteRecipient(host, out.String())
+		},
+		func(payload []byte) (int, error) {
+			var out, errb bytes.Buffer
+			code, err := remote.RunWithInput(cfg, host, "keys", []string{"receive"}, bytes.NewReader(payload), &out, &errb)
+			if err != nil {
+				return 0, err
+			}
+			if code != 0 {
+				return 0, secrets.RemoteErr(host, "receive", code, errb.String())
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(out.String()))
+			if err != nil {
+				return 0, fmt.Errorf("%s: unexpected reply from `gv keys receive`: %q", host, strings.TrimSpace(out.String()))
+			}
+			return n, nil
+		})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✓ %d secrets → %s (%s, namespace %s)\n", res.Count, host, secrets.ShortRecipient(res.Recipient), ns)
 	return nil
 }
 

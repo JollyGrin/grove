@@ -5,7 +5,9 @@
 # environment ONLY — never a pane, state file, prompt, ls --json, shell
 # history or the config tree (ciphertext only). Dummy-data pattern
 # (e2e/dummy.sh): scratch HOME + GROVE_STATE_DIR + isolated tmux server.
-# The fake-ssh half (push --host) is ticket 08.
+# (3) gv-keys 08: `gv keys push --host pc` over a fake ssh — ciphertext only
+# on the wire, the remote host decrypts with its own identity, a third
+# identity cannot.
 set -euo pipefail
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -183,6 +185,78 @@ wid="$(grep task-002 "$SCRATCH/wins.txt" | head -1 | cut -d' ' -f1)"
 cmd="$(tmux list-panes -t "$wid" -F '#{pane_current_command}' | head -1)"
 case "$cmd" in bash|zsh|sh|fish|dash) ;; *) fail "pane is running $cmd, not a shell" ;; esac
 
+say "push leg: fake ssh on PATH re-runs the command as the REMOTE host"
+RHOME="$SCRATCH/home-remote"; RSTATE="$SCRATCH/state-remote"
+mkdir -p "$SCRATCH/bin" "$RHOME" "$RSTATE" "$SCRATCH/ssh-in"
+cat > "$SCRATCH/bin/ssh" <<SSHEOF
+#!/usr/bin/env bash
+target=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -o) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) if [ -z "\$target" ]; then target="\$1"; shift; else break; fi ;;
+  esac
+done
+[ "\$target" = "localhost" ] || { echo "fake ssh: target '\$target' is not localhost" >&2; exit 42; }
+cmd="\$*"
+echo "[fake ssh] \$cmd" >> "$SCRATCH/ssh.log"
+# capture whatever travels on stdin (the payload), then hand it on
+tee "$SCRATCH/ssh-in/\$\$.in" | env HOME="$RHOME" GROVE_STATE_DIR="$RSTATE" sh -c "\$cmd"
+SSHEOF
+chmod +x "$SCRATCH/bin/ssh"
+printf 'hosts:\n  pc:\n    ssh: localhost\n    gv: %s\n' "$GV" >> "$WCFG"
+remote_gv() { env HOME="$RHOME" GROVE_STATE_DIR="$RSTATE" "$GV" "$@"; }
+export PATH="$SCRATCH/bin:$PATH"
+
+say "push: a remote with no identity fails with a pointer"
+rc=0; "$GV" keys push --host pc > "$SCRATCH/push0.out" 2>&1 || rc=$?
+[ "$rc" != 0 ] || fail "push to a remote with no identity should fail"
+grep -q 'gv keys init' "$SCRATCH/push0.out" || { cat "$SCRATCH/push0.out"; fail "no init hint"; }
+
+say "push: remote runs gv keys init, then push (global + workspace namespaces)"
+remote_gv keys init > /dev/null
+"$GV" keys push --host pc > "$SCRATCH/push1.out" || { cat "$SCRATCH/push1.out"; fail "push global failed"; }
+grep -q '^✓ 2 secrets → pc (age1….\{4\}, namespace global)$' "$SCRATCH/push1.out" || { cat "$SCRATCH/push1.out"; fail "push summary wrong"; }
+"$GV" keys push --host pc --workspace dummy > "$SCRATCH/push2.out" || { cat "$SCRATCH/push2.out"; fail "push workspace failed"; }
+grep -q 'namespace dummy' "$SCRATCH/push2.out" || fail "workspace push summary wrong"
+"$GV" keys push --host pc > "$SCRATCH/push3.out" || fail "second push (idempotent) failed"
+cmp -s "$SCRATCH/push1.out" "$SCRATCH/push3.out" || fail "second push output differs"
+
+say "push: --host on set is refused with the friendly shape"
+rc=0; printf x | "$GV" keys set NOPE --host pc > "$SCRATCH/set-host.out" 2>&1 || rc=$?
+[ "$rc" != 0 ] || fail "keys set --host should fail"
+grep -q 'not supported' "$SCRATCH/set-host.out" || { cat "$SCRATCH/set-host.out"; fail "no friendly refusal"; }
+[ ! -e "$RHOME/.config/grove/secrets/global/NOPE.age" ] || fail "set --host wrote on the remote"
+
+say "push: the wire carried ciphertext only (captured, then grep)"
+ls "$SCRATCH/ssh-in"/*.in > /dev/null || fail "nothing captured"
+if grep -l hunter2 "$SCRATCH"/ssh-in/*.in "$SCRATCH/ssh.log" "$SCRATCH"/push*.out; then fail "plaintext crossed the wire"; fi
+grep -q '"secrets"' "$SCRATCH"/ssh-in/*.in || fail "no payload captured"
+
+say "push: remote store is ciphertext in a 0700 dir"
+RSEC="$RHOME/.config/grove/secrets/global"
+[ -f "$RSEC/DUMMY_KEY.age" ] || fail "DUMMY_KEY.age not on the remote"
+[ "$(stat -c %a "$RSEC" 2>/dev/null || stat -f %Lp "$RSEC")" = 700 ] || fail "remote ns dir not 0700"
+if grep -rl hunter2 "$RHOME" "$RSTATE"; then fail "plaintext in the remote store"; fi
+
+say "push: a THIRD identity cannot decrypt the pushed file"
+THIRD_STATE="$SCRATCH/state-third"; mkdir -p "$THIRD_STATE"
+env HOME="$RHOME" GROVE_STATE_DIR="$THIRD_STATE" "$GV" keys init > /dev/null
+rc=0; env HOME="$RHOME" GROVE_STATE_DIR="$THIRD_STATE" "$GV" keys exec DUMMY_KEY -- true > "$SCRATCH/third.out" 2>&1 || rc=$?
+[ "$rc" != 0 ] || fail "third identity decrypted the pushed secret"
+grep -q 'not a recipient' "$SCRATCH/third.out" || { cat "$SCRATCH/third.out"; fail "third identity: wrong error"; }
+
+say "remote grab (same profile p) resolves from the remote's own identity"
+rm -f "$SCRATCH/seen"
+cd "$DUMMY"
+sed -e "s/^id: task-001/id: task-003/" -e "s/^title: .*/title: \"Third task\"/" .grove/tasks/task-001.md > .grove/tasks/task-003.md
+env HOME="$RHOME" GROVE_STATE_DIR="$RSTATE" "$GV" grab task-003 --repo dummy --profile p > "$SCRATCH/grab3.out" || { cat "$SCRATCH/grab3.out"; fail "remote grab failed"; }
+wait_for "$SCRATCH/seen" || { pane_text task-003; cat "$SCRATCH/pane.txt"; fail "remote worker never ran"; }
+sleep 1
+[ "$(cat "$SCRATCH/seen")" = "hunter2|hunter2|plain" ] || fail "remote worker env wrong: $(cat "$SCRATCH/seen")"
+
 say "shell history (flushed when the isolated server's shells exit)"
 kill_tmux
 sleep 1
@@ -194,4 +268,4 @@ say "live state untouched"
 [ "$LIVE_BEFORE" = "$(snapshot_live)" ] || fail "live grove state changed"
 [ "$(real_tmux)" = "$REAL_TMUX_BEFORE" ] || fail "the REAL tmux server's session list changed"
 
-say "PASS — profiled grab resolves secrets at launch; plaintext only in the worker env"
+say "PASS — launch-time secrets, plaintext only in the worker env; push --host ships ciphertext only"

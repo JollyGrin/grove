@@ -1,9 +1,11 @@
 package connections
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
 )
@@ -132,5 +134,50 @@ func TestKeysRowsDroppedInFakeEnv(t *testing.T) {
 		if strings.HasPrefix(r.Connection.ID, "keys:") {
 			t.Errorf("fake env grew %s", r.Connection.ID)
 		}
+	}
+}
+
+func TestKeysHostRow(t *testing.T) {
+	hosts := map[string]*config.Host{"pc": {SSH: "dean@pc", GV: "gv"}}
+	mk := func(stored []string, out string, err error) Env {
+		env := keysEnv(nil, nil, nil, nil)
+		env.Cfg.Hosts = hosts
+		env.KeysStored = func() []string { return stored }
+		env.Output = func(_ time.Duration, name string, args ...string) (string, error) {
+			if name != "ssh" || args[len(args)-1] != "gv keys ls --json" {
+				t.Errorf("probe = %s %v", name, args)
+			}
+			return out, err
+		}
+		return env
+	}
+	remoteJSON := `{"schema_version":1,"keys":[{"name":"A","namespace":"global"},{"name":"B","namespace":"ws"}]}`
+	for _, tc := range []struct {
+		name   string
+		stored []string
+		out    string
+		err    error
+		want   State
+		info   string
+	}{
+		{"complete", []string{"global/A", "ws/B"}, remoteJSON, nil, StateOK, "2 present"},
+		{"missing one", []string{"global/A", "global/B", "ws/B"}, remoteJSON, nil, StateWarn, "global/B"},
+		{"old gv", []string{"global/A"}, "unknown command", nil, StateMissing, "predate"},
+		{"ssh down", []string{"global/A"}, "", errors.New("exit 255"), StateMissing, "exit 255"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := mk(tc.stored, tc.out, tc.err)
+			rows := keysHostConnections(env)
+			if len(rows) != 1 || rows[0].ID != "keys:host:pc" || rows[0].Severity != SeverityWarn {
+				t.Fatalf("rows = %+v", rows)
+			}
+			st := rows[0].Check(env)
+			if st.State != tc.want || !strings.Contains(st.Info, tc.info) {
+				t.Errorf("status = %+v", st)
+			}
+		})
+	}
+	if rows := keysHostConnections(mk(nil, "", nil)); len(rows) != 0 {
+		t.Errorf("no stored secrets must mean no row, got %+v", rows)
 	}
 }
