@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/JollyGrin/grove/internal/claudestate"
 	"github.com/JollyGrin/grove/internal/config"
 	"github.com/JollyGrin/grove/internal/cost"
 	"github.com/JollyGrin/grove/internal/detect"
@@ -56,6 +57,9 @@ type refreshMsg struct {
 	// into the board while the R remote merge is on.
 	handedOff []*state.Task
 	live      map[string]string
+	// labels is the resolver's row label per ticket (grove-536), built from
+	// this beat's signals and replaced wholesale on the next.
+	labels map[string]string
 	// infos is the per-ticket pane read behind live (grove-254): the
 	// supervisor engine needs Exists/HasClaude/PaneContent, not just the
 	// status word. Consumed in Update and dropped — never held on the model.
@@ -169,6 +173,7 @@ type Model struct {
 	scene    []*state.Task
 	sceneBuf []*state.Task
 	live     map[string]string
+	labels   map[string]string // resolver label per ticket, one beat old (grove-536)
 	prs      map[string]*github.PR
 	// prUnknown holds the tickets whose last PR poll errored or timed out
 	// (github.FetchAll, grove-251) — a ticket here renders "?" in the PR
@@ -372,7 +377,7 @@ func Run(cfg *config.Config, stateDir, label string) (*state.Task, string, error
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
+	return tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs()), prsCmd(m.cfg, m.stateDir, nil), chatsCmd(m.label, true), tickEvery(time.Second), prTickEvery(30*time.Second), featTickEvery(featTickInterval))
 }
 
 // --- commands ---
@@ -461,15 +466,21 @@ func snapshotSessions(fetch func(string) (*tmux.SessionSnapshot, error)) func(st
 // process spawns/sec, which pegged the CPU on hosts where spawning is
 // expensive (EDR scanning each exec, WSL1). snapFor and detectFrom are
 // injected so tests can count exactly what a refresh reads.
-func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo) (map[string]string, string, map[string]detect.LiveInfo) {
+//
+// grove-536: Claude's own session file answers busy/idle/waiting, so
+// readClaude is called ONCE with every worker pane id the snapshots show,
+// and detectFrom (the capture-pane) runs only for a task whose pane has no
+// session file for its session — the fallback. The map readClaude returns
+// lives for this refresh only. signals feeds state.Resolve.
+func liveStates(active []*state.Task, session string, snapFor func(string) *tmux.SessionSnapshot, detectFrom func(*tmux.SessionSnapshot, string) detect.LiveInfo, readClaude func(map[string]bool) map[string]state.ClaudeStatus) (map[string]string, string, map[string]detect.LiveInfo, map[string]state.Signals) {
 	live := map[string]string{}
-	infos := make(map[string]detect.LiveInfo, len(active))
 	activeWindow := snapFor(session).ActiveWindow()
 	focused := ""
+
+	infos, signals := claudestate.Observe(active, snapFor, detectFrom, readClaude)
 	for _, t := range active {
+		info := infos[t.Ticket]
 		snap := snapFor(t.TmuxSession)
-		info := detectFrom(snap, t.TmuxWindow)
-		infos[t.Ticket] = info
 		if !info.Exists {
 			live[t.Ticket] = "gone"
 		} else {
@@ -482,7 +493,7 @@ func liveStates(active []*state.Task, session string, snapFor func(string) *tmux
 			focused = t.Ticket
 		}
 	}
-	return live, focused, infos
+	return live, focused, infos, signals
 }
 
 // feedTail is the activity-feed tail bound — the folder keeps this many
@@ -492,7 +503,7 @@ const feedTail = 200
 // refreshCmd reads one cockpit beat's worth of data. withTombstones gates
 // the state.HandedOff scan on the R toggle (grove-178 fix round): with R
 // off — the default — the beat does zero tombstone work.
-func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones bool) tea.Cmd {
+func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones bool, sessionDirs []string) tea.Cmd {
 	return func() tea.Msg {
 		// grove-126: one incremental pass answers both the task map and the
 		// feed tail — O(appended bytes) per tick, not two full-log scans —
@@ -509,8 +520,16 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 		// grove-149: two session-wide reads answer every window/pane question
 		// for the whole board; only capture-pane stays per task (inside
 		// DetectLiveFrom).
-		live, focused, infos := liveStates(active, session,
-			snapshotSessions(tmux.SnapshotSession), detect.DetectLiveFrom)
+		live, focused, infos, signals := liveStates(active, session,
+			snapshotSessions(tmux.SnapshotSession), detect.DetectLiveFrom,
+			func(want map[string]bool) map[string]state.ClaudeStatus {
+				return claudestate.Read(sessionDirs, want)
+			})
+		now := time.Now()
+		labels := make(map[string]string, len(active))
+		for _, t := range active {
+			labels[t.Ticket] = state.Resolve(t, signals[t.Ticket], now).Label()
+		}
 
 		// Piggyback the resource gauge on the existing 1s tick — no new poll
 		// loop or goroutine (grove-3). The read is a handful of sysctls; the
@@ -524,7 +543,7 @@ func refreshCmd(folder *state.Folder, stateDir, session string, withTombstones b
 			Workers: workers, Kind: resource.KindSample,
 		})
 
-		return refreshMsg{tasks: active, handedOff: handedOff, live: live, infos: infos, events: events, mem: mem, workers: workers, ok: true, focused: focused,
+		return refreshMsg{tasks: active, handedOff: handedOff, live: live, labels: labels, infos: infos, events: events, mem: mem, workers: workers, ok: true, focused: focused,
 			features: openFeatures(folder.Features())}
 	}
 }
@@ -829,7 +848,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		decayCelebrations(m.celebrations)
 		// grove-402: the CHATS box rides this beat — the cheap pass (one
 		// list-panes), the costly one only while the box is focused.
-		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), chatsCmd(m.label, m.focus == focusChats), tickEvery(time.Second))
+		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs()), chatsCmd(m.label, m.focus == focusChats), tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
@@ -877,6 +896,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.localTasks, m.handedOff = msg.tasks, msg.handedOff
 			m.live = msg.live
+			m.labels = msg.labels
 			// grove-377: a changed open-feature set earns one status pass
 			// now instead of waiting for the next PR beat.
 			if !sameSlugs(m.features, msg.features) {
@@ -1088,7 +1108,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case landDoneMsg:
 		m.flash = landFlash(msg)
-		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs())
 
 	case serveStatusMsg:
 		if msg.serves != nil {
@@ -1141,7 +1161,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.flash = "✓ sent to " + msg.ticket
 		}
-		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs())
 
 	case remoteDoneMsg:
 		// grove-185: nothing local changed (the remote host recorded its own
@@ -1165,7 +1185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = "✓ done"
 		}
-		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+		return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs())
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -1308,7 +1328,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flash = fmt.Sprintf("asking %d host(s)…", len(m.cfg.Hosts))
 		// The ad-hoc refresh brings the tombstones in (their scan is gated
 		// on R being on); live remote rows land with the ssh answer.
-		return m, tea.Batch(remoteCmd(m.cfg), refreshCmd(m.folder, m.stateDir, m.sessionName(), true))
+		return m, tea.Batch(remoteCmd(m.cfg), refreshCmd(m.folder, m.stateDir, m.sessionName(), true, m.sessionDirs()))
 	case "@": // arm a remote spawn (grove-199); a second @ cycles the host
 		host, err := m.firstArmedHost()
 		if err != nil {
@@ -1440,7 +1460,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.flash = "reviewing " + t.Ticket
 			}
-			return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+			return m, refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote, m.sessionDirs())
 		}
 	case "d":
 		if t := m.selected(); t != nil {
@@ -1788,6 +1808,32 @@ func (m Model) spawnProfile(profile string) (tea.Model, tea.Cmd) {
 
 // sessionName is the workspace's shared tmux session (grove-<label>, or the
 // legacy global "grove"); the model carries label so it needn't ask cmd/gv.
+// sessionDirs lists every Claude Code sessions/ dir a worker may be running
+// under (grove-536): the default ~/.claude, the workspace's claude_config_dir
+// and any CLAUDE_CONFIG_DIR a model profile exports. Sorted-free and small;
+// built per refresh, not cached.
+func (m Model) sessionDirs() []string {
+	var extra []string
+	if m.cfg != nil {
+		extra = append(extra, m.cfg.ClaudeConfigDir)
+		for _, p := range m.cfg.ModelProfiles {
+			if p != nil {
+				extra = append(extra, p.Env["CLAUDE_CONFIG_DIR"])
+			}
+		}
+	}
+	return claudestate.SessionDirs(extra...)
+}
+
+// labelOf is the row label for t: the resolver's answer from the last beat,
+// or the hook-only label before the first beat lands.
+func (m Model) labelOf(t *state.Task) string {
+	if l, ok := m.labels[t.Ticket]; ok {
+		return l
+	}
+	return t.Label()
+}
+
 func (m Model) sessionName() string {
 	if m.label == "" {
 		return "grove"

@@ -84,8 +84,12 @@ cp "$HOME/.cc-work/settings.json" "$SCRATCH/ccwork-before.json"
 "$GV" init --only hooks > /dev/null
 "$GV" init --only hooks > /dev/null
 [ -f "$HOME/.claude/settings.json" ] || fail "hooks must land in the worker's profile (~/.claude)"
-GV_COUNT=$(grep -c 'gv hook stop' "$HOME/.claude/settings.json" || true)
+# Anchor on the closing quote of the JSON command: bare 'gv hook stop' also
+# matches `gv hook stop-failure`.
+GV_COUNT=$(grep -c 'gv hook stop"' "$HOME/.claude/settings.json" || true)
 [ "$GV_COUNT" -eq 1 ] || fail "gv Stop hook count in ~/.claude = $GV_COUNT, want 1 (idempotent)"
+GV_FAIL_COUNT=$(grep -c 'gv hook stop-failure"' "$HOME/.claude/settings.json" || true)
+[ "$GV_FAIL_COUNT" -eq 1 ] || fail "gv StopFailure hook count in ~/.claude = $GV_FAIL_COUNT, want 1 (idempotent)"
 cmp -s "$HOME/.cc-work/settings.json" "$SCRATCH/ccwork-before.json" || fail "unrelated profile (~/.cc-work) was touched"
 
 say "--agents-md with a stub worker writes the brain"

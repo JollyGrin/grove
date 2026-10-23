@@ -27,6 +27,7 @@ type Payload struct {
 	Cwd                  string `json:"cwd"`
 	HookEventName        string `json:"hook_event_name"`
 	Message              string `json:"message"`
+	NotificationType     string `json:"notification_type"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	// Source is SessionStart's origin: startup | resume | clear | compact
 	// (verified on Claude Code 2.1.283, grove-339). "compact" means Claude
@@ -38,7 +39,17 @@ type Payload struct {
 	// already continuing after a Stop hook blocked — the done gate never
 	// blocks that re-entry (grove-441).
 	StopHookActive bool `json:"stop_hook_active"`
+	// AgentID is set on a payload fired from inside a subagent; those are
+	// not the worker's own turn and are dropped for the events below.
+	AgentID string `json:"agent_id"`
+	// Error and ErrorDetails are StopFailure's reason (e.g. rate_limit)
+	// and free text.
+	Error        string `json:"error"`
+	ErrorDetails string `json:"error_details"`
 }
+
+// stopFailedDetailsCap bounds stop_failed's details, in runes.
+const stopFailedDetailsCap = 200
 
 // Candidate is one fleet the receiver may attribute an event to: a
 // registered workspace (Label = workspace label) or the legacy global
@@ -98,6 +109,26 @@ func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.
 	}
 
 	switch event {
+	case "stop-failure", "prompt-submit":
+		if p.AgentID != "" {
+			return nil // a subagent's payload, not the worker's turn
+		}
+		if event == "prompt-submit" {
+			// No prompt text: it can be large and is not ours to log.
+			return state.Append(stateDir, state.Event{
+				Type: state.EvPromptSubmitted, Ticket: task.Ticket,
+				Data: map[string]string{},
+			})
+		}
+		details := capRunes(p.ErrorDetails, stopFailedDetailsCap)
+		err := state.Append(stateDir, state.Event{
+			Type: state.EvStopFailed, Ticket: task.Ticket,
+			Data: map[string]string{"error": p.Error, "details": details},
+		})
+		notify.Desktop(task.Ticket+" turn failed", p.Error)
+		notify.Push(task.Ticket+" turn failed", p.Error, "high", "warning")
+		return err
+
 	case "session-start":
 		if p.Source == "compact" {
 			// A compact restart is not a new session: no glyph change, no
@@ -197,7 +228,10 @@ func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.
 		glyphWorker(task, state.Glyph(state.AgentWaiting, ""))
 		_ = state.Append(stateDir, state.Event{
 			Type: state.EvNotification, Ticket: task.Ticket,
-			Data: map[string]string{"message": p.Message, "session_id": p.SessionID},
+			Data: map[string]string{
+				"message": p.Message, "session_id": p.SessionID,
+				"notification_type": p.NotificationType,
+			},
 		})
 		notify.Desktop(task.Ticket+" needs input", p.Message)
 		notify.Push(task.Ticket+" needs input", p.Message, "high", "bell")
@@ -337,7 +371,14 @@ var hookEvents = map[string]string{
 	"Notification": "notification",
 	"Stop":         "stop",
 	"SessionEnd":   "session-end",
+	// grove-537: the resolver's two extra signals. Deliberately not the
+	// per-tool-call events — each firing is a gv process spawn.
+	"StopFailure":      "stop-failure",
+	"UserPromptSubmit": "prompt-submit",
 }
+
+// EventCount is how many Claude hook events grove manages.
+func EventCount() int { return len(hookEvents) }
 
 // SettingsPaths derives every Claude settings.json the fleet's workers
 // live under — hooks only fire for sessions of the profile whose settings

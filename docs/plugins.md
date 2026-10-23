@@ -52,7 +52,7 @@ payload under one named key.
 
 | Command | Payload key | Shape |
 |---|---|---|
-| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`, `host`); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
+| `gv ls --json` | `tasks` | array — one row per active task (task fields + `live`, `pr`, `cost`, `host`, and — grove-539, additive — `state`, `state_detail`, `state_source`: the resolver's one worker state, the same word the cockpit shows. `state` is one of `setup|setup_failed|working|waiting|blocked|idle|errored|dead|paused|done`; `state_detail` is `""` or a short reason (`permission prompt`, `question`, `done ✓`, `stalled?`, `rate_limit`, …); `state_source` is `hook|claude|pane|timeout` — why grove believes it. Prefer `state` over `live` + `agent`; the old fields are unchanged); plus, after the active rows, one row per handed-off task (`done: true`, `handed_off_to: <host>`, `live: "handed-off"`) — skip them if you only want local workers |
 | `gv audit --json` | `report` | object — per-task classification (incl. the report-only `handed_off` class for tombstones) + orphan worktrees + orphan/worktree processes + `chat_sessions` (live detached orchestrator chats, grove-203; each row also carries `n`, `pane`, `dir` and the resolved `session_id` since grove-215) |
 | `gv sweep --json` | `report` | object — `{items, orphan_processes, worktree_processes, stale_prompts}` proposed-action dry-run |
 | `gv cost --json` | `rows` | array — per-ticket token/cost estimates |
@@ -349,11 +349,12 @@ whole "produce" half; `gv watch` below is the "consume" half.
 
 | event | ntfy priority · tag | desktop |
 |---|---|---|
-| `worker_waiting` / `worker_vanished` / `worker_errored` | high · `warning` | yes |
+| `worker_waiting` / `worker_vanished` / `worker_errored` / `setup_failed` | high · `warning` | yes |
 | `pr_ci_failed` / `pr_conflicting` | high · `x` | yes |
 | `pr_ready` | default · `white_check_mark` | yes |
 | `pr_merged` | default · `tada` | yes |
-| `pr_opened` / `pr_updated` / `pr_closed` / `worker_recovered` | none | no |
+| `stop_failed` | high · `warning` | yes |
+| `pr_opened` / `pr_updated` / `pr_closed` / `worker_recovered` / `prompt_submitted` | none | no |
 
 `gv watch` (grove-205) is the supported subscription: grove does the
 tailing, the offset bookkeeping and the torn-line handling, and hands you
@@ -413,13 +414,19 @@ offset and read new lines on a timer). One record per line:
 Task-scoped types: `task_created`, `session_started`, `agent_status`,
 `notification`, `answered`, `human_status`, `session_ended`, `attached`,
 `task_done`, `task_untracked`, `task_adopted`, `task_paused`,
+`setup_failed` (grove-538: data `{exit, tail}` — appended by `gv run-setup` when a repo's `setup:` exits non-zero; `exit` is the code as a string, `tail` the last non-empty stderr line, ≤200 runes; additive),
 `task_handed_off` (grove-177: data `{host, branch}` — an untrack that keeps
 a forwarding pointer to the remote grove host; a later `task_untracked`
 for the same ticket drops the pointer for good), (grove-252) the
 eleven delivery/liveness types in the table above: `pr_opened`,
 `pr_updated`, `pr_ci_failed`, `pr_conflicting`, `pr_ready`, `pr_merged`,
 `pr_closed`, `worker_waiting`, `worker_vanished`, `worker_errored`,
-`worker_recovered`, and (grove-289) `compaction` — data `{session_id}`,
+`worker_recovered`, (grove-537, additive) `stop_failed` — data `{error,
+details}`, from the `StopFailure` hook when an API error / rate limit /
+auth failure ends a turn without a `Stop` (`details` ≤200 runes) — and
+`prompt_submitted` — empty data, from `UserPromptSubmit`; the prompt text
+is never logged; both are in `--type`'s vocabulary but not the default set; subagent and foreign-session payloads are dropped for
+both — and (grove-289) `compaction` — data `{session_id}`,
 fired by a SessionStart with `source: "compact"` (a context-compaction
 restart, not a new session). It is in `--type`'s known vocabulary but
 NOT the default set: informational (`gv cost --context` is its read

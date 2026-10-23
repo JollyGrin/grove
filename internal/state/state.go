@@ -24,14 +24,20 @@ const (
 	EvSessionStarted = "session_started"
 	EvAgentStatus    = "agent_status"
 	EvNotification   = "notification"
-	EvSessionEnded   = "session_ended"
-	EvAttached       = "attached"
-	EvAnswered       = "answered"
-	EvHumanStatus    = "human_status"
-	EvTaskDone       = "task_done"
-	EvTaskUntracked  = "task_untracked"
-	EvTaskAdopted    = "task_adopted"
-	EvTaskPaused     = "task_paused"
+	// Worker-state events (design 2026-10-19-worker-state): folded here so
+	// Resolve can read them; the hooks/verbs that append them arrive in
+	// later tickets of the worker-state train.
+	EvStopFailed      = "stop_failed"      // data {error, details}
+	EvPromptSubmitted = "prompt_submitted" // UserPromptSubmit hook
+	EvSetupFailed     = "setup_failed"     // data {exit, tail} (grove-538); legacy {error}
+	EvSessionEnded    = "session_ended"
+	EvAttached        = "attached"
+	EvAnswered        = "answered"
+	EvHumanStatus     = "human_status"
+	EvTaskDone        = "task_done"
+	EvTaskUntracked   = "task_untracked"
+	EvTaskAdopted     = "task_adopted"
+	EvTaskPaused      = "task_paused"
 	// EvTaskHandedOff (grove-177) is the forwarding tombstone `gv handoff`
 	// writes after the remote adopt succeeded: data {host, branch}, the
 	// event time is `at`. Folds like an untrack (leaves Active) but keeps
@@ -220,6 +226,42 @@ type Task struct {
 	// pane that legitimately still shows a shell while claude boots does
 	// not read as a vanished worker.
 	LiveSince time.Time `json:"-"`
+	// Worker-state inputs for Resolve (design 2026-10-19-worker-state §1).
+	// Internal bookkeeping (json:"-"): scalars and short capped strings,
+	// not plugin-contract surface.
+	//
+	// WaitingSince is when a permission_prompt/elicitation_dialog
+	// notification landed; cleared by the next agent_status or
+	// prompt_submitted. StopFailedAt/StopError/StopDetails are the last
+	// stop_failed (error capped at 200 runes). PromptAt is the last
+	// prompt_submitted, AnsweredAt the last `gv answer`. SetupFailed/
+	// SetupError come from setup_failed. SessionStarted: a session_started
+	// has landed since the task was created/adopted.
+	WaitingSince   time.Time `json:"-"`
+	StopFailedAt   time.Time `json:"-"`
+	StopError      string    `json:"-"`
+	StopDetails    string    `json:"-"`
+	PromptAt       time.Time `json:"-"`
+	AnsweredAt     time.Time `json:"-"`
+	SetupFailed    bool      `json:"-"`
+	SetupError     string    `json:"-"`
+	SessionStarted bool      `json:"-"`
+}
+
+// stopFailedCap bounds the stop_failed text a Task carries, the way the
+// Stop message is capped in hooks (2000 runes).
+const stopFailedCap = 200
+
+// capRunes truncates s to at most n runes.
+func capRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // BaseOr is the branch this task forked from and merges back to: its own
@@ -359,6 +401,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Delivery, t.Liveness = nil, nil
 		t.LiveSince = ev.Time
 		t.Compactions = 0
+		resetWorkerState(t)
 	case EvSessionStarted:
 		t.SessionID = d["session_id"]
 		if t.Agent == AgentSetup || t.Agent == AgentDead {
@@ -366,10 +409,36 @@ func fold(tasks map[string]*Task, ev Event) {
 		}
 		t.Paused = false // any live session un-pauses (mirrors ParkedTickets)
 		t.LiveSince = ev.Time
+		t.SessionStarted = true
+		t.SetupFailed, t.SetupError = false, ""
+	case EvNotification:
+		switch d["notification_type"] {
+		case "permission_prompt", "elicitation_dialog":
+			t.WaitingSince = ev.Time
+		}
+	case EvStopFailed:
+		t.StopFailedAt = ev.Time
+		t.StopError = capRunes(d["error"], stopFailedCap)
+		t.StopDetails = capRunes(d["details"], stopFailedCap)
+	case EvPromptSubmitted:
+		t.PromptAt = ev.Time
+		t.WaitingSince = time.Time{}
+		if t.Agent == AgentIdle {
+			t.Agent = AgentWorking // the operator typed into the pane
+		}
+	case EvSetupFailed:
+		t.SetupFailed = true
+		reason := d["tail"]
+		if reason == "" {
+			reason = d["error"]
+		}
+		t.SetupError = capRunes(reason, stopFailedCap)
 	case EvCompaction:
 		t.Compactions++
 	case EvAgentStatus:
 		t.Agent = d["status"]
+		t.WaitingSince = time.Time{}
+		t.StopFailedAt = time.Time{}
 		t.Sentinel = d["sentinel"]
 		t.Question = d["question"]
 		t.SentinelAt = sentinelStamp(d["sentinel"], ev.Time)
@@ -377,7 +446,8 @@ func fold(tasks map[string]*Task, ev Event) {
 			t.LastMessage = m
 		}
 	case EvAnswered:
-		t.Agent = AgentWorking // optimistic flip; scraper corrects if it didn't take
+		t.Agent = AgentWorking // optimistic flip; Resolve flags it if no prompt_submitted follows
+		t.AnsweredAt = ev.Time
 		t.Question = ""
 	case EvHumanStatus:
 		t.Human = d["status"]
@@ -457,6 +527,7 @@ func fold(tasks map[string]*Task, ev Event) {
 		t.Sentinel, t.Question, t.SentinelAt = "", "", nil
 		t.Delivery, t.Liveness = nil, nil
 		t.LiveSince = ev.Time
+		resetWorkerState(t)
 	case EvPROpened, EvPRUpdated, EvPRCIFailed, EvPRConflicting, EvPRReady, EvPRMerged, EvPRClosed:
 		foldDelivery(t, ev)
 	case EvWorkerWaiting:
@@ -468,6 +539,14 @@ func fold(tasks map[string]*Task, ev Event) {
 	case EvWorkerRecovered:
 		t.Liveness = &Liveness{State: LivenessOK, At: ev.Time}
 	}
+}
+
+// resetWorkerState clears the Resolve inputs when a task starts a fresh
+// life (created or adopted).
+func resetWorkerState(t *Task) {
+	t.WaitingSince, t.StopFailedAt, t.PromptAt, t.AnsweredAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	t.StopError, t.StopDetails, t.SetupError = "", "", ""
+	t.SetupFailed, t.SessionStarted = false, false
 }
 
 // foldDelivery folds one of the seven EvPR* events into Task.Delivery. The
@@ -529,28 +608,10 @@ func sentinelStamp(sentinel string, at time.Time) *time.Time {
 	return &at
 }
 
-// Label is the single most-actionable status string for table rows.
+// Label is the single most-actionable status string for table rows: the
+// resolver with no observation (no tmux or session-file signals, no clock).
 func (t *Task) Label() string {
-	switch {
-	case t.Done:
-		return "done"
-	case t.Paused:
-		return "paused"
-	case t.Agent == AgentWaiting:
-		return "QUESTION"
-	case t.Agent == AgentBlocked:
-		return "BLOCKED"
-	case t.Agent == AgentDead:
-		return "dead"
-	case t.Agent == AgentIdle && t.Sentinel == "done":
-		return "idle ✓"
-	case t.Agent == AgentIdle && t.Sentinel == "done_unverified":
-		return "done?" // grove-441: DONE claimed, worktree says otherwise
-	case t.Agent == AgentIdle:
-		return "stalled?"
-	default:
-		return t.Agent
-	}
+	return Resolve(t, Signals{WindowExists: true}, time.Time{}).Label()
 }
 
 // Glyph is the one-rune live-status marker pushed into a worker's tmux

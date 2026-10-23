@@ -56,7 +56,7 @@ func happyEnv(cfg *config.Config) connections.Env {
 		HooksInstalled: func(paths []string) map[string]map[string]bool {
 			out := map[string]map[string]bool{}
 			for _, p := range paths {
-				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}
+				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true, "StopFailure": true, "UserPromptSubmit": true}
 			}
 			return out
 		},

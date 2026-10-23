@@ -159,6 +159,57 @@ changes the behavior.
   (`.grove/orchestrator/<profile>/`) give each backend its own chain, and
   CLAUDE.md still applies (memory loads recurse up ancestor dirs).
 
+## Session status file (`<config dir>/sessions/<pid>.json`) — spike grove-534
+
+Verified 2026-10-20 on **Claude Code 2.1.304**, Linux, tmux 3.4: a real
+interactive `claude` in a scratch `CLAUDE_CONFIG_DIR` on an isolated tmux
+server, a 2 ms poller logging every change, ~154k reads. Fixtures:
+`internal/claudestate/testdata/session-2.1.304*.json`.
+
+- **Fields**: `pid`, `sessionId`, `cwd`, `startedAt`, `procStart`,
+  `version`, `kind` (`interactive`), `entrypoint`, `tmux`, `name`,
+  `status`, `updatedAt`, `statusUpdatedAt` (ms epoch), and `waitingFor`
+  only while `status` is `waiting`. A sibling `<pid>.<hash>.key` file sits
+  beside it; ignore it.
+- **`status` is `busy | idle | waiting | shell`** — not the three the
+  design assumed. `shell` = no turn running but a background shell is
+  alive (an auto-backgrounded `sleep` showed it for the shell's whole
+  life); treat it as "not stuck on the operator", never as an error. A
+  resolver must map unknown values to "no signal", not to idle.
+- **Scenarios** (all verified): a running turn reads `busy` and returns to
+  `idle` on its normal end; **Esc mid-turn reaches `idle`** in ~100 ms
+  (via a ~10 ms `shell` blip when a foreground Bash tool is cancelled); a
+  Bash permission prompt reads `waiting` / `waitingFor: "permission
+  prompt"`; an AskUserQuestion menu reads `waiting` / `"input needed"`; a
+  startup dialog (the auto-mode opt-in) reads `waiting` / `"dialog open"`
+  before the first `idle`. Answering returns it to `busy` within ~70 ms.
+- **Latency**: `statusUpdatedAt` precedes the file mtime by 3–30 ms, and
+  the file changed within ~10 ms of the pane showing the turn's end. A 1 s
+  reader sees a transition at most one tick late.
+- **Lifecycle**: `/exit` removes `<pid>.json` and the `.key` in <1 s.
+  **`kill -9` leaves both behind**, still reading its last status
+  (`idle`), with no staleness marker. A *new* claude launch in the same
+  config dir swept the dead file within ~1 s; until then, liveness is the
+  reader's job: `procStart` equals field 22 of `/proc/<pid>/stat`
+  (clock ticks since boot; verified equal on 5 live sessions), so
+  "pid alive AND procStart matches" is pid-reuse-safe.
+- **`CLAUDE_CONFIG_DIR`**: `sessions/` lives directly under the active
+  config dir (`$CLAUDE_CONFIG_DIR/sessions/`), one directory per profile —
+  a resolver must scan every profile dir it launches into.
+- **Write shape**: the file is **written in place** (inode never changed
+  across ~25 rewrites; no rename). A new file first appears **without
+  `status`/`updatedAt`** (~50 ms), then gains them. 0 decode failures in
+  ~154k reads, but in-place means tearing is not impossible: a reader
+  treats a parse error or a missing `status` as "no new signal, keep the
+  last good value", never as dead or idle.
+- **`tmux` field**: `<session>:@<window>.%<pane>` at launch time (not a
+  bare `%pane`) — e.g. `grove-x:@6.%11`. It is **frozen at launch**:
+  after `break-pane` into another session it still read the old
+  `sb:@0.%0`. Match on the `%pane` suffix only (pane ids survive moves,
+  tmux-discipline §3). **Outside tmux the key is absent**, not empty.
+- Not exercised: macOS, `claude --resume` file reuse, a `waiting` state
+  other than the three `waitingFor` strings above.
+
 ## Modals in the pane (v2.1.282, grove-308)
 
 - Permission prompts, AskUserQuestion and the input box are **unboxed**:
@@ -177,7 +228,7 @@ changes the behavior.
   with `…`, `(<digit>` (`detect.Spinning`); `✻ Baked for 55s · done` is
   the finished form. `esc to interrupt` is gone; the input caret is
   followed by U+00A0. No hook fires when a pane dies, and an API-error end
-  fires `StopFailure` (not installed by grove) — not `Stop`.
+  fires `StopFailure` (installed by grove since grove-537 → `stop_failed`) — not `Stop`.
 
 ## Profiles and config dirs
 

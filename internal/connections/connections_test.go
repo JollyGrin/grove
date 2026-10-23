@@ -60,7 +60,7 @@ func happyEnv(cfg *config.Config) Env {
 		HooksInstalled: func(paths []string) map[string]map[string]bool {
 			out := map[string]map[string]bool{}
 			for _, p := range paths {
-				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true}
+				out[p] = map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true, "StopFailure": true, "UserPromptSubmit": true}
 			}
 			return out
 		},
@@ -254,10 +254,10 @@ func TestCheckHooks(t *testing.T) {
 	}
 	e := Env{HooksInstalled: fake(map[string]bool{"Stop": true, "SessionEnd": true})}
 	st := checkHooksAt("/p/settings.json")(e)
-	if st.State != StateMissing || st.Info != "2/4 events wired" {
-		t.Errorf("got %v %q, want missing 2/4 events wired", st.State, st.Info)
+	if st.State != StateMissing || st.Info != "2/6 events wired" {
+		t.Errorf("got %v %q, want missing 2/6 events wired", st.State, st.Info)
 	}
-	e.HooksInstalled = fake(map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true})
+	e.HooksInstalled = fake(map[string]bool{"SessionStart": true, "Notification": true, "Stop": true, "SessionEnd": true, "StopFailure": true, "UserPromptSubmit": true})
 	if st := checkHooksAt("/p/settings.json")(e); st.State != StateOK {
 		t.Errorf("got %v, want ok", st.State)
 	}

@@ -73,6 +73,14 @@ func (sb accountSandbox) gv(t *testing.T, stdin string, args ...string) (string,
 	return string(out), err
 }
 
+// cmd is a `gv args...` command in the sandbox, not yet run.
+func (sb accountSandbox) cmd(args ...string) *exec.Cmd {
+	cmd := exec.Command(filepath.Join(sb.bin, "gv"), args...)
+	cmd.Dir = sb.home
+	cmd.Env = sb.env()
+	return cmd
+}
+
 // The token value never reaches any output or error message.
 func TestAccountSentinelNeverPrinted(t *testing.T) {
 	sb := newAccountSandbox(t)

@@ -689,6 +689,37 @@ grep -q '"account":"alt"' "$GROVE_STATE_DIR/events.jsonl" || fail "no event reco
 perl -pi -e "s#^(\s*)claude: \Q$FAKE_CLAUDE\E\$#\$1claude: echo#" "$WCFG"
 grep -q 'claude: echo' "$WCFG" || fail "claude stub not restored"
 
+# --- grove-538: a failing repo setup: lands a setup_failed event ---
+say "failing setup: records setup_failed {exit, tail} (grove-538)"
+mdtask task-538 "failing setup"
+perl -pi -e 's/^(\s*)claude: echo$/$1claude: echo\n$1setup: "echo boom >&2; exit 3"/' "$WCFG"
+grep -q 'setup: "echo boom' "$WCFG" || fail "setup stub not written"
+"$GV" grab task-538 > "$SCRATCH/grab-538.out"
+for _ in $(seq 1 50); do
+  grep -q '"type":"setup_failed"' "$GROVE_STATE_DIR/events.jsonl" 2>/dev/null && break
+  sleep 0.2
+done
+grep '"type":"setup_failed"' "$DUMMY/.grove/state/events.jsonl" "$GROVE_STATE_DIR/events.jsonl" 2>/dev/null > "$SCRATCH/setup-failed.out" || true
+grep -q '"exit":"3"' "$SCRATCH/setup-failed.out" || fail "setup_failed exit missing"
+grep -q '"tail":"boom"' "$SCRATCH/setup-failed.out" || fail "setup_failed tail missing"
+
+# --- grove-553: adopt of a fresh worktree passes the ticket to run-setup too ---
+say "failing setup on adopt: one more setup_failed {exit:3} (grove-553)"
+count_setup_failed() { cat "$DUMMY/.grove/state/events.jsonl" "$GROVE_STATE_DIR/events.jsonl" 2>/dev/null | grep -c '"type":"setup_failed"' || true; }
+BEFORE_553=$(count_setup_failed)
+WT_538=$(git -C "$DUMMY" worktree list --porcelain | awk '/^worktree /{p=$2} /task-538/{print p; exit}')
+[ -n "$WT_538" ] || fail "no worktree found for task-538"
+"$GV" pause task-538 --force > "$SCRATCH/pause-538.out"
+git -C "$DUMMY" worktree remove --force "$WT_538" || fail "could not remove task-538 worktree"
+"$GV" adopt task-538 > "$SCRATCH/adopt-538.out"
+for _ in $(seq 1 50); do
+  [ "$(count_setup_failed)" -gt "$BEFORE_553" ] && break
+  sleep 0.2
+done
+[ "$(count_setup_failed)" = "$((BEFORE_553 + 1))" ] || fail "adopt of a fresh worktree should append exactly one setup_failed"
+perl -pi -e 's/^\s*setup: "echo boom.*\n//' "$WCFG"
+! grep -q 'setup:' "$WCFG" || fail "setup stub not removed"
+
 say "audit is quiet afterwards"
 "$GV" audit --json | tee "$SCRATCH/audit.json" >/dev/null
 

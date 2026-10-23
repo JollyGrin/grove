@@ -106,6 +106,9 @@ var KnownTypes = []string{
 	state.EvWorkerErrored,
 	state.EvWorkerRecovered,
 	state.EvCompaction,
+	state.EvStopFailed,
+	state.EvPromptSubmitted,
+	state.EvSetupFailed,
 }
 
 // KnownSentinels is the classifier's vocabulary (internal/hooks.classify):

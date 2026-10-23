@@ -34,7 +34,7 @@ func TestRefreshCmdOkAtZeroActive(t *testing.T) {
 		}
 	}
 
-	msg, ok := refreshCmd(state.NewFolder(dir, feedTail), dir, "grove-nonexistent-test-session", false)().(refreshMsg)
+	msg, ok := refreshCmd(state.NewFolder(dir, feedTail), dir, "grove-nonexistent-test-session", false, nil)().(refreshMsg)
 	if !ok {
 		t.Fatalf("refreshCmd returned %T, want refreshMsg", msg)
 	}

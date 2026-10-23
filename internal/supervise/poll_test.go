@@ -171,3 +171,80 @@ var errLookup = &lookupErr{}
 type lookupErr struct{}
 
 func (*lookupErr) Error() string { return "gh: lookup failed" }
+
+func claudePaneSnap(cmd string) func(string) (*tmux.SessionSnapshot, error) {
+	return func(string) (*tmux.SessionSnapshot, error) {
+		return tmux.ParseSessionSnapshot("@1\t1\tgr-1\n", "@1\t%1\t0\t24\t"+cmd+"\n"), nil
+	}
+}
+
+// grove-539: a session file saying `waiting` is Claude's own state — it
+// feeds worker_waiting (marker = waitingFor) through the same 10s
+// hysteresis, and the pane is never captured.
+func TestPoll_SessionFileWaitingEmitsWorkerWaiting(t *testing.T) {
+	stateDir := t.TempDir()
+	seedActiveTask(t, stateDir, "gr-1", "dummy", "gr-1-branch", "grove-x", "gr-1")
+	deps := PollDeps{
+		StateDir:   stateDir,
+		RepoLookup: func(string) (string, bool) { return "", false },
+		SnapFor:    claudePaneSnap("claude"),
+		DetectFrom: func(*tmux.SessionSnapshot, string) detect.LiveInfo {
+			t.Fatal("capture-pane ran for a worker with a session file")
+			return detect.LiveInfo{}
+		},
+		ReadClaude: func(want map[string]bool) map[string]state.ClaudeStatus {
+			if !want["%1"] {
+				t.Fatalf("want = %v", want)
+			}
+			return map[string]state.ClaudeStatus{"%1": {Status: "waiting", WaitingFor: "permission prompt", SessionID: "s-gr-1"}}
+		},
+		FetchAll: func(map[string][2]string) (map[string]*github.PR, map[string]error) {
+			return nil, nil
+		},
+	}
+	mem := NewMemory()
+	evs, err := Poll(deps, mem, t0())
+	if err != nil || len(evs) != 0 {
+		t.Fatalf("first pass = %+v, %v; want nothing (hysteresis)", evs, err)
+	}
+	evs, err = Poll(deps, mem, t0().Add(9*time.Second))
+	if err != nil || len(evs) != 0 {
+		t.Fatalf("9s pass = %+v, %v; want nothing", evs, err)
+	}
+	evs, err = Poll(deps, mem, t0().Add(11*time.Second))
+	if err != nil || len(evs) != 1 || evs[0].Type != state.EvWorkerWaiting || evs[0].Data["marker"] != "permission prompt" {
+		t.Fatalf("11s pass = %+v, %v; want worker_waiting marker=permission prompt", evs, err)
+	}
+}
+
+// A pane that stopped running claude (and has no session file) still
+// debounces 60s before worker_vanished.
+func TestPoll_BareShellVanishedAfterDebounce(t *testing.T) {
+	stateDir := t.TempDir()
+	seedActiveTask(t, stateDir, "gr-1", "dummy", "gr-1-branch", "grove-x", "gr-1")
+	deps := PollDeps{
+		StateDir:   stateDir,
+		RepoLookup: func(string) (string, bool) { return "", false },
+		SnapFor:    claudePaneSnap("bash"),
+		DetectFrom: func(*tmux.SessionSnapshot, string) detect.LiveInfo {
+			return detect.LiveInfo{Exists: true, Status: detect.StatusUnknown, PaneContent: "$ "}
+		},
+		ReadClaude: func(map[string]bool) map[string]state.ClaudeStatus { return nil },
+		FetchAll: func(map[string][2]string) (map[string]*github.PR, map[string]error) {
+			return nil, nil
+		},
+	}
+	mem := NewMemory()
+	// past bootGrace: the seeded session_started is stamped with the real clock.
+	base := time.Now().Add(5 * time.Minute)
+	if evs, _ := Poll(deps, mem, base); len(evs) != 0 {
+		t.Fatalf("first pass = %+v", evs)
+	}
+	if evs, _ := Poll(deps, mem, base.Add(30*time.Second)); len(evs) != 0 {
+		t.Fatalf("30s pass = %+v", evs)
+	}
+	evs, err := Poll(deps, mem, base.Add(61*time.Second))
+	if err != nil || len(evs) != 1 || evs[0].Type != state.EvWorkerVanished {
+		t.Fatalf("61s pass = %+v, %v; want worker_vanished", evs, err)
+	}
+}

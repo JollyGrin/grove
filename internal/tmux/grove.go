@@ -869,6 +869,24 @@ func (s *SessionSnapshot) ClaudePane(base string) (paneID string, height int, ok
 	return "", 0, false
 }
 
+// ClaudePaneCommand is pane_current_command of base's claude pane, from the
+// same snapshot ClaudePane reads — no exec. "" when the window or pane is
+// gone (or the snapshot is nil).
+func (s *SessionSnapshot) ClaudePaneCommand(base string) string {
+	id, _, ok := s.ClaudePane(base)
+	if !ok {
+		return ""
+	}
+	for _, panes := range s.panes {
+		for _, p := range panes {
+			if p.id == id {
+				return p.command
+			}
+		}
+	}
+	return ""
+}
+
 // CapturePaneBottomKnown is CapturePaneBottom for a caller that already
 // knows the pane's height (from a SessionSnapshot): the same bottom-N-lines
 // capture, minus the display-message height query. Same forgiving error

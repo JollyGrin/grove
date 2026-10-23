@@ -36,7 +36,7 @@ func Push(ev state.Event) {
 // nothing.
 func PushClass(evType string) (priority, tags string, desktop bool) {
 	switch evType {
-	case state.EvWorkerWaiting, state.EvWorkerVanished, state.EvWorkerErrored:
+	case state.EvWorkerWaiting, state.EvWorkerVanished, state.EvWorkerErrored, state.EvSetupFailed:
 		return "high", "warning", true
 	case state.EvPRCIFailed, state.EvPRConflicting:
 		return "high", "x", true
