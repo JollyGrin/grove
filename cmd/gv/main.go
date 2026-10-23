@@ -176,7 +176,7 @@ const usage = `gv — grove
                                               repo (feedback first), recent LEARNINGS.md entries, and
                                               entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
-  gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]]
+  gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>
                                               age-encrypted secrets: init makes this host's identity,
                                               recipient prints its public key, set reads the value from
                                               stdin or a hidden prompt (never an argument), ls shows
