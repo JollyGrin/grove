@@ -519,7 +519,7 @@ func keysExec(args []string) error {
 
 // legacyEnvPresent reports whether the pre-store secrets file exists.
 func legacyEnvPresent() bool {
-	_, err := os.Stat(config.SecretsPath())
+	_, err := os.Stat(secrets.LegacyEnvPath())
 	return err == nil
 }
 
@@ -562,7 +562,7 @@ func keysImport(w io.Writer, args []string) error {
 	}
 	explicit := path != ""
 	if path == "" {
-		path = config.SecretsPath()
+		path = secrets.LegacyEnvPath()
 	}
 	if _, _, err := secrets.InitIdentity(); err != nil {
 		return err

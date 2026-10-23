@@ -86,7 +86,9 @@ value is never an argument — `gv keys set NAME` reads stdin or a hidden
 prompt. Ad-hoc use: `gv keys exec NAME -- sh -c '… $NAME …'` (single
 quotes: the child's shell expands it). A remote host: `gv keys push --host
 H`. `gv keys ls --json` lists names/previews only; nothing here touches
-`events.jsonl`. Design: `docs/plans/2026-09-27-secure-keys-design.md`.
+`events.jsonl`. `gv hooks install` also wires a PreToolUse `gv hook
+secrets-guard` that denies any tool call naming the identity file, `gv
+keys env` or the secrets dir (never `ls`/`exec`). Design: `docs/plans/2026-09-27-secure-keys-design.md`.
 
 ## Feature trains
 

@@ -38,6 +38,9 @@ type Payload struct {
 	// already continuing after a Stop hook blocked — the done gate never
 	// blocks that re-entry (grove-441).
 	StopHookActive bool `json:"stop_hook_active"`
+	// ToolInput is PreToolUse's tool arguments, kept raw — the secrets
+	// guard (grove-370) scans every string inside it.
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 // Candidate is one fleet the receiver may attribute an event to: a
@@ -77,6 +80,9 @@ func ReceiveTo(candidates []Candidate, event string, stdin io.Reader, stdout io.
 	var p Payload
 	if err := json.NewDecoder(stdin).Decode(&p); err != nil {
 		return err
+	}
+	if event == secretsGuardEvent {
+		return secretsGuard(p, stdout) // host-wide: no fleet attribution needed
 	}
 	var stateDir, root string
 	var task *state.Task
@@ -337,6 +343,7 @@ var hookEvents = map[string]string{
 	"Notification": "notification",
 	"Stop":         "stop",
 	"SessionEnd":   "session-end",
+	"PreToolUse":   secretsGuardEvent,
 }
 
 // SettingsPaths derives every Claude settings.json the fleet's workers

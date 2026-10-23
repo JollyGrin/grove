@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/JollyGrin/grove/internal/config"
-	"github.com/JollyGrin/grove/internal/openrouter"
 	"github.com/JollyGrin/grove/internal/secrets"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/sub"
@@ -139,9 +138,13 @@ func cmdSub(args []string) error {
 	}
 
 	if *dryRun {
+		keyShown := secrets.Preview(wsLabel(), lane.TokenEnv)
+		if keyShown == "" {
+			keyShown = "set"
+		}
 		fmt.Printf("lane=%s model=%s mode=%s inputs=%d files, %d chars key=%s url=%s\n",
 			lane.Name, lane.Model, mode, len(inputs), inputChars(inputs),
-			openrouter.Mask(key), strings.TrimRight(lane.BaseURL, "/")+"/v1/messages")
+			keyShown, strings.TrimRight(lane.BaseURL, "/")+"/v1/messages")
 		return nil
 	}
 

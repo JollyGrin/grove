@@ -129,3 +129,15 @@ func SetWithMeta(ns, name string, value []byte, typ string, reveal int) (preview
 	}
 	return previewErr, WriteMeta(ns, name, m)
 }
+
+// Preview returns the opt-in masked preview stored beside name's
+// ciphertext in the namespace Resolve would answer from. "" when none was
+// stored, the name is unset, or it comes from the process environment.
+func Preview(label, name string) string {
+	_, ns, err := Lookup(label, name)
+	if err != nil || ns == "env" {
+		return ""
+	}
+	m, _ := ReadMeta(ns, name)
+	return m.Preview
+}

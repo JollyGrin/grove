@@ -633,13 +633,13 @@ func TestSubLaneRow(t *testing.T) {
 		t.Errorf("key via env = %+v, want ok", st)
 	}
 
-	// key present via secrets file — ok.
+	// a plaintext .env is no longer consulted (grove-370 cutover) — warn.
 	st = checkSubLane(Env{
 		Cfg: baseCfg("flat-x"), Getenv: noEnv, Home: "/home/u",
 		ReadFile: func(string) ([]byte, error) { return []byte("export FLAT_X_KEY=shh\n"), nil },
 	})
-	if st.State != StateOK {
-		t.Errorf("key via secrets file = %+v, want ok", st)
+	if st.State != StateWarn {
+		t.Errorf("key only in .env = %+v, want warn", st)
 	}
 
 	// key only in the key store — ok.
