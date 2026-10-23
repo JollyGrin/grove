@@ -1,22 +1,15 @@
 // Package openrouter is a minimal read-only client for the two OpenRouter
 // account endpoints the cockpit's ACCOUNT tab shows (grove-87): credits
 // (lifetime purchased/used counters) and key usage (daily/weekly/monthly
-// burn). It also resolves — and, for the paste-key connect flow, persists —
-// API keys in the same secrets file worker profiles self-source
-// (~/.config/grove/.env). The key-file helpers (Key/SaveKey/Mask) are
-// var-agnostic since grove-104 so the ACCOUNT tab can manage every model
-// profile's auth_token_env, not just OPENROUTER_API_KEY. Display only:
-// grove never mutates any provider account, and there is no in-TUI payment
-// flow, ever.
+// burn). Keys live in the encrypted store (internal/secrets), not here.
+// Display only: grove never mutates any provider account, and there is no
+// in-TUI payment flow, ever.
 package openrouter
 
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/JollyGrin/grove/internal/secrets"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 )
 
@@ -47,68 +40,6 @@ type KeyUsage struct {
 	Daily   float64
 	Weekly  float64
 	Monthly float64
-}
-
-// Key resolves the key held in env var varName: the process environment
-// first, then a tolerant parse of envPath (the profile secrets file —
-// `export NAME=value`, bare `NAME=value`, quoted or not; last assignment
-// wins, like sourcing). "" means no key — callers degrade to dashes,
-// never an error state.
-func Key(envPath, varName string) string {
-	if k := os.Getenv(varName); k != "" {
-		return k
-	}
-	return keyFromFile(envPath, varName)
-}
-
-func keyFromFile(path, varName string) string {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return secrets.ParseDotenv(raw)[varName]
-}
-
-// SaveKey persists key as the varName assignment in envPath, creating the
-// file 0600 if absent and preserving every other line byte-for-byte. An
-// existing assignment (export or bare) is replaced in place so the file
-// never accumulates stale keys.
-func SaveKey(envPath, varName, key string) error {
-	line := "export " + varName + "=" + key
-	raw, err := os.ReadFile(envPath)
-	if os.IsNotExist(err) {
-		return os.WriteFile(envPath, []byte(line+"\n"), 0o600)
-	}
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	replaced := false
-	for i, l := range lines {
-		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "export "))
-		if strings.HasPrefix(t, varName+"=") {
-			lines[i] = line
-			replaced = true
-		}
-	}
-	if !replaced {
-		lines = append(lines, line)
-	}
-	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
-}
-
-// Mask renders a key safely for screen: enough of the prefix to recognize
-// it, the tail to disambiguate, nothing in between — e.g.
-// "sk-or-v1-f9b...a6a". The full key must never render in the TUI.
-func Mask(key string) string {
-	r := []rune(key)
-	if len(r) <= 15 {
-		if len(r) <= 4 {
-			return "…"
-		}
-		return string(r[:4]) + "…"
-	}
-	return string(r[:12]) + "..." + string(r[len(r)-3:])
 }
 
 // client: one shared 5s-timeout client — calls are one-shot tea.Cmds fired

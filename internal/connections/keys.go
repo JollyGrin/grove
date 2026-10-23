@@ -59,7 +59,7 @@ func keysConnections(env Env) []Connection {
 		}
 		seen[p.AuthTokenEnv] = true
 		name := p.AuthTokenEnv
-		if held[name] || env.Getenv(name) != "" || envFileHasVar(env, filepath.Join(env.Home, ".config", "grove", ".env"), name) {
+		if held[name] || env.Getenv(name) != "" {
 			continue
 		}
 		missing = append(missing, name)

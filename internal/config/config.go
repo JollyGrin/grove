@@ -475,13 +475,6 @@ func shellQuote(s string) string {
 // lines) — one quoting rule for every value that reaches a launch shell.
 func ShellQuote(s string) string { return shellQuote(s) }
 
-// SecretsPath is the model-profile secrets file the launch wrap
-// self-sources (grove-36 design §2.1) — never inherited from the tmux
-// server's or launching shell's environment.
-func SecretsPath() string {
-	return filepath.Join(Dir(), ".env")
-}
-
 // modelFlagValue extracts a --model flag's shell-quoted value from a
 // WithModel'd command, e.g. `claude --model 'opus' --foo` -> "opus".
 var modelFlagValue = regexp.MustCompile(`--model\s+'([^']*)'`)

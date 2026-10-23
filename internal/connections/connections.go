@@ -136,7 +136,7 @@ type Env struct {
 	KeysStored func() []string
 	// Resolve maps a secret name to its value through the key store (env
 	// first, then the store; "" = unresolved). nil = the store is not
-	// consulted (fake envs); the legacy .env fallback still applies.
+	// consulted (fake envs).
 	Resolve func(name string) string
 }
 

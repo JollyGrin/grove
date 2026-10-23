@@ -232,7 +232,10 @@ func accountCmd(cfg *config.Config, stateDir, label string, tasks []*state.Task,
 		if key == "" {
 			return msg
 		}
-		msg.keyMasked = openrouter.Mask(key)
+		msg.keyMasked = secrets.Preview(label, openrouter.EnvVar)
+		if msg.keyMasked == "" {
+			msg.keyMasked = "set"
+		}
 		if c, err := openrouter.FetchCredits(openrouter.DefaultBaseURL, key); err == nil {
 			msg.creditsOK, msg.credits = true, c
 		} else {

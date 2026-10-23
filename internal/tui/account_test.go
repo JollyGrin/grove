@@ -567,7 +567,4 @@ func TestPasteKeyCmdWritesStore(t *testing.T) {
 	if got := secrets.Resolve("", "KIMI_API_KEY"); got != "pasted-value-xyz-0123456789" {
 		t.Errorf("resolve = %q", got)
 	}
-	if _, err := os.Stat(config.SecretsPath()); err == nil {
-		t.Error("paste must not write the legacy .env")
-	}
 }

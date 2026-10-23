@@ -199,33 +199,7 @@ func checkSubLane(e Env) Status {
 	if (e.Resolve != nil && e.Resolve(tokenEnv) != "") || (e.KeysHeld != nil && e.KeysHeld()[tokenEnv]) {
 		return Status{State: StateOK, Info: tokenEnv + " in the key store"}
 	}
-	secretsPath := filepath.Join(e.Home, ".config", "grove", ".env")
-	if envFileHasVar(e, secretsPath, tokenEnv) {
-		return Status{State: StateOK, Info: tokenEnv + " in " + secretsPath}
-	}
-	return Status{State: StateWarn, Info: fmt.Sprintf("%s not set (process env, key store or %s)", tokenEnv, secretsPath)}
-}
-
-// envFileHasVar tolerantly parses a `export NAME=value` secrets file
-// (mirrors internal/openrouter's key parsing) via e.ReadFile so the check
-// is testable without touching disk.
-func envFileHasVar(e Env, path, varName string) bool {
-	raw, err := e.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		v, ok := strings.CutPrefix(line, varName+"=")
-		if ok && strings.TrimSpace(strings.Trim(v, `"'`)) != "" {
-			return true
-		}
-	}
-	return false
+	return Status{State: StateWarn, Info: fmt.Sprintf("%s not set (process env or key store) — gv keys set %s", tokenEnv, tokenEnv)}
 }
 
 // providerConnections declares readiness for the configured task backend.
