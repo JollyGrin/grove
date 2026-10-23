@@ -88,6 +88,7 @@ func Core(env Env) []Connection {
 		conns = append(conns, agentsMdConnections(env)...)
 		conns = append(conns, memoryConnections(env)...)
 		conns = append(conns, remoteHostConnections(env)...)
+		conns = append(conns, keysHostConnections(env)...)
 
 		conns = append(conns, Connection{
 			ID:          "sub:lane",

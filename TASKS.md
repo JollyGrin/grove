@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] grove-368 gv-keys 08: `gv keys push --host H` / `receive` / `reseal` — ciphertext + sidecars to a remote over existing ssh (`remote.RunWithInput`, `keys` Supported but only recipient/receive relay), `keys:host:<H>` doctor row, e2e/keys.sh fake-ssh leg. Train PR → feature/gv-keys-secrets.
 - [x] **grove-363** gv-keys 03: launch path — `env:` values `secret:NAME` (`literal:` escapes) validated at load; `WrapProfile(cmd, p, source)` now runs `eval "$(gv keys env --profile P --workspace-root R || echo false)"` instead of sourcing `.env`; internal `gv keys env` prints export lines for exactly the profile's names, refuses a TTY, and on a missing name exits non-zero naming it + the namespaces searched; `e2e/keys.sh` (grab half) in all.sh. PR → `feature/gv-keys-secrets` (grove-363, 2026-10-22).
 - [x] grove-365: gv-keys 05 — `NAME.meta.yaml` sidecar (type/preview/reveal/set_at), `secrets.PreviewFor` rule, `gv keys set --type --reveal`, `ls` type+preview columns and `--json` fields; `rm` deletes both files.
 - [x] **grove-364 gv-keys 04: `gv keys exec NAME[,NAME…] -- <cmd>`** — `secrets.ExecEnv` (named secrets only, dedup, name check before decrypt, missing name fails naming namespaces) + `syscall.Exec` verb (no shell; child's exit code); empty-arg stderr warning with the `sh -c '…'` right-shape; new `e2e/keys.sh` (added to all.sh). Not relayed over `--host`.

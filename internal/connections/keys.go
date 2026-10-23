@@ -6,10 +6,14 @@ package connections
 // names (Env.KeysHeld).
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/remote"
 )
 
 // keysConnections returns keys:identity (when an identity exists, or
@@ -84,4 +88,65 @@ func checkKeysIdentity(e Env) Status {
 		return Status{State: StateWarn, Info: fmt.Sprintf("%s is %04o, want 0700", filepath.Dir(e.KeysIdentityPath), di.Mode().Perm())}
 	}
 	return Status{State: StateOK, Info: e.KeysIdentityPath}
+}
+
+// keysHostConnections adds one keys:host:<H> row per configured remote
+// host, only on a machine that stores secrets (conditional, like the other
+// keys rows): it runs `<gv> keys ls --json` over the same BatchMode ssh as
+// the host probe and names the locally stored secrets H lacks.
+func keysHostConnections(env Env) []Connection {
+	if env.KeysIdentityPath == "" || env.KeysStored == nil || len(env.KeysStored()) == 0 {
+		return nil
+	}
+	var conns []Connection
+	for _, name := range env.Cfg.HostNames() {
+		h := env.Cfg.Hosts[name]
+		conns = append(conns, Connection{
+			ID:          "keys:host:" + name,
+			Kind:        KindRemoteHost,
+			Severity:    SeverityWarn,
+			RequiredFor: []string{"grab --host"},
+			Title:       "secrets present on host " + name,
+			Fix:         "gv keys push --host " + name,
+			Check:       checkKeysHost(h),
+		})
+	}
+	return conns
+}
+
+func checkKeysHost(h *config.Host) func(Env) Status {
+	return func(e Env) Status {
+		if e.Output == nil {
+			return Status{State: StateMissing, Info: "no probe"}
+		}
+		out, err := e.Output(remoteProbeTimeout, "ssh",
+			"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", h.SSH, "--", remote.Quote(h.GV)+" keys ls --json")
+		if err != nil {
+			return Status{State: StateMissing, Info: "ssh " + h.SSH + ": " + err.Error()}
+		}
+		var env struct {
+			Keys []struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"keys"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			return Status{State: StateMissing, Info: "no gv keys ls --json from " + h.SSH + " — its gv may predate gv keys (gv update --yes)"}
+		}
+		have := map[string]bool{}
+		for _, k := range env.Keys {
+			have[k.Namespace+"/"+k.Name] = true
+		}
+		var missing []string
+		for _, s := range e.KeysStored() {
+			if !have[s] {
+				missing = append(missing, s)
+			}
+		}
+		sort.Strings(missing)
+		if len(missing) > 0 {
+			return Status{State: StateWarn, Info: "host lacks " + strings.Join(missing, ", ")}
+		}
+		return Status{State: StateOK, Info: fmt.Sprintf("%d present", len(have))}
+	}
 }

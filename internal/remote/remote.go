@@ -30,10 +30,13 @@ var Supported = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true, "untrack": true,
 	"orchestrator": true, "chat": true,
+	// grove-368: only `keys recipient` and `keys receive` relay (the two
+	// halves of `gv keys push --host`); see KeysRelays.
+	"keys": true,
 }
 
 // SupportedList is the human-readable form for error messages.
-const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new, chat close"
+const SupportedList = "grab, ls, adopt, handoff, answer, nudge, diff, pause, untrack, orchestrator new, chat close, keys push"
 
 // ExtractHost strips `--host <name>` / `--host=<name>` from args and
 // returns the name plus the remaining args in their original order. A
@@ -197,6 +200,20 @@ func Quote(s string) string {
 // returned as err.
 func Run(cfg *config.Config, host, verb string, args []string, stdout, stderr io.Writer) (int, error) {
 	return run(cfg, host, verb, args, os.Stdin, stdout, stderr)
+}
+
+// RunWithInput is Run with the caller's stdin: `gv keys push` streams a
+// ciphertext payload to the remote `gv keys receive` (grove-368).
+func RunWithInput(cfg *config.Config, host, verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return run(cfg, host, verb, args, stdin, stdout, stderr)
+}
+
+// KeysRelays reports whether `gv keys <args…> --host H` relays to the
+// host: only the two push halves do. Everything else (`set`, `ls`, …) gets
+// the same friendly refusal as any unsupported verb, because a secret is
+// never typed or listed through a hop.
+func KeysRelays(args []string) bool {
+	return len(args) > 0 && (args[0] == "recipient" || args[0] == "receive")
 }
 
 // RunDetached is Run with stdin closed: the cockpit relays from inside the

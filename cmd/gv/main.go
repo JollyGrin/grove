@@ -177,6 +177,8 @@ const usage = `gv — grove
                                               entries naming a skill that has not absorbed them
   gv hooks install|status                     wire settings.json per worker profile (default ~/.claude)
   gv keys init | recipient | set NAME [--global | --workspace [L]] | ls [--json] | rm NAME [--global | --workspace [L]] | exec NAME[,NAME…] -- <cmd…>
+  gv keys push --host H [--global | --workspace [L]]   share a namespace's ciphertext with host H (adds its recipient, reseals)
+  gv keys reseal [--global | --workspace [L]]          re-encrypt a namespace to its current recipients.txt
                                               age-encrypted secrets: init makes this host's identity,
                                               recipient prints its public key, set reads the value from
                                               stdin or a hidden prompt (never an argument), ls shows
@@ -440,7 +442,7 @@ func main() {
 	// `chat` relays only its `close` verb (grove-294): send's free text may
 	// legitimately contain "--host pc", so the other chat verbs keep the
 	// unsupported-verb path below rather than a whole-argv scan.
-	if remote.Supported[cmd] && (cmd != "chat" || (len(args) > 0 && args[0] == "close")) {
+	if remote.Supported[cmd] && (cmd != "chat" || (len(args) > 0 && args[0] == "close")) && (cmd != "keys" || remote.KeysRelays(args)) {
 		var host string
 		var rest []string
 		if cmd == "answer" || cmd == "nudge" {
@@ -481,7 +483,8 @@ func main() {
 	} else {
 		// A real --host on an unsupported verb gets the friendly
 		// supported-list error, not a flag-parse death.
-		if host, _ := remote.ExtractHost(args); host != "" {
+		// `gv keys push --host H` owns its --host (cmdKeys parses it).
+		if host, _ := remote.ExtractHost(args); host != "" && !(cmd == "keys" && len(args) > 0 && args[0] == "push") {
 			fmt.Fprintf(os.Stderr, "gv: --host is not supported for `gv %s` yet (supported: %s)\n", cmd, remote.SupportedList)
 			os.Exit(1)
 		}

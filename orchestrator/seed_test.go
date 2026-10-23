@@ -15,6 +15,11 @@ var seedCoveredRemoteVerbs = map[string]bool{
 	"grab": true, "ls": true, "adopt": true, "handoff": true,
 	"answer": true, "nudge": true, "diff": true, "pause": true,
 	"untrack": true, "orchestrator": true, "chat": true,
+	// keys relays only recipient/receive (gv keys push --host, grove-368).
+	// The seed teaches push as operator-confirmed in gv-keys 09 (#369),
+	// which also owns the seed-stamp refresh; this ticket does not touch
+	// the seed.
+	"keys": true,
 }
 
 // TestSeedDocumentsRemoteVerbs fails the moment internal/remote.Supported

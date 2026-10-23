@@ -131,6 +131,9 @@ type Env struct {
 	// in any namespace — directory listing only, never a value.
 	KeysIdentityPath string
 	KeysHeld         func() map[string]bool
+	// KeysStored names every stored secret as "namespace/NAME" (the
+	// keys:host rows compare it with a remote's `keys ls --json`).
+	KeysStored func() []string
 }
 
 // NewEnv builds the real-machine Env.
@@ -163,6 +166,14 @@ func NewEnv(cfg *config.Config, cfgErr error) Env {
 		KeysHeld: func() map[string]bool {
 			held, _ := secrets.Held()
 			return held
+		},
+		KeysStored: func() []string {
+			entries, _ := secrets.List()
+			out := make([]string, 0, len(entries))
+			for _, e := range entries {
+				out = append(out, e.Namespace+"/"+e.Name)
+			}
+			return out
 		},
 	}
 }

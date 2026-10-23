@@ -281,3 +281,24 @@ func TestKeysEnvRefusesTerminal(t *testing.T) {
 		t.Fatalf("want terminal refusal, got %v", err)
 	}
 }
+
+func TestParseNSFlags(t *testing.T) {
+	a, host, err := parseNSFlags([]string{"--host", "pc", "--workspace", "foo"}, true)
+	if err != nil || host != "pc" || !a.workspace || a.label != "foo" {
+		t.Fatalf("%+v %q %v", a, host, err)
+	}
+	if a, host, err = parseNSFlags([]string{"--host=pc", "--global"}, true); err != nil || host != "pc" || !a.global {
+		t.Fatalf("%+v %q %v", a, host, err)
+	}
+	if _, _, err = parseNSFlags([]string{"--workspace", "--host", "pc"}, true); err != nil {
+		t.Fatalf("bare --workspace before --host: %v", err)
+	}
+	for _, bad := range [][]string{{"NAME"}, {"--global", "--workspace"}, {"--host"}} {
+		if _, _, err := parseNSFlags(bad, true); err == nil {
+			t.Errorf("parseNSFlags(%v) accepted", bad)
+		}
+	}
+	if _, _, err := parseNSFlags([]string{"--host", "pc"}, false); err == nil {
+		t.Error("reseal must not take --host")
+	}
+}

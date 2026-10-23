@@ -1,6 +1,9 @@
 package remote
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -306,5 +309,44 @@ func TestQuoteLeadingExpansionChars(t *testing.T) {
 		if got := Quote(c.in); got != c.want {
 			t.Errorf("Quote(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestKeysRelaysOnlyPushHalves (grove-368): `keys` is Supported, but only
+// recipient and receive relay; set/ls/rm/exec never travel a hop.
+func TestKeysRelaysOnlyPushHalves(t *testing.T) {
+	if !Supported["keys"] {
+		t.Fatal("keys must be Supported")
+	}
+	for args, want := range map[string]bool{
+		"recipient": true, "receive": true,
+		"set": false, "ls": false, "rm": false, "exec": false, "push": false, "env": false, "": false,
+	} {
+		var a []string
+		if args != "" {
+			a = []string{args, "X"}
+		}
+		if got := KeysRelays(a); got != want {
+			t.Errorf("KeysRelays(%v) = %v, want %v", a, got, want)
+		}
+	}
+	if !strings.Contains(SupportedList, "keys push") {
+		t.Fatalf("SupportedList = %q", SupportedList)
+	}
+}
+
+// TestRunWithInputFeedsStdin: the payload reaches the ssh child's stdin.
+func TestRunWithInputFeedsStdin(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := &config.Config{Hosts: map[string]*config.Host{"pc": {SSH: "localhost", GV: "gv"}}}
+	var out, errb bytes.Buffer
+	code, err := RunWithInput(cfg, "pc", "keys", []string{"receive"}, strings.NewReader("payload"), &out, &errb)
+	if err != nil || code != 0 || out.String() != "payload" {
+		t.Fatalf("code=%d err=%v out=%q", code, err, out.String())
 	}
 }
