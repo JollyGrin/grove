@@ -16,16 +16,17 @@ import (
 )
 
 type Repo struct {
-	Path         string   `yaml:"path"`
-	Base         string   `yaml:"base"`
-	Setup        string   `yaml:"setup"`
-	Claude       string   `yaml:"claude"`
-	Effort       string   `yaml:"effort"`      // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
-	Autocompact  string   `yaml:"autocompact"` // per-repo --autocompact window for workers (grove-440; auto or 100000–1000000 tokens); empty = no flag, Claude Code's own window
-	Prompt       string   `yaml:"prompt"`
-	Provider     string   `yaml:"provider"`      // per-repo task backend override (markdown|linear); empty = global kind
-	ModelProfile string   `yaml:"model_profile"` // per-repo default model profile (grove-36); empty = anthropic
-	LinearLabels []string `yaml:"linear_labels"`
+	Path          string   `yaml:"path"`
+	Base          string   `yaml:"base"`
+	Setup         string   `yaml:"setup"`
+	Claude        string   `yaml:"claude"`
+	Effort        string   `yaml:"effort"`         // per-repo default --effort for workers (grove-435; low|medium|high|xhigh|max); empty = model default
+	Autocompact   string   `yaml:"autocompact"`    // per-repo --autocompact window for workers (grove-440; auto or 100000–1000000 tokens); empty = no flag, Claude Code's own window
+	Prompt        string   `yaml:"prompt"`         // whole-file kickoff template override
+	PromptOverlay string   `yaml:"prompt_overlay"` // fragment rendered at the embedded template's overlay slot (grove-568); ignored when prompt is set
+	Provider      string   `yaml:"provider"`       // per-repo task backend override (markdown|linear); empty = global kind
+	ModelProfile  string   `yaml:"model_profile"`  // per-repo default model profile (grove-36); empty = anthropic
+	LinearLabels  []string `yaml:"linear_labels"`
 	// DoneGate is the Stop hook's evidence gate for `STATUS: DONE` claims
 	// (grove-441): off | warn (default: log + desktop notify, never block)
 	// | block (Claude Code `decision: block`, capped so it cannot loop).
@@ -325,6 +326,9 @@ func parse(raw []byte, src string) (*Config, error) {
 		}
 		if r.Prompt != "" {
 			r.Prompt = expand(r.Prompt)
+		}
+		if r.PromptOverlay != "" {
+			r.PromptOverlay = expand(r.PromptOverlay)
 		}
 		if st, err := os.Stat(r.Path); err != nil || !st.IsDir() {
 			return nil, fmt.Errorf("repo %q: path %s is not a directory", name, r.Path)

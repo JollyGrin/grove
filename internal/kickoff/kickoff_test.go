@@ -57,7 +57,7 @@ func TestLinearGoldenParity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := Render(goldenTask, linearVerbs, "linear", "", mode, "", "main", "")
+		got, err := Render(goldenTask, linearVerbs, "linear", "", "", mode, "", "main", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +68,7 @@ func TestLinearGoldenParity(t *testing.T) {
 }
 
 func TestRenderDefaultUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "", "main", "")
+	got, err := Render(testTask, linearVerbs, "linear", "", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestRenderDefaultUnchanged(t *testing.T) {
 // grove-146: an empty brief must not alter existing renders (every other
 // call site in this file passes "" and depends on byte-identical output).
 func TestRenderNoBriefUnchanged(t *testing.T) {
-	withBrief, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "", "main", "")
+	withBrief, err := Render(testTask, linearVerbs, "linear", "", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRenderNoBriefUnchanged(t *testing.T) {
 }
 
 func TestRenderOperatorBrief(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeDefault, "Only touch the staging config, do not deploy.", "main", "")
+	got, err := Render(testTask, linearVerbs, "linear", "", "", ModeDefault, "Only touch the staging config, do not deploy.", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestRenderOperatorBrief(t *testing.T) {
 }
 
 func TestRenderManualUnchanged(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModeManual, "", "main", "")
+	got, err := Render(testTask, linearVerbs, "linear", "", "", ModeManual, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestRenderManualUnchanged(t *testing.T) {
 }
 
 func TestRenderPickup(t *testing.T) {
-	got, err := Render(testTask, linearVerbs, "linear", "", ModePickup, "", "main", "")
+	got, err := Render(testTask, linearVerbs, "linear", "", "", ModePickup, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Render(testTask, linearVerbs, "linear", custom, ModeDefault, "", "main", "")
+	got, err := Render(testTask, linearVerbs, "linear", custom, "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRenderOverrideIsolation(t *testing.T) {
 	}
 
 	for _, mode := range []Mode{ModeManual, ModePickup} {
-		got, err := Render(testTask, linearVerbs, "linear", custom, mode, "", "main", "")
+		got, err := Render(testTask, linearVerbs, "linear", custom, "", mode, "", "main", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +186,7 @@ var mdTask = &provider.Task{
 }
 
 func TestRenderMarkdownDefault(t *testing.T) {
-	got, err := Render(mdTask, mdVerbs, "markdown", "", ModeDefault, "", "main", "")
+	got, err := Render(mdTask, mdVerbs, "markdown", "", "", ModeDefault, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestRenderMarkdownDefault(t *testing.T) {
 }
 
 func TestRenderMarkdownManualAndPickup(t *testing.T) {
-	man, err := Render(mdTask, mdVerbs, "markdown", "", ModeManual, "", "main", "")
+	man, err := Render(mdTask, mdVerbs, "markdown", "", "", ModeManual, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestRenderMarkdownManualAndPickup(t *testing.T) {
 		t.Errorf("markdown manual render wrong:\n%s", man)
 	}
 
-	pick, err := Render(mdTask, mdVerbs, "markdown", "", ModePickup, "", "main", "")
+	pick, err := Render(mdTask, mdVerbs, "markdown", "", "", ModePickup, "", "main", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestRenderNamesThePRBase(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name+"/no feature", func(t *testing.T) {
-			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "main", "")
+			got, err := Render(c.task, c.verbs, c.kind, "", "", c.mode, "", "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +273,7 @@ func TestRenderNamesThePRBase(t *testing.T) {
 			}
 		})
 		t.Run(c.name+"/feature", func(t *testing.T) {
-			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "feature/x", "x")
+			got, err := Render(c.task, c.verbs, c.kind, "", "", c.mode, "", "feature/x", "x")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -328,7 +328,7 @@ func TestRenderEndsWithStatusSentinels(t *testing.T) {
 				name += "/feature"
 			}
 			t.Run(name, func(t *testing.T) {
-				got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", f.base, f.feature)
+				got, err := Render(c.task, c.verbs, c.kind, "", "", c.mode, "", f.base, f.feature)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -388,7 +388,7 @@ func TestRenderMemoryParagraph(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := Render(c.task, c.verbs, c.kind, "", c.mode, "", "main", "")
+			got, err := Render(c.task, c.verbs, c.kind, "", "", c.mode, "", "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -406,12 +406,65 @@ func TestRenderMemoryParagraph(t *testing.T) {
 		task  *provider.Task
 		verbs provider.Verbs
 	}{{"linear", testTask, linearVerbs}, {"markdown", mdTask, mdVerbs}} {
-		got, err := Render(c.task, c.verbs, c.kind, "", ModeManual, "", "main", "")
+		got, err := Render(c.task, c.verbs, c.kind, "", "", ModeManual, "", "main", "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(got, "auto memory") {
 			t.Errorf("%s manual render must not carry the memory paragraph", c.kind)
 		}
+	}
+}
+
+// TestRenderNoOverlayByteIdentical pins grove-568: the overlay slot added to
+// every embedded template renders as nothing when no overlay is configured.
+// Fixtures were generated from main before the slot existed.
+func TestRenderNoOverlayByteIdentical(t *testing.T) {
+	modes := map[string]Mode{"default": ModeDefault, "manual": ModeManual, "pickup": ModePickup}
+	for _, kind := range []string{"linear", "markdown"} {
+		for name, m := range modes {
+			want, err := os.ReadFile(filepath.Join("testdata", "nooverlay_"+kind+"_"+name+".txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Render(goldenTask, linearVerbs, kind, "", "", m, "", "main", "feat")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(want) {
+				t.Errorf("%s/%s: render changed without an overlay\n--- got ---\n%s", kind, name, got)
+			}
+		}
+	}
+}
+
+func TestRenderOverlaySlot(t *testing.T) {
+	dir := t.TempDir()
+	overlay := filepath.Join(dir, "kickoff.local.tmpl")
+	if err := os.WriteFile(overlay, []byte("{{.Identifier}} overlay\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	whole := filepath.Join(dir, "whole.tmpl")
+	if err := os.WriteFile(whole, []byte("WHOLE {{.Identifier}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"linear", "markdown"} {
+		for _, m := range []Mode{ModeDefault, ModeManual, ModePickup} {
+			got, err := Render(goldenTask, linearVerbs, kind, "", overlay, m, "", "main", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := goldenTask.ID + " overlay"
+			if n := strings.Count(got, want); n != 1 {
+				t.Errorf("%s mode %d: overlay rendered %d times, want 1", kind, m, n)
+			}
+		}
+	}
+	got, err := Render(goldenTask, linearVerbs, "linear", whole, overlay, ModeDefault, "", "main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "WHOLE") || strings.Contains(got, "overlay") {
+		t.Errorf("prompt: must win and drop the overlay, got %q", got)
 	}
 }
