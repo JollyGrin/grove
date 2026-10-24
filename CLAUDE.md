@@ -50,7 +50,10 @@ orchestrator's brain, `.grove/orchestrator/CLAUDE.md`, is grove's seed and
 is replaced on every update; the operator's rules for that workspace live
 beside it in `CLAUDE.local.md`, the overlay, which wins where the two
 contradict and is never touched by grove (`gv brains`,
-docs/orchestrator-overlay.md). A
+docs/orchestrator-overlay.md). The kickoff template has the same
+split: the embedded one is grove's and carries an `overlay` slot a repo
+fills with `prompt_overlay:`; `prompt:` still replaces it wholesale and
+`gv brains` / `gv doctor` flag that. A
 workspace's cockpit and its workers share one tmux session
 `grove-<label>` (window 0 = cockpit, 1+ = workers). The cockpit has two
 layouts, `horizontal` (every pane side by side) and `focus`; `L` toggles

@@ -1877,7 +1877,10 @@ func cmdGrab(args []string) error {
 	if choice.Feature != nil {
 		featureSlug = choice.Feature.Slug
 	}
-	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode, *briefFlag, choice.Base, featureSlug)
+	if repo.Prompt != "" && repo.PromptOverlay != "" {
+		fmt.Fprintf(os.Stderr, "note: repo sets both prompt: and prompt_overlay: — prompt: wins, the overlay is ignored\n")
+	}
+	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, repo.PromptOverlay, promptMode, *briefFlag, choice.Base, featureSlug)
 	if err != nil {
 		return err
 	}
@@ -4057,7 +4060,7 @@ func cmdAdopt(args []string) error {
 	if pickupBase == "" {
 		pickupBase = repo.Base
 	}
-	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode, "", pickupBase, storedFeature)
+	prompt, err := kickoff.Render(task, verbs, repoKind, "", repo.PromptOverlay, promptMode, "", pickupBase, storedFeature)
 	if err != nil {
 		return err
 	}

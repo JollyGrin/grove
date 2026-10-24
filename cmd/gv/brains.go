@@ -33,6 +33,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -43,6 +44,8 @@ import (
 
 	"github.com/JollyGrin/grove/internal/bootstrap"
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/kickoff"
+	"github.com/JollyGrin/grove/internal/schema"
 	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/workspace"
 	"github.com/JollyGrin/grove/orchestrator"
@@ -92,6 +95,13 @@ func cmdBrains(args []string) error {
 	if err != nil {
 		return err
 	}
+	var kickoffRows []kickoff.Row
+	if cfg, err := loadCfg(); err == nil {
+		kickoffRows = kickoff.Report(cfg.Repos)
+	}
+	if kickoffRows == nil {
+		kickoffRows = []kickoff.Row{}
+	}
 	var rows []bootstrap.BrainRow
 	var refreshErr error
 	if *refresh {
@@ -100,12 +110,18 @@ func cmdBrains(args []string) error {
 		rows = bootstrap.PlanSweep(probes, orchestrator.ClaudeMd)
 	}
 	if *asJSON {
-		if err := emitJSON("brains", rows); err != nil {
+		// grove-568: `kickoffs` rides beside `brains` in the envelope — additive.
+		out := schema.Envelope("brains", rows)
+		out["kickoffs"] = kickoffRows
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
 			return err
 		}
 		return refreshErr
 	}
 	printBrainSweep(os.Stdout, rows, *refresh)
+	printKickoffs(os.Stdout, kickoffRows)
 	return refreshErr
 }
 
@@ -475,4 +491,26 @@ func reportBrainSweepAfterUpdate(target string) {
 		fmt.Print("\norchestrator brains, against the seed the new binary carries:\n")
 	}
 	os.Stdout.Write(out)
+}
+
+// printKickoffs lists each configured repo's kickoff template state
+// (grove-568). Silent when every repo uses the embedded default.
+func printKickoffs(w io.Writer, rows []kickoff.Row) {
+	any := false
+	for _, r := range rows {
+		if r.State != kickoff.StateDefault {
+			any = true
+		}
+	}
+	if !any {
+		return
+	}
+	fmt.Fprintln(w, "\nKICKOFFS")
+	for _, r := range rows {
+		line := fmt.Sprintf("  %-20s %-9s %s", r.Repo, r.State, r.Path)
+		if r.Note != "" {
+			line += "  — " + r.Note
+		}
+		fmt.Fprintln(w, strings.TrimRight(line, " "))
+	}
 }

@@ -1,0 +1,48 @@
+You are working on task DEV-1234: Persist filter state in the URL
+
+--- TASK ---
+Filters reset on reload.
+
+Make them survive.
+[dean]: see screenshot
+[unknown]: second comment
+with two lines
+--- END TASK ---
+
+If the operator wants to read the code alongside you, `gv editor` (run
+from this worktree) opens a side-by-side editor pane in your tmux window —
+offer it when it would help, and run it when asked.
+
+Before you begin: Move the ticket to "In Progress" using the dev-linear Linear tools.
+
+Implement every behaviour the task asks for, and only that — adjacent fixes,
+refactors or extensions are follow-ups to report, not changes to make. Commit
+tests only where the task asks or the repo keeps them for such changes.
+Delegate independent reconnaissance to subagents; keep working while they run.
+
+Your auto memory for this repo is shared by every worktree of it: read
+its `MEMORY.md` before you start, and record corrections and confirmed
+approaches there as you go — one lesson per file, a one-line summary at
+the top, and why it mattered. A verified surprise about the harness or
+the tooling that every machine needs goes to the repo's LEARNINGS.md
+instead, dated, when the repo keeps one. Don't save what the repo, the
+task or git already records.
+
+Done means: the repo's lint, build and tests pass; the work is committed
+with the task prefix (DEV-1234: ...) and, if this repo has a remote, pushed
+with a PR open via `gh pr create --base main` and "Task: DEV-1234" in
+the body — never push to the base branch itself; with no remote, say so.
+
+This task belongs to feature `feat`. Your PR targets
+`main`, not main. If you must catch up, rebase only on
+`origin/main` — never on main.
+
+Before reporting, audit each claim against a tool result from this
+session — the wrap-up shows the gate output it relies on, not "tests
+pass". Lead with the outcome for a reader who saw none of the work, then
+verify each acceptance criterion against your diff, then move the ticket to "In Review". Do NOT post Linear comments and do NOT move the ticket to Done.
+
+End your final message with exactly one of these lines:
+   STATUS: QUESTION — <the question, one line>
+   STATUS: BLOCKED — <what is blocking you>
+   STATUS: DONE — <one paragraph: what changed and how you verified it>

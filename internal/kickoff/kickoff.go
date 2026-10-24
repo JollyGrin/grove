@@ -65,7 +65,11 @@ type data struct {
 // base is the branch the PR targets (the caller resolves it: a feature's
 // branch, else the repo's base — never empty); feature is the feature's
 // slug, empty when the task rides no train (grove-374).
-func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string, mode Mode, brief, base, feature string) (string, error) {
+// overlayPath names a repo-owned text/template fragment rendered at the
+// embedded templates' "overlay" slot with the same data (grove-568); empty,
+// or a templatePath that replaces the template wholesale, leaves the slot
+// empty so the output is byte-identical to a render without one.
+func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath, overlayPath string, mode Mode, brief, base, feature string) (string, error) {
 	linearSet := kind == "linear"
 	var text string
 	switch mode {
@@ -94,6 +98,19 @@ func Render(task *provider.Task, verbs provider.Verbs, kind, templatePath string
 	}
 	t, err := template.New("kickoff").Parse(text)
 	if err != nil {
+		return "", err
+	}
+	frag := ""
+	if overlayPath != "" && !(mode == ModeDefault && templatePath != "") {
+		raw, err := os.ReadFile(overlayPath)
+		if err != nil {
+			return "", err
+		}
+		if f := strings.TrimSpace(string(raw)); f != "" {
+			frag = f + "\n\n"
+		}
+	}
+	if _, err := t.New("overlay").Parse(frag); err != nil {
 		return "", err
 	}
 	var b strings.Builder
