@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,8 +46,8 @@ func TestSeedTeachesHostFlag(t *testing.T) {
 			"the seed's --host teaching (duty 3 Dispatch + the tools block) has been trimmed — "+
 			"restore it in orchestrator/CLAUDE.md", n)
 	}
-	if !strings.Contains(ClaudeMd, "gv grab DEV-X --host") {
-		t.Error("orchestrator/CLAUDE.md is missing the `gv grab DEV-X --host` example — " +
+	if !strings.Contains(ClaudeMd, "gv grab <task> --host") {
+		t.Error("orchestrator/CLAUDE.md is missing the `gv grab <task> --host` example — " +
 			"restore it in orchestrator/CLAUDE.md's tools block")
 	}
 	if !strings.Contains(ClaudeMd, "handoff MOVES a task that is already running") {
@@ -216,8 +218,8 @@ func TestSeedTeachesChatHide(t *testing.T) {
 // effort dial is a one-off pin exactly like --model, and the orchestrator
 // must know it exists before it reaches for a cheaper model.
 func TestSeedTeachesEffort(t *testing.T) {
-	if !strings.Contains(ClaudeMd, "gv grab DEV-X --effort E") {
-		t.Error("orchestrator/CLAUDE.md is missing `gv grab DEV-X --effort E` — restore it in the tools block")
+	if !strings.Contains(ClaudeMd, "gv grab <task> --effort E") {
+		t.Error("orchestrator/CLAUDE.md is missing `gv grab <task> --effort E` — restore it in the tools block")
 	}
 	if !strings.Contains(ClaudeMd, "low|medium|high|xhigh|max") {
 		t.Error("orchestrator/CLAUDE.md no longer names the documented effort levels (low|medium|high|xhigh|max)")
@@ -269,5 +271,111 @@ func TestSeedTeachesLearningsReview(t *testing.T) {
 			t.Errorf("orchestrator/CLAUDE.md Duties is missing %q — the learnings-review duty "+
 				"(grove-439) has been trimmed; restore it", want)
 		}
+	}
+}
+
+// flat collapses the seed's hard line wraps so a sentence can be asserted
+// whole, wherever the 72-column wrap happens to fall inside it.
+func flat(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// TestSeedTeachesOverlay (grove-515, brain-overlay car 05) guards the
+// `## This seed and the workspace overlay` section: the overlay wins where
+// it contradicts the seed, the floor no overlay lowers (the closed list
+// of irreversible or outward-facing actions), the named-not-numbered rule
+// for workspace duties, and the LEARNINGS.md read at session start. Every
+// assertion is scoped to the section, so deleting it cannot hide behind a
+// mention elsewhere.
+func TestSeedTeachesOverlay(t *testing.T) {
+	sec := flat(seedSection(t, "This seed and the workspace overlay"))
+	for _, want := range []string{
+		"It is replaced wholesale on every grove update, so never edit it.",
+		"`CLAUDE.local.md` beside it, if present, is this workspace's overlay",
+		"Where the overlay contradicts this file, the overlay wins",
+		"A seed rule the overlay does not name still applies in full.",
+		"**One floor no overlay lowers:** an irreversible or outward-facing action " +
+			"still needs the operator's explicit yes in this chat, or a mandate or land order.",
+		"Those actions are merging a PR or a branch, closing an issue, `done`, `untrack`, " +
+			"`adopt`, `sweep`, `handoff`, and any `grab` the operator did not ask for.",
+		"only by naming it explicitly as one",
+		"Workspace duties in the overlay are named, not numbered",
+		`cites a seed duty as "duty N (Name)"`,
+		"If `LEARNINGS.md` exists beside this file, read it at the start of every session, " +
+			"before triage or dispatch.",
+	} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("`## This seed and the workspace overlay` no longer says %q — the overlay "+
+				"contract (docs/orchestrator-overlay.md) has been trimmed; restore it", want)
+		}
+	}
+	// The section must sit right after the intro, before the tools block,
+	// so a brain reads the contract before it reads a single verb.
+	if i, j := strings.Index(ClaudeMd, "\n## This seed and the workspace overlay"), strings.Index(ClaudeMd, "\n## Your tools"); i < 0 || j < 0 || i > j {
+		t.Error("`## This seed and the workspace overlay` must come before `## Your tools`")
+	}
+}
+
+// TestSeedTeachesBrainsVerbs (grove-515) guards the three `gv brains`
+// forms in the tools block — the verb-surface rule for cars 01-04: a brain
+// must know the read, the refresh and the migration exist.
+func TestSeedTeachesBrainsVerbs(t *testing.T) {
+	tools := seedSection(t, "Your tools")
+	for _, want := range []string{
+		"gv brains [--json]",
+		"gv brains --refresh",
+		"gv brains --migrate [--apply]",
+	} {
+		if !strings.Contains(tools, want) {
+			t.Errorf("orchestrator/CLAUDE.md's tools block is missing `%s` — restore it", want)
+		}
+	}
+}
+
+// seedDutyNames is the numbered duty list as an overlay cites it:
+// "duty N (Name)". Renaming or renumbering a duty is a deliberate edit
+// here too, because every workspace overlay that cites the old name or
+// number silently stops matching the seed otherwise.
+var seedDutyNames = []string{
+	"Fleet summary",
+	"Backlog triage",
+	"Dispatch",
+	"Unstick",
+	"Ticket sharpening",
+	"Cleanup & recovery",
+	"Cost analysis",
+	"Context-rot rescue",
+	"Remote overflow",
+	"Land a feature",
+	"Learnings review",
+}
+
+var dutyLine = regexp.MustCompile(`(?m)^(\d+)\. \*\*([^*]+)\*\*`)
+
+// TestSeedDutyNamesAreAContract (grove-515) asserts the Duties section's
+// numbered list — number and bold name, in order — against seedDutyNames.
+func TestSeedDutyNamesAreAContract(t *testing.T) {
+	duties := seedSection(t, "Duties")
+	var got []string
+	for i, m := range dutyLine.FindAllStringSubmatch(duties, -1) {
+		if m[1] != strconv.Itoa(i+1) {
+			t.Errorf("duty list is not numbered 1..N in order: item %d is numbered %s (%s)", i+1, m[1], m[2])
+		}
+		got = append(got, m[2])
+	}
+	if strings.Join(got, "|") != strings.Join(seedDutyNames, "|") {
+		t.Errorf("orchestrator/CLAUDE.md's numbered duties changed:\n got: %q\nwant: %q\n"+
+			"Overlays cite duties as \"duty N (Name)\" — a rename or renumber is a deliberate "+
+			"edit to seedDutyNames here AND to every workspace overlay that cites it", got, seedDutyNames)
+	}
+}
+
+// TestSeedIsProviderNeutral (grove-515) keeps the thegrid-isms out: the
+// seed is born into every workspace, so a task is `<task>`, never a DEV-
+// ticket.
+func TestSeedIsProviderNeutral(t *testing.T) {
+	if strings.Contains(ClaudeMd, "DEV-") {
+		t.Error("orchestrator/CLAUDE.md mentions `DEV-` — the seed is provider-neutral; write `<task>`")
+	}
+	if !strings.Contains(ClaudeMd, "gv grab <task> --repo Y") {
+		t.Error("orchestrator/CLAUDE.md is missing the `gv grab <task> --repo Y` example")
 	}
 }

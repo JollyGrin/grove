@@ -21,7 +21,7 @@
 # count, and no sweep or refresh ever writes over an existing overlay.
 # grove-513: `gv brains --migrate` (dry run) drafts CLAUDE.local.md.draft
 # beside each edited brain whose seed the archive knows — an appended
-# section lands under Workspace duties, a DEV-X→grove-N brain becomes a
+# section lands under Workspace duties, a <task>→grove-N brain becomes a
 # Glossary line, a tracked brain gets its two git commands PRINTED — and
 # every other file's bytes are unchanged; unknown stamps are reported.
 # grove-514: `gv brains --migrate --apply --label L` swaps one reviewed
@@ -328,13 +328,13 @@ mkrepo "$MIGADD"
 MIGADD_BRAIN="$MIGADD/.grove/orchestrator/CLAUDE.md"
 [ -f "$MIGADD_BRAIN" ] || fail "init did not seed mig-add"
 printf '\n## Local pair testing\n\nRun both servers before any PR that touches the wire protocol.\n' >> "$MIGADD_BRAIN"
-# mig-subst: the seed with every DEV-X swapped for grove-N — the fleet's
+# mig-subst: the seed with every <task> swapped for grove-N — the fleet's
 # commonest edit — and the brain force-added to git, as thegrid's is.
 MIGSUB="$SCRATCH/mig-subst"
 mkrepo "$MIGSUB"
 ( cd "$MIGSUB" && "$GV" init --yes --label mig-subst > /dev/null )
 MIGSUB_BRAIN="$MIGSUB/.grove/orchestrator/CLAUDE.md"
-sed 's/DEV-X/grove-N/g' "$MIGSUB_BRAIN" > "$SCRATCH/subst.md" && mv "$SCRATCH/subst.md" "$MIGSUB_BRAIN"
+sed 's/<task>/grove-N/g' "$MIGSUB_BRAIN" > "$SCRATCH/subst.md" && mv "$SCRATCH/subst.md" "$MIGSUB_BRAIN"
 grep -q 'grove-N' "$MIGSUB_BRAIN" || fail "substitution fixture has no grove-N"
 git -C "$MIGSUB" add -f .grove/orchestrator/CLAUDE.md && git -C "$MIGSUB" commit -qm brain
 # Snapshot every file but the drafts: the dry run may add *.draft and
@@ -375,7 +375,7 @@ grep -q 'Review before applying' "$ADD_DRAFT" && fail "appended section must not
 grep -q '## Glossary' "$ADD_DRAFT" && fail "mig-add has no substitutions" || true
 SUB_DRAFT="$MIGSUB/.grove/orchestrator/CLAUDE.local.md.draft"
 grep -q '^## Glossary' "$SUB_DRAFT" || fail "substitution draft must carry a Glossary"
-grep -q 'Wherever the seed writes `DEV-X`, read `grove-N`.' "$SUB_DRAFT" || fail "glossary line missing"
+grep -q 'Wherever the seed writes `<task>`, read `grove-N`.' "$SUB_DRAFT" || fail "glossary line missing"
 grep -c 'Wherever the seed writes' "$SUB_DRAFT" | grep -qx 1 || fail "exactly one glossary line for one token map"
 grep -q 'Review before applying\|## Addenda\|## Workspace duties' "$SUB_DRAFT" && fail "substitution draft must be glossary only" || true
 
@@ -447,7 +447,7 @@ say "--apply on the tracked brain: git commands printed, none run"
 $(cat "$SCRATCH/apply-sub.txt")"
 cat "$SCRATCH/apply-sub.txt"
 cmp -s "$MIGSUB_BRAIN" "$SEEDED_BRAIN" || fail "mig-subst CLAUDE.md must be the pristine seed after --apply"
-grep -q 'Wherever the seed writes `DEV-X`, read `grove-N`.' "$SUB_OVERLAY" || fail "the glossary draft must be the overlay now"
+grep -q 'Wherever the seed writes `<task>`, read `grove-N`.' "$SUB_OVERLAY" || fail "the glossary draft must be the overlay now"
 grep -q "cd $MIGSUB && git add -f .grove/orchestrator/CLAUDE.local.md" "$SCRATCH/apply-sub.txt" || fail "tracked brain: git add -f must be printed after --apply"
 grep -q "cd $MIGSUB && git rm --cached .grove/orchestrator/CLAUDE.md" "$SCRATCH/apply-sub.txt" || fail "tracked brain: git rm --cached must be printed after --apply"
 git -C "$MIGSUB" ls-files --error-unmatch .grove/orchestrator/CLAUDE.md > /dev/null || fail "--apply ran git rm --cached — it must only print it"

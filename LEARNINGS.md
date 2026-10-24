@@ -42,6 +42,17 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-24 · `CLAUDE.local.md` is the only overlay mechanism Claude
+  Code gives a non-git profile subdir; `@imports` are not one** (grove-515,
+  brain-overlay train #508; probes 2026-10-19 on v2.1.303). External
+  `@imports` need a one-time approval and are dropped silently under `-p`;
+  an ancestor CLAUDE.md's imports do not load from a subdirectory cwd at
+  all, while its `CLAUDE.local.md` and `.claude/rules/*` do. `CLAUDE.local.md`
+  loads last from the cwd and every ancestor, with or without git, and an
+  in-session `/compact` re-injects it with `CLAUDE.md`. Precedence is not a
+  mechanism ("Claude may pick one arbitrarily"), so the seed names the
+  overlay as the winner in words and keeps a floor no overlay lowers. Rule:
+  claude-code-facts §Sessions.
 - **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
   worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
   and `.claude/settings.local.json` never reaches a fresh worktree**
@@ -68,21 +79,6 @@
   `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
   WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
   table — one table alone misses half. Rule: tmux-discipline §3.
-
-- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
-  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
-  is not an error, so "did the command fail" cannot answer "does this pane
-  exist". `paneFacts` treats an empty answer as "no such pane" before
-  parsing; any new reader of a caller-supplied `%N` must do the same.
-
-- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
-  is ACTIVE, which is only the cockpit when the caller is sitting in it**
-  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
-  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
-  run from a phone, a worker window or a detached chat (`gv chat
-  hide`/`show`) must re-tile the cockpit window by its `@N` id
-  (`retileCockpit`) — the integration test keeps a worker window active
-  and asserts its layout is untouched.
 
 - **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
   tmux reports it as "File name too long"** (grove-401): an isolated
