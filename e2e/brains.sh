@@ -24,6 +24,14 @@
 # section lands under Workspace duties, a DEV-X→grove-N brain becomes a
 # Glossary line, a tracked brain gets its two git commands PRINTED — and
 # every other file's bytes are unchanged; unknown stamps are reported.
+# grove-514: `gv brains --migrate --apply --label L` swaps one reviewed
+# draft in — CLAUDE.md → CLAUDE.md.bak-pre-overlay (byte-identical), the
+# binary's seed → CLAUDE.md, draft → CLAUDE.local.md (over the stub) — and
+# refuses, non-zero and touching nothing, on a pristine brain, a missing
+# draft, a draft still carrying a Review block, a real CLAUDE.local.md or
+# a declined prompt; a tracked brain's git commands are printed, not run;
+# three workspaces (pristine / additive / conflicting) then read
+# `pristine: true, overlay: true` from `gv brains --json`.
 # tmux: never talks to a tmux server, so no tmux isolation needed.
 set -euo pipefail
 
@@ -380,10 +388,134 @@ grep -q 'mig-subst\|handmade\|edited' "$SCRATCH/migrate-label.txt" && fail "--la
 "$GV" brains --migrate --label nope > "$SCRATCH/migrate-nope.txt" 2>&1 && fail "an unknown label must fail" || true
 [ "$(snapshot)" = "$SNAP_BEFORE" ] || fail "second --migrate changed a non-draft file"
 
+say "gv brains --migrate --apply: every refusal exits non-zero and touches nothing (grove-514)"
+# Everything under the workspaces, HOME and state — drafts included now.
+snapshot_all() { find "$SCRATCH" -mindepth 2 -type f ! -path '*/.git/*' -exec cksum {} + | sort; }
+# refuses: a pristine brain has nothing to migrate.
+SNAP_ALL="$(snapshot_all)"
+"$GV" brains --migrate --apply --label seeded --yes > "$SCRATCH/apply-pristine.txt" 2>&1 && fail "--apply on a pristine brain must exit non-zero" || true
+grep -q 'pristine' "$SCRATCH/apply-pristine.txt" || fail "pristine refusal must say so:
+$(cat "$SCRATCH/apply-pristine.txt")"
+# refuses: no draft (edited is unknown-base, so the dry run drafted nothing).
+"$GV" brains --migrate --apply --label edited --yes > "$SCRATCH/apply-nodraft.txt" 2>&1 && fail "--apply without a draft must exit non-zero" || true
+grep -q "no $EDITED/.grove/orchestrator/CLAUDE.local.md.draft" "$SCRATCH/apply-nodraft.txt" || fail "missing-draft refusal must name the draft and the dry run:
+$(cat "$SCRATCH/apply-nodraft.txt")"
+grep -q 'gv brains --migrate --label edited' "$SCRATCH/apply-nodraft.txt" || fail "missing-draft refusal must hand over the dry-run command"
+# refuses: --apply needs --label; --apply/--yes need --migrate.
+"$GV" brains --migrate --apply --yes > "$SCRATCH/apply-nolabel.txt" 2>&1 && fail "--apply without --label must exit non-zero" || true
+"$GV" brains --apply --label mig-add > "$SCRATCH/apply-nomigrate.txt" 2>&1 && fail "--apply without --migrate must exit non-zero" || true
+# refuses: a real CLAUDE.local.md (one line past the stub) beside the brain.
+SUB_OVERLAY="$MIGSUB/.grove/orchestrator/CLAUDE.local.md"
+cp "$SUB_OVERLAY" "$SCRATCH/sub-stub.md"
+printf -- '- The operator is Dean.\n' >> "$SUB_OVERLAY"
+"$GV" brains --migrate --apply --label mig-subst --yes > "$SCRATCH/apply-overlay.txt" 2>&1 && fail "--apply over a real overlay must exit non-zero" || true
+grep -q 'CLAUDE.local.md with real lines already exists' "$SCRATCH/apply-overlay.txt" || fail "real-overlay refusal missing:
+$(cat "$SCRATCH/apply-overlay.txt")"
+grep -q -- '- The operator is Dean.' "$SUB_OVERLAY" || fail "the real overlay must be untouched"
+cp "$SCRATCH/sub-stub.md" "$SUB_OVERLAY"
+# declined prompt: exit 0, nothing changed.
+printf 'n\n' | "$GV" brains --migrate --apply --label mig-add > "$SCRATCH/apply-decline.txt" 2>&1 || fail "a declined prompt must exit 0:
+$(cat "$SCRATCH/apply-decline.txt")"
+grep -q 'apply? \[y/N\]' "$SCRATCH/apply-decline.txt" || fail "without --yes the prompt must show"
+grep -q 'not applied — nothing changed' "$SCRATCH/apply-decline.txt" || fail "declining must say nothing changed"
+[ "$(snapshot_all)" = "$SNAP_ALL" ] || fail "a refusal or a declined prompt changed a file:
+$(diff <(printf '%s\n' "$SNAP_ALL") <(snapshot_all) || true)"
+
+say "--apply on the additive draft: seed in, original parked, draft is the overlay"
+BEFORE_ADD_BRAIN="$(cksum < "$MIGADD_BRAIN")"
+ADD_DRAFT_BYTES="$(cksum < "$ADD_DRAFT")"
+ADD_OVERLAY="$MIGADD/.grove/orchestrator/CLAUDE.local.md"
+"$GV" brains --migrate --apply --label mig-add --yes > "$SCRATCH/apply-add.txt" 2>&1 || fail "--apply --yes on mig-add exited non-zero:
+$(cat "$SCRATCH/apply-add.txt")"
+cat "$SCRATCH/apply-add.txt"
+grep -q '✓ mig-add migrated' "$SCRATCH/apply-add.txt" || fail "apply must report the migration"
+cmp -s "$MIGADD_BRAIN" "$SEEDED_BRAIN" || fail "after --apply CLAUDE.md must be byte-identical to StampSeed(seed) (the seeded workspace's brain)"
+ADD_BAK="$MIGADD/.grove/orchestrator/CLAUDE.md.bak-pre-overlay"
+[ -f "$ADD_BAK" ] || fail "the original brain must be parked at .bak-pre-overlay"
+[ "$(cksum < "$ADD_BAK")" = "$BEFORE_ADD_BRAIN" ] || fail "the backup must be byte-identical to the original brain"
+[ ! -e "$ADD_DRAFT" ] || fail "the draft must have moved"
+[ "$(cksum < "$ADD_OVERLAY")" = "$ADD_DRAFT_BYTES" ] || fail "CLAUDE.local.md must be the draft's bytes (the stub is replaced)"
+grep -q '^## Local pair testing' "$ADD_OVERLAY" || fail "the overlay must carry the migrated section"
+grep -q 'git ' "$SCRATCH/apply-add.txt" && fail "an untracked brain gets no git commands" || true
+# a second --apply has no draft: refuses, changes nothing.
+SNAP_ADD="$(snapshot_all)"
+"$GV" brains --migrate --apply --label mig-add --yes > "$SCRATCH/apply-again.txt" 2>&1 && fail "a second --apply must refuse" || true
+[ "$(snapshot_all)" = "$SNAP_ADD" ] || fail "a refused second --apply changed a file"
+
+say "--apply on the tracked brain: git commands printed, none run"
+"$GV" brains --migrate --apply --label mig-subst --yes > "$SCRATCH/apply-sub.txt" 2>&1 || fail "--apply --yes on mig-subst exited non-zero:
+$(cat "$SCRATCH/apply-sub.txt")"
+cat "$SCRATCH/apply-sub.txt"
+cmp -s "$MIGSUB_BRAIN" "$SEEDED_BRAIN" || fail "mig-subst CLAUDE.md must be the pristine seed after --apply"
+grep -q 'Wherever the seed writes `DEV-X`, read `grove-N`.' "$SUB_OVERLAY" || fail "the glossary draft must be the overlay now"
+grep -q "cd $MIGSUB && git add -f .grove/orchestrator/CLAUDE.local.md" "$SCRATCH/apply-sub.txt" || fail "tracked brain: git add -f must be printed after --apply"
+grep -q "cd $MIGSUB && git rm --cached .grove/orchestrator/CLAUDE.md" "$SCRATCH/apply-sub.txt" || fail "tracked brain: git rm --cached must be printed after --apply"
+git -C "$MIGSUB" ls-files --error-unmatch .grove/orchestrator/CLAUDE.md > /dev/null || fail "--apply ran git rm --cached — it must only print it"
+git -C "$MIGSUB" ls-files --error-unmatch .grove/orchestrator/CLAUDE.local.md > /dev/null 2>&1 && fail "--apply ran git add — it must only print it" || true
+[ -f "$MIGSUB/.grove/orchestrator/CLAUDE.md.bak-pre-overlay" ] || fail "mig-subst backup missing"
+
+say "conflicting brain: --apply refuses on the Review block, applies once it is removed"
+# mig-conf: this binary's seed with one guardrail line deleted (a rewrite
+# the classifier cannot explain → Review) plus an appended section (→
+# Workspace duties).
+MIGCONF="$SCRATCH/mig-conf"
+mkrepo "$MIGCONF"
+( cd "$MIGCONF" && "$GV" init --yes --label mig-conf > /dev/null )
+MIGCONF_BRAIN="$MIGCONF/.grove/orchestrator/CLAUDE.md"
+grep -q '^- \*\*Never edit repository code\.\*\*' "$MIGCONF_BRAIN" || fail "seed lost the guardrail this leg deletes — pick another line"
+sed '/^- \*\*Never edit repository code\.\*\*/d' "$MIGCONF_BRAIN" > "$SCRATCH/conf.md" && mv "$SCRATCH/conf.md" "$MIGCONF_BRAIN"
+printf '\n## Release ritual\n\nTag before the Friday demo.\n' >> "$MIGCONF_BRAIN"
+BEFORE_CONF_BRAIN="$(cksum < "$MIGCONF_BRAIN")"
+"$GV" brains --migrate --label mig-conf > "$SCRATCH/migrate-conf.txt" || fail "dry run on mig-conf exited non-zero"
+grep -q 'mig-conf *draft *1 added / 0 substituted / 1 to review' "$SCRATCH/migrate-conf.txt" || fail "mig-conf must read 1 / 0 / 1:
+$(cat "$SCRATCH/migrate-conf.txt")"
+grep -q 'resolve it first; --apply refuses while it is there' "$SCRATCH/migrate-conf.txt" || fail "dry run must warn about the Review block"
+CONF_DRAFT="$MIGCONF/.grove/orchestrator/CLAUDE.local.md.draft"
+grep -q '^## Review before applying' "$CONF_DRAFT" || fail "conflicting draft must carry the Review block"
+grep -q 'Never edit repository code' "$CONF_DRAFT" || fail "the deleted guardrail must be shown for review"
+SNAP_CONF="$(snapshot_all)"
+"$GV" brains --migrate --apply --label mig-conf --yes > "$SCRATCH/apply-conf.txt" 2>&1 && fail "--apply must refuse while the Review block is there" || true
+grep -q 'still carries a `Review before applying` block' "$SCRATCH/apply-conf.txt" || fail "Review refusal missing:
+$(cat "$SCRATCH/apply-conf.txt")"
+[ "$(snapshot_all)" = "$SNAP_CONF" ] || fail "the Review refusal changed a file"
+# The operator resolves it: here, drops the block (the deletion was a mistake).
+python3 - "$CONF_DRAFT" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p).read().split("\n")
+cut = lines.index("## Review before applying")
+open(p, "w").write("\n".join(lines[:cut]).rstrip("\n") + "\n")
+PY
+grep -q 'Review before applying' "$CONF_DRAFT" && fail "fixture: block not removed" || true
+"$GV" brains --migrate --apply --label mig-conf --yes > "$SCRATCH/apply-conf2.txt" 2>&1 || fail "--apply after resolving must succeed:
+$(cat "$SCRATCH/apply-conf2.txt")"
+cmp -s "$MIGCONF_BRAIN" "$SEEDED_BRAIN" || fail "mig-conf CLAUDE.md must be the pristine seed after --apply"
+[ "$(cksum < "$MIGCONF/.grove/orchestrator/CLAUDE.md.bak-pre-overlay")" = "$BEFORE_CONF_BRAIN" ] || fail "mig-conf backup must be the edited brain, byte for byte"
+grep -q '^## Release ritual' "$MIGCONF/.grove/orchestrator/CLAUDE.local.md" || fail "the resolved draft must be the overlay"
+grep -q '^- \*\*Never edit repository code\.\*\*' "$MIGCONF_BRAIN" || fail "the seed guardrail is back in the pristine brain"
+
+say "gv brains --json after --apply: migrated brains are pristine and carry an overlay"
+"$GV" brains --json > "$SCRATCH/brains-after.json" || fail "gv brains --json after --apply exited non-zero"
+python3 - "$SCRATCH/brains-after.json" <<'PY' || fail "post-apply rows wrong"
+import json, sys
+rows = {r["label"]: r for r in json.load(open(sys.argv[1]))["brains"]}
+ok = True
+for l in ("mig-add", "mig-subst", "mig-conf"):
+    r = rows.get(l)
+    if r is None:
+        print(f"  {l}: missing"); ok = False; continue
+    if r["state"] != "current" or not r["pristine"] or not r["overlay"] or r["overlay_lines"] < 1:
+        print(f"  {l}: want current/pristine/overlay, got {r}"); ok = False
+    if "CLAUDE.md.bak-pre-overlay" not in r.get("leftovers", []):
+        print(f"  {l}: .bak-pre-overlay must be listed as a leftover, got {r.get('leftovers')}"); ok = False
+if not ok:
+    sys.exit(1)
+PY
+
 say "empty registry is a quiet, zero-exit line"
 mkdir -p "$SCRATCH/empty"
 HOME="$SCRATCH/empty" "$GV" brains > "$SCRATCH/empty.out" || fail "gv brains on an empty registry must exit 0"
 grep -q 'no workspaces registered' "$SCRATCH/empty.out" || fail "empty registry message missing:
 $(cat "$SCRATCH/empty.out")"
 
-printf '\n\033[32mbrains E2E: PASS\033[0m — sweep classifies, reports, mutates nothing; --refresh replaces only pristine brains; --migrate writes drafts only\n'
+printf '\n\033[32mbrains E2E: PASS\033[0m — sweep classifies, reports, mutates nothing; --refresh replaces only pristine brains; --migrate writes drafts only; --apply swaps one reviewed draft in\n'

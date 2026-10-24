@@ -23,10 +23,16 @@
 // edited brain's edits into the overlay, dry run: it diffs each edited
 // brain against the archived seed its stamp names, classifies the hunks
 // and writes CLAUDE.local.md.draft beside the brain — the only file it
-// touches. `--apply` is car 04.
+// touches. `gv brains --migrate --apply --label L [--yes]` (grove-514)
+// swaps one reviewed draft in: CLAUDE.md → CLAUDE.md.bak-pre-overlay, the
+// current seed → CLAUDE.md, the draft → CLAUDE.local.md (over a stub).
+// It refuses — non-zero, no file touched — while the draft is missing or
+// still carries a Review block, or a real CLAUDE.local.md is there; a
+// tracked brain's two git commands are printed and never run.
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -56,6 +62,8 @@ func cmdBrains(args []string) error {
 	refresh := fs.Bool("refresh", false, "replace every PRISTINE stale brain in place; an edited one gets CLAUDE.md.new, an unstamped one is only reported")
 	migrate := fs.Bool("migrate", false, "dry run: draft a CLAUDE.local.md.draft from each edited brain's edits (writes nothing else)")
 	label := fs.String("label", "", "with --migrate: only this workspace (or \"(global)\")")
+	apply := fs.Bool("apply", false, "with --migrate --label L: swap the reviewed CLAUDE.local.md.draft in (CLAUDE.md → .bak-pre-overlay, seed → CLAUDE.md, draft → CLAUDE.local.md)")
+	yes := fs.Bool("yes", false, "with --apply: skip the confirm prompt")
 	parseAnywhere(fs, args)
 
 	if *migrate {
@@ -65,7 +73,16 @@ func cmdBrains(args []string) error {
 		if *asJSON {
 			return fmt.Errorf("--migrate has no --json form yet")
 		}
+		if *apply {
+			if *label == "" {
+				return fmt.Errorf("--apply migrates one workspace at a time: `%s<label>`", bootstrap.MigrateApplyCmd)
+			}
+			return cmdBrainsMigrateApply(*label, *yes, os.Stdin, os.Stdout)
+		}
 		return cmdBrainsMigrate(*label)
+	}
+	if *apply || *yes {
+		return fmt.Errorf("--apply and --yes only apply to --migrate")
 	}
 	if *label != "" {
 		return fmt.Errorf("--label only applies to --migrate")
@@ -140,6 +157,71 @@ func cmdBrainsMigrate(label string) error {
 	return sweepErr
 }
 
+// migrateProbeFor finds one labelled brain among the registry plus the
+// global one, with its git-tracked bit filled in.
+func migrateProbeFor(label string) (bootstrap.MigrateProbe, error) {
+	probes, err := brainProbes()
+	if err != nil {
+		return bootstrap.MigrateProbe{}, err
+	}
+	for _, p := range probes {
+		if p.Label != label {
+			continue
+		}
+		mp := bootstrap.MigrateProbe{BrainProbe: p}
+		if p.Label != bootstrap.GlobalBrainLabel && !p.RootGone && p.Exists {
+			mp.Tracked = brainTracked(p.Root)
+		}
+		return mp, nil
+	}
+	return bootstrap.MigrateProbe{}, fmt.Errorf("no workspace labelled %q (see `gv workspaces`; the global brain is %q)", label, bootstrap.GlobalBrainLabel)
+}
+
+// cmdBrainsMigrateApply is `gv brains --migrate --apply --label L
+// [--yes]`: plan the swap (every refusal is a non-zero exit before any
+// file moves), show the three moves, confirm unless --yes, run them, and
+// print — never run — a tracked brain's git commands. A declined prompt
+// exits 0 with nothing changed, like `gv feature land`.
+func cmdBrainsMigrateApply(label string, yes bool, in io.Reader, out io.Writer) error {
+	p, err := migrateProbeFor(label)
+	if err != nil {
+		return err
+	}
+	draft, draftOK, backupExists := bootstrap.ReadApply(p)
+	plan, err := bootstrap.PlanApply(p, draft, draftOK, backupExists, orchestrator.ClaudeMd)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s: apply %s\n", plan.Label, bootstrap.DraftFile)
+	fmt.Fprintf(out, "  1. mv %s → %s\n", plan.Brain, plan.Backup)
+	fmt.Fprintf(out, "  2. write the seed this binary carries (%s) as %s\n", bootstrap.SeedStamp(orchestrator.ClaudeMd), plan.Brain)
+	over := "→"
+	if plan.StubReplaced {
+		over = "→ (over the stub)"
+	}
+	fmt.Fprintf(out, "  3. mv %s %s %s\n", plan.Draft, over, plan.Overlay)
+	if !yes {
+		fmt.Fprint(out, "apply? [y/N] ")
+		sc := bufio.NewScanner(in)
+		if !(sc.Scan() && strings.ToLower(strings.TrimSpace(sc.Text())) == "y") {
+			fmt.Fprintln(out, "not applied — nothing changed")
+			return nil
+		}
+	}
+	if err := bootstrap.Apply(plan); err != nil {
+		return fmt.Errorf("%s: apply failed, brain restored: %w", plan.Label, err)
+	}
+	fmt.Fprintf(out, "✓ %s migrated — %s is the pristine seed, your edits live in %s; the old brain is at %s (grove never deletes it)\n",
+		plan.Label, bootstrap.BrainFile, bootstrap.OverlayFile, plan.Backup)
+	if plan.Tracked {
+		fmt.Fprintln(out, "git tracks this brain — run these yourself (grove never does):")
+		for _, c := range plan.GitCommands {
+			fmt.Fprintf(out, "  cd %s && %s\n", p.Root, c)
+		}
+	}
+	return nil
+}
+
 // brainTracked asks git whether the workspace repo versions its brain
 // (thegrid and waterhouse force-added theirs past `.grove/.gitignore`). No
 // git, no repo, or untracked all read false.
@@ -189,7 +271,7 @@ func printBrainMigrate(w io.Writer, rows []bootstrap.MigrateRow) {
 		}
 	}
 	if drafts > 0 {
-		fmt.Fprintf(w, "%d %s drafted — dry run, nothing else written; read each draft, then `%s<label>` (car 04) swaps it in.\n",
+		fmt.Fprintf(w, "%d %s drafted — dry run, nothing else written; read each draft, then `%s<label>` swaps it in.\n",
 			drafts, plural(drafts, "draft"), bootstrap.MigrateApplyCmd)
 		if review > 0 {
 			fmt.Fprintf(w, "%d %s a `%s` block — resolve it first; --apply refuses while it is there.\n",
