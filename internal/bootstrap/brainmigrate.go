@@ -106,6 +106,66 @@ func ClassifyBrain(brain, base string) Migration {
 	return m
 }
 
+// ReviewGlossary is the heading tag of a Review item born from a glossary
+// line that has no counterpart in the current seed.
+const ReviewGlossary = "Glossary"
+
+// Rebase re-keys the glossary on the current seed. The glossary is read off
+// the brain's diff against its OWN stamped seed (base), but after --apply
+// the brain is the current seed, so a From that seed no longer writes
+// points at nothing. Each such entry follows base → current's own rename
+// (the token map of that diff) when current still writes the replacement;
+// otherwise, or when two entries collapse onto one token with different
+// readings, it becomes a Review item instead of vanishing.
+func (m Migration) Rebase(base, current string) Migration {
+	cur := SeedBody(current)
+	if len(m.Glossary) == 0 {
+		return m
+	}
+	renames := map[string]string{}
+	for _, h := range hunksOf(strings.Split(SeedBody(base), "\n"), strings.Split(cur, "\n")) {
+		if len(h.Seed) != len(h.Brain) {
+			continue
+		}
+		if spans, ok := classifyPairs(h.Seed, h.Brain); ok {
+			for _, s := range spans {
+				if _, dup := renames[s.From]; !dup {
+					renames[s.From] = s.To
+				}
+			}
+		}
+	}
+	out := m
+	out.Hunks = append([]Hunk(nil), m.Hunks...)
+	out.Glossary = nil
+	reading := map[string]string{} // rebased From → To
+	orphan := func(s Subst, why string) {
+		out.Hunks = append(out.Hunks, Hunk{Class: HunkReview, Heading: ReviewGlossary,
+			Seed:  []string{fmt.Sprintf("Wherever the seed writes `%s`, read `%s`.", s.From, s.To)},
+			Brain: []string{why}})
+	}
+	for _, s := range m.Glossary {
+		from := s.From
+		if !strings.Contains(cur, from) {
+			to, ok := renames[from]
+			if !ok || !strings.Contains(cur, to) {
+				orphan(s, "(the current seed no longer writes `"+from+"` and has no replacement for it)")
+				continue
+			}
+			from = to
+		}
+		if prev, seen := reading[from]; seen {
+			if prev != s.To {
+				orphan(s, fmt.Sprintf("(the current seed writes `%s` for this too, already read as `%s`)", from, prev))
+			}
+			continue
+		}
+		reading[from] = s.To
+		out.Glossary = append(out.Glossary, Subst{From: from, To: s.To})
+	}
+	return out
+}
+
 // ── line diff ────────────────────────────────────────────────────────────
 
 type lineOp struct {
@@ -642,7 +702,7 @@ func PlanMigrate(probes []MigrateProbe, seed string, lookup func(stamp string) (
 				}
 				break
 			}
-			m := ClassifyBrain(p.Content, base)
+			m := ClassifyBrain(p.Content, base).Rebase(base, seed)
 			row.State = MigrateDraft
 			row.Added, row.Substituted, row.Review = m.Counts()
 			row.Draft = RenderDraft(p.Label, row.Have, m)
