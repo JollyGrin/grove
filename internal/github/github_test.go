@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -232,5 +233,220 @@ func TestPRForBranchErrorsWhenRetryFails(t *testing.T) {
 	pr, err := PRForBranch(dir, "some-branch")
 	if err == nil {
 		t.Fatalf("expected an error, got pr=%+v", pr)
+	}
+}
+
+// batchGH is a stub gh for the grove-541 batched fetch. It appends every
+// invocation's arguments to $GH_LOG, answers `--state open` with the
+// repo's open PRs (two branches, newest first, one duplicate head), and
+// `--head <branch>` with a merged PR for "merged-branch" or nothing. The
+// repo is told apart by the working directory's basename so one stub can
+// serve several repos.
+const batchGH = `#!/bin/sh
+echo "$(basename "$PWD") $*" >> "$GH_LOG"
+case "$*" in
+  *"--state open"*)
+    cat <<'JSON'
+[{"number": 10, "url": "https://github.com/o/r/pull/10", "state": "OPEN", "headRefName": "open-a", "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+  "statusCheckRollup": [{"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+ {"number": 9, "url": "https://github.com/o/r/pull/9", "state": "OPEN", "headRefName": "open-a", "isDraft": true, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"},
+ {"number": 11, "url": "https://github.com/o/r/pull/11", "state": "OPEN", "headRefName": "open-b", "isDraft": true, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
+  "statusCheckRollup": [{"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"}]}]
+JSON
+    ;;
+  *"--head merged-branch"*)
+    cat <<'JSON'
+[{"number": 5, "url": "https://github.com/o/r/pull/5", "state": "MERGED", "mergedAt": "2026-10-01T00:00:00Z", "isDraft": false, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"}]
+JSON
+    ;;
+  *) echo '[]' ;;
+esac
+`
+
+// ghLog reads the stub's invocation log, one line per call.
+func ghLog(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+func countContaining(lines []string, sub string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFetchAllOneListPerRepo (grove-541): N tracked branches in one repo
+// cost ONE `--state open` list, matched to branches locally, plus a
+// `--head` fallback only for the branches the list did not cover — the
+// merged one (which the fallback must still report MERGED) and the one
+// with no PR at all. The newest open PR wins when a branch has two.
+func TestFetchAllOneListPerRepo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo1")
+	os.Mkdir(repo, 0o755)
+	log := filepath.Join(dir, "gh.log")
+	t.Setenv("GH_LOG", log)
+	stubGH(t, dir, batchGH)
+
+	lookups := map[string][2]string{
+		"t-a":      {repo, "open-a"},
+		"t-b":      {repo, "open-b"},
+		"t-merged": {repo, "merged-branch"},
+		"t-none":   {repo, "no-pr-branch"},
+	}
+	prs, unknown := FetchAll(lookups)
+	if len(unknown) != 0 {
+		t.Fatalf("unknown = %v, want none", unknown)
+	}
+	if pr := prs["t-a"]; pr == nil || pr.Number != 10 || pr.CI != "pass" || pr.Draft {
+		t.Errorf("t-a = %+v, want #10 OPEN CI pass (newest open PR for the branch)", pr)
+	}
+	if pr := prs["t-b"]; pr == nil || pr.Number != 11 || pr.CI != "fail" || pr.Mergeable != "CONFLICTING" {
+		t.Errorf("t-b = %+v, want #11 CONFLICTING CI fail", pr)
+	}
+	if pr := prs["t-merged"]; pr == nil || pr.Number != 5 || pr.State != "MERGED" {
+		t.Errorf("t-merged = %+v, want #5 MERGED via the per-branch fallback", pr)
+	}
+	if _, ok := prs["t-none"]; ok {
+		t.Errorf("t-none in prs = %+v, want absent (no PR)", prs["t-none"])
+	}
+
+	lines := ghLog(t, log)
+	if n := countContaining(lines, "--state open"); n != 1 {
+		t.Errorf("open-PR list calls = %d, want 1:\n%s", n, strings.Join(lines, "\n"))
+	}
+	if n := countContaining(lines, "--head"); n != 2 {
+		t.Errorf("--head fallback calls = %d, want 2 (merged-branch, no-pr-branch only):\n%s", n, strings.Join(lines, "\n"))
+	}
+	for _, b := range []string{"open-a", "open-b"} {
+		if countContaining(lines, "--head "+b) != 0 {
+			t.Errorf("per-branch call issued for %s, which the list already covered", b)
+		}
+	}
+}
+
+// TestFetchAllOneListPerDistinctRepo: lookups spanning two repo paths (two
+// workspaces, or one workspace with two repos) cost one list each, and
+// two tasks sharing a repo path share its list.
+func TestFetchAllOneListPerDistinctRepo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	r1, r2 := filepath.Join(dir, "repo1"), filepath.Join(dir, "repo2")
+	os.Mkdir(r1, 0o755)
+	os.Mkdir(r2, 0o755)
+	log := filepath.Join(dir, "gh.log")
+	t.Setenv("GH_LOG", log)
+	stubGH(t, dir, batchGH)
+
+	prs, unknown := FetchAll(map[string][2]string{
+		"ws1-a": {r1, "open-a"},
+		"ws1-b": {r1, "open-b"},
+		"ws2-a": {r2, "open-a"},
+	})
+	if len(unknown) != 0 || len(prs) != 3 {
+		t.Fatalf("prs=%v unknown=%v, want 3 PRs and no unknown", prs, unknown)
+	}
+	lines := ghLog(t, log)
+	if n := countContaining(lines, "--state open"); n != 2 {
+		t.Errorf("open-PR list calls = %d, want 2 (one per repo):\n%s", n, strings.Join(lines, "\n"))
+	}
+	if countContaining(lines, "repo1 ") != 1 || countContaining(lines, "repo2 ") != 1 {
+		t.Errorf("want exactly one call in each repo dir:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestFetchAllListFailureMarksRepoUnknown: when the repo's list fails
+// (both with and without CI fields) every key of that repo is unknown —
+// never "no PR" — and no per-branch fallback is attempted for it. The
+// other repo is unaffected.
+func TestFetchAllListFailureMarksRepoUnknown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	bad, good := filepath.Join(dir, "bad"), filepath.Join(dir, "good")
+	os.Mkdir(bad, 0o755)
+	os.Mkdir(good, 0o755)
+	log := filepath.Join(dir, "gh.log")
+	t.Setenv("GH_LOG", log)
+	stubGH(t, dir, `#!/bin/sh
+echo "$(basename "$PWD") $*" >> "$GH_LOG"
+case "$(basename "$PWD")" in
+  bad) echo 'boom' >&2; exit 1 ;;
+esac
+`+strings.TrimPrefix(batchGH, "#!/bin/sh\necho \"$(basename \"$PWD\") $*\" >> \"$GH_LOG\"\n"))
+
+	prs, unknown := FetchAll(map[string][2]string{
+		"bad-a":    {bad, "open-a"},
+		"bad-none": {bad, "no-pr-branch"},
+		"good-a":   {good, "open-a"},
+	})
+	for _, k := range []string{"bad-a", "bad-none"} {
+		if _, ok := unknown[k]; !ok {
+			t.Errorf("%s not in unknown (%v) — a failed list must never read as no PR", k, unknown)
+		}
+		if _, ok := prs[k]; ok {
+			t.Errorf("%s in prs, want absent", k)
+		}
+	}
+	if pr := prs["good-a"]; pr == nil || pr.Number != 10 {
+		t.Errorf("good-a = %+v, want #10", pr)
+	}
+	if _, ok := unknown["good-a"]; ok {
+		t.Errorf("good-a unknown, want resolved")
+	}
+	lines := ghLog(t, log)
+	if n := countContaining(lines, "bad --head"); n != 0 {
+		t.Errorf("fallback calls in the failed repo = %d, want 0:\n%s", n, strings.Join(lines, "\n"))
+	}
+}
+
+// TestFetchAllListDegradesCIOn403 (grove-451 carried to the batch): a
+// token that cannot read statusCheckRollup gets the open PRs from the
+// retried fact-only list with CI "unknown", instead of the whole repo
+// landing in unknown.
+func TestFetchAllListDegradesCIOn403(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub script is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "gh.log")
+	t.Setenv("GH_LOG", log)
+	stubGH(t, dir, `#!/bin/sh
+echo "$*" >> "$GH_LOG"
+case "$*" in
+  *statusCheckRollup*) echo 'GraphQL: Resource not accessible by integration (statusCheckRollup)' >&2; exit 1 ;;
+  *"--state open"*)
+    echo '[{"number": 10, "url": "u", "state": "OPEN", "headRefName": "open-a", "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}]' ;;
+  *) echo '[]' ;;
+esac
+`)
+	prs, unknown := FetchAll(map[string][2]string{"t-a": {dir, "open-a"}})
+	if len(unknown) != 0 {
+		t.Fatalf("unknown = %v, want none", unknown)
+	}
+	pr := prs["t-a"]
+	if pr == nil || pr.Number != 10 {
+		t.Fatalf("t-a = %+v, want #10", pr)
+	}
+	if pr.CI != "unknown" {
+		t.Errorf("CI = %q, want unknown on the degraded list", pr.CI)
+	}
+	lines := ghLog(t, log)
+	if n := countContaining(lines, "--state open"); n != 2 {
+		t.Errorf("list calls = %d, want 2 (full, then fact-only retry):\n%s", n, strings.Join(lines, "\n"))
 	}
 }

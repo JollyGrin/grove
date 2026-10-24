@@ -42,22 +42,6 @@
 
 ## Claude Code behavior (verified in ovs)
 
-- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
-  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
-  and `.claude/settings.local.json` never reaches a fresh worktree**
-  (grove-437). Rule: treat auto memory as one surface per repo;
-  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
-  reads the default location rather than relocating it. A headless
-  `claude -p` run carries the auto-memory system prompt, so it is a valid
-  probe of whether a kickoff makes workers write memory. Rule:
-  claude-code-facts §Profiles.
-- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
-  block itself, so a kickoff's "do not ask for confirmation" line is a
-  duplicate** (grove-433). Rule: templates state goals, constraints and
-  verification only; before ever adding the paragraph back, grep a real
-  worker transcript's `prompt_snapshot` for "operating autonomously".
-  Rule: claude-code-facts §System prompt.
-
 ## tmux / git / detector internals (verified against source)
 
 - 2026-10-19 (grove-531, tmux 3.6a): **A window with `window-size manual` ignores a client that attaches to it** — a 100x30 pty client attached straight to a slot-pinned 139x50 hidden chat sees a 139x50 window clipped to its screen; `set -wu window-size` makes it follow the client at once (100x29). A SESSION hook (`set-hook -t <@win> client-attached …`, no `-w`) fires for a direct attach; `client-session-changed` fires on attach AND on `switch-client` INTO the session, but nothing fires on the session a client switches AWAY from; `client-detached` fires on detach, and a `run-shell -b gv …` from it already reads `#{session_attached}` = 0. Hook values read as formats like any option (`#{m:*sync-sizes*,#{client-detached}}` tells grove's hook from an operator's global one), and a session-level hook shadows a global hook of the same name for that session. `show-hooks -g` lists every hook NAME, set or not — grep for a value, not the name. `set-hook <name> …` without an `[index]` replaces the whole array (a `[1]` set earlier is gone). Promoted: tmux-discipline §3 (per-session hooks).
@@ -98,6 +82,7 @@
 
 ## Go / CLI
 
+- **2026-10-24 · `gh pr list` GraphQL cost barely scales with `--limit`** (grove-541). Measured with gh's own `PullRequestList` query plus `rateLimit { cost }`: `--limit 1 --head <branch>` with statusCheckRollup+comments = 1 point, `--limit 30` = 1, `--limit 100` = 3 — not the ~200 the "potential nodes / 100" rule of thumb predicts for 100 rows × 100 comments × 100 contexts. The quota `gh api rate_limit` reports is points, so one 100-row list per repo replaces N per-branch lookups at the cost of four. Rule: measure a GraphQL query's cost with `rateLimit { cost }` in the query itself (`GH_DEBUG=api` shows gh's query text to copy); `rate_limit` deltas are polluted by every other cockpit polling at the same time.
 - **`log-append.py rotate` half-commits when it hits an undated row** (2026-10-11, grove-474). With TASKS.md over its cap, rotate wrote the oldest row into `docs/archive/` and then `sys.exit`ed on the next, undated row, leaving TASKS.md unchanged. The rerun archived that first row again, so it appeared twice. Fix: give each undated row a date from `git log -S'<row text>' --format=%cs -- TASKS.md`, rerun rotate, then check the archive diff for duplicates. Its bare-date fallback also raised IndexError (no capture group) until grove-471 fixed `row_date`.
 - **2026-10-11 · The no-secrets PreToolUse guard is not in the repo and is armed only on contributor lanes** (grove-470). `~/.config/grove/hooks/no-secrets-on-contrib.sh` lives in the operator's config dir, and its first line exits 0 unless `GROVE_DATA_LANE=contributor` — a value only a model profile's env map exports. Accounts never apply under a profile (claude-accounts design §Decision 1), so an account-pinned worker never runs with the guard armed: adding `CLAUDE_CODE_OAUTH_TOKEN` to its deny pattern (design §Decision 4) defends only a contributor-lane worker that inherited the token some other way. It is one operator's private file, so the patch is not grove's to ship (no doctor row either: a repo-agnostic binary must not hardcode it). Rule: before citing a hook as a guard, read its arming condition — a guard that exits early on your lane is not one.
 - **2026-10-07 · App-token 403 cascade (grove-451).** One bundled `--json` field took down two unrelated features: a GitHub App token can't read `statusCheckRollup`, so the single `gh pr list` that served both the ls/TUI CI column and the `gv done` merge gate failed as a whole — CI columns went blank AND every `gv done` on a genuinely merged ticket reported "no PR found" and demanded `--force`. The gate never looked at CI; it just rode the same query. Rule: a verdict-bearing query asks only for the fields its verdict needs; display queries degrade field-by-field (retry without the privileged field, render unknown) rather than failing the fetch; and a command failure must never be reported with the words of a successful empty result.

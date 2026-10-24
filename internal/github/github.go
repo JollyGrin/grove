@@ -67,6 +67,7 @@ const (
 type ghPR struct {
 	Number     int    `json:"number"`
 	URL        string `json:"url"`
+	HeadRef    string `json:"headRefName"` // batched list only (grove-541)
 	State      string `json:"state"`
 	MergedAt   string `json:"mergedAt"`
 	IsDraft    bool   `json:"isDraft"`
@@ -226,12 +227,67 @@ func Merged(repoDir, branch string) (bool, *PR, error) {
 	return pr.State == "MERGED", pr, nil
 }
 
-// FetchAll fans PR lookups out concurrently (ls refresh path). unknown
-// carries a key whenever its lookup errored or never returned before the
-// timeout — the transition engine (part 2) must never emit a transition
-// from a failed lookup, so "lookup failed" has to stay distinguishable
-// from "no PR" (a key in neither map). A key present in prs is never also
-// in unknown.
+// openListLimit is the page size of the per-repo open-PR list. One page
+// is one GraphQL request; measured at 3 rate-limit points for 100 rows
+// against 1 for a single `--head` lookup (2026-10-24), so the batch wins
+// from four tracked branches up. Open PRs past the page fall through to
+// the per-branch fallback, so the cap costs calls, never correctness.
+const openListLimit = "100"
+
+// listOpen runs ONE `gh pr list --state open` for the repo and indexes the
+// rows by head branch — the newest PR per branch, which is also what
+// `--head <branch> --limit 1` returns (gh orders by CREATED_AT desc). It
+// degrades the CI fields the way PRForBranch does (grove-451): a token
+// that cannot read statusCheckRollup gets the rows with CI "unknown".
+func listOpen(repoDir string) (map[string]*PR, error) {
+	rows, err := listOpenRows(repoDir, "headRefName,"+factFields+","+ciFields)
+	ciUnknown := false
+	if err != nil {
+		rows, err = listOpenRows(repoDir, "headRefName,"+factFields)
+		if err != nil {
+			return nil, err
+		}
+		ciUnknown = true
+	}
+	byHead := make(map[string]*PR, len(rows))
+	for i := range rows {
+		if _, seen := byHead[rows[i].HeadRef]; seen {
+			continue
+		}
+		pr := fromGH(&rows[i])
+		if ciUnknown {
+			pr.CI = "unknown"
+		}
+		byHead[rows[i].HeadRef] = pr
+	}
+	return byHead, nil
+}
+
+func listOpenRows(repoDir, fields string) ([]ghPR, error) {
+	out, err := gh(repoDir, "pr", "list", "--state", "open", "--limit", openListLimit, "--json", fields)
+	if err != nil {
+		return nil, err
+	}
+	var rows []ghPR
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// FetchAll resolves every lookup (key → {repoDir, branch}) with one open-PR
+// list per distinct repoDir (grove-541) plus a per-branch PRForBranch
+// fallback only for branches the list did not cover — those are the
+// merged/closed PRs the transition engine must keep seeing, or open PRs
+// past the page. Lookups across workspaces that share a repo path share
+// its one call; a remote host's tasks are fetched by that host, not here.
+//
+// unknown carries a key whenever its lookup errored or never returned
+// before the timeout — a failed repo list puts EVERY key of that repo in
+// unknown, and the transition engine (grove-251) must never emit a
+// transition from a failed lookup, so "lookup failed" has to stay
+// distinguishable from "no PR" (a key in neither map). A key present in
+// prs is never also in unknown.
 func FetchAll(lookups map[string][2]string) (prs map[string]*PR, unknown map[string]error) {
 	type res struct {
 		key string
@@ -239,11 +295,33 @@ func FetchAll(lookups map[string][2]string) (prs map[string]*PR, unknown map[str
 		err error
 	}
 	ch := make(chan res, len(lookups))
+	byRepo := map[string]map[string]string{} // repoDir → key → branch
 	for key, rb := range lookups {
-		go func(key, repoDir, branch string) {
-			pr, err := PRForBranch(repoDir, branch)
-			ch <- res{key, pr, err}
-		}(key, rb[0], rb[1])
+		if byRepo[rb[0]] == nil {
+			byRepo[rb[0]] = map[string]string{}
+		}
+		byRepo[rb[0]][key] = rb[1]
+	}
+	for repoDir, keys := range byRepo {
+		go func(repoDir string, keys map[string]string) {
+			open, err := listOpen(repoDir)
+			if err != nil {
+				for key := range keys {
+					ch <- res{key, nil, err}
+				}
+				return
+			}
+			for key, branch := range keys {
+				if pr, ok := open[branch]; ok {
+					ch <- res{key, pr, nil}
+					continue
+				}
+				go func(key, branch string) {
+					pr, err := PRForBranch(repoDir, branch)
+					ch <- res{key, pr, err}
+				}(key, branch)
+			}
+		}(repoDir, keys)
 	}
 	prs = map[string]*PR{}
 	unknown = map[string]error{}
