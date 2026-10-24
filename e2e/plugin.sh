@@ -250,6 +250,22 @@ assert r['skills'] == ['dummy-skill'], r['skills']
 assert [(c['skill'], c['date']) for c in r['candidates']] == [('dummy-skill', '$TODAY')], r['candidates']
 "
 
+# 2e. READ: the brain sweep (grove-236; grove-511 fields). Pure read.
+"$GV" brains --json > "$OUT/brains.json"
+python3 -c "
+import json
+data = json.load(open('$OUT/brains.json'))
+assert data['schema_version'] == 1, data
+rows = {r['label']: r for r in data['brains']}
+assert '(global)' in rows, rows.keys()  # grove-511: the brain used outside any workspace
+for r in rows.values():
+    for f in ('label', 'root', 'state', 'pristine', 'have', 'want', 'command', 'note', 'action', 'leftovers'):
+        assert f in r, (f, r)
+    assert r['state'] in ('current', 'stale', 'unstamped', 'absent', 'missing-root'), r
+    assert isinstance(r['pristine'], bool) and isinstance(r['leftovers'], list), r
+    assert r['action'] == '', ('plain gv brains must not act', r)
+"
+
 # 3. REACT: tail events.jsonl — read-only, never written by a plugin.
 tail -n 50 "$ROOT/.grove/state/events.jsonl" > "$OUT/events.tail"
 python3 -c "

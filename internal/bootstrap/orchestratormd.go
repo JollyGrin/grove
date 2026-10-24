@@ -52,15 +52,19 @@ const (
 	ActionNone   BrainAction = "none"   // nothing to do
 	ActionNew    BrainAction = "new"    // write CLAUDE.md.new beside it
 	ActionReport BrainAction = "report" // say so; touch nothing
+	// ActionRefreshed is `gv brains --refresh` only (grove-511): a stale
+	// brain grove can PROVE it wrote unchanged is replaced in place.
+	ActionRefreshed BrainAction = "refreshed"
 )
 
 // BrainPlan is the decision for one brain: never any I/O.
 type BrainPlan struct {
-	State  BrainState
-	Action BrainAction
-	Have   string // the stamp found in the brain ("" when absent/unstamped)
-	Want   string // the current seed's stamp
-	Note   string // the one-line human report
+	State    BrainState
+	Action   BrainAction
+	Pristine bool   // the brain is byte-for-byte a seed grove wrote (see Pristine)
+	Have     string // the stamp found in the brain ("" when absent/unstamped)
+	Want     string // the current seed's stamp
+	Note     string // the one-line human report
 }
 
 // seedBody is a seed or brain with every stamp line and trailing blank
@@ -105,6 +109,20 @@ func BrainStamp(content string) string {
 	return stamp
 }
 
+// Pristine reports whether a brain is exactly what grove wrote: the stamp
+// it carries is the hash of its own body, so nobody edited it since (an
+// edit anywhere outside the stamp line moves the hash; an edit to the
+// stamp line makes it a different seed's stamp). It needs no extra state
+// — the stamp IS the record. Unstamped content is never pristine.
+//
+// A pristine brain is grove's own file, which is what lets `gv brains
+// --refresh` (grove-511) replace it in place without a .new or a backup:
+// the old bytes are reproducible from the seed history by stamp.
+func Pristine(content string) bool {
+	have := BrainStamp(content)
+	return have != "" && have == SeedStamp(content)
+}
+
 // PlanBrain is the whole decision, pure: what to do about a brain whose
 // content is `content` (exists=false when there is none) given `seed`.
 // force only ever widens the hand-managed case into a .new write — it
@@ -115,13 +133,13 @@ func PlanBrain(content string, exists bool, seed string, force bool) BrainPlan {
 		return BrainPlan{State: BrainAbsent, Action: ActionSeed, Want: want,
 			Note: "installed the orchestrator brain (seed " + want + ")"}
 	}
-	have := BrainStamp(content)
+	have, pristine := BrainStamp(content), Pristine(content)
 	switch {
 	case have == want:
-		return BrainPlan{State: BrainCurrent, Action: ActionNone, Have: have, Want: want,
+		return BrainPlan{State: BrainCurrent, Action: ActionNone, Pristine: pristine, Have: have, Want: want,
 			Note: "orchestrator brain up to date (seed " + want + ")"}
 	case have != "":
-		return BrainPlan{State: BrainStale, Action: ActionNew, Have: have, Want: want,
+		return BrainPlan{State: BrainStale, Action: ActionNew, Pristine: pristine, Have: have, Want: want,
 			Note: fmt.Sprintf("seed moved %s → %s — wrote %s.new beside your brain; grove never overwrites it", have, want, BrainFile)}
 	case force:
 		return BrainPlan{State: BrainUnstamped, Action: ActionNew, Want: want,

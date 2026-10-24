@@ -189,23 +189,29 @@ Updating the host later: `gv update` is a GitHub-releases self-updater
 and errors on a private source install — use
 `ssh <host> 'cd ~/git/grove && git pull --ff-only && go install ./cmd/gv'`.
 
-**After `gv update --yes` on a host, read the brain sweep it prints and
-refresh what it names** (grove-236). A new binary carries a new
-orchestrator seed, so every workspace on that host is suddenly running an
-older brain; the sweep runs only when the update actually replaced the
-binary and lists each workspace that is behind with the exact command —
-run from that workspace's root, over the same ssh hop:
+**After `gv update --yes` on a host, read the brain refresh report it
+prints and act on what is left** (grove-236, grove-511). A new binary
+carries a new orchestrator seed, so every workspace on that host is
+suddenly running an older brain. When the update actually replaced the
+binary it runs `gv brains --refresh` itself: every PRISTINE stale brain
+(every registered workspace plus the host's global `(global)` brain) is
+replaced in place and reported as done; whatever it could not touch is
+listed with the exact command, over the same ssh hop:
 
 ```bash
-ssh <host> 'gv update --yes'                 # the sweep prints at the end
-ssh <host> 'gv brains'                       # or read it any time, pure read
-ssh <host> 'cd <root> && gv init --only orchestrator-md'
+ssh <host> 'gv update --yes'                 # refreshes pristine brains, prints the report
+ssh <host> 'gv brains'                       # read the state any time, pure read
+ssh <host> 'gv brains --refresh'             # rerun the refresh by hand (grove-511)
+ssh <host> 'cd <root> && gv init --only orchestrator-md'   # an EDITED brain: CLAUDE.md.new to diff
 ```
 
 The sweep reads the host's OWN `~/.config/grove/registry.yaml`, so
-running it over ssh reports that host's workspaces — there is no
-cross-host push, and nothing is ever overwritten: the refresh drops
-`CLAUDE.md.new` beside the brain for you to diff.
+running it over ssh refreshes that host's workspaces — there is no
+cross-host push. The refresh overwrites only a brain grove can prove it
+wrote unchanged (the stamp is the hash of the body — `pristine` in the
+report); an edited brain gets `CLAUDE.md.new` beside it for you to diff,
+an unstamped one is only reported, and the `.new` / `.bak-*` leftovers it
+lists are yours to delete, never grove's.
 
 ## Sidecars: user systemd units
 
@@ -377,11 +383,11 @@ running process without it noticing — the old code keeps running until you
 restart it:
 
 ```bash
-ssh grove-host 'gv update --yes'                        # read the brain sweep it prints
+ssh grove-host 'gv update --yes'                        # read the brain refresh report it prints
 ssh grove-host 'systemctl --user restart gv-chat.service gv-supervise.service'
 ```
 
-Same rule for both units. (The brain sweep from `gv update --yes` is a
+Same rule for both units. (The brain refresh from `gv update --yes` is a
 separate follow-up — see the workspace-twins section above.)
 
 ## Mac side

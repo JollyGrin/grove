@@ -123,7 +123,7 @@ func Core(env Env) []Connection {
 			Severity:    SeverityWarn,
 			RequiredFor: []string{"ui"},
 			Title:       "orchestrator brain up to date",
-			Fix:         "gv init --only orchestrator-md",
+			Fix:         "gv brains --refresh",
 			Check:       checkOrchestratorBrain,
 		})
 	}

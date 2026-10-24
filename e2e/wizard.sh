@@ -4,7 +4,8 @@
 # config survives --yes byte-identical, --only hooks wires the scratch
 # settings.json exactly once (ovs entries preserved), --yes never spawns the
 # agents-md run, --agents-md with a stub worker writes AGENTS.md, the
-# orchestrator brain refresh seeds/stamps/never-overwrites (grove-190),
+# orchestrator brain refresh seeds/stamps/never-overwrites (grove-190) and
+# `gv brains --refresh` replaces only a pristine brain in place (grove-511),
 # and doctor --json renders the connections board.
 # tmux: never talks to a tmux server (doctor only checks tmux is on PATH), so no tmux isolation needed.
 set -euo pipefail
@@ -134,6 +135,36 @@ $(cat "$SCRATCH/orch2.out")"
 grep -q 'orchestrator brain up to date' "$SCRATCH/orchdoc.txt" || fail "doctor must carry the brain row:
 $(cat "$SCRATCH/orchdoc.txt")"
 grep -q 'seed moved' "$SCRATCH/orchdoc.txt" || fail "doctor must flag the stale stamp"
+grep -q -- '→ gv brains --refresh' "$SCRATCH/orchdoc.txt" || fail "doctor's fix must name gv brains --refresh (grove-511):
+$(cat "$SCRATCH/orchdoc.txt")"
+# grove-511: `gv brains --refresh` leaves an EDITED stale brain alone too —
+# it only rewrites the .new — and replaces a PRISTINE one in place.
+rm -f "$BRAIN.new"
+"$GV" brains --refresh > "$SCRATCH/orchref.out" 2>&1 || fail "gv brains --refresh exited non-zero:
+$(cat "$SCRATCH/orchref.out")"
+[ "$(cat "$BRAIN")" = "$BEFORE" ] || fail "gv brains --refresh overwrote an edited brain"
+[ -f "$BRAIN.new" ] || fail "gv brains --refresh must write .new beside an edited brain"
+grep -q 'wrote CLAUDE.md.new' "$SCRATCH/orchref.out" || fail "refresh must report the .new:
+$(cat "$SCRATCH/orchref.out")"
+rm -f "$BRAIN.new"
+python3 - "$BRAIN" <<'PY'
+import hashlib, sys
+# An older seed, stamped exactly as grove stamps: pristine, but stale.
+body = "# Orchestrator\n\nan older seed body"
+stamp = hashlib.sha256(body.encode()).hexdigest()[:12]
+open(sys.argv[1], "w").write(body + "\n\n<!-- grove-seed: " + stamp + " -->\n")
+PY
+"$GV" brains > "$SCRATCH/orchplain.out" 2>&1 || fail "gv brains exited non-zero"
+grep -q 'pristine' "$SCRATCH/orchplain.out" || fail "plain sweep must call the older seed pristine:
+$(cat "$SCRATCH/orchplain.out")"
+"$GV" brains --refresh > "$SCRATCH/orchref2.out" 2>&1 || fail "gv brains --refresh (pristine) exited non-zero"
+grep -q 'replaced in place' "$SCRATCH/orchref2.out" || fail "pristine stale brain must be replaced in place:
+$(cat "$SCRATCH/orchref2.out")"
+[ ! -f "$BRAIN.new" ] || fail "a pristine refresh must not write .new"
+[ "$(grep -c 'grove-seed' "$BRAIN")" = 1 ] || fail "replaced brain must carry exactly one stamp"
+"$GV" init --only orchestrator-md --yes > "$SCRATCH/orch2b.out" 2>&1
+grep -q 'up to date' "$SCRATCH/orch2b.out" || fail "replaced brain must read current:
+$(cat "$SCRATCH/orch2b.out")"
 # A hand-managed brain (no stamp at all) is reported, never rewritten.
 rm -f "$BRAIN.new"; printf '# my own brain\n' > "$BRAIN"
 "$GV" init --only orchestrator-md --yes > "$SCRATCH/orch3.out" 2>&1
