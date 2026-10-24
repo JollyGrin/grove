@@ -229,7 +229,7 @@ func TestPrintBrainMigrate(t *testing.T) {
 		probe("handmade", "# mine\n", false),
 		{BrainProbe: bootstrap.BrainProbe{Label: "(global)", Root: "/g", Dir: "/g", Exists: true,
 			Content: "other seed, edited\n<!-- grove-seed: 000000000000 -->\n", Leftovers: []string{"CLAUDE.md.new"}}},
-	}, "# newer seed\n", func(s string) (string, bool) {
+	}, "# newer seed\n\nthe operator\n", func(s string) (string, bool) {
 		if s == stamp {
 			return base, true
 		}

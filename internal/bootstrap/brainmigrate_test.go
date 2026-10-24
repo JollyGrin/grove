@@ -224,7 +224,9 @@ func migrateProbe(label, content string) MigrateProbe {
 
 func TestPlanMigrateRows(t *testing.T) {
 	base := fixture(t, "base.md")
-	seed := "# newer seed\n\nnothing in common\n"
+	// still writes the tokens the brains substitute, or glossary lines would
+	// be orphans (grove-593)
+	seed := "# newer seed\n\nthe operator, DEV-X\n"
 	oldStamp := SeedStamp(base)
 	lookup := func(s string) (string, bool) {
 		if s == oldStamp {
@@ -347,5 +349,60 @@ func TestMigrateSweepWritesOnlyTheDraft(t *testing.T) {
 	}
 	if entries, _ = os.ReadDir(dir); len(entries) != len(files)+1 {
 		t.Errorf("second run added files: %v", entries)
+	}
+}
+
+// A brain on an archived stamp substitutes a token the CURRENT seed has
+// since renamed: the draft's Glossary must be keyed on a token the current
+// seed writes, or the line goes to Review — never on text --apply removes.
+func TestRebaseGlossaryKeysExistInCurrentSeed(t *testing.T) {
+	old := fixture(t, "base.md")
+	renamed := StampSeed(strings.ReplaceAll(old, "DEV-X", "<task>"))
+	gone := StampSeed(strings.ReplaceAll(old, "DEV-X", "whichever ticket the operator names today"))
+	cases := []struct {
+		name       string
+		current    string
+		wantGloss  []Subst
+		wantReview int
+	}{
+		{"unchanged seed", StampSeed(old), []Subst{{"the operator", "Dean"}, {"DEV-X", "grove-N"}}, 0},
+		{"token renamed", renamed, []Subst{{"the operator", "Dean"}, {"<task>", "grove-N"}}, 0},
+		{"no counterpart", gone, []Subst{{"the operator", "Dean"}}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := ClassifyBrain(asBrain(fixture(t, "substituted.md"), old), old).Rebase(old, c.current)
+			if len(m.Glossary) != len(c.wantGloss) {
+				t.Fatalf("glossary %+v, want %+v", m.Glossary, c.wantGloss)
+			}
+			for i, w := range c.wantGloss {
+				if m.Glossary[i] != w {
+					t.Errorf("glossary[%d] = %+v, want %+v", i, m.Glossary[i], w)
+				}
+			}
+			for _, s := range m.Glossary {
+				if !strings.Contains(SeedBody(c.current), s.From) {
+					t.Errorf("glossary From %q is not in the current seed", s.From)
+				}
+			}
+			if _, _, r := m.Counts(); r != c.wantReview {
+				t.Errorf("review = %d, want %d: %+v", r, c.wantReview, m.Hunks)
+			}
+		})
+	}
+}
+
+// Two stamped tokens that the current seed folded into one placeholder
+// with different readings keep the first and review the second.
+func TestRebaseCollapsedTokensReview(t *testing.T) {
+	old := "intro\n\nrun `gv grab DEV-X` now\nand `gv done DEV-42` after\nrun `gv grab DEV-X` again\nand `gv done DEV-42` too\n"
+	cur := StampSeed(strings.NewReplacer("DEV-X", "<task>", "DEV-42", "<task>").Replace(old))
+	brain := asBrain(strings.NewReplacer("DEV-X", "grove-N", "DEV-42", "grove-42").Replace(old), old)
+	m := ClassifyBrain(brain, old).Rebase(old, cur)
+	if len(m.Glossary) != 1 || m.Glossary[0] != (Subst{"<task>", "grove-N"}) {
+		t.Fatalf("glossary %+v", m.Glossary)
+	}
+	if _, _, r := m.Counts(); r != 1 {
+		t.Fatalf("want one review item: %+v", m.Hunks)
 	}
 }
