@@ -162,14 +162,17 @@ func ExtractOpIDPrefix(args []string) (opID string, rest []string) {
 // ssh hands the remote command to the remote login shell as ONE string,
 // so every passthrough arg is single-quoted — `--brief "with spaces"`
 // arrives on the host as the same single argument it was here. BatchMode
-// keeps a missing key from hanging on a password prompt.
+// keeps a missing key from hanging on a password prompt; ConnectTimeout
+// keeps a sleeping or dead host from hanging every --host verb for the
+// TCP default (~75 s on macOS), and ServerAliveInterval notices a host
+// that vanishes mid-command (grove-571).
 func Argv(h *config.Host, verb string, args []string) []string {
 	parts := make([]string, 0, len(args)+2)
 	parts = append(parts, Quote(h.GV), verb)
 	for _, a := range args {
 		parts = append(parts, Quote(a))
 	}
-	return []string{"ssh", "-o", "BatchMode=yes", h.SSH, "--", strings.Join(parts, " ")}
+	return []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", h.SSH, "--", strings.Join(parts, " ")}
 }
 
 // Quote single-quotes s for a POSIX shell; a token of plain safe

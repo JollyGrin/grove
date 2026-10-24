@@ -1932,9 +1932,11 @@ func openURL(url string) string {
 	if url == "" {
 		return "no URL"
 	}
-	if err := exec.Command("open", url).Start(); err != nil {
+	cmd := exec.Command("open", url)
+	if err := cmd.Start(); err != nil {
 		return err.Error()
 	}
+	go func() { _ = cmd.Wait() }() // reap — an unwaited child is a zombie until the TUI exits (grove-571)
 	return "opened " + url
 }
 

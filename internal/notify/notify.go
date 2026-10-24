@@ -35,14 +35,26 @@ func capRunes(body string, n int) string {
 
 // Desktop pings via terminal-notifier, best-effort. Fired from the hook
 // itself so it works with the TUI closed.
-func Desktop(title, body string) {
+func Desktop(title, body string) { desktop(title, body) }
+
+// desktop is Desktop returning the started child (nil when none was),
+// so a test can watch it get reaped. Start without Wait leaves a zombie
+// for the parent's lifetime — the hours-long cockpit supervisor pushes
+// from a loop, and 14 of them piled up under one dash (grove-571) — so
+// every fire-and-forget child is waited for in a goroutine.
+func desktop(title, body string) *exec.Cmd {
 	if _, err := exec.LookPath("terminal-notifier"); err != nil {
-		return
+		return nil
 	}
 	body = capRunes(body, 120)
-	_ = exec.Command("terminal-notifier",
+	cmd := exec.Command("terminal-notifier",
 		"-title", "gv: "+title, "-message", body,
-		"-group", "grove", "-sender", "com.apple.Terminal").Start()
+		"-group", "grove", "-sender", "com.apple.Terminal")
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+	go func() { _ = cmd.Wait() }() // reap; the exit status is nobody's business
+	return cmd
 }
 
 // Push sends a phone push, best-effort. Synchronous by necessity — a

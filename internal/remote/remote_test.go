@@ -103,17 +103,20 @@ func TestArgv(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := Argv(h, c.verb, c.args)
-		prefix := []string{"ssh", "-o", "BatchMode=yes", "dean@grove-host", "--"}
-		if !reflect.DeepEqual(got[:5], prefix) || len(got) != 6 {
+		// grove-571: ConnectTimeout bounds a dead host at 10 s (TCP default
+		// is ~75 s on macOS); ServerAliveInterval catches one that vanishes
+		// mid-command. Order is asserted — ssh takes the first -o it sees.
+		prefix := []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "dean@grove-host", "--"}
+		if !reflect.DeepEqual(got[:9], prefix) || len(got) != 10 {
 			t.Fatalf("Argv(%s %v) = %v, want prefix %v + one command string", c.verb, c.args, got, prefix)
 		}
-		if got[5] != c.want {
-			t.Errorf("Argv(%s %v) remote cmd = %q, want %q", c.verb, c.args, got[5], c.want)
+		if got[9] != c.want {
+			t.Errorf("Argv(%s %v) remote cmd = %q, want %q", c.verb, c.args, got[9], c.want)
 		}
 	}
 	// default gv
-	if got := Argv(&config.Host{SSH: "h", GV: "gv"}, "ls", nil); got[5] != "gv ls" {
-		t.Errorf("bare gv: %q", got[5])
+	if got := Argv(&config.Host{SSH: "h", GV: "gv"}, "ls", nil); got[9] != "gv ls" {
+		t.Errorf("bare gv: %q", got[9])
 	}
 }
 
