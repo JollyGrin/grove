@@ -9,15 +9,16 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/tmux"
 )
 
@@ -31,8 +32,8 @@ const (
 	// the viewer can tell a quiet cockpit from a dead one.
 	Heartbeat = 10 * time.Second
 
-	emptyText = "no minimized chats"
-	version   = "v1"
+	emptyText = "no chats"
+	version   = "v2"
 )
 
 // Glyph maps a row's Turn to its state glyph.
@@ -52,12 +53,51 @@ func Glyph(turn string) string {
 
 var ticketRe = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*-[0-9]+\b`)
 
-// Name is the box title: a ticket id found in the label wins over the label.
-func Name(r chat.Row) string {
-	if t := ticketRe.FindString(r.Label); t != "" {
+// Chip is one chat on the rail (grove-510): every chat of the workspace has
+// one, the on-screen chat included (Shown, drawn highlighted).
+type Chip struct {
+	Name    string    // the chat's stable name — cockpit·1, chat-3 — as the CHATS box says it
+	Title   string    // the chip title (Title picks it)
+	Turn    string    // running / waiting / idle / errored / stopped / ""
+	At      time.Time // last activity; zero = unknown
+	Session string    // the focus target; "" = not clickable (a remote chat)
+	Shown   bool      // on screen in the cockpit window
+}
+
+// Title picks a chip title: Claude's own session title (the pane title,
+// already stripped by PaneTitle) wins; else a ticket id found in the
+// transcript label; else that label (the first prompt). Never the last
+// message.
+func Title(paneTitle, label string) string {
+	if t := strings.Join(strings.Fields(paneTitle), " "); t != "" {
 		return t
 	}
-	return strings.Join(strings.Fields(r.Label), " ")
+	if t := ticketRe.FindString(label); t != "" {
+		return t
+	}
+	return strings.Join(strings.Fields(label), " ")
+}
+
+// PaneTitle reads a Claude session title off a raw pane title: Claude Code
+// titles its pane "<status glyph> <title>" (✳ when idle, a spinner while
+// working). Only a title led by such a glyph is Claude's — anything else is
+// tmux's default (the hostname) or a shell's — and Claude's placeholder
+// "Claude Code" is no title yet. "" when there is none.
+func PaneTitle(raw string) string {
+	f := strings.Fields(raw)
+	if len(f) < 2 {
+		return ""
+	}
+	for _, r := range f[0] {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return ""
+		}
+	}
+	t := strings.Join(f[1:], " ")
+	if t == "Claude Code" {
+		return ""
+	}
+	return t
 }
 
 func cells(s string) int { return lipgloss.Width(s) }
@@ -104,18 +144,16 @@ func compactAge(at, now time.Time) string {
 }
 
 // layout is the one computation behind both the drawing and the click
-// hit-test, so the two can never disagree: the boxes that get a slot, how
+// hit-test, so the two can never disagree: the chips that get a slot, how
 // many chats the "+N more" slot stands for, and the content cells per box.
 // Box i spans columns [i*(cw+1), i*(cw+1)+cw); the │ sits right after it.
-func layout(rows []chat.Row, shown, width int) (boxes []chat.Row, more, cw int) {
-	for _, r := range rows {
-		if shown == 0 || r.N != shown {
-			boxes = append(boxes, r)
-		}
-	}
-	if len(boxes) == 0 {
+// Every chip is a candidate — the shown one included — and when they do not
+// all fit, the shown chip is never the one folded into "+N more".
+func layout(chips []Chip, width int) (boxes []Chip, more, cw int) {
+	if len(chips) == 0 {
 		return nil, 0, 0
 	}
+	boxes = chips
 	slots := len(boxes)
 	if width/slots < MinBox {
 		slots = width / MinBox
@@ -124,8 +162,17 @@ func layout(rows []chat.Row, shown, width int) (boxes []chat.Row, more, cw int) 
 		}
 	}
 	if slots < len(boxes) {
-		more = len(boxes) - (slots - 1)
-		boxes = boxes[:slots-1]
+		keep := slots - 1
+		boxes = append([]Chip(nil), chips[:keep]...)
+		if keep > 0 {
+			for _, c := range chips[keep:] {
+				if c.Shown { // the shown chip takes the last slot rather than hide in "+N more"
+					boxes[keep-1] = c
+					break
+				}
+			}
+		}
+		more = len(chips) - keep
 	}
 	cw = width/slots - 1 // content cells per box; the │ takes one
 	if cw < MinBox-1 {
@@ -135,49 +182,52 @@ func layout(rows []chat.Row, shown, width int) (boxes []chat.Row, more, cw int) 
 }
 
 // Hit maps a 0-based column on the rail to the chat session whose box spans
-// it. Separators, the "+N more" slot, columns past the last box and boxes
-// without a session answer ok=false.
-func Hit(rows []chat.Row, shown, width, x int) (session string, ok bool) {
-	boxes, _, cw := layout(rows, shown, width)
+// it. Separators, the "+N more" slot, columns past the last box, the shown
+// chip (clicking it is a no-op) and chips without a session answer ok=false.
+func Hit(chips []Chip, width, x int) (session string, ok bool) {
+	boxes, _, cw := layout(chips, width)
 	if x < 0 || cw == 0 {
 		return "", false
 	}
 	i, off := x/(cw+1), x%(cw+1)
-	if off == cw || i >= len(boxes) || boxes[i].Session == "" {
+	if off == cw || i >= len(boxes) || boxes[i].Shown || boxes[i].Session == "" {
 		return "", false
 	}
 	return boxes[i].Session, true
 }
 
 // Render draws the rail: two lines, one box per chat, separated by │, no
-// outer frame. Pure — now is a parameter so the goldens are stable. Rows are
-// the chats NOT on screen; shown (the on-screen chat's number) is skipped if
-// it slipped in. Boxes are width/len wide, never under MinBox: past what
-// fits, the last slot reads "+N more".
-func Render(rows []chat.Row, shown, width int, now time.Time) string {
-	return render(rows, shown, width, now, "")
+// outer frame. Line one is the turn glyph and the title, line two the
+// chat's name (▣ on screen, ○ off it — the CHATS box's glyphs) and age. The shown chat's box is bold. Pure — now is a parameter so the
+// goldens are stable. Boxes are width/len wide, never under MinBox: past
+// what fits, the last slot reads "+N more".
+func Render(chips []Chip, width int, now time.Time) string {
+	return render(chips, width, now, "")
 }
 
 // render is Render with one box (by session) inverted: the click feedback.
-func render(rows []chat.Row, shown, width int, now time.Time, invert string) string {
-	boxes, more, cw := layout(rows, shown, width)
+func render(chips []Chip, width int, now time.Time, invert string) string {
+	boxes, more, cw := layout(chips, width)
 	if len(boxes) == 0 {
 		return emptyText
 	}
 	var l1, l2 []string
-	for _, r := range boxes {
-		a := fmt.Sprintf("%s %d %s", Glyph(r.Turn), r.N, Name(r))
-		turn := r.Turn
-		if turn == "" {
-			turn = "unknown"
+	for _, c := range boxes {
+		a := strings.TrimRight(Glyph(c.Turn)+" "+c.Title, " ")
+		mark := "○ "
+		if c.Shown {
+			mark = "▣ "
 		}
-		b := turn
-		if age := compactAge(r.Activity(), now); age != "" {
+		b := mark + c.Name
+		if age := compactAge(c.At, now); age != "" {
 			b += " · " + age
 		}
-		c1, c2 := fit(strings.TrimRight(a, " "), cw), fit(b, cw)
-		if invert != "" && r.Session == invert {
+		c1, c2 := fit(a, cw), fit(b, cw)
+		switch {
+		case invert != "" && c.Session == invert:
 			c1, c2 = "\x1b[7m"+c1+"\x1b[27m", "\x1b[7m"+c2+"\x1b[27m"
+		case c.Shown:
+			c1, c2 = "\x1b[1m"+c1+"\x1b[22m", "\x1b[1m"+c2+"\x1b[22m"
 		}
 		l1 = append(l1, c1)
 		l2 = append(l2, c2)
@@ -189,60 +239,68 @@ func render(rows []chat.Row, shown, width int, now time.Time, invert string) str
 	return strings.TrimRight(strings.Join(l1, "│"), " ") + "\n" + strings.TrimRight(strings.Join(l2, "│"), " ")
 }
 
-// --- wire format: "v1\t<unix ts>\t<shown>" then "<n>\t<turn>\t<last unix>\t<name>\t<session>" per box ---
+// --- wire format: "v2\t<unix ts>" then "<shown 0|1>\t<turn>\t<last unix>\t<name>\t<session>\t<title>" per chip ---
 
 func clean(s string) string {
 	return strings.Join(strings.Fields(strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(s)), " ")
 }
 
-// Encode renders the payload for the given off-screen rows (name = Name(row)
-// is stored, so the viewer never needs the label/ticket distinction).
-func Encode(rows []chat.Row, shown int, now time.Time) string {
+// Encode renders the payload for the chips, in rail order.
+func Encode(chips []Chip, now time.Time) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\t%d\t%d", version, now.Unix(), shown)
-	for _, r := range rows {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "%d\t%s\t%d\t%s\t%s", r.N, clean(r.Turn), r.Activity().Unix(), clean(Name(r)), clean(r.Session))
+	fmt.Fprintf(&b, "%s\t%d", version, now.Unix())
+	for _, c := range chips {
+		shown := 0
+		if c.Shown {
+			shown = 1
+		}
+		var at int64
+		if !c.At.IsZero() {
+			at = c.At.Unix()
+		}
+		fmt.Fprintf(&b, "\n%d\t%s\t%d\t%s\t%s\t%s", shown, clean(c.Turn), at, clean(c.Name), clean(c.Session), clean(c.Title))
 	}
 	return b.String()
 }
 
-// Parse is Encode's inverse. ok=false on anything it does not recognise.
-func Parse(s string) (rows []chat.Row, shown int, wrote time.Time, ok bool) {
+// Parse is Encode's inverse. ok=false on anything it does not recognise —
+// a payload of another version included (a rail drawn by an older binary).
+func Parse(s string) (chips []Chip, wrote time.Time, ok bool) {
 	lines := strings.Split(s, "\n")
 	head := strings.Split(lines[0], "\t")
-	if len(head) < 3 || head[0] != version {
-		return nil, 0, time.Time{}, false
+	if len(head) < 2 || head[0] != version {
+		return nil, time.Time{}, false
 	}
 	ts, err := strconv.ParseInt(head[1], 10, 64)
 	if err != nil {
-		return nil, 0, time.Time{}, false
+		return nil, time.Time{}, false
 	}
-	shown, _ = strconv.Atoi(head[2])
 	for _, line := range lines[1:] {
-		f := strings.SplitN(line, "\t", 5)
-		if len(f) < 4 {
+		f := strings.SplitN(line, "\t", 6)
+		if len(f) < 5 {
 			continue
 		}
-		n, _ := strconv.Atoi(f[0])
 		at, _ := strconv.ParseInt(f[2], 10, 64)
-		r := chat.Row{N: n, Turn: f[1], Label: f[3]}
-		if len(f) > 4 {
-			r.Session = f[4]
+		c := Chip{Shown: f[0] == "1", Turn: f[1], Name: f[3], Session: f[4]}
+		if len(f) > 5 {
+			c.Title = f[5]
 		}
 		if at > 0 {
-			r.LastActive = time.Unix(at, 0)
+			c.At = time.Unix(at, 0)
 		}
-		rows = append(rows, r)
+		chips = append(chips, c)
 	}
-	return rows, shown, time.Unix(ts, 0), true
+	return chips, time.Unix(ts, 0), true
 }
 
 // Runner is the tmux exec seam (tmux.Run in production).
 type Runner func(args ...string) (string, error)
 
-// Writer is the cockpit side: it writes the payload only when it changed
-// (plus a slow heartbeat), so identical ticks cost nothing.
+// Writer is the cockpit side: on the beat it writes the payload only when
+// it changed (plus a slow heartbeat), so identical ticks cost nothing; a
+// focus move forces the write (grove-510) — another process may have
+// written the option since this Writer last did, so "unchanged since my
+// last write" proves nothing then.
 type Writer struct {
 	Run   Runner
 	mu    sync.Mutex // Write is called from overlapping refresh and focus commands
@@ -250,16 +308,17 @@ type Writer struct {
 	lastT time.Time
 }
 
-// Write stores rows for the session; reports whether it touched tmux.
-func (w *Writer) Write(session string, rows []chat.Row, shown int, now time.Time) (bool, error) {
+// Write stores the chips for the session; reports whether it touched tmux.
+// force skips the change detection.
+func (w *Writer) Write(session string, chips []Chip, now time.Time, force bool) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	body := Encode(rows, shown, time.Time{})
+	body := Encode(chips, time.Time{})
 	// Compare without the timestamp: change detection ignores the clock.
-	if body == w.last && now.Sub(w.lastT) < Heartbeat {
+	if !force && body == w.last && now.Sub(w.lastT) < Heartbeat {
 		return false, nil
 	}
-	_, err := w.Run("set-option", "-t", tmux.ExactActive(session), tmux.RailRowsOption, Encode(rows, shown, now))
+	_, err := w.Run("set-option", "-t", tmux.ExactActive(session), tmux.RailRowsOption, Encode(chips, now))
 	if err != nil {
 		return false, err
 	}
@@ -278,35 +337,55 @@ type Viewer struct {
 	// (injected by cmd/gv; never a child process). Nil = clicks do nothing.
 	Focus func(session string) error
 	prev  string
-	rows  []chat.Row // what the picture on screen was drawn from
-	shown int
+	chips []Chip // what the picture on screen was drawn from
 }
 
 // read is the single tmux call of a tick (or a click's freshness check).
-func (v *Viewer) read() (rows []chat.Row, shown int, wrote time.Time, ok bool, err error) {
+func (v *Viewer) read() (chips []Chip, wrote time.Time, ok bool, err error) {
 	out, err := v.Run("show-options", "-t", tmux.ExactActive(v.Session), "-v", tmux.RailRowsOption)
-	rows, shown, wrote, ok = Parse(out)
-	return rows, shown, wrote, ok && err == nil, err
+	chips, wrote, ok = Parse(out)
+	return chips, wrote, ok && err == nil, err
 }
 
 // Step is one tick: a single show-options, then a redraw if the picture
 // changed. A failed read keeps the last picture (the cockpit may be gone).
 func (v *Viewer) Step() error {
-	rows, shown, wrote, ok, err := v.read()
+	chips, wrote, ok, err := v.read()
 	now := v.Now()
 	var text string
 	if ok {
-		text = Render(rows, shown, v.Width(), now)
+		text = Render(chips, v.Width(), now)
 		if now.Sub(wrote) > StaleAfter {
 			text = markStale(text)
 		}
-		v.rows, v.shown = rows, shown
+		v.chips = chips
 	} else if v.prev == "" {
 		text = emptyText
 	} else {
 		return err
 	}
 	return v.draw(text)
+}
+
+// Loop is the viewer's life: one draw, then a Step per tick — the heartbeat
+// that also ages a picture into "stale" — and per wake, the SIGUSR1 a
+// writer sends right after it wrote (grove-521), so a swap shows in one
+// read instead of up to a tick later; a Click per click. Every input feeds
+// this one loop, so nothing races. Returns when done closes.
+func (v *Viewer) Loop(tick <-chan time.Time, wake <-chan os.Signal, clicks <-chan [2]int, done <-chan struct{}) {
+	_ = v.Step()
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick:
+			_ = v.Step()
+		case <-wake:
+			_ = v.Step()
+		case c := <-clicks:
+			_ = v.Click(c[0], c[1])
+		}
+	}
 }
 
 func (v *Viewer) draw(text string) error {
@@ -327,21 +406,21 @@ func (v *Viewer) draw(text string) error {
 // Click handles a left click at the 0-based column x, line y (0 or 1 are the
 // two box lines). A click on a box inverts it for the tick, then runs Focus
 // with that chat's session; the next Step redraws. A separator, the "+N more"
-// slot or empty space does nothing. A box whose chat has gone since it was
+// slot, the shown chat's own box or empty space does nothing. A box whose chat has gone since it was
 // drawn (the fresh option no longer lists it) flashes "gone" for one tick and
 // mutates nothing — the only tmux call made first is a read.
 func (v *Viewer) Click(x, y int) error {
 	if v.Focus == nil || y < 0 || y > 1 {
 		return nil
 	}
-	session, ok := Hit(v.rows, v.shown, v.Width(), x)
+	session, ok := Hit(v.chips, v.Width(), x)
 	if !ok {
 		return nil
 	}
-	fresh, shown, _, ok, _ := v.read()
+	fresh, _, ok, _ := v.read()
 	live := false
-	for _, r := range fresh {
-		if r.Session == session && (shown == 0 || r.N != shown) {
+	for _, c := range fresh {
+		if c.Session == session && !c.Shown {
 			live = true
 		}
 	}
@@ -349,7 +428,7 @@ func (v *Viewer) Click(x, y int) error {
 		return v.draw(markGone(v.prev))
 	}
 	plain := v.prev
-	_ = v.draw(render(v.rows, v.shown, v.Width(), v.Now(), session))
+	_ = v.draw(render(v.chips, v.Width(), v.Now(), session))
 	if err := v.Focus(session); err != nil {
 		v.prev = ""
 		return v.draw(markGone(plain))

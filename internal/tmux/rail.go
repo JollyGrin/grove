@@ -64,14 +64,23 @@ func cockpitPanes(session string) ([]railPane, error) {
 	return parseRailPanes(out), nil
 }
 
-// RailPane finds the cockpit window's rail pane (stamped @grove_rail), and
-// the id of that window, which the writer needs to tell on-screen chats from
-// off-screen ones.
-func RailPane(session string) (pane, window string, ok bool) {
+// RailPIDOption is the PANE option the rail viewer stamps its own pid in
+// (grove-521), so a writer can wake it with SIGUSR1 instead of waiting out
+// its tick.
+const RailPIDOption = "@grove_rail_pid"
+
+// RailPane finds the cockpit window's rail pane (stamped @grove_rail), the
+// id of that window, which the writer needs to tell on-screen chats from
+// off-screen ones, and the viewer pid to wake after a write: 0 unless the
+// pid the viewer stamped IS the pane's process. That check is the safety:
+// a viewer started under a shell that did not exec it shares its pane with
+// a process SIGUSR1 would kill, so it is never signalled — it redraws on
+// its tick as before.
+func RailPane(session string) (pane, window string, pid int, ok bool) {
 	out, err := run("list-panes", "-t", cockpitWindowTarget(session), "-F",
-		"#{pane_id}\t#{window_id}\t#{@grove_rail}")
+		"#{pane_id}\t#{window_id}\t#{@grove_rail}\t#{pane_pid}\t#{"+RailPIDOption+"}")
 	if err != nil {
-		return "", "", false
+		return "", "", 0, false
 	}
 	window = ""
 	for _, line := range strings.Split(out, "\n") {
@@ -82,9 +91,19 @@ func RailPane(session string) (pane, window string, ok bool) {
 		window = f[1]
 		if len(f) > 2 && f[2] != "" {
 			pane, ok = f[0], true
+			pid = 0
+			if len(f) > 4 && f[4] != "" && f[3] == f[4] {
+				pid, _ = strconv.Atoi(f[4])
+			}
 		}
 	}
-	return pane, window, ok
+	return pane, window, pid, ok
+}
+
+// StampRailPID records the viewer's pid on its rail pane (RailPIDOption).
+func StampRailPID(pane string, pid int) error {
+	_, err := run("set-option", "-p", "-t", pane, RailPIDOption, strconv.Itoa(pid))
+	return err
 }
 
 // IsRailPane reports whether a pane id carries the rail stamp. Fails open
@@ -155,12 +174,14 @@ func EnsureRail(session, dir, cmd string) (string, error) {
 // tmux rescales every pane proportionally on resize, so a rail sized at
 // build time on a detached 80x24 session would balloon once a real client
 // attaches. A tmux hook, not a watcher — it is one command string tmux
-// runs, no process or goroutine of ours.
+// runs, no process or goroutine of ours. Its second command (grove-525)
+// re-sizes the hidden chats to the slot the resize just rescaled — after the
+// rail is back at its height, so the slot is read final.
 const railHook = "window-resized"
 
 func keepRailHeight(session, pane string) error {
 	_, err := run("set-hook", "-w", "-t", cockpitWindowTarget(session), railHook,
-		fmt.Sprintf("resize-pane -t %s -y %d", pane, RailHeight))
+		fmt.Sprintf("resize-pane -t %s -y %d ; %s", pane, RailHeight, SyncSizesCommand(session)))
 	return err
 }
 
@@ -186,8 +207,17 @@ func KillRail(session string) error {
 // RailHeight (tmux's layouts give stacked panes equal height, so the
 // resize after every re-tile is the whole trick), then focus the chat — or
 // the dash when there is none. The rail is kept the LAST pane so it is the
-// bottom of the right column.
+// bottom of the right column. Last, the hidden chats are sized to the slot
+// the re-tile produced (grove-525, SyncHiddenSizes).
 func RetileFocus(session string) error {
+	if err := retileFocus(session); err != nil {
+		return err
+	}
+	syncAfterRetile(session)
+	return nil
+}
+
+func retileFocus(session string) error {
 	win := cockpitWindowTarget(session)
 	panes, err := cockpitPanes(session)
 	if err != nil {
@@ -208,7 +238,7 @@ func RetileFocus(session string) error {
 			return err
 		}
 	}
-	if _, err := run("set-option", "-t", win, "-w", "main-pane-width", fmt.Sprintf("%d%%", cockpitMainWidth)); err != nil {
+	if _, err := run("set-option", "-t", win, "-w", "main-pane-width", fmt.Sprintf("%d%%", focusDashWidth(session))); err != nil {
 		return err
 	}
 	if _, err := run("select-layout", "-t", win, "main-vertical"); err != nil {

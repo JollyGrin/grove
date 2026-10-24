@@ -53,39 +53,13 @@
   mechanism ("Claude may pick one arbitrarily"), so the seed names the
   overlay as the winner in words and keeps a floor no overlay lowers. Rule:
   claude-code-facts §Sessions.
-- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
-  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
-  and `.claude/settings.local.json` never reaches a fresh worktree**
-  (grove-437). Rule: treat auto memory as one surface per repo;
-  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
-  reads the default location rather than relocating it. A headless
-  `claude -p` run carries the auto-memory system prompt, so it is a valid
-  probe of whether a kickoff makes workers write memory. Rule:
-  claude-code-facts §Profiles.
-- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
-  block itself, so a kickoff's "do not ask for confirmation" line is a
-  duplicate** (grove-433). Rule: templates state goals, constraints and
-  verification only; before ever adding the paragraph back, grep a real
-  worker transcript's `prompt_snapshot` for "operating autonomously".
-  Rule: claude-code-facts §System prompt.
-
 ## tmux / git / detector internals (verified against source)
 
+- 2026-10-19 (grove-531, tmux 3.6a): **A window with `window-size manual` ignores a client that attaches to it** — a 100x30 pty client attached straight to a slot-pinned 139x50 hidden chat sees a 139x50 window clipped to its screen; `set -wu window-size` makes it follow the client at once (100x29). A SESSION hook (`set-hook -t <@win> client-attached …`, no `-w`) fires for a direct attach; `client-session-changed` fires on attach AND on `switch-client` INTO the session, but nothing fires on the session a client switches AWAY from; `client-detached` fires on detach, and a `run-shell -b gv …` from it already reads `#{session_attached}` = 0. Hook values read as formats like any option (`#{m:*sync-sizes*,#{client-detached}}` tells grove's hook from an operator's global one), and a session-level hook shadows a global hook of the same name for that session. `show-hooks -g` lists every hook NAME, set or not — grep for a value, not the name. `set-hook <name> …` without an `[index]` replaces the whole array (a `[1]` set earlier is gone). Promoted: tmux-discipline §3 (per-session hooks).
+- **2026-10-19 · A global `pane-border-status` makes a lone pane a row shorter than its window — size the PANE, not the window** — under the operator's own `set -g pane-border-status top` (tmux 3.6a) a one-pane hidden chat window pinned to the slot's W×H holds a W×(H-1) pane, so `swap-pane` into the slot still resizes it and sends SIGWINCH (Claude repaints on screen). Pin a one-pane window to slot + (window − pane) and compare PANE sizes; `swap-pane -d` keeps every pane option and sends no SIGWINCH when the two panes are the same size; tmux's `after-select-layout` hook fires for CLI-issued commands, a cheap e2e probe for "no re-tile ran". Tests on the scratch server read `~/.tmux.conf` (no `-f`), so a live test pins the option it depends on. grove-526. Promoted: tmux-discipline §3 (pane, not window, size).
+- 2026-10-19 (grove-525, tmux 3.6a): **`resize-window -x/-y` silently sets that window's `window-size` to `manual`** — `show-options -w` reads `window-size manual` afterwards with no `set-option` of ours. So an e2e `tmux resize-window -t <cockpit>` pins the cockpit window too, and "unpin on leave" must be an explicit `set-option -wu -t <@win> window-size` (it falls back to the global/user value). Also verified: a `set-hook` body is parsed when it fires, so `cmd1 ; cmd2` in one hook string runs both, in order (the rail's `resize-pane` then `run-shell -b`); `run-shell` format-expands its argument, so a `#` in a path must be doubled. A user conf with `set -g window-size smallest` + `aggressive-resize on` does NOT crash new windows — only global `manual` does. Promoted: tmux-discipline §3 (`resize-window` pins).
+- 2026-10-19 (focus swap spike, tmux 3.6a): **`set -g window-size manual` crashes the tmux server on the next new window** — `new-session` (with or without `-x/-y`) or `new-window` after it prints `server exited unexpectedly` and every session on that server is gone (reproduced 2× on an isolated `-L` server, no client attached). Per-window `set -w -t <win> window-size manual` + `resize-window -x -y` is safe. Rule: never set `window-size` globally — on the operator's real server that line is a kill-server. Same spike: a `swap-pane` between two panes of IDENTICAL size sends no SIGWINCH, so Claude Code does not repaint (swapped-in screen byte-identical, ~5ms), while today's break-pane/join-pane into a differently-sized slot costs one full Claude repaint (~270ms on a short transcript). Design: docs/plans/2026-10-19-focus-same-size-swap-design.md. Promoted: tmux-discipline §1 (never `set -g window-size`).
 - 2026-10-19 (grove-487, tmux 3.6a): `#{pane_last}` is 1 for the window's previously active pane — the only pane recency tmux has (no per-pane activity time), and the right "which chat was I in" answer when `L` is typed in the dash (the dash is always the active pane then). `run()` trims its output, so a list-panes format whose LAST field is an empty `@option` loses its trailing tabs on the final line and a field-count check rejects that pane — end such a format with a literal `\t.`. Two quick `L` presses run two off-loop layout commands concurrently: an e2e that polls pane count and presses `L` again can race the first command's option write (`@grove_focus_hid`) — wait for the option, not the panes.
-- **2026-10-07 · `tmux show-options` takes ONE option name and never
-  auto-starts a server** (grove-455). Rule: the read-only query is a single
-  exec `tmux start-server \; show-options -g \; show-options -gw` (on a
-  serverless machine the started server answers and exits; on a live one
-  `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
-  WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
-  table — one table alone misses half. Rule: tmux-discipline §3.
-
-- **2026-09-28 · a unix socket path has a ~104-byte ceiling on darwin, and
-  tmux reports it as "File name too long"** (grove-401): an isolated
-  server whose `-S`/`TMUX_TMPDIR` sits under a deep scratch dir never
-  starts, and every call fails before connecting. Scratch tmux roots go
-  directly under `/tmp` (`mktemp -d /tmp/…`), which is what every e2e
-  suite and `scratchServer` already do — the reason is now written down.
 
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Rule: prose goes via `load-buffer` +
@@ -114,7 +88,6 @@
 
 - **`log-append.py rotate` half-commits when it hits an undated row** (2026-10-11, grove-474). With TASKS.md over its cap, rotate wrote the oldest row into `docs/archive/` and then `sys.exit`ed on the next, undated row, leaving TASKS.md unchanged. The rerun archived that first row again, so it appeared twice. Fix: give each undated row a date from `git log -S'<row text>' --format=%cs -- TASKS.md`, rerun rotate, then check the archive diff for duplicates. Its bare-date fallback also raised IndexError (no capture group) until grove-471 fixed `row_date`.
 - **2026-10-11 · The no-secrets PreToolUse guard is not in the repo and is armed only on contributor lanes** (grove-470). `~/.config/grove/hooks/no-secrets-on-contrib.sh` lives in the operator's config dir, and its first line exits 0 unless `GROVE_DATA_LANE=contributor` — a value only a model profile's env map exports. Accounts never apply under a profile (claude-accounts design §Decision 1), so an account-pinned worker never runs with the guard armed: adding `CLAUDE_CODE_OAUTH_TOKEN` to its deny pattern (design §Decision 4) defends only a contributor-lane worker that inherited the token some other way. It is one operator's private file, so the patch is not grove's to ship (no doctor row either: a repo-agnostic binary must not hardcode it). Rule: before citing a hook as a guard, read its arming condition — a guard that exits early on your lane is not one.
-- **2026-10-07 · App-token 403 cascade (grove-451).** One bundled `--json` field took down two unrelated features: a GitHub App token can't read `statusCheckRollup`, so the single `gh pr list` that served both the ls/TUI CI column and the `gv done` merge gate failed as a whole — CI columns went blank AND every `gv done` on a genuinely merged ticket reported "no PR found" and demanded `--force`. The gate never looked at CI; it just rode the same query. Rule: a verdict-bearing query asks only for the fields its verdict needs; display queries degrade field-by-field (retry without the privileged field, render unknown) rather than failing the fetch; and a command failure must never be reported with the words of a successful empty result.
 - **2026-10-07 · `--model` was never recorded on the task; only
   `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
   the `task_created`/`task_adopted` data know a worker's PROFILE, but a
@@ -131,22 +104,6 @@
   grep the launch line (`grep -o 'echo [^$]*\$(cat'`) and not the whole
   scrollback — the first cut of `e2e/dummy.sh`'s effort leg failed on a
   correct launch for exactly this reason.
-- **2026-09-28 · two `e2e/all.sh` runs at once on one machine wedge
-  `e2e/sub.sh` at `gv sub --agentic`** (grove-405; seen by the train owner
-  while cars 01–04 ran their gates side by side — root cause UNKNOWN, not
-  reproduced here): until someone finds out what the two runs share, run
-  `e2e/all.sh` once, unpiped, alone. A wedged run is a scheduling problem,
-  not a red suite — do not "fix" sub.sh on the strength of it.
-- **2026-09-28 · the cockpit flash never expires, and it takes its room
-  from the footer legend** (grove-403): `m.flash` is plain state — nothing
-  clears it on a beat, only the next assignment does. A flash left behind
-  by an earlier key therefore squeezes the legend's hints down to bare
-  keys for as long as it stands (`h · enter · x`, not `h hide · …`). An
-  e2e assertion on a hint LABEL fails on a narrow pane for that reason
-  alone; assert on the keys, or on a frame whose flash you control.
-- **2026-09-28 · A TUI test that EXECUTES a beat's commands runs the real ones — timers and disk writes included** (grove-402): walking `Update(tickMsg{})`'s `tea.Batch` to see which passes it makes also calls `tickEvery`/`prTickEvery` (`tea.Tick` blocks for the full 1s/30s — two beats plus `Init` cost the suite a minute) and `refreshCmd`, which with the fixtures' `stateDir == ""` writes `tasks.json` + `resource.jsonl` into the PACKAGE directory (`internal/tui/`), where they sit untracked, ready to be committed. Give such a test a `t.TempDir()` state dir + folder, and run each command under a short timeout so a timer is abandoned rather than waited out (`chatPasses` in `chats_test.go`). `prtick_test.go` still pays the 30s.
-- **2026-09-28 · `internal/tui` declares its own two-argument `min`, shadowing the builtin** (grove-402): `min(a, b, c)` fails to compile in that package ("too many arguments") on a toolchain where it is fine everywhere else. Nest the calls, or delete the helper deliberately — not as a drive-by.
-- **2026-09-28 · Panel focus assumed exactly two panels** (grove-402): `tab` was `m.focus = 1 - m.focus`, and `assembleFeatures` forced `focusAgents` on EVERY refresh with no open feature — so a third panel lost focus one second after tab gave it. Focus now cycles through `nextFocus` (inert panels skipped), and each panel's assemble only takes focus back from ITSELF.
 
 - **stdlib `flag` stops at the first positional** — `gv grab <url> --repo
   x` silently ignores `--repo` without a re-parse loop (`parseAnywhere`).
@@ -165,6 +122,19 @@
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-10-24 · A `--brief-file` can grant grab/merge/land/issue-close for
+  one feature train, and a chat on today's seed acts on it despite the
+  supervision mandate's "out of scope however worded" list** (brain-overlay
+  drive, journal docs/plans/2026-10-24-brain-overlay-journal.md): 4 cars
+  grabbed, reviewed, squash-merged into the train, landed and closed in
+  ~4.5h with zero operator turns, one steer, ~$29. Three things broke:
+  review subagents spawned from the chat stalled twice (70+ min, no
+  report, cause undiagnosed) and the chat ended up running the gate
+  itself; the hand-kept journal diverged from the report PR within hours;
+  every chat-side `gh` mutation carries the operator's login, so a
+  closed duplicate car (#581) was unattributable. Rule: the drive's
+  journal must be appended by the binary, and review must be a watched
+  task, not a subagent — docs/plans/2026-10-24-feature-drive-design.md.
 - **2026-10-07 · Kickoff A/B (model-fit 02, #434): the de-choreographed
   template is cost-neutral and slightly more disciplined; `--effort
   medium` is the win on rote work.** Three rote tickets (#145 merge gate,

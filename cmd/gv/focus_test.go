@@ -23,7 +23,7 @@ func TestFocusBeforeSpawnGatedOnLayout(t *testing.T) {
 func TestFocusChatRefusals(t *testing.T) {
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	if _, err := focusChat("@box/grove-chat-x-1", true); err == nil || !strings.Contains(err.Error(), "gv chat show") {
+	if _, err := focusChat("@box/grove-chat-x-1", "", true); err == nil || !strings.Contains(err.Error(), "gv chat show") {
 		t.Errorf("remote target must be refused naming gv chat show, got %v", err)
 	}
 	if err := cmdChatFocus(nil); err == nil || !strings.Contains(err.Error(), "usage: gv chat focus") {

@@ -353,6 +353,10 @@ func hookCandidates() []hooks.Candidate {
 }
 
 func main() {
+	// grove-525: every focus re-tile, in any gv process, sizes the
+	// workspace's hidden chats to the slot — the registry lookup it needs
+	// lives here.
+	tmux.FocusWorkspace = focusWorkspace
 	// `gv account` runs before the ambient workspace resolves: the shell
 	// function asks `token-path` from any cwd, so it must be read-only
 	// (resolveAmbient creates .grove/state) and a broken workspace label
@@ -1134,6 +1138,9 @@ func buildCockpit(ws *workspace.Workspace, cfg *config.Config) error {
 	// Seed the session's layout option from config before the first spawn,
 	// so SpawnPane's re-tile already honors it (grove-52).
 	if err := tmux.SetCockpitLayout(session, cfg.CockpitLayout()); err != nil {
+		return err
+	}
+	if err := tmux.SetFocusDashWidth(session, cfg.FocusDashPercent()); err != nil {
 		return err
 	}
 	// Name the outer terminal tab after the workspace so several cockpits

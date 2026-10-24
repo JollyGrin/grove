@@ -1,0 +1,23 @@
+✻ Cooked for 2s · done 9:38 PM
+
+❯ Use AskUserQuestion with two questions. Q1 header 'Weekend', question text
+  exactly: 'When you think about how you would most like to spend a long, quiet
+  weekend away from screens and work, which of these do you prefer?' options
+  Hiking / Reading. Q2 header 'Drink', question 'Tea or coffee?' options Tea /
+  Coffee.
+
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Weekend  ☒ Drink  ✔ Submit  →
+
+Review your answers
+
+ │ ● When you think about how you would most like to spend a long, quiet weekend
+ │   away from screens and work, which of these do you prefer?
+   → Reading
+ ● Tea or coffee?
+   → Tea
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

@@ -663,6 +663,23 @@ func TestHotkeyFor(t *testing.T) {
 	}
 }
 
+func TestFocusDashPercent(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", 30}, {"0.3", 30}, {"0.25", 25}, {"0.5", 50}, {"0.85", 85}, {"0.15", 15},
+		{"0", 30}, {"0.1", 30}, {"0.9", 30}, {"30", 30}, {"40", 30}, {"-0.3", 30}, {"wide", 30},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Cockpit.FocusDashWidth = tc.in
+		if got := c.FocusDashPercent(); got != tc.want {
+			t.Errorf("FocusDashPercent() with %q = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCockpitLayout(t *testing.T) {
 	cases := []struct {
 		name string
@@ -691,16 +708,21 @@ func TestCockpitLayout(t *testing.T) {
 cockpit:
   effects: calm
   layout: horizontal
+  focus_dash_width: 0.5
 `)
 	root := newWorkspace(t, `
 workspace:
   label: grid
 cockpit:
   layout: focus
+  focus_dash_width: 0.25
 `)
 	c, err := LoadAt(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := c.FocusDashPercent(); got != 25 {
+		t.Errorf("workspace cockpit.focus_dash_width = %d%%, want 25 (workspace wins)", got)
 	}
 	if got := c.CockpitLayout(); got != "focus" {
 		t.Errorf("workspace cockpit.layout = %q, want focus (workspace wins)", got)

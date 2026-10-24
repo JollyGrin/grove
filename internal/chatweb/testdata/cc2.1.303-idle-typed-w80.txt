@@ -1,0 +1,23 @@
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratchpad/partb/repo · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                  Ctrl+Y to paste deleted text
+────────────────────────────────────────────────────────────────────────────────
+❯ can you look at the README in this repository and tell me what the project
+  is for, in one or two short sentences please, thanks
+────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-53…
+  ⏸ manual mode on

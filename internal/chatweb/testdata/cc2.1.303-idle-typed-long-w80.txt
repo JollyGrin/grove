@@ -1,0 +1,24 @@
+  that could also be scripted from the shell. Over the following years the
+  project grew steadily through contributions from a community of developers,
+  and the 1.x and 2.x releases added better color support, mouse handling, and
+  more flexible key bindings. Configuration moved to a plain text file, usually
+  named .tmux.conf, which people shared in their dotfile repositories and blog
+  posts, turning personal setups into a kind of informal culture. Plugin
+  managers followed, letting users install community extensions for status bars,
+  session saving, and themes. Later releases introduced features such as popup
+  windows and more advanced layout tools, which kept the project relevant as
+  developers' workflows moved toward remote servers, containers, and
+  long-running build or deployment jobs. Today tmux is packaged in nearly every
+  major Linux distribution and is available on macOS and the BSDs, and it
+  remains one of the most widely used command-line tools for keeping terminal
+  work organized and persistent.
+
+✻ Sautéed for 7s · done 9:39 PM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ when you get a moment, could you read through the README in this repository
+  and then write me a short, friendly summary of what the project is for and
+  who would use it, keeping it under fifty words please
+────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-53…
+  ⏸ manual mode on

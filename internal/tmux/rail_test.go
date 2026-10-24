@@ -99,7 +99,7 @@ func TestRailLifecycleAndRetile(t *testing.T) {
 		if last.left != panes[1].left || last.top <= panes[1].top {
 			t.Errorf("%s: rail not stacked under the chat: %+v", when, panes)
 		}
-		want := winW * cockpitMainWidth / 100
+		want := winW * cockpitFocusMainWidth / 100
 		if d := panes[0].w - want; d < -1 || d > 1 {
 			t.Errorf("%s: dash width = %d of %d, want ~%d", when, panes[0].w, winW, want)
 		}
@@ -159,9 +159,25 @@ func TestRailPaneClassifiers(t *testing.T) {
 	if err := PaneClosable(railID, nil); err != ErrRail {
 		t.Errorf("PaneClosable(rail) = %v, want ErrRail", err)
 	}
-	pane, win, ok := RailPane(s)
-	if !ok || pane != railID || !strings.HasPrefix(win, "@") {
-		t.Errorf("RailPane = %q %q %v", pane, win, ok)
+	pane, win, pid, ok := RailPane(s)
+	if !ok || pane != railID || !strings.HasPrefix(win, "@") || pid != 0 {
+		t.Errorf("RailPane = %q %q %d %v (no stamp yet: pid 0)", pane, win, pid, ok)
+	}
+	// grove-521: a stamp that is the pane's own process is the pid to wake;
+	// any other stamp (a viewer under a shell) is never signalled.
+	panePID, _ := run("display-message", "-p", "-t", railID, "#{pane_pid}")
+	want, _ := strconv.Atoi(strings.TrimSpace(panePID))
+	if err := StampRailPID(railID, want); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pid, _ := RailPane(s); pid != want || want == 0 {
+		t.Errorf("RailPane pid = %d, want the pane's own %d", pid, want)
+	}
+	if err := StampRailPID(railID, want+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pid, _ := RailPane(s); pid != 0 {
+		t.Errorf("RailPane pid = %d for a stamp that is not the pane's process, want 0", pid)
 	}
 	out, _ := run("list-panes", "-a", "-F", paneListFormat)
 	rails := 0
@@ -179,5 +195,35 @@ func TestRailPaneClassifiers(t *testing.T) {
 	bf, _ := run("display-message", "-p", "-t", railID, "-F", "#{@grove_rail}")
 	if bf != "1" {
 		t.Errorf("@grove_rail = %q, want 1", bf)
+	}
+}
+
+// grove-522: the session's @grove_focus_dash_width (seeded from
+// cockpit.focus_dash_width) reaches main-pane-width on retile; an
+// out-of-range stamp falls back to cockpitFocusMainWidth.
+func TestRetileFocusHonorsDashWidth(t *testing.T) {
+	scratchServer(t)
+	dir := t.TempDir()
+	const s = "grove-w"
+	if _, err := run("new-session", "-d", "-s", s, "-n", "cockpit", "-x", "200", "-y", "50", "-c", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("split-window", "-t", ExactActive(s), "-c", dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ stamp, want int }{{50, 50}, {99, cockpitFocusMainWidth}, {20, 20}} {
+		if err := SetFocusDashWidth(s, tc.stamp); err != nil {
+			t.Fatal(err)
+		}
+		if err := RetileFocus(s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := run("show-options", "-t", cockpitWindowTarget(s), "-wv", "main-pane-width")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.TrimSpace(out), fmt.Sprintf("%d%%", tc.want); got != want {
+			t.Errorf("stamp %d: main-pane-width = %q, want %q", tc.stamp, got, want)
+		}
 	}
 }

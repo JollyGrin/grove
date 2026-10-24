@@ -1,0 +1,23 @@
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratchpad/partb/repo · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯ Try "how do I log an error?"
+────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-53…
+  ⏸ manual mode on

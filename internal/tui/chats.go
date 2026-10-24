@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -50,6 +51,12 @@ type ChatRow struct {
 	Model   string
 	Busy    bool
 	Created time.Time
+	// Name is the chat's stable name (grove-510) — cockpit·1, chat-3 —
+	// fixed by its stamp, so it does not flip when focus moves the pane.
+	// "" = name it by position (chatName).
+	Name string
+	// Title is Claude's session title off the pane title ("" = none yet).
+	Title string
 
 	Label      string
 	LastActive time.Time
@@ -133,16 +140,45 @@ func mergeChats(prev, fresh []ChatRow, deep bool) []ChatRow {
 	return fresh
 }
 
-// sortChats orders the box: the chats on screen first, then the hidden
-// ones, each by number — positions hold still under the cursor.
+// sortChats orders the box by stable name (ChatLess), the rail's order —
+// shown/hidden never moves a row, so positions hold still under the cursor.
 func sortChats(rows []ChatRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if a.Hidden != b.Hidden {
-			return !a.Hidden
-		}
-		return a.N < b.N
+		return ChatLess(ChatName(rows[i]), ChatName(rows[j]))
 	})
+}
+
+// ChatLess orders two chat names: local cockpit·N, local chat-N, then
+// remote, each by number. The CHATS box and the rail both sort with it
+// (grove-528), so the two lists never disagree.
+func ChatLess(a, b string) bool {
+	ka, na := chatOrder(a)
+	kb, nb := chatOrder(b)
+	if ka != kb {
+		return ka < kb
+	}
+	if na != nb {
+		return na < nb
+	}
+	return a < b
+}
+
+// chatOrder ranks a chat name: local cockpit·N, local chat-N, then remote
+// in the same order.
+func chatOrder(name string) (rank, n int) {
+	base, _, remote := strings.Cut(name, " @")
+	if num, ok := strings.CutPrefix(base, "cockpit·"); ok {
+		n, _ = strconv.Atoi(num)
+	} else if num, ok := strings.CutPrefix(base, "chat-"); ok {
+		rank = 1
+		n, _ = strconv.Atoi(num)
+	} else {
+		rank = 2
+	}
+	if remote {
+		rank += 3
+	}
+	return rank, n
 }
 
 // chatIsWaiting: the agent is blocked on a picker — by either field.
@@ -170,12 +206,18 @@ func chatCounter(rows []ChatRow) string {
 	return s
 }
 
-// chatName names a row: `cockpit·2` for a pane on screen, `chat-3` for a
-// hidden session, with the `@host` marker on a remote pane.
-func chatName(r ChatRow) string {
-	name := fmt.Sprintf("cockpit·%d", r.N)
-	if r.Hidden {
+// ChatName names a row: its stable Name when it has one, else by position —
+// `cockpit·2` for a pane on screen, `chat-3` for a hidden session — with
+// the `@host` marker on a remote pane. The rail names its chips with this
+// same function (grove-510).
+func ChatName(r ChatRow) string {
+	name := r.Name
+	switch {
+	case name != "":
+	case r.Hidden:
 		name = fmt.Sprintf("chat-%d", r.N)
+	default:
+		name = fmt.Sprintf("cockpit·%d", r.N)
 	}
 	if r.Host != "" {
 		name += " @" + r.Host
@@ -220,7 +262,7 @@ type chatLine struct {
 func buildChatLines(dst []chatLine, rows []ChatRow) []chatLine {
 	dst = dst[:0]
 	for _, r := range rows {
-		l := chatLine{kind: chatShown, name: chatName(r), model: r.Model, state: chatState(r)}
+		l := chatLine{kind: chatShown, name: ChatName(r), model: r.Model, state: chatState(r)}
 		if r.Hidden {
 			l.kind = chatHidden
 		}
@@ -441,4 +483,45 @@ func (m Model) viewChats(lay chatLayout) string {
 	// width of its own to fall back on.
 	body := truncPad(titleStyle.Render(m.chatTitle), w) + "\n" + strings.Join(rows, "\n")
 	return border.Width(m.width - 2).Render(body)
+}
+
+// Clicks on CHATS rows (grove-517). The box's geometry is chatLayout's —
+// the same numbers viewChats draws with — so a click can't land on a row
+// the frame doesn't show there.
+
+// chatsTop is the frame line of the box's top border: the header line,
+// then FEATURES and AGENTS as they render. Measured, not re-derived, and
+// only on a click — never per frame.
+func (m Model) chatsTop() int {
+	top := 1
+	if lay := m.featureLayout(); lay.height > 0 {
+		top += lipgloss.Height(m.viewFeatures(lay))
+	}
+	return top + lipgloss.Height(m.viewAgents())
+}
+
+// hit maps a line dy below the box's top border to the chat drawn there:
+// border, title, column header, the reply row, `+N more` and the bottom
+// border are none. sel is the cursor the reply row hangs under. Pure.
+func (lay chatLayout) hit(dy, sel int) (int, bool) {
+	line := 3 // border, title, column header
+	for i := lay.start; i < lay.start+lay.shown; i++ {
+		if dy == line {
+			return i, true
+		}
+		line++
+		if lay.reply && i == sel {
+			line++
+		}
+	}
+	return 0, false
+}
+
+// chatHit is the chat under frame cell (x, y), if any.
+func (m Model) chatHit(x, y int) (int, bool) {
+	lay := m.chatLayout()
+	if lay.height == 0 || x < 1 || x > m.width-2 { // no box, or on its side border
+		return 0, false
+	}
+	return lay.hit(y-m.chatsTop(), m.chatSel)
 }

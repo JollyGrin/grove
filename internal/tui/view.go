@@ -424,6 +424,15 @@ func (m Model) viewFooter() string {
 			line += "   " + sChrome.Render(trunc(m.flash, room))
 		}
 	}
+	if m.prQuotaLow {
+		hint := "gh quota low"
+		if m.prStale {
+			hint += " · PRs stale"
+		}
+		if room := m.width - lipgloss.Width(line) - 3; room >= len([]rune(hint)) {
+			line += "   " + sDim.Render(hint)
+		}
+	}
 	return truncPad(line, m.width)
 }
 

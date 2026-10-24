@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -166,6 +167,9 @@ type Config struct {
 	Cockpit struct {
 		Effects string `yaml:"effects"`
 		Layout  string `yaml:"layout"`
+		// FocusDashWidth is the dash pane's fraction of the cockpit window
+		// in the focus layout (grove-522); see FocusDashPercent.
+		FocusDashWidth string `yaml:"focus_dash_width"`
 	} `yaml:"cockpit"`
 	Sub Sub `yaml:"sub"` // grove-288: gv sub defaults; field-wise merge, workspace overrides global
 }
@@ -191,6 +195,23 @@ func (c *Config) CockpitLayout() string {
 		return "focus"
 	}
 	return "horizontal"
+}
+
+// DefaultFocusDashWidth is cockpit.focus_dash_width when unset or invalid.
+const DefaultFocusDashWidth = 0.3
+
+// FocusDashPercent resolves cockpit.focus_dash_width (a fraction of the
+// cockpit window, e.g. 0.3) to a whole percent for tmux's main-pane-width.
+// Forgiving like CockpitLayout: unset, 0, outside [0.15, 0.85] — including
+// a percent-looking 30, which is rejected rather than guessed at — or a
+// non-numeric value falls back to 30. Held as a string so a typo never
+// fails the config decode.
+func (c *Config) FocusDashPercent() int {
+	f, err := strconv.ParseFloat(strings.TrimSpace(c.Cockpit.FocusDashWidth), 64)
+	if err != nil || f < 0.15 || f > 0.85 {
+		f = DefaultFocusDashWidth
+	}
+	return int(f*100 + 0.5)
 }
 
 // Sub configures `gv sub` — a read-only micro-task delegated to a cheaper

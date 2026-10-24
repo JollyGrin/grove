@@ -145,9 +145,13 @@ func hideChat(pane, target string) (string, error) {
 	if rec.Pane == "" {
 		return "", fmt.Errorf("%s has no live pane to hide", chatName(rec.Row))
 	}
+	freezeChatNames(rec.Row.Workspace, isCockpit)
 	session, err := tmux.HideChatPane(rec.Pane, rec.Row.Workspace, isCockpit, func(session string) error {
 		return state.Append(config.StateDirAt(rec.Root), chatMoveEvent(state.EvChatHidden, session, rec.Pane, rec.Row))
 	})
+	if session != "" {
+		railWriteNow(rec.Row.Workspace, cockpitSessionForLabel(rec.Row.Workspace))
+	}
 	if err != nil {
 		if session != "" {
 			return "", fmt.Errorf("hid the chat as %s, but: %w", session, err)
@@ -175,7 +179,7 @@ func cmdChatShow(args []string) error {
 		fmt.Printf("✓ shown %s — attached in pane %s; `gv chat hide %s` closes the attachment again\n", remoteChatTarget(host, session), pane, pane)
 		return nil
 	}
-	pane, row, err := showChat(args[0], true)
+	pane, row, err := showChat(args[0], "", true)
 	if err != nil {
 		return err
 	}
@@ -186,23 +190,29 @@ func cmdChatShow(args []string) error {
 // showChat is the one implementation behind `gv chat show` and the
 // cockpit's `h` / `enter` on a hidden row (grove-403). focus=true is the
 // verb's behavior: the shown pane takes the keyboard. focus=false leaves
-// the cockpit window's active pane where it was.
-func showChat(target string, focus bool) (string, chat.Row, error) {
-	rec, isCockpit, err := showTarget(target)
+// the cockpit window's active pane where it was. label scopes the lookup
+// (showTarget); "" lets the target name its workspace.
+func showChat(target, label string, focus bool) (string, chat.Row, error) {
+	rec, isCockpit, err := showTarget(target, label)
 	if err != nil {
 		return "", chat.Row{}, err
 	}
-	return showRecord(rec, isCockpit, focus)
+	pane, row, err := showRecord(rec, isCockpit, focus)
+	if pane != "" {
+		railWriteNow(rec.Row.Workspace, cockpitSessionForLabel(rec.Row.Workspace))
+	}
+	return pane, row, err
 }
 
 // showTarget resolves a show target to its report record, after the
-// registry check every show shares.
-func showTarget(target string) (chatRecord, tmux.CockpitCheck, error) {
+// registry check every show shares: live rows only, within label's
+// workspace (findLiveChat, grove-521).
+func showTarget(target, label string) (chatRecord, tmux.CockpitCheck, error) {
 	isCockpit, err := cockpitSessionCheck()
 	if err != nil {
 		return chatRecord{}, nil, err
 	}
-	rec, err := findChat(target)
+	rec, err := findLiveChat(target, label)
 	if err != nil {
 		return chatRecord{}, nil, err
 	}
@@ -215,6 +225,7 @@ func showRecord(rec chatRecord, isCockpit tmux.CockpitCheck, focus bool) (string
 		return "", chat.Row{}, fmt.Errorf("%s", refusal)
 	}
 	session := rec.Row.Session
+	freezeChatNames(rec.Row.Workspace, isCockpit)
 	show := tmux.ShowChatPaneUnfocused
 	if focus {
 		show = tmux.ShowChatPane
@@ -299,6 +310,7 @@ func hideRemoteChat(pane string, facts tmux.PaneFacts, isCockpit tmux.CockpitChe
 	if rec.Host == "" {
 		return "", err
 	}
+	railWriteNow(label, facts.Session)
 	name := remoteChatTarget(rec.Host, rec.Session)
 	if err != nil {
 		return "", fmt.Errorf("hid %s, but: %w", name, err)
@@ -332,6 +344,7 @@ func showRemoteChat(host, session string, focus bool) (pane string, warnings []s
 	if pane == "" {
 		return "", nil, err
 	}
+	railWriteNow(label, cockpitSessionForLabel(label))
 	if aerr := state.Append(config.StateDirAt(root), remoteChatMoveEvent(state.EvChatShown, host, session, pane, label)); aerr != nil && err == nil {
 		err = aerr
 	}

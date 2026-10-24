@@ -55,10 +55,20 @@ workspace's cockpit and its workers share one tmux session
 `grove-<label>` (window 0 = cockpit, 1+ = workers). The cockpit has two
 layouts, `horizontal` (every pane side by side) and `focus`; `L` toggles
 them (`cockpit.layout`; the old `vertical`/`tiled` values read as
-horizontal). In `focus` one chat is shown beside the dash and the rest are
+horizontal). In `focus` one chat is shown beside the dash (the dash's
+width is `cockpit.focus_dash_width`, a fraction, default 0.3; unset, 0,
+non-numeric, a percent like `30`, or outside 0.15–0.85 read as 0.3;
+takes effect when the cockpit session is next built) and the rest are
 minimized (hidden, as in §Hidden chats) behind a 4-row rail pane under it
-— click a box or `gv chat focus <session>` swaps the shown chat; `L` back
-restores exactly the chats focus minimized. `gv hooks install`
+— one chip per chat, the shown one bold, titled by Claude's pane title; a
+chat's name (`cockpit·1`, `chat-3`) is stamped on its pane
+(`@grove_chat_name`) before any move, so it never flips with focus —
+click a chip or `gv chat focus <session>` swaps the shown chat; `L` back
+restores exactly the chats focus minimized. In focus every hidden chat's
+pane is pinned to the slot's size, so a swap is one same-size `swap-pane`
+(no Claude repaint) and a chat keeps its `grove-chat-<label>-<n>` home for
+life; a client attached straight to a hidden chat un-pins it to follow
+that client, and its detach re-pins it. `gv hooks install`
 writes the **shared** `~/.cc-work/settings.json` — it preserves other
 tools' entries, but treat it with respect.
 Subscription accounts live in `<state>/accounts/` (`<name>.token` 0600 +

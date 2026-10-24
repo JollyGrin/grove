@@ -416,7 +416,7 @@ func (m Model) handleLensKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.serveKey(f.slug)
 	case "r":
 		m.flash = "refreshing PRs…"
-		return m, tea.Batch(prsCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
+		return m, tea.Batch(prsNowCmd(m.cfg, m.stateDir, m.localTasks), featuresCmd(m.cfg, m.stateDir, m.features))
 	case "enter", "n", "a", "o", "p", "t", "v", "d":
 		return m.lensRowKey(k, f)
 	}

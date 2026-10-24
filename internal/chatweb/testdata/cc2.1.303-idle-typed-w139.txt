@@ -1,0 +1,49 @@
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/f2844754-ebee-45bc-b8d7-938d6c8c02bf/scratchpad/partb/repo · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                             Ctrl+Y to paste deleted text
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ can you look at the README in this repository and tell me what the project is for, in one or two short sentences please, thanks
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-531-focus-swap-03-direct-attach/f2844754-ebee-45bc-b8d7-938d6…
+  ⏸ manual mode on

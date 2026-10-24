@@ -60,8 +60,10 @@ func cmdChat(args []string) error {
 		return cmdChatServe(args[1:])
 	case "rail":
 		return cmdChatRail(args[1:])
+	case "sync-sizes":
+		return cmdChatSyncSizes(args[1:])
 	default:
-		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail)", args[0])
+		return fmt.Errorf("unknown `gv chat` subcommand %q (have: ls, tail, send, keys, close, hide, show, focus, restamp, serve, rail, sync-sizes)", args[0])
 	}
 }
 
@@ -293,6 +295,21 @@ func chatRows(targets []workspace.Workspace, look chatLookup) []chat.Row {
 // Everything impure arrives in look, so the whole join is table-tested
 // without a tmux server or a real `ps`.
 func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
+	return chatRecordsOf(targets, look, true)
+}
+
+// liveChatRecords is the report without its archived rows (grove-521): the
+// focus/show paths can only move a chat that is running, and the archived
+// half is the expensive one — every transcript head in every brain dir.
+// A live pane's own transcript is read only when it wears no id yet (the
+// sole-candidate resolve needs the list), so its row may lack the label and
+// last-active time the full report carries; the identity fields are the
+// same.
+func liveChatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
+	return chatRecordsOf(targets, look, false)
+}
+
+func chatRecordsOf(targets []workspace.Workspace, look chatLookup, archived bool) []chatRecord {
 	configDirOf := configDirResolver()
 	var pending []livePane
 	for _, ws := range targets {
@@ -387,7 +404,10 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 	var recs []chatRecord
 	for _, lp := range pending {
 		id := lp.pane.ChatSession
-		sessions := scan(lp.configDir, lp.pane.Dir)
+		var sessions []transcript.Session
+		if archived || id == "" {
+			sessions = scan(lp.configDir, lp.pane.Dir)
+		}
 		if id == "" {
 			if s, ok := chat.Resolve(sessions, claimed, rivals[lp.pane.Dir]); ok {
 				id = s.ID
@@ -411,6 +431,9 @@ func chatRecords(targets []workspace.Workspace, look chatLookup) []chatRecord {
 		}.Row(), Pane: lp.pane.Pane, Window: lp.pane.Window, Dir: lp.pane.Dir, PID: lp.pane.PID, ConfigDir: lp.configDir, Root: lp.ws.Root})
 	}
 	for _, ws := range targets {
+		if !archived {
+			break
+		}
 		cfgDir := configDirOf(ws)
 		for _, dir := range orchestratorProjectDirs(ws) {
 			for _, s := range scan(cfgDir, dir) {

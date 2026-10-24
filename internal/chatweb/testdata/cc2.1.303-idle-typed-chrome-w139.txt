@@ -1,0 +1,49 @@
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/f2844754-ebee-45bc-b8d7-938d6c8c02bf/scratchpad/partb/repo · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ please summarise the README in this repository and then tell me what 1. the build and 2. the tests do, esc to interrupt is not a thing
+  here
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  PERSONAL /private/tmp/claude-501/-Users-oprtr-git--worktrees-grove-grove-531-focus-swap-03-direct-attach/f2844754-ebee-45bc-b8d7-938d6…
+  ⏸ manual mode on
