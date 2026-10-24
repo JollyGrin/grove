@@ -393,6 +393,19 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-09-28 · a re-tile aimed at `=session:` lands on whatever window
+  is ACTIVE, which is only the cockpit when the caller is sitting in it**
+  (grove-401): `SelectLayout`/`MainVertical`/`SpawnPane` all target
+  `ExactActive(session)`, fine for the dash's own hotkeys. A verb that can
+  run from a phone, a worker window or a detached chat (`gv chat
+  hide`/`show`) must re-tile the cockpit window by its `@N` id
+  (`retileCockpit`) — the integration test keeps a worker window active
+  and asserts its layout is untouched.
+- **2026-09-28 · `tmux display-message -p -t %999` on a pane that does
+  not exist prints an EMPTY line and exits 0** (grove-401, tmux 3.6a): it
+  is not an error, so "did the command fail" cannot answer "does this pane
+  exist". `paneFacts` treats an empty answer as "no such pane" before
+  parsing; any new reader of a caller-supplied `%N` must do the same.
 - **2026-09-28 · `join-pane` without `-d` hands the joined pane the
   keyboard; `-d` leaves the window's active pane alone** (grove-403, tmux
   3.6a): `tmux.ShowChatPane` focuses the chat it shows, which is right for

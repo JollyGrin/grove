@@ -264,7 +264,7 @@ func TestPrintBrainMigrate(t *testing.T) {
 	}
 }
 
-// grove-513, the realism check: the fleet's commonest edit — every `DEV-X`
+// grove-513, the realism check: the fleet's commonest edit — every `<task>`
 // in the REAL seed swapped for `grove-N`, every `the operator` for `Dean` —
 // must come out as glossary lines alone, no Review block. And the archive
 // finds the real seed's base by stamp.
@@ -275,7 +275,7 @@ func TestMigrateRealSeedSubstitutionIsGlossaryOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("archive lacks the embedded seed %s — run `go generate ./orchestrator/seeds`", stamp)
 	}
-	edited := strings.ReplaceAll(strings.ReplaceAll(seed, "DEV-X", "grove-N"), "the operator", "Dean")
+	edited := strings.ReplaceAll(strings.ReplaceAll(seed, "<task>", "grove-N"), "the operator", "Dean")
 	brain := bootstrap.SeedBody(edited) + "\n\n<!-- grove-seed: " + stamp + " -->\n"
 	m := bootstrap.ClassifyBrain(brain, base)
 	a, s, r := m.Counts()
@@ -288,7 +288,13 @@ func TestMigrateRealSeedSubstitutionIsGlossaryOnly(t *testing.T) {
 		}
 		t.Fatalf("counts %d/%d/%d, want 0/n/0; non-substituted hunks:\n%s", a, s, r, strings.Join(reviews, "\n"))
 	}
-	if len(m.Glossary) != 2 || m.Glossary[0].From != "DEV-X" || m.Glossary[1].From != "the operator" {
+	// Glossary order is first occurrence in the seed, which moves as the
+	// seed is edited — assert the set, not the order.
+	got := map[string]string{}
+	for _, g := range m.Glossary {
+		got[g.From] = g.To
+	}
+	if len(m.Glossary) != 2 || got["<task>"] != "grove-N" || got["the operator"] != "Dean" {
 		t.Errorf("glossary %+v", m.Glossary)
 	}
 }
