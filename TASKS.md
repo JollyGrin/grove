@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] brain-overlay 02: `gv brains` reports the `CLAUDE.local.md` overlay; first seed writes an empty stub (grove-512, 2026-10-24): every brain row (registry + `(global)`) now carries `overlay` (bool) and `overlay_lines` (int — non-blank lines once block HTML comments are stripped, so a comments-only file is no overlay). `SeedBrain`, `RefreshBrain`'s absent case and `gv brains --refresh`'s seed action drop `OverlayStub` beside a freshly seeded brain — one HTML comment per line (Glossary / Overrides / Addenda / Workspace duties + the convention URL), written with O_EXCL so it never lands over an existing file; a current or stale brain never gets a stub after the fact. Every edited-stale note ends "move your edits to CLAUDE.local.md: `gv brains --migrate`" (verb lands in car 03). New `docs/orchestrator-overlay.md` holds the convention: the floor no overlay lowers, the four sections, the `**Override — <section> › <rule>:**` / `**Addendum to duty N (Name):**` / `**Workspace duty:**` shapes and the unbrewed example. Tests: stub written on absent-seed and never over an existing overlay; stripping comments from the stub leaves whitespace; stub → `overlay: false`, one real line → `true`/1; text report shows `overlay: N lines` + a fleet count. e2e brains.sh (stub after init, real overlay on `edited`, pre-existing global overlay survives `--refresh`, no sweep/refresh adds or changes an overlay), wizard.sh (first-seed leg sees the stub; overlay survives every refresh) green; plugin.sh's 2e leg gained the two fields (suite itself still red on this Mac at the pre-brains `/private/tmp` learnings_file compare — leg verified in isolation). PR → feature/brain-overlay.
 - [x] brain-overlay 01: `gv brains --refresh` replaces pristine brains in place (grove-511, 2026-10-24): a brain is **pristine** when its stamp is the hash of its own body (`bootstrap.Pristine`, no new state). New writing flag `gv brains --refresh` acts per row — absent → seed, stale+pristine → replaced in place (`action: refreshed`, no `.new`, no backup), stale+edited → `CLAUDE.md.new` as today (`action: new`), unstamped → report only. Plain `gv brains [--json]` stays a pure read (e2e asserts bytes AND mtimes) and gains additive fields `pristine`, `action` (empty unless `--refresh`) and `leftovers` (`CLAUDE.md.new` / `.bak-*` beside the brain, listed never deleted). The sweep now also covers the global `cfg.Orchestrator.Dir` as row `(global)`. Doctor's brain-row fix names `gv brains --refresh`; `gv update` runs `gv brains --refresh` itself after a real binary swap and prints the refresh report (design OQ1 decided 2026-10-24: automatic). Verified: unit tables in internal/bootstrap + cmd/gv, e2e brains.sh/wizard.sh/dummy.sh green; plugin.sh carries the new field leg but is red on macOS base before it (known /private/tmp red). Seed untouched (car 05 teaches the verb).
 - [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
 - [x] **grove-504** — focus rail never a CHATS row: `cockpitChatPanes` skips `p.Rail`; `ApplyLayout` starts the rail in `$HOME`, not the caller's cwd; unit test + `e2e/rail.sh` leg (build from inside the orchestrator dir).
@@ -34,41 +35,6 @@
 - [x] focus-mode 02: the chat rail (grove-486, 2026-10-19): in `focus` a 4-row grove-drawn pane (`@grove_rail 1`, border `chats`) sits under the chat, one box per off-screen chat (glyph/n/ticket-or-label, turn · age, `+N more`). `gv chat rail --session` is a dumb viewer (one `show-options` per 2s, `· stale` after 30s); the dash's existing refresh beat writes `@grove_rail_rows` (every 5th beat, only on change + 10s heartbeat). `tmux.ApplyLayout` owns the lifecycle, `tmux.RetileFocus` is the one focus re-tile (main-vertical → rail last + `resize-pane -y 4` → select chat); a `window-resized` hook re-holds the height after a client attaches. Chat verbs/ls refuse or skip the rail. `internal/chatrail` (goldens), `e2e/rail.sh` (in all.sh).
 - [x] **grove-490** focus-mode 06: FEATURES → TRAINS — one line per train (`slug ▰▰▰▱▱ 3/7 · ↓3 main · serve –`, bar ≤12 cells, open-PR cars in their glyph colour), `◆ #N is waiting on you` only under a train with a question car; freed rows go to ACTIVITY. No key or tmux change. View allocs 1833→1765 (1 train).
 - [x] grove-485 · focus-mode 01: two cockpit layouts, `horizontal` (even-horizontal) | `focus` (main-vertical, dash at `cockpitMainWidth`%, chats stacked right); `L` toggles them; `vertical`/`tiled` removed (a stale `cockpit.layout: vertical|tiled` reads as horizontal). Footer/help hint "L focus/horizontal", goldens regenerated, GETTING-STARTED updated. Table tests for tmuxLayout/nextLayout/CockpitLayout plus an isolated-socket geometry test (`TestSelectLayoutFocusHorizontal`).
-- [x] chat-hide 05: docs + brains (grove-405, 2026-09-28, on
-      `feature/chat-hide`). CLAUDE.md gains "Hidden chats"; the
-      orchestrator seed teaches `gv chat hide [<s>]` / `gv chat show <s>`
-      — an orchestrator may hide ITSELF when the operator asks it to get
-      out of the way (non-destructive, no second yes), while
-      hiding/showing/closing ANOTHER chat stays propose-then-act —
-      guarded by `TestSeedTeachesChatHide`. Seed stamp 23508b2c0c92 →
-      79b5290fc383; workspace brains are NOT refreshed by this car (they go
-      `stale` in `gv brains` once the train is released, and are merged
-      then by the usual `gv init --only orchestrator-md` three-way).
-      docs/plugins.md already carried `chat_hidden` / `chat_shown` incl.
-      `host`; it gains the event-before-move limit. LEARNINGS: pane
-      identity across break/join, why not a 1-column shrink, the
-      mktemp/`cd ""` scratch trap, the known limits as shipped. Skills:
-      tmux-discipline (scratch-dir guard, moved panes), shipping-gates,
-      claude-code-facts (`$TMUX_PANE` in claude's children). Go: two
-      usage strings only. Idea, not built: a tmux prefix binding for hide
-      (bindings are server-global — it would leak into non-grove
-      sessions).
-- [x] chat-hide 04: remote chats — hide closes the local attach pane,
-      show re-attaches (grove-404, 2026-09-28, on `feature/chat-hide`).
-      A remote chat lives on its host and the cockpit pane is only `ssh -t
-      <host> tmux attach`, so `gv chat hide <%pane>` / `h` kills the LOCAL
-      pane (nothing is sent to the host) and `gv chat show
-      @<host>/<session>` / `h` / `enter` opens a fresh attach pane through
-      the tagging tail now shared with the `@` spawn (`tmux.TagRemotePane`).
-      The spawn stamps `@grove_remote_session` on the pane; an unstamped
-      legacy pane is refused, never guessed. Hidden remote chats are
-      remembered in ONE user option on the cockpit session
-      (`@grove_hidden_remote`) that rides the CHATS box's existing
-      `list-panes -a` as its last field — no file, poll, cache or ssh on
-      any tick; rows render `○ chat-N @host` with `—` for state and last
-      line. `x` on a remote row relays the existing `gv chat close --host`;
-      `a` flashes "attach to reply" (no `chat send --host` relay exists —
-      deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked

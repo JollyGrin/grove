@@ -51,6 +51,7 @@ type BrainProbe struct {
 	RootGone  bool     // the registered root is not a directory any more
 	Exists    bool     // a CLAUDE.md is present under Dir
 	Content   string   // that brain's bytes (empty when Exists is false)
+	Overlay   string   // CLAUDE.local.md's bytes beside it ("" when there is none — or it is empty)
 	Leftovers []string // CLAUDE.md.new / CLAUDE.md.bak-* basenames beside the brain
 }
 
@@ -65,6 +66,12 @@ type BrainRow struct {
 	Want     string `json:"want"`     // the stamp of the seed THIS binary carries
 	Command  string `json:"command"`  // what to run ("" when nothing to do)
 	Note     string `json:"note"`     // the one-line human reason
+	// Overlay says a CLAUDE.local.md with at least one real line sits
+	// beside the brain (grove-512); OverlayLines counts those lines —
+	// non-blank once block HTML comments are stripped, so the first-seed
+	// stub is `overlay: false, overlay_lines: 0`.
+	Overlay      bool `json:"overlay"`
+	OverlayLines int  `json:"overlay_lines"`
 	// Action is what `--refresh` did about the row: seed · none · refreshed
 	// · new · report. Empty under a plain (read-only) sweep.
 	Action string `json:"action"`
@@ -117,6 +124,9 @@ func probeDir(p *BrainProbe) {
 	if b, err := os.ReadFile(filepath.Join(p.Dir, BrainFile)); err == nil {
 		p.Exists, p.Content = true, string(b)
 	}
+	if b, err := os.ReadFile(filepath.Join(p.Dir, OverlayFile)); err == nil {
+		p.Overlay = string(b)
+	}
 	p.Leftovers = []string{}
 	entries, err := os.ReadDir(p.Dir)
 	if err != nil {
@@ -146,7 +156,9 @@ func PlanSweep(probes []BrainProbe, seed string) []BrainRow {
 	want := SeedStamp(seed)
 	rows := make([]BrainRow, 0, len(probes))
 	for _, p := range probes {
-		row := BrainRow{Label: p.Label, Root: p.Root, Want: want, Leftovers: p.Leftovers}
+		row := BrainRow{Label: p.Label, Root: p.Root, Want: want, Leftovers: p.Leftovers,
+			OverlayLines: OverlayLines(p.Overlay)}
+		row.Overlay = row.OverlayLines > 0
 		if row.Leftovers == nil {
 			row.Leftovers = []string{}
 		}
@@ -169,10 +181,10 @@ func PlanSweep(probes []BrainProbe, seed string) []BrainRow {
 				row.Note = "seed moved " + plan.Have + " → " + want + " — pristine, replaced in place by " + RefreshSweepCmd
 			case global:
 				row.Command = RefreshSweepCmd
-				row.Note = "seed moved " + plan.Have + " → " + want + " — edited; " + RefreshSweepCmd + " writes " + BrainFile + ".new to diff"
+				row.Note = "seed moved " + plan.Have + " → " + want + " — edited; " + RefreshSweepCmd + " writes " + BrainFile + ".new to diff; " + MigrateHint
 			default:
 				row.Command = refreshCmd
-				row.Note = "seed moved " + plan.Have + " → " + want + " — edited, lands as " + BrainFile + ".new to diff"
+				row.Note = "seed moved " + plan.Have + " → " + want + " — edited, lands as " + BrainFile + ".new to diff; " + MigrateHint
 			}
 		case BrainUnstamped:
 			if !global {
@@ -211,9 +223,10 @@ func RefreshAction(row BrainRow) BrainAction {
 
 // RefreshSweep is `gv brains --refresh` (grove-511): plan every probe,
 // then carry each row's RefreshAction out and record it in Action. It
-// writes exactly two things — a stamped seed over an absent or PRISTINE
-// brain, and CLAUDE.md.new beside an edited one — and never deletes
-// anything (leftovers are listed, not removed). Rows keep the state they
+// writes exactly three things — a stamped seed over an absent or PRISTINE
+// brain, the overlay stub beside a freshly seeded one when no
+// CLAUDE.local.md exists (grove-512), and CLAUDE.md.new beside an edited
+// brain — and never deletes anything (leftovers are listed, not removed). Rows keep the state they
 // were FOUND in: a replaced brain reads `stale` + `refreshed`, which is
 // what the report shows as done.
 //
@@ -246,6 +259,14 @@ func RefreshSweep(probes []BrainProbe, seed string) ([]BrainRow, error) {
 			}
 			rows[i].Command = ""
 			rows[i].Note = "installed the orchestrator brain (seed " + row.Want + ")"
+			// First seed: the empty overlay stub beside it — never over
+			// an existing CLAUDE.local.md (grove-512).
+			if stub, err := WriteOverlayStub(dir); err != nil {
+				fail(i, err)
+				continue
+			} else if stub != "" {
+				rows[i].Note += " and an empty " + OverlayFile + " stub"
+			}
 		case ActionRefreshed:
 			if err := os.WriteFile(filepath.Join(dir, BrainFile), stamped, 0o644); err != nil {
 				fail(i, err)
@@ -259,7 +280,7 @@ func RefreshSweep(probes []BrainProbe, seed string) ([]BrainRow, error) {
 				continue
 			}
 			rows[i].Command = ""
-			rows[i].Note = "seed moved " + row.Have + " → " + row.Want + " — edited; wrote " + BrainFile + ".new beside your brain, diff it in"
+			rows[i].Note = "seed moved " + row.Have + " → " + row.Want + " — edited; wrote " + BrainFile + ".new beside your brain, diff it in; " + MigrateHint
 			if !contains(rows[i].Leftovers, BrainFile+".new") {
 				rows[i].Leftovers = append(rows[i].Leftovers, BrainFile+".new")
 			}

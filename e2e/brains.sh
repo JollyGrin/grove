@@ -16,6 +16,9 @@
 # may appear anywhere. Then `gv brains --refresh` (grove-511) replaces the
 # pristine brain in place, seeds the global one, writes .new beside the
 # edited one and leaves the hand-managed one alone — and deletes nothing.
+# grove-512: the first seed writes the CLAUDE.local.md stub (comments only,
+# `overlay: false`), a real overlay reports `overlay: true` + its line
+# count, and no sweep or refresh ever writes over an existing overlay.
 # tmux: never talks to a tmux server, so no tmux isolation needed.
 set -euo pipefail
 
@@ -56,6 +59,14 @@ mkrepo "$SEEDED"
 SEEDED_BRAIN="$SEEDED/.grove/orchestrator/CLAUDE.md"
 [ -f "$SEEDED_BRAIN" ] || fail "orchestrator-md step did not install a brain"
 grep -q '<!-- grove-seed: ' "$SEEDED_BRAIN" || fail "installed brain carries no seed stamp"
+# grove-512: the first seed drops the overlay stub beside the brain — HTML
+# comments only, so it is `overlay: false` and costs the model nothing.
+SEEDED_OVERLAY="$SEEDED/.grove/orchestrator/CLAUDE.local.md"
+[ -f "$SEEDED_OVERLAY" ] || fail "first seed must write the CLAUDE.local.md stub"
+grep -v '^<!--' "$SEEDED_OVERLAY" > "$SCRATCH/stub.rest" || true
+[ ! -s "$SCRATCH/stub.rest" ] || fail "stub must be HTML comments only:
+$(cat "$SEEDED_OVERLAY")"
+grep -q 'docs/orchestrator-overlay.md' "$SEEDED_OVERLAY" || fail "stub must point at the convention doc"
 
 say "workspace 'handmade': hand-written brain, no seed stamp (pre-grove-190 shape)"
 HAND="$SCRATCH/handmade"
@@ -109,6 +120,10 @@ mkrepo "$EDITED"
 mkdir -p "$EDITED/.grove/orchestrator"
 EDITED_BRAIN="$EDITED/.grove/orchestrator/CLAUDE.md"
 cp "$PRISTINE_BRAIN" "$EDITED_BRAIN"
+# grove-512: a real overlay beside it — the stub's comments plus ONE line.
+EDITED_OVERLAY="$EDITED/.grove/orchestrator/CLAUDE.local.md"
+cp "$SEEDED_OVERLAY" "$EDITED_OVERLAY"
+printf -- '- The operator is Dean.\n' >> "$EDITED_OVERLAY"
 printf '\n## my own duty\n' >> "$EDITED_BRAIN"
 
 # Byte-exact + mtime snapshots: the sweep is a pure read and must prove it.
@@ -120,6 +135,10 @@ BEFORE_EDITED="$(cksum < "$EDITED_BRAIN")"
 MT_BEFORE="$(for f in "$SEEDED_BRAIN" "$HAND_BRAIN" "$PRISTINE_BRAIN" "$EDITED_BRAIN" "$(dirname "$SEEDED_BRAIN")" "$(dirname "$PRISTINE_BRAIN")" "$(dirname "$EDITED_BRAIN")"; do mtime "$f"; done)"
 GLOBAL_DIR="$HOME/.config/grove/orchestrator"
 [ ! -e "$GLOBAL_DIR" ] || fail "scratch HOME must start with no global orchestrator dir"
+# grove-512: every `gv init --yes` above seeded a stub beside its brain
+# (handmade/pristine/edited overwrote only the brain). Snapshot the set and
+# the bytes: no sweep or refresh may add to it or change one.
+OVERLAYS_BEFORE="$(find "$SCRATCH" -name 'CLAUDE.local.md' -exec cksum {} + | sort)"
 
 say "gv brains --json classifies every workspace"
 "$GV" brains --json > "$SCRATCH/brains.json" || fail "gv brains --json exited non-zero"
@@ -137,6 +156,9 @@ want = {
     "edited":   ("stale",        "gv init --only orchestrator-md",                         False),
     "(global)": ("absent",       "gv brains --refresh",                                    False),
 }
+# grove-512: only the edited workspace carries a real overlay; the seeded
+# one has the comments-only stub, which counts as none.
+overlay = {"edited": (True, 1)}
 ok = True
 if len(rows) != len(want):
     print(f"  {len(rows)} rows, want {len(want)}: {sorted(rows)}"); ok = False
@@ -144,6 +166,8 @@ for label, (state, command, pristine) in want.items():
     r = rows.get(label)
     if r is None:
         print(f"  no row for {label}"); ok = False; continue
+    if (r.get("overlay"), r.get("overlay_lines")) != overlay.get(label, (False, 0)):
+        print(f"  {label}: overlay {r.get('overlay')!r}/{r.get('overlay_lines')!r}, want {overlay.get(label, (False, 0))!r}"); ok = False
     if r["state"] != state:
         print(f"  {label}: state {r['state']!r}, want {state!r}"); ok = False
     if r["command"] != command:
@@ -154,9 +178,13 @@ for label, (state, command, pristine) in want.items():
         print(f"  {label}: a plain sweep must leave action empty, got {r['action']!r}"); ok = False
     if not isinstance(r["leftovers"], list):
         print(f"  {label}: leftovers must be a list, got {r['leftovers']!r}"); ok = False
-    for field in ("label", "root", "state", "pristine", "have", "want", "command", "note", "action", "leftovers"):
+    for field in ("label", "root", "state", "pristine", "have", "want", "command", "note", "action", "leftovers", "overlay", "overlay_lines"):
         if field not in r:
             print(f"  {label}: contract field {field} missing"); ok = False
+if "gv brains --migrate" not in rows.get("edited", {}).get("note", ""):
+    print(f"  edited: note must point at the migrate verb (grove-512), got {rows.get('edited', {}).get('note')!r}"); ok = False
+if "--migrate" in rows.get("pristine", {}).get("note", ""):
+    print(f"  pristine: nothing to migrate, got {rows.get('pristine', {}).get('note')!r}"); ok = False
 if rows.get("pristine", {}).get("leftovers") != ["CLAUDE.md.bak-seed-000000000000"]:
     print(f"  pristine: leftovers must list the .bak, got {rows.get('pristine', {}).get('leftovers')!r}"); ok = False
 if rows.get("pristine", {}).get("have") != rows.get("edited", {}).get("have") or not rows.get("pristine", {}).get("have"):
@@ -187,6 +215,8 @@ grep -q 'pristine' "$SCRATCH/brains.txt" || fail "a pristine stale brain must be
 grep -q '1 pristine brain .*gv brains --refresh' "$SCRATCH/brains.txt" || fail "report must offer gv brains --refresh for the pristine brain"
 grep -q "safe to delete" "$SCRATCH/brains.txt" || fail "report must list leftovers as safe to delete"
 grep -q "$PRISTINE_BAK" "$SCRATCH/brains.txt" || fail "report must name the .bak leftover by path"
+grep -q 'overlay: 1 line' "$SCRATCH/brains.txt" || fail "report must show the edited brain's overlay (grove-512)"
+grep -q '1 brain carries a CLAUDE.local.md overlay' "$SCRATCH/brains.txt" || fail "report must count overlays (grove-512)"
 
 say "the sweep mutated nothing — bytes AND mtimes"
 [ "$(cksum < "$SEEDED_BRAIN")" = "$BEFORE_SEEDED" ] || fail "seeded brain changed under a pure-read sweep"
@@ -201,6 +231,14 @@ $NEW"
 [ -d "$GHOST" ] && fail "sweep recreated a deleted workspace root" || true
 [ ! -e "$GLOBAL_DIR" ] || fail "plain sweep created the global orchestrator dir"
 [ -f "$PRISTINE_BAK" ] || fail "sweep removed a leftover"
+[ "$(find "$SCRATCH" -name 'CLAUDE.local.md' -exec cksum {} + | sort)" = "$OVERLAYS_BEFORE" ] || fail "plain sweep wrote or changed a CLAUDE.local.md — the stub is a first-seed write only"
+
+# grove-512: an overlay that exists BEFORE the first seed is the operator's
+# — the refresh seeds the brain beside it and must not write the stub over it.
+mkdir -p "$GLOBAL_DIR"
+GLOBAL_OVERLAY="$GLOBAL_DIR/CLAUDE.local.md"
+printf '# Workspace overlay: global\n\n## Glossary\n- The operator is Dean.\n' > "$GLOBAL_OVERLAY"
+BEFORE_GLOBAL_OVERLAY="$(cksum < "$GLOBAL_OVERLAY")"
 
 say "gv brains --refresh: pristine replaced in place, global seeded, edited gets .new, hand-managed untouched (grove-511)"
 "$GV" brains --refresh --json > "$SCRATCH/refresh.json" || fail "gv brains --refresh --json exited non-zero"
@@ -234,6 +272,8 @@ cmp -s "$EDITED_BRAIN.new" "$SEEDED_BRAIN" || fail ".new must carry the stamped 
 [ "$(cksum < "$SEEDED_BRAIN")" = "$BEFORE_SEEDED" ] || fail "refresh rewrote a current brain"
 [ -f "$GLOBAL_DIR/CLAUDE.md" ] || fail "refresh must seed the global brain"
 cmp -s "$GLOBAL_DIR/CLAUDE.md" "$SEEDED_BRAIN" || fail "global brain must be the stamped seed"
+[ "$(cksum < "$GLOBAL_OVERLAY")" = "$BEFORE_GLOBAL_OVERLAY" ] || fail "refresh wrote the stub over an existing CLAUDE.local.md"
+[ "$(find "$SCRATCH" -path "$GLOBAL_DIR" -prune -o -name 'CLAUDE.local.md' -exec cksum {} + | sort)" = "$OVERLAYS_BEFORE" ] || fail "refresh wrote or changed a workspace CLAUDE.local.md — only the global dir was seeded"
 [ -d "$GHOST" ] && fail "refresh recreated a deleted workspace root" || true
 
 say "refresh text report says what it did; a second plain sweep finds them current"
@@ -253,6 +293,14 @@ for label in ("pristine", "(global)", "seeded"):
     r = rows[label]
     if r["state"] != "current" or not r["pristine"]:
         print(f"  {label}: {r['state']}/{r['pristine']}, want current/pristine"); ok = False
+# grove-512: the pre-existing global overlay (3 real lines) survived the
+# seed and is reported; the edited one still reads 1 line.
+if (rows["(global)"]["overlay"], rows["(global)"]["overlay_lines"]) != (True, 3):
+    print(f"  (global): overlay {rows['(global)']['overlay']!r}/{rows['(global)']['overlay_lines']!r}, want True/3"); ok = False
+if (rows["edited"]["overlay"], rows["edited"]["overlay_lines"]) != (True, 1):
+    print(f"  edited: overlay {rows['edited']['overlay']!r}/{rows['edited']['overlay_lines']!r}, want True/1"); ok = False
+if rows["pristine"]["overlay"] or rows["seeded"]["overlay"]:
+    print("  pristine/seeded: no real overlay, must read False"); ok = False
 if rows["edited"]["state"] != "stale" or rows["edited"]["pristine"]:
     print(f"  edited: {rows['edited']}"); ok = False
 sys.exit(0 if ok else 1)

@@ -250,7 +250,7 @@ assert r['skills'] == ['dummy-skill'], r['skills']
 assert [(c['skill'], c['date']) for c in r['candidates']] == [('dummy-skill', '$TODAY')], r['candidates']
 "
 
-# 2e. READ: the brain sweep (grove-236; grove-511 fields). Pure read.
+# 2e. READ: the brain sweep (grove-236; grove-511 + grove-512 fields). Pure read.
 "$GV" brains --json > "$OUT/brains.json"
 python3 -c "
 import json
@@ -259,10 +259,13 @@ assert data['schema_version'] == 1, data
 rows = {r['label']: r for r in data['brains']}
 assert '(global)' in rows, rows.keys()  # grove-511: the brain used outside any workspace
 for r in rows.values():
-    for f in ('label', 'root', 'state', 'pristine', 'have', 'want', 'command', 'note', 'action', 'leftovers'):
+    for f in ('label', 'root', 'state', 'pristine', 'have', 'want', 'command', 'note', 'action', 'leftovers', 'overlay', 'overlay_lines'):
         assert f in r, (f, r)
     assert r['state'] in ('current', 'stale', 'unstamped', 'absent', 'missing-root'), r
     assert isinstance(r['pristine'], bool) and isinstance(r['leftovers'], list), r
+    # grove-512: overlay is a bool, overlay_lines an int, and they agree.
+    assert isinstance(r['overlay'], bool) and isinstance(r['overlay_lines'], int), r
+    assert r['overlay'] == (r['overlay_lines'] > 0), r
     assert r['action'] == '', ('plain gv brains must not act', r)
 "
 
