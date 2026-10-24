@@ -68,9 +68,12 @@ const usage = `gv — grove
   gv version | gv --version                    print the build version
   gv update [--yes] [--force]                 self-update from the latest GitHub release
                                               (after a real update: the brain sweep below, report-only)
-  gv brains [--json]                          every registered workspace's orchestrator brain vs the
-                                              seed this binary carries — pure read, names the refresh
-                                              command per workspace; grove never overwrites a brain
+  gv brains [--json]                          every registered workspace's orchestrator brain (+ the
+                                              global one) vs the seed this binary carries — pure read,
+                                              names the refresh command per brain
+  gv brains --refresh [--json]                replace every PRISTINE stale brain in place (grove wrote
+                                              it, nobody edited it); an edited brain gets CLAUDE.md.new
+                                              to diff, an unstamped one is only reported
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)

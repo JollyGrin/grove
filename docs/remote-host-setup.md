@@ -193,19 +193,24 @@ and errors on a private source install — use
 refresh what it names** (grove-236). A new binary carries a new
 orchestrator seed, so every workspace on that host is suddenly running an
 older brain; the sweep runs only when the update actually replaced the
-binary and lists each workspace that is behind with the exact command —
-run from that workspace's root, over the same ssh hop:
+binary and lists each brain that is behind (every registered workspace
+plus the host's global `(global)` brain) with the exact command, over the
+same ssh hop:
 
 ```bash
 ssh <host> 'gv update --yes'                 # the sweep prints at the end
 ssh <host> 'gv brains'                       # or read it any time, pure read
-ssh <host> 'cd <root> && gv init --only orchestrator-md'
+ssh <host> 'gv brains --refresh'             # replaces every PRISTINE stale brain in place (grove-511)
+ssh <host> 'cd <root> && gv init --only orchestrator-md'   # an EDITED brain: CLAUDE.md.new to diff
 ```
 
 The sweep reads the host's OWN `~/.config/grove/registry.yaml`, so
 running it over ssh reports that host's workspaces — there is no
-cross-host push, and nothing is ever overwritten: the refresh drops
-`CLAUDE.md.new` beside the brain for you to diff.
+cross-host push. `gv brains --refresh` overwrites only a brain grove can
+prove it wrote unchanged (the stamp is the hash of the body — `pristine`
+in the report); an edited brain still gets `CLAUDE.md.new` beside it for
+you to diff, an unstamped one is only reported, and the `.new` /
+`.bak-*` leftovers it lists are yours to delete, never grove's.
 
 ## Sidecars: user systemd units
 

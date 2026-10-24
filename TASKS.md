@@ -24,6 +24,7 @@
 
 ## Now
 
+- [x] brain-overlay 01: `gv brains --refresh` replaces pristine brains in place (grove-511, 2026-10-24): a brain is **pristine** when its stamp is the hash of its own body (`bootstrap.Pristine`, no new state). New writing flag `gv brains --refresh` acts per row — absent → seed, stale+pristine → replaced in place (`action: refreshed`, no `.new`, no backup), stale+edited → `CLAUDE.md.new` as today (`action: new`), unstamped → report only. Plain `gv brains [--json]` stays a pure read (e2e asserts bytes AND mtimes) and gains additive fields `pristine`, `action` (empty unless `--refresh`) and `leftovers` (`CLAUDE.md.new` / `.bak-*` beside the brain, listed never deleted). The sweep now also covers the global `cfg.Orchestrator.Dir` as row `(global)`. Doctor's brain-row fix names `gv brains --refresh`; `gv update` still only PRINTS the sweep (design OQ1 open; flip `updateRefreshesBrains` in cmd/gv/brains.go to make it automatic). Verified: unit tables in internal/bootstrap + cmd/gv, e2e brains.sh/wizard.sh/dummy.sh green; plugin.sh carries the new field leg but is red on macOS base before it (known /private/tmp red). Seed untouched (car 05 teaches the verb).
 - [x] grove-503 (#503): rail writer race — chatrail.Writer.Write mutex-guarded, railTick uses TryLock on railBeat so an overlapping refresh skips its beat; race test in internal/chatrail
 - [x] **grove-504** — focus rail never a CHATS row: `cockpitChatPanes` skips `p.Rail`; `ApplyLayout` starts the rail in `$HOME`, not the caller's cwd; unit test + `e2e/rail.sh` leg (build from inside the orchestrator dir).
 - [x] grove-491: focus-mode 07 — docs wrap for the train: CLAUDE.md §Layout (two layouts, `L`, focus hides chats, `gv chat focus`), orchestrator seed (`gv chat focus` in tools, focus note under Dispatch-and-dismiss; brains go stale until `gv init --only orchestrator-md`), grove-cockpit-design Status 2026-10, HANDOFF train section. plugins.md already carries `reason:"focus"` (grove-487); no new tmux skill rule (no LEARNINGS entry on status/status-format).
@@ -68,25 +69,6 @@
       line. `x` on a remote row relays the existing `gv chat close --host`;
       `a` flashes "attach to reply" (no `chat send --host` relay exists —
       deferred). `chat_hidden` / `chat_shown` gained an additive `host` key.
-- [x] chat-hide 03: cockpit keys on CHATS rows (grove-403, 2026-09-28, on
-      `feature/chat-hide`). With the CHATS box focused: `h` hides a shown
-      chat / shows a hidden one (the keyboard stays on the dashboard —
-      `tmux.ShowChatPaneUnfocused`, join-pane `-d`), `enter` focuses the
-      pane (showing it first when hidden), `a` opens a one-line inline
-      reply under the row for a HIDDEN chat (a shown one refuses via
-      `chat.WriteRefusal`), `x` closes after a y/N confirm. Remote rows
-      were inert in this car (grove-404 then gave them `h`/`enter`/`x`;
-      `a` flashes "attach to reply"); task keys stay refused; every
-      global key is untouched. The keys call the functions behind the CLI
-      verbs through injected vars (`hideChat`, `showChat`, `relayChat`,
-      `closeChat`, `closeCockpitPane` — the first, second and last factored
-      out of `cmdChatHide` / `cmdChatShow` / `cmdOrchestratorClose`), one
-      `tea.Cmd` per press and one costly pass of the box on its answer.
-      `ChatRow.Session` comes off the existing pane listing. ACTIVITY
-      renders `chat_hidden` / `chat_shown`; the footer offers the row's
-      chat keys under CHATS focus only; help gains a CHATS section. No new
-      event type, no new `--json` field. `e2e/cockpit.sh` drives all four
-      keys through the live TUI.
 
 Grove is the operator's live daily driver and dogfoods itself: the real
 backlog is **GitHub issues on this repo** (`grove-N` = issue #N), worked
