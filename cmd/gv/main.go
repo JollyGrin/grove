@@ -74,6 +74,9 @@ const usage = `gv — grove
   gv brains --refresh [--json]                replace every PRISTINE stale brain in place (grove wrote
                                               it, nobody edited it); an edited brain gets CLAUDE.md.new
                                               to diff, an unstamped one is only reported
+  gv brains --migrate [--label L]             dry run: draft CLAUDE.local.md.draft from each edited
+                                              brain's edits against its archived seed (writes nothing
+                                              else; prints a tracked brain's git commands)
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)

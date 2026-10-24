@@ -141,10 +141,12 @@ type BrainPlan struct {
 	Note     string // the one-line human report
 }
 
-// seedBody is a seed or brain with every stamp line and trailing blank
+// SeedBody is a seed or brain with every stamp line and trailing blank
 // space removed — the bytes the stamp is computed over. Stripping first
-// makes stamping idempotent: StampSeed(StampSeed(x)) == StampSeed(x).
-func seedBody(s string) string {
+// makes stamping idempotent: StampSeed(StampSeed(x)) == StampSeed(x). The
+// seed archive generator (orchestrator/seeds/gen.go) and the migration
+// diff use the same body.
+func SeedBody(s string) string {
 	lines := strings.Split(s, "\n")
 	kept := lines[:0]
 	for _, ln := range lines {
@@ -158,14 +160,14 @@ func seedBody(s string) string {
 
 // SeedStamp is the short sha256 identifying a seed's content.
 func SeedStamp(seed string) string {
-	sum := sha256.Sum256([]byte(seedBody(seed)))
+	sum := sha256.Sum256([]byte(SeedBody(seed)))
 	return hex.EncodeToString(sum[:])[:seedStampLen]
 }
 
 // StampSeed returns the seed with exactly one trailing stamp line. Every
 // seed write goes through it, so a stamp can never be duplicated.
 func StampSeed(seed string) string {
-	body := seedBody(seed)
+	body := SeedBody(seed)
 	return body + "\n\n" + seedStampPrefix + SeedStamp(body) + seedStampSuffix + "\n"
 }
 
