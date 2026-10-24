@@ -158,6 +158,31 @@ changes the behavior.
 - `--continue` chains key on **cwd** — per-profile subdirs
   (`.grove/orchestrator/<profile>/`) give each backend its own chain, and
   CLAUDE.md still applies (memory loads recurse up ancestor dirs).
+- **External `@imports` are gated, and `-p` drops them silently** (verified
+  2026-10-19, v2.1.303; brain-overlay design). An import whose path
+  resolves outside the working directory needs a one-time approval dialog
+  (stored per project in `~/.claude.json`,
+  `hasClaudeMdExternalIncludesApproved`); under `-p` there is no dialog and
+  the file is simply not loaded, with no warning.
+- **An ancestor CLAUDE.md's `@imports` do not load from a subdirectory
+  cwd.** Launched from `.grove/orchestrator/<profile>/`, the ancestor
+  `orchestrator/CLAUDE.md` loaded but its `@grove-seed.md` import did not
+  (it counts as external from there), and neither did the workspace-root
+  CLAUDE.md's imports. The ancestor's `CLAUDE.local.md` and
+  `.claude/rules/*` DID load. Never put a seed rule behind an `@import`.
+- **`CLAUDE.local.md` loads last, from the cwd and every ancestor, with or
+  without git.** Within a directory it is appended after `CLAUDE.md`
+  (type `Local`); it loaded from a gitignored dir and from a profile subdir
+  of a workspace with no repository at all. This is why the operator's
+  overlay sits beside the seed (`.grove/orchestrator/CLAUDE.local.md`,
+  docs/orchestrator-overlay.md): position is the only precedence Claude
+  Code has — "if two instructions contradict each other, Claude may pick
+  one arbitrarily" — so the seed names the overlay as the winner in words.
+- **In-session `/compact` re-injects `CLAUDE.md` AND `CLAUDE.local.md`.**
+  Docs promise only that the project-root CLAUDE.md survives compaction;
+  live, the transcript carries a fresh `instructions` attachment after the
+  `compact_boundary` listing both files, and the next request carried
+  both. A `-p --resume` probe agreed, imports included.
 
 ## Modals in the pane (v2.1.282, grove-308)
 

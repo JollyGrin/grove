@@ -27,7 +27,7 @@ the tooling that every machine needs goes to the repo's LEARNINGS.md
 instead, dated, when the repo keeps one. Don't save what the repo, the
 ticket or git already records.
 
-Done means: the work is committed with the ticket prefix
+{{template "overlay" .}}Done means: the work is committed with the ticket prefix
 ({{.Identifier}}: ...) and pushed to the same branch, with a PR open —
 `gh pr create --base {{.Base}}` only if none exists. Never push to main;
 never target deploy/* branches.

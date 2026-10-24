@@ -67,10 +67,19 @@ const usage = `gv — grove
 
   gv version | gv --version                    print the build version
   gv update [--yes] [--force]                 self-update from the latest GitHub release
-                                              (after a real update: the brain sweep below, report-only)
-  gv brains [--json]                          every registered workspace's orchestrator brain vs the
-                                              seed this binary carries — pure read, names the refresh
-                                              command per workspace; grove never overwrites a brain
+                                              (after a real update: runs gv brains --refresh, below)
+  gv brains [--json]                          every registered workspace's orchestrator brain (+ the
+                                              global one) vs the seed this binary carries — pure read,
+                                              names the refresh command per brain
+  gv brains --refresh [--json]                replace every PRISTINE stale brain in place (grove wrote
+                                              it, nobody edited it); an edited brain gets CLAUDE.md.new
+                                              to diff, an unstamped one is only reported
+  gv brains --migrate [--label L]             dry run: draft CLAUDE.local.md.draft from each edited
+                                              brain's edits against its archived seed (writes nothing
+                                              else; prints a tracked brain's git commands)
+  gv brains --migrate --apply --label L [--yes]   swap the reviewed draft in: CLAUDE.md → .bak-pre-overlay,
+                                              seed → CLAUDE.md, draft → CLAUDE.local.md; refuses while
+                                              a Review block or a real CLAUDE.local.md is there
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)
@@ -1868,7 +1877,10 @@ func cmdGrab(args []string) error {
 	if choice.Feature != nil {
 		featureSlug = choice.Feature.Slug
 	}
-	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, promptMode, *briefFlag, choice.Base, featureSlug)
+	if repo.Prompt != "" && repo.PromptOverlay != "" {
+		fmt.Fprintf(os.Stderr, "note: repo sets both prompt: and prompt_overlay: — prompt: wins, the overlay is ignored\n")
+	}
+	prompt, err := kickoff.Render(task, prov.Verbs(), prov.Kind(), repo.Prompt, repo.PromptOverlay, promptMode, *briefFlag, choice.Base, featureSlug)
 	if err != nil {
 		return err
 	}
@@ -4048,7 +4060,7 @@ func cmdAdopt(args []string) error {
 	if pickupBase == "" {
 		pickupBase = repo.Base
 	}
-	prompt, err := kickoff.Render(task, verbs, repoKind, "", promptMode, "", pickupBase, storedFeature)
+	prompt, err := kickoff.Render(task, verbs, repoKind, "", repo.PromptOverlay, promptMode, "", pickupBase, storedFeature)
 	if err != nil {
 		return err
 	}

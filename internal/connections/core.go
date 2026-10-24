@@ -109,6 +109,9 @@ func Core(env Env) []Connection {
 	// override `--effort` without a word from claude.
 	conns = append(conns, effortConnection())
 
+	// grove-568: repos whose `prompt:` replaces the kickoff template wholesale.
+	conns = append(conns, kickoffConnections(env)...)
+
 	// claude-accounts: account rows, only when something is wrong.
 	conns = append(conns, accountConnections(env, time.Now())...)
 
@@ -123,7 +126,7 @@ func Core(env Env) []Connection {
 			Severity:    SeverityWarn,
 			RequiredFor: []string{"ui"},
 			Title:       "orchestrator brain up to date",
-			Fix:         "gv init --only orchestrator-md",
+			Fix:         "gv brains --refresh",
 			Check:       checkOrchestratorBrain,
 		})
 	}

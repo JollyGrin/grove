@@ -162,7 +162,7 @@ func TestOrchestratorBrainRow(t *testing.T) {
 	if stale.State != "warn" {
 		t.Errorf("stale stamp: state %q, want warn", stale.State)
 	}
-	if stale.Fix != "gv init --only orchestrator-md" {
+	if stale.Fix != "gv brains --refresh" {
 		t.Errorf("fix = %q, want the refresh command", stale.Fix)
 	}
 	if !strings.Contains(stale.Info, "seed moved") {

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -33,6 +34,74 @@ const (
 
 // BrainFile is the brain's basename inside an orchestrator dir.
 const BrainFile = "CLAUDE.md"
+
+// OverlayFile is the operator-owned overlay beside the brain (grove-512,
+// brain-overlay design §Files). Claude Code appends it after CLAUDE.md,
+// from the orchestrator dir and from every profile subdir under it, with
+// or without git. Grove writes it exactly once — as OverlayStub, on the
+// first seed, when no file is there — and never rewrites it.
+const OverlayFile = "CLAUDE.local.md"
+
+// OverlayDocURL is where the overlay convention lives; the stub points
+// at it so an operator opening the empty file knows the shape.
+const OverlayDocURL = "https://github.com/JollyGrin/grove/blob/main/docs/orchestrator-overlay.md"
+
+// OverlayStub is the first-seed overlay: one HTML comment per line, so
+// Claude Code — which strips block HTML comments before injection —
+// loads it at zero context cost, and a shell `grep -v '^<!--'` finds
+// nothing. The headings are the convention's four sections, in order.
+const OverlayStub = "<!-- Workspace overlay (operator-owned; grove never rewrites this file). Convention: " + OverlayDocURL + " -->\n" +
+	"<!-- ## Glossary -->\n" +
+	"<!-- ## Overrides -->\n" +
+	"<!-- ## Addenda -->\n" +
+	"<!-- ## Workspace duties -->\n"
+
+// htmlComment matches one block HTML comment, across lines, non-greedy —
+// the same thing Claude Code drops before a CLAUDE*.md reaches the model.
+var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// StripHTMLComments removes every block HTML comment from s. What is
+// left is what the model would see.
+func StripHTMLComments(s string) string {
+	return htmlComment.ReplaceAllString(s, "")
+}
+
+// OverlayLines counts the lines of overlay content that reach the model:
+// non-blank lines once block HTML comments are gone. The stub scores 0.
+func OverlayLines(content string) int {
+	n := 0
+	for _, ln := range strings.Split(StripHTMLComments(content), "\n") {
+		if strings.TrimSpace(ln) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// HasOverlay reports whether overlay content carries any real line. A
+// file holding only HTML comments (the stub) is no overlay — everywhere:
+// the report, and the later migration verbs.
+func HasOverlay(content string) bool { return OverlayLines(content) > 0 }
+
+// WriteOverlayStub installs OverlayStub as orchDir/CLAUDE.local.md when
+// nothing is there, and returns the path written ("" when a file already
+// existed). It is the only way grove ever writes the overlay on its own,
+// and O_EXCL makes the never-over-an-existing-file rule the kernel's.
+func WriteOverlayStub(orchDir string) (string, error) {
+	target := filepath.Join(orchDir, OverlayFile)
+	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if _, err := f.WriteString(OverlayStub); err != nil {
+		f.Close()
+		return "", err
+	}
+	return target, f.Close()
+}
 
 // BrainState classifies an on-disk brain against the current seed.
 type BrainState string
@@ -52,21 +121,32 @@ const (
 	ActionNone   BrainAction = "none"   // nothing to do
 	ActionNew    BrainAction = "new"    // write CLAUDE.md.new beside it
 	ActionReport BrainAction = "report" // say so; touch nothing
+	// ActionRefreshed is `gv brains --refresh` only (grove-511): a stale
+	// brain grove can PROVE it wrote unchanged is replaced in place.
+	ActionRefreshed BrainAction = "refreshed"
 )
+
+// MigrateHint is appended to every edited-stale note (grove-512): the
+// edits belong in the overlay, and the verb that moves them there arrives
+// with brain-overlay car 03 — the note may name it now.
+const MigrateHint = "move your edits to " + OverlayFile + ": `gv brains --migrate`"
 
 // BrainPlan is the decision for one brain: never any I/O.
 type BrainPlan struct {
-	State  BrainState
-	Action BrainAction
-	Have   string // the stamp found in the brain ("" when absent/unstamped)
-	Want   string // the current seed's stamp
-	Note   string // the one-line human report
+	State    BrainState
+	Action   BrainAction
+	Pristine bool   // the brain is byte-for-byte a seed grove wrote (see Pristine)
+	Have     string // the stamp found in the brain ("" when absent/unstamped)
+	Want     string // the current seed's stamp
+	Note     string // the one-line human report
 }
 
-// seedBody is a seed or brain with every stamp line and trailing blank
+// SeedBody is a seed or brain with every stamp line and trailing blank
 // space removed — the bytes the stamp is computed over. Stripping first
-// makes stamping idempotent: StampSeed(StampSeed(x)) == StampSeed(x).
-func seedBody(s string) string {
+// makes stamping idempotent: StampSeed(StampSeed(x)) == StampSeed(x). The
+// seed archive generator (orchestrator/seeds/gen.go) and the migration
+// diff use the same body.
+func SeedBody(s string) string {
 	lines := strings.Split(s, "\n")
 	kept := lines[:0]
 	for _, ln := range lines {
@@ -80,14 +160,14 @@ func seedBody(s string) string {
 
 // SeedStamp is the short sha256 identifying a seed's content.
 func SeedStamp(seed string) string {
-	sum := sha256.Sum256([]byte(seedBody(seed)))
+	sum := sha256.Sum256([]byte(SeedBody(seed)))
 	return hex.EncodeToString(sum[:])[:seedStampLen]
 }
 
 // StampSeed returns the seed with exactly one trailing stamp line. Every
 // seed write goes through it, so a stamp can never be duplicated.
 func StampSeed(seed string) string {
-	body := seedBody(seed)
+	body := SeedBody(seed)
 	return body + "\n\n" + seedStampPrefix + SeedStamp(body) + seedStampSuffix + "\n"
 }
 
@@ -105,6 +185,20 @@ func BrainStamp(content string) string {
 	return stamp
 }
 
+// Pristine reports whether a brain is exactly what grove wrote: the stamp
+// it carries is the hash of its own body, so nobody edited it since (an
+// edit anywhere outside the stamp line moves the hash; an edit to the
+// stamp line makes it a different seed's stamp). It needs no extra state
+// — the stamp IS the record. Unstamped content is never pristine.
+//
+// A pristine brain is grove's own file, which is what lets `gv brains
+// --refresh` (grove-511) replace it in place without a .new or a backup:
+// the old bytes are reproducible from the seed history by stamp.
+func Pristine(content string) bool {
+	have := BrainStamp(content)
+	return have != "" && have == SeedStamp(content)
+}
+
 // PlanBrain is the whole decision, pure: what to do about a brain whose
 // content is `content` (exists=false when there is none) given `seed`.
 // force only ever widens the hand-managed case into a .new write — it
@@ -115,14 +209,17 @@ func PlanBrain(content string, exists bool, seed string, force bool) BrainPlan {
 		return BrainPlan{State: BrainAbsent, Action: ActionSeed, Want: want,
 			Note: "installed the orchestrator brain (seed " + want + ")"}
 	}
-	have := BrainStamp(content)
+	have, pristine := BrainStamp(content), Pristine(content)
 	switch {
 	case have == want:
-		return BrainPlan{State: BrainCurrent, Action: ActionNone, Have: have, Want: want,
+		return BrainPlan{State: BrainCurrent, Action: ActionNone, Pristine: pristine, Have: have, Want: want,
 			Note: "orchestrator brain up to date (seed " + want + ")"}
 	case have != "":
-		return BrainPlan{State: BrainStale, Action: ActionNew, Have: have, Want: want,
-			Note: fmt.Sprintf("seed moved %s → %s — wrote %s.new beside your brain; grove never overwrites it", have, want, BrainFile)}
+		note := fmt.Sprintf("seed moved %s → %s — wrote %s.new beside your brain; grove never overwrites it", have, want, BrainFile)
+		if !pristine {
+			note += "; " + MigrateHint
+		}
+		return BrainPlan{State: BrainStale, Action: ActionNew, Pristine: pristine, Have: have, Want: want, Note: note}
 	case force:
 		return BrainPlan{State: BrainUnstamped, Action: ActionNew, Want: want,
 			Note: fmt.Sprintf("brain has no seed stamp (hand-managed) — forced: wrote %s.new for a manual diff", BrainFile)}
@@ -148,7 +245,8 @@ func InspectBrain(orchDir, seed string, force bool) (BrainPlan, error) {
 // RefreshBrain is `gv init --only orchestrator-md`: inspect, then carry
 // the plan out. Returns the plan and the path written ("" when nothing
 // was). Idempotent — a second run finds the same state and rewrites the
-// same bytes at most.
+// same bytes at most. A first seed also drops the overlay stub beside the
+// brain (grove-512) — only when no CLAUDE.local.md is there.
 func RefreshBrain(orchDir, seed string, force bool) (BrainPlan, string, error) {
 	plan, err := InspectBrain(orchDir, seed, force)
 	if err != nil {
@@ -163,6 +261,9 @@ func RefreshBrain(orchDir, seed string, force bool) (BrainPlan, string, error) {
 		if err := os.WriteFile(target, []byte(StampSeed(seed)), 0o644); err != nil {
 			return plan, "", err
 		}
+		if _, err := WriteOverlayStub(orchDir); err != nil {
+			return plan, target, err
+		}
 		return plan, target, nil
 	case ActionNew:
 		target := filepath.Join(orchDir, BrainFile+".new")
@@ -176,7 +277,8 @@ func RefreshBrain(orchDir, seed string, force bool) (BrainPlan, string, error) {
 
 // SeedBrain is the first-run half only (the cockpit build and the
 // detached chat spawn): create the dir and install the stamped seed when
-// the brain is absent. Never writes .new — an unattended cockpit open
+// the brain is absent, plus the overlay stub when no CLAUDE.local.md is
+// there (grove-512). Never writes .new — an unattended cockpit open
 // must not litter a workspace; drift is `gv doctor`'s row to raise and
 // the refresh step's job to act on.
 func SeedBrain(orchDir, seed string) (string, error) {
@@ -190,6 +292,9 @@ func SeedBrain(orchDir, seed string) (string, error) {
 	target := filepath.Join(orchDir, BrainFile)
 	if err := os.WriteFile(target, []byte(StampSeed(seed)), 0o644); err != nil {
 		return "", err
+	}
+	if _, err := WriteOverlayStub(orchDir); err != nil {
+		return target, err
 	}
 	return target, nil
 }

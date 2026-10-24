@@ -4,7 +4,9 @@
 # config survives --yes byte-identical, --only hooks wires the scratch
 # settings.json exactly once (ovs entries preserved), --yes never spawns the
 # agents-md run, --agents-md with a stub worker writes AGENTS.md, the
-# orchestrator brain refresh seeds/stamps/never-overwrites (grove-190),
+# orchestrator brain refresh seeds/stamps/never-overwrites (grove-190) and
+# `gv brains --refresh` replaces only a pristine brain in place (grove-511),
+# the first seed writes the CLAUDE.local.md stub and no refresh touches it (grove-512),
 # and doctor --json renders the connections board.
 # tmux: never talks to a tmux server (doctor only checks tmux is on PATH), so no tmux isolation needed.
 set -euo pipefail
@@ -114,6 +116,19 @@ BRAIN="$ROOT/.grove/orchestrator/CLAUDE.md"
 [ -f "$BRAIN" ] || fail "init should have seeded the orchestrator brain"
 [ "$(grep -c 'grove-seed' "$BRAIN")" = 1 ] || fail "brain must carry exactly one seed stamp:
 $(tail -3 "$BRAIN")"
+# grove-512: the first seed drops the overlay stub beside the brain — only
+# HTML comments (zero context), never rewritten once it exists.
+OVERLAY="$ROOT/.grove/orchestrator/CLAUDE.local.md"
+[ -f "$OVERLAY" ] || fail "first seed must write the CLAUDE.local.md stub"
+grep -v '^<!--' "$OVERLAY" > "$SCRATCH/overlay.rest" || true
+[ ! -s "$SCRATCH/overlay.rest" ] || fail "stub must be HTML comments only:
+$(cat "$OVERLAY")"
+grep -q 'docs/orchestrator-overlay.md' "$OVERLAY" || fail "stub must point at the convention doc"
+for h in Glossary Overrides Addenda 'Workspace duties'; do
+  grep -q "$h" "$OVERLAY" || fail "stub missing the $h heading"
+done
+printf -- '- The operator is Dean.\n' >> "$OVERLAY"
+OVERLAY_BEFORE="$(cat "$OVERLAY")"
 "$GV" init --only orchestrator-md --yes > "$SCRATCH/orch1.out" 2>&1
 grep -q 'up to date' "$SCRATCH/orch1.out" || fail "matching stamp must be a no-op:
 $(cat "$SCRATCH/orch1.out")"
@@ -134,6 +149,36 @@ $(cat "$SCRATCH/orch2.out")"
 grep -q 'orchestrator brain up to date' "$SCRATCH/orchdoc.txt" || fail "doctor must carry the brain row:
 $(cat "$SCRATCH/orchdoc.txt")"
 grep -q 'seed moved' "$SCRATCH/orchdoc.txt" || fail "doctor must flag the stale stamp"
+grep -q -- '→ gv brains --refresh' "$SCRATCH/orchdoc.txt" || fail "doctor's fix must name gv brains --refresh (grove-511):
+$(cat "$SCRATCH/orchdoc.txt")"
+# grove-511: `gv brains --refresh` leaves an EDITED stale brain alone too —
+# it only rewrites the .new — and replaces a PRISTINE one in place.
+rm -f "$BRAIN.new"
+"$GV" brains --refresh > "$SCRATCH/orchref.out" 2>&1 || fail "gv brains --refresh exited non-zero:
+$(cat "$SCRATCH/orchref.out")"
+[ "$(cat "$BRAIN")" = "$BEFORE" ] || fail "gv brains --refresh overwrote an edited brain"
+[ -f "$BRAIN.new" ] || fail "gv brains --refresh must write .new beside an edited brain"
+grep -q 'wrote CLAUDE.md.new' "$SCRATCH/orchref.out" || fail "refresh must report the .new:
+$(cat "$SCRATCH/orchref.out")"
+rm -f "$BRAIN.new"
+python3 - "$BRAIN" <<'PY'
+import hashlib, sys
+# An older seed, stamped exactly as grove stamps: pristine, but stale.
+body = "# Orchestrator\n\nan older seed body"
+stamp = hashlib.sha256(body.encode()).hexdigest()[:12]
+open(sys.argv[1], "w").write(body + "\n\n<!-- grove-seed: " + stamp + " -->\n")
+PY
+"$GV" brains > "$SCRATCH/orchplain.out" 2>&1 || fail "gv brains exited non-zero"
+grep -q 'pristine' "$SCRATCH/orchplain.out" || fail "plain sweep must call the older seed pristine:
+$(cat "$SCRATCH/orchplain.out")"
+"$GV" brains --refresh > "$SCRATCH/orchref2.out" 2>&1 || fail "gv brains --refresh (pristine) exited non-zero"
+grep -q 'replaced in place' "$SCRATCH/orchref2.out" || fail "pristine stale brain must be replaced in place:
+$(cat "$SCRATCH/orchref2.out")"
+[ ! -f "$BRAIN.new" ] || fail "a pristine refresh must not write .new"
+[ "$(grep -c 'grove-seed' "$BRAIN")" = 1 ] || fail "replaced brain must carry exactly one stamp"
+"$GV" init --only orchestrator-md --yes > "$SCRATCH/orch2b.out" 2>&1
+grep -q 'up to date' "$SCRATCH/orch2b.out" || fail "replaced brain must read current:
+$(cat "$SCRATCH/orch2b.out")"
 # A hand-managed brain (no stamp at all) is reported, never rewritten.
 rm -f "$BRAIN.new"; printf '# my own brain\n' > "$BRAIN"
 "$GV" init --only orchestrator-md --yes > "$SCRATCH/orch3.out" 2>&1
@@ -143,6 +188,16 @@ $(cat "$SCRATCH/orch3.out")"
 "$GV" init --only orchestrator-md --yes --force-orchestrator-md > /dev/null 2>&1
 [ -f "$BRAIN.new" ] || fail "--force-orchestrator-md must write .new for an unstamped brain"
 [ "$(cat "$BRAIN")" = "# my own brain" ] || fail "forced run overwrote the brain"
+# grove-512: every refresh above (seed, .new, pristine replace, forced .new)
+# left the overlay alone, and gv brains reports it.
+[ "$(cat "$OVERLAY")" = "$OVERLAY_BEFORE" ] || fail "a refresh touched CLAUDE.local.md"
+"$GV" brains --json > "$SCRATCH/orchbrains.json" || fail "gv brains --json exited non-zero"
+python3 - "$SCRATCH/orchbrains.json" "$ROOT" <<'PY2' || fail "overlay fields wrong (see above)"
+import json, os, sys
+rows = {os.path.realpath(r["root"]): r for r in json.load(open(sys.argv[1]))["brains"]}
+r = rows[os.path.realpath(sys.argv[2])]
+assert r["overlay"] is True and r["overlay_lines"] == 1, r
+PY2
 
 say "doctor renders the connections board"
 "$GV" doctor --json > "$SCRATCH/doctor.json" 2>&1 || true   # exit 1 = expected (scratch gh auth)

@@ -24,7 +24,7 @@ the tooling that every machine needs goes to the repo's LEARNINGS.md
 instead, dated, when the repo keeps one. Don't save what the repo, the
 task or git already records.
 
-Done means: the repo's lint, build and tests pass; the work is committed
+{{template "overlay" .}}Done means: the repo's lint, build and tests pass; the work is committed
 with the task prefix ({{.ID}}: ...) and, if this repo has a remote, pushed
 with a PR open via `gh pr create --base {{.Base}}` and "Task: {{.ID}}" in
 the body — never push to the base branch itself; with no remote, say so.
