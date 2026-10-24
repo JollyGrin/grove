@@ -8,6 +8,21 @@
 
 ## Claude Code behavior (verified in ovs)
 
+- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
+  block itself, so a kickoff's "do not ask for confirmation" line is a
+  duplicate** (grove-433). Rule: templates state goals, constraints and
+  verification only; before ever adding the paragraph back, grep a real
+  worker transcript's `prompt_snapshot` for "operating autonomously".
+  Rule: claude-code-facts §System prompt.
+- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
+  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
+  and `.claude/settings.local.json` never reaches a fresh worktree**
+  (grove-437). Rule: treat auto memory as one surface per repo;
+  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
+  reads the default location rather than relocating it. A headless
+  `claude -p` run carries the auto-memory system prompt, so it is a valid
+  probe of whether a kickoff makes workers write memory. Rule:
+  claude-code-facts §Profiles.
 - **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd, so
   every worktree shares `<config dir>/projects/<encoded main checkout>/
   memory/` — and the one settings scope that is per-repo and private,
@@ -37,4 +52,15 @@
 
 ## tmux / git / detector internals (verified against source)
 
+- **2026-10-07 · `tmux show-options` takes ONE option name and never
+  auto-starts a server** (grove-455). Rule: the read-only query is a single
+  exec `tmux start-server \; show-options -g \; show-options -gw` (on a
+  serverless machine the started server answers and exits; on a live one
+  `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
+  WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
+  table — one table alone misses half. Rule: tmux-discipline §3.
 - **2026-10-07 · `show-options` takes ONE option name, and does not auto-start a server.** tmux 3.4: `tmux show-options -g a b c` fails with "too many arguments (need at most 1)", and on a machine with no server running `tmux show-options -g` answers "error connecting to …/default" instead of sourcing the config (only `start-server`/`new-session` boot one). The working read-only query is a single exec `tmux start-server \; show-options -g \; show-options -gw` — on a serverless machine the started server serves the query and exits (no session, `exit-empty` default); on a live one `start-server` is a no-op. `pane-base-index` and `allow-rename` live in the WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session table — one table alone misses half of them. Found implementing grove-455/#169, whose ticket text assumed both the multi-name form and the auto-start.
+
+## Go / CLI
+
+- **2026-10-07 · App-token 403 cascade (grove-451).** One bundled `--json` field took down two unrelated features: a GitHub App token can't read `statusCheckRollup`, so the single `gh pr list` that served both the ls/TUI CI column and the `gv done` merge gate failed as a whole — CI columns went blank AND every `gv done` on a genuinely merged ticket reported "no PR found" and demanded `--force`. The gate never looked at CI; it just rode the same query. Rule: a verdict-bearing query asks only for the fields its verdict needs; display queries degrade field-by-field (retry without the privileged field, render unknown) rather than failing the fetch; and a command failure must never be reported with the words of a successful empty result.

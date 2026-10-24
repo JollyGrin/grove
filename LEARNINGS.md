@@ -42,22 +42,6 @@
 
 ## Claude Code behavior (verified in ovs)
 
-- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
-  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
-  and `.claude/settings.local.json` never reaches a fresh worktree**
-  (grove-437). Rule: treat auto memory as one surface per repo;
-  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
-  reads the default location rather than relocating it. A headless
-  `claude -p` run carries the auto-memory system prompt, so it is a valid
-  probe of whether a kickoff makes workers write memory. Rule:
-  claude-code-facts §Profiles.
-- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
-  block itself, so a kickoff's "do not ask for confirmation" line is a
-  duplicate** (grove-433). Rule: templates state goals, constraints and
-  verification only; before ever adding the paragraph back, grep a real
-  worker transcript's `prompt_snapshot` for "operating autonomously".
-  Rule: claude-code-facts §System prompt.
-
 ## tmux / git / detector internals (verified against source)
 
 - 2026-10-19 (grove-531, tmux 3.6a): **A window with `window-size manual` ignores a client that attaches to it** — a 100x30 pty client attached straight to a slot-pinned 139x50 hidden chat sees a 139x50 window clipped to its screen; `set -wu window-size` makes it follow the client at once (100x29). A SESSION hook (`set-hook -t <@win> client-attached …`, no `-w`) fires for a direct attach; `client-session-changed` fires on attach AND on `switch-client` INTO the session, but nothing fires on the session a client switches AWAY from; `client-detached` fires on detach, and a `run-shell -b gv …` from it already reads `#{session_attached}` = 0. Hook values read as formats like any option (`#{m:*sync-sizes*,#{client-detached}}` tells grove's hook from an operator's global one), and a session-level hook shadows a global hook of the same name for that session. `show-hooks -g` lists every hook NAME, set or not — grep for a value, not the name. `set-hook <name> …` without an `[index]` replaces the whole array (a `[1]` set earlier is gone). Promoted: tmux-discipline §3 (per-session hooks).
@@ -65,13 +49,6 @@
 - 2026-10-19 (grove-525, tmux 3.6a): **`resize-window -x/-y` silently sets that window's `window-size` to `manual`** — `show-options -w` reads `window-size manual` afterwards with no `set-option` of ours. So an e2e `tmux resize-window -t <cockpit>` pins the cockpit window too, and "unpin on leave" must be an explicit `set-option -wu -t <@win> window-size` (it falls back to the global/user value). Also verified: a `set-hook` body is parsed when it fires, so `cmd1 ; cmd2` in one hook string runs both, in order (the rail's `resize-pane` then `run-shell -b`); `run-shell` format-expands its argument, so a `#` in a path must be doubled. A user conf with `set -g window-size smallest` + `aggressive-resize on` does NOT crash new windows — only global `manual` does. Promoted: tmux-discipline §3 (`resize-window` pins).
 - 2026-10-19 (focus swap spike, tmux 3.6a): **`set -g window-size manual` crashes the tmux server on the next new window** — `new-session` (with or without `-x/-y`) or `new-window` after it prints `server exited unexpectedly` and every session on that server is gone (reproduced 2× on an isolated `-L` server, no client attached). Per-window `set -w -t <win> window-size manual` + `resize-window -x -y` is safe. Rule: never set `window-size` globally — on the operator's real server that line is a kill-server. Same spike: a `swap-pane` between two panes of IDENTICAL size sends no SIGWINCH, so Claude Code does not repaint (swapped-in screen byte-identical, ~5ms), while today's break-pane/join-pane into a differently-sized slot costs one full Claude repaint (~270ms on a short transcript). Design: docs/plans/2026-10-19-focus-same-size-swap-design.md. Promoted: tmux-discipline §1 (never `set -g window-size`).
 - 2026-10-19 (grove-487, tmux 3.6a): `#{pane_last}` is 1 for the window's previously active pane — the only pane recency tmux has (no per-pane activity time), and the right "which chat was I in" answer when `L` is typed in the dash (the dash is always the active pane then). `run()` trims its output, so a list-panes format whose LAST field is an empty `@option` loses its trailing tabs on the final line and a field-count check rejects that pane — end such a format with a literal `\t.`. Two quick `L` presses run two off-loop layout commands concurrently: an e2e that polls pane count and presses `L` again can race the first command's option write (`@grove_focus_hid`) — wait for the option, not the panes.
-- **2026-10-07 · `tmux show-options` takes ONE option name and never
-  auto-starts a server** (grove-455). Rule: the read-only query is a single
-  exec `tmux start-server \; show-options -g \; show-options -gw` (on a
-  serverless machine the started server answers and exits; on a live one
-  `start-server` is a no-op); `pane-base-index`/`allow-rename` live in the
-  WINDOW table (`-gw`), `base-index`/`renumber-windows` in the session
-  table — one table alone misses half. Rule: tmux-discipline §3.
 
 - **`tmux.SendKeys` is single-line only** and tmux interprets key-name
   lookalikes in the text. Rule: prose goes via `load-buffer` +
@@ -98,9 +75,9 @@
 
 ## Go / CLI
 
+- **2026-10-24 · The cockpit's "dirty heap regardless of workspace" was `charmbracelet/x/ansi`'s pooled parser, not grove** (grove-580). `x/ansi` ≤ v0.11.4 builds every `sync.Pool` parser with a **4 MB** data buffer (`parser_sync.go`), and `lipgloss.Style.Render` → `cellbuf.Wrap` takes one per call. The pool is per-P and private slots are never stolen, so on a 14-core Mac up to 14 × 4 MB sit live between GCs, and each GC clears the pool only for the next frame to allocate again — a ratchet whose ceiling is GOMAXPROCS × 4 MB × GOGC, which is exactly the 32–45 MB "floor" and 57–88 MB peaks the audit measured, and why an EMPTY workspace (deancafe) read heavier than the busiest. Measured with the new SIGUSR2 seam on throwaway dashes on the real workspaces: inuse 29.2 MB (24.6 MB = six parsers) on deancafe, footprint 54 MB / peak 70 MB at 4 min; after bumping `x/cellbuf` v0.0.15 (pulls `x/ansi` v0.11.5, where the buffer is 4 KB) inuse 5.1 MB, footprint 14.7 MB / peak 15.4 MB at 10 min; grove 35.6 → 16.4 MB. Goroutines 13–14 either way, flat over time — nothing of grove's is retained; the live set is runtime + reflect typelinks + one JSON decode. No `SetMemoryLimit`: a limit sized from a 3–5 MB live set would be inert or would thrash the GC against a pool that refills every cycle. Rules: a resident Go process that looks heavy is profiled (`kill -USR2`), never guessed at; and when `-top` is dominated by a dependency's `(inline)` allocator, read the dependency's version history before touching grove — the fix was `go get`. USR2 KILLS a binary older than the seam (≤ v0.1.84): check `gv version` first.
 - **`log-append.py rotate` half-commits when it hits an undated row** (2026-10-11, grove-474). With TASKS.md over its cap, rotate wrote the oldest row into `docs/archive/` and then `sys.exit`ed on the next, undated row, leaving TASKS.md unchanged. The rerun archived that first row again, so it appeared twice. Fix: give each undated row a date from `git log -S'<row text>' --format=%cs -- TASKS.md`, rerun rotate, then check the archive diff for duplicates. Its bare-date fallback also raised IndexError (no capture group) until grove-471 fixed `row_date`.
 - **2026-10-11 · The no-secrets PreToolUse guard is not in the repo and is armed only on contributor lanes** (grove-470). `~/.config/grove/hooks/no-secrets-on-contrib.sh` lives in the operator's config dir, and its first line exits 0 unless `GROVE_DATA_LANE=contributor` — a value only a model profile's env map exports. Accounts never apply under a profile (claude-accounts design §Decision 1), so an account-pinned worker never runs with the guard armed: adding `CLAUDE_CODE_OAUTH_TOKEN` to its deny pattern (design §Decision 4) defends only a contributor-lane worker that inherited the token some other way. It is one operator's private file, so the patch is not grove's to ship (no doctor row either: a repo-agnostic binary must not hardcode it). Rule: before citing a hook as a guard, read its arming condition — a guard that exits early on your lane is not one.
-- **2026-10-07 · App-token 403 cascade (grove-451).** One bundled `--json` field took down two unrelated features: a GitHub App token can't read `statusCheckRollup`, so the single `gh pr list` that served both the ls/TUI CI column and the `gv done` merge gate failed as a whole — CI columns went blank AND every `gv done` on a genuinely merged ticket reported "no PR found" and demanded `--force`. The gate never looked at CI; it just rode the same query. Rule: a verdict-bearing query asks only for the fields its verdict needs; display queries degrade field-by-field (retry without the privileged field, render unknown) rather than failing the fetch; and a command failure must never be reported with the words of a successful empty result.
 - **2026-10-07 · `--model` was never recorded on the task; only
   `model_profile` was** (grove-435). `gv ls --json`, the `Task` struct and
   the `task_created`/`task_adopted` data know a worker's PROFILE, but a
