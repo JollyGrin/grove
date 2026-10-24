@@ -145,18 +145,24 @@ func TestPrintBrainSweepRefreshShowsWhatItDid(t *testing.T) {
 // The post-update report shells out to the REPLACED binary — this process
 // still carries the OLD embedded seed, so an in-process sweep would report
 // every workspace current against the seed the update just superseded.
-func TestReportBrainSweepAfterUpdateRunsTheReplacedBinary(t *testing.T) {
+// Since grove-511 (design OQ1, decided: automatic) it runs `brains
+// --refresh`, so the pristine brains are brought current in the same
+// step, and the header says so.
+func TestReportBrainSweepAfterUpdateRunsTheReplacedBinaryRefresh(t *testing.T) {
+	if !updateRefreshesBrains {
+		t.Fatal("gv update must refresh brains automatically (OQ1 decided 2026-10-24)")
+	}
 	stub := filepath.Join(t.TempDir(), "gv")
-	script := "#!/bin/sh\n[ \"$1\" = brains ] || { echo \"wrong verb: $*\" >&2; exit 2; }\necho NEW-BINARY-SWEEP\n"
+	script := "#!/bin/sh\n[ \"$1\" = brains ] && [ \"$2\" = --refresh ] && [ $# = 2 ] || { echo \"wrong verb: $*\" >&2; exit 2; }\necho NEW-BINARY-REFRESH\n"
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() { reportBrainSweepAfterUpdate(stub) })
-	if !strings.Contains(out, "NEW-BINARY-SWEEP") {
-		t.Errorf("post-update report must print the replaced binary's sweep, got %q", out)
+	if !strings.Contains(out, "NEW-BINARY-REFRESH") {
+		t.Errorf("post-update report must run the replaced binary's refresh and print its report, got %q", out)
 	}
-	if !strings.Contains(out, "the new binary carries") {
-		t.Errorf("report needs a header saying whose seed it is, got %q", out)
+	if !strings.Contains(out, "refreshed against the seed the new binary carries") {
+		t.Errorf("header must say the brains were refreshed, not only swept, got %q", out)
 	}
 }
 

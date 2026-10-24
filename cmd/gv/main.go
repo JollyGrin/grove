@@ -67,7 +67,7 @@ const usage = `gv — grove
 
   gv version | gv --version                    print the build version
   gv update [--yes] [--force]                 self-update from the latest GitHub release
-                                              (after a real update: the brain sweep below, report-only)
+                                              (after a real update: runs gv brains --refresh, below)
   gv brains [--json]                          every registered workspace's orchestrator brain (+ the
                                               global one) vs the seed this binary carries — pure read,
                                               names the refresh command per brain

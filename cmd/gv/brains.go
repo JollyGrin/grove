@@ -34,9 +34,10 @@ import (
 
 // updateRefreshesBrains decides what `gv update` does after a real binary
 // swap: run `gv brains --refresh` itself (true) or print the plain sweep,
-// which names the command (false). Brain-overlay design §Open questions 1
-// — an operator decision; the default stays the read until it is made.
-const updateRefreshesBrains = false
+// which names the command (false). Brain-overlay design §Open questions 1,
+// decided 2026-10-24: automatic — a pristine brain is grove's own
+// unchanged file, and the refresh report says what happened.
+const updateRefreshesBrains = true
 
 func cmdBrains(args []string) error {
 	fs := flag.NewFlagSet("brains", flag.ExitOnError)
@@ -237,6 +238,10 @@ func reportBrainSweepAfterUpdate(target string) {
 		fmt.Fprintf(os.Stderr, "warning: brain sweep failed (%v) — run `gv brains` yourself\n", err)
 		return
 	}
-	fmt.Print("\norchestrator brains, against the seed the new binary carries:\n")
+	if updateRefreshesBrains {
+		fmt.Print("\norchestrator brains refreshed against the seed the new binary carries (pristine ones replaced in place; edited ones get CLAUDE.md.new):\n")
+	} else {
+		fmt.Print("\norchestrator brains, against the seed the new binary carries:\n")
+	}
 	os.Stdout.Write(out)
 }
