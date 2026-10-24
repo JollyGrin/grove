@@ -4,8 +4,8 @@
 // it was born from (found by its stamp in the embedded seed archive), sort
 // every hunk into what the overlay convention can hold, and render a
 // CLAUDE.local.md.draft beside the brain. Nothing else is written here —
-// `--apply` (car 04) is the step that swaps files, and it refuses while a
-// `## Review before applying` block remains.
+// `--apply` (grove-514, below) is the step that swaps files, and it refuses
+// while a `## Review before applying` block remains.
 //
 // The classifier is pure: (brain, base) in, hunks out. Three classes:
 //
@@ -38,7 +38,7 @@ import (
 // dry run rewrites it; it is grove's rendering, never operator text.
 const DraftFile = OverlayFile + ".draft"
 
-// MigrateCmd is the verb this file implements; MigrateApplyCmd is car 04's.
+// MigrateCmd is the dry run; MigrateApplyCmd swaps one reviewed draft in.
 const (
 	MigrateCmd      = "gv brains --migrate"
 	MigrateApplyCmd = MigrateCmd + " --apply --label "
@@ -464,7 +464,7 @@ func RenderDraft(label, stamp string, m Migration) string {
 	fmt.Fprintf(&b, "# Workspace overlay: %s\n", label)
 	fmt.Fprintf(&b, "<!-- Drafted by `%s` from the edits in %s against seed %s. Convention: %s -->\n",
 		MigrateCmd, BrainFile, stamp, OverlayDocURL)
-	fmt.Fprintf(&b, "<!-- Read it, edit it, then `%s%s` swaps it in (car 04). -->\n", MigrateApplyCmd, label)
+	fmt.Fprintf(&b, "<!-- Read it, edit it, then `%s%s` swaps it in. -->\n", MigrateApplyCmd, label)
 
 	if len(m.Glossary) > 0 {
 		b.WriteString("\n## Glossary\n")
@@ -678,4 +678,117 @@ func MigrateSweep(probes []MigrateProbe, seed string, lookup func(string) (strin
 		}
 	}
 	return rows, firstErr
+}
+
+// ── apply (grove-514, car 04) ────────────────────────────────────────────
+//
+// `gv brains --migrate --apply --label L` swaps a reviewed draft in, one
+// workspace at a time: the edited brain steps aside as a backup, the
+// current seed takes its place, and the draft becomes the overlay. Three
+// file moves, nothing deleted, and every refusal below leaves the dir
+// byte-for-byte as it was.
+
+// BackupPreOverlay is where --apply parks the edited brain. It is never
+// overwritten: a second --apply refuses until the operator moves it.
+const BackupPreOverlay = BrainFile + ".bak-pre-overlay"
+
+// ApplyPlan is one brain's --apply, decided before anything is touched.
+type ApplyPlan struct {
+	Label   string
+	Dir     string
+	Brain   string // Dir/CLAUDE.md — the edited brain, becomes Backup
+	Backup  string // Dir/CLAUDE.md.bak-pre-overlay
+	Draft   string // Dir/CLAUDE.local.md.draft — becomes Overlay
+	Overlay string // Dir/CLAUDE.local.md (absent or stub-only)
+	Seed    string // the stamped seed that becomes the new CLAUDE.md
+	// StubReplaced says a stub-only overlay sits at Overlay and the draft
+	// lands over it (the one file --apply replaces rather than moves).
+	StubReplaced bool
+	Tracked      bool
+	GitCommands  []string // printed after --apply, never run
+}
+
+// ApplyRefusal is why --apply would not run: a non-zero exit with the
+// reason, and no file changed.
+type ApplyRefusal struct{ Reason string }
+
+func (r *ApplyRefusal) Error() string { return r.Reason }
+
+// hasReviewBlock reports whether a draft still carries the heading the
+// operator has to resolve and delete before --apply.
+func hasReviewBlock(draft string) bool {
+	for _, ln := range strings.Split(draft, "\n") {
+		if strings.TrimSpace(ln) == ReviewHeading {
+			return true
+		}
+	}
+	return false
+}
+
+// PlanApply is the pure half of --apply: given a probe and the draft's
+// bytes (draftOK false when no draft is on disk), decide the swap or
+// refuse. Refusals, in the order checked: root gone; no brain; the brain
+// is pristine (nothing to migrate); draft missing; draft still holds a
+// Review block; a non-stub CLAUDE.local.md exists; a backup already sits
+// at .bak-pre-overlay.
+func PlanApply(p MigrateProbe, draft string, draftOK bool, backupExists bool, seed string) (ApplyPlan, error) {
+	plan := ApplyPlan{Label: p.Label, Dir: p.Dir,
+		Brain:   filepath.Join(p.Dir, BrainFile),
+		Backup:  filepath.Join(p.Dir, BackupPreOverlay),
+		Draft:   filepath.Join(p.Dir, DraftFile),
+		Overlay: filepath.Join(p.Dir, OverlayFile),
+		Seed:    StampSeed(seed)}
+	refuse := func(format string, args ...any) (ApplyPlan, error) {
+		return ApplyPlan{}, &ApplyRefusal{Reason: fmt.Sprintf(format, args...)}
+	}
+	switch {
+	case p.RootGone:
+		return refuse("%s: registered root %s is gone — nothing to apply", p.Label, p.Root)
+	case !p.Exists:
+		return refuse("%s: no %s under %s — nothing to migrate", p.Label, BrainFile, p.Dir)
+	case Pristine(p.Content):
+		return refuse("%s: %s is pristine (seed %s) — nothing to migrate", p.Label, BrainFile, BrainStamp(p.Content))
+	case !draftOK:
+		return refuse("%s: no %s — run `%s --label %s` first and read the draft", p.Label, plan.Draft, MigrateCmd, p.Label)
+	case hasReviewBlock(draft):
+		return refuse("%s: %s still carries a `%s` block — resolve each item, delete the block, then re-run", p.Label, plan.Draft, strings.TrimPrefix(ReviewHeading, "## "))
+	case HasOverlay(p.Overlay):
+		return refuse("%s: a %s with real lines already exists at %s — merge the draft into it by hand (grove never overwrites an overlay)", p.Label, OverlayFile, plan.Overlay)
+	case backupExists:
+		return refuse("%s: %s already exists — move it aside first (grove never overwrites a backup)", p.Label, plan.Backup)
+	}
+	plan.StubReplaced = p.Overlay != ""
+	if p.Tracked {
+		plan.Tracked, plan.GitCommands = true, TrackedBrainCommands()
+	}
+	return plan, nil
+}
+
+// ReadApply gathers what PlanApply needs from disk: the draft's bytes and
+// whether a backup is already there.
+func ReadApply(p MigrateProbe) (draft string, draftOK bool, backupExists bool) {
+	if b, err := os.ReadFile(filepath.Join(p.Dir, DraftFile)); err == nil {
+		draft, draftOK = string(b), true
+	}
+	_, err := os.Stat(filepath.Join(p.Dir, BackupPreOverlay))
+	return draft, draftOK, err == nil
+}
+
+// Apply runs a plan: brain → backup, stamped seed → brain, draft → overlay
+// (over a stub, if one is there). A failure after the first move puts the
+// brain back before returning, so a half-applied dir is never left behind.
+// Nothing is deleted; the git commands of a tracked brain are not run.
+func Apply(plan ApplyPlan) error {
+	if err := os.Rename(plan.Brain, plan.Backup); err != nil {
+		return err
+	}
+	if err := os.WriteFile(plan.Brain, []byte(plan.Seed), 0o644); err != nil {
+		_ = os.Rename(plan.Backup, plan.Brain)
+		return err
+	}
+	if err := os.Rename(plan.Draft, plan.Overlay); err != nil {
+		_ = os.Rename(plan.Backup, plan.Brain)
+		return err
+	}
+	return nil
 }

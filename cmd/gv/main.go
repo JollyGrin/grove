@@ -77,6 +77,9 @@ const usage = `gv — grove
   gv brains --migrate [--label L]             dry run: draft CLAUDE.local.md.draft from each edited
                                               brain's edits against its archived seed (writes nothing
                                               else; prints a tracked brain's git commands)
+  gv brains --migrate --apply --label L [--yes]   swap the reviewed draft in: CLAUDE.md → .bak-pre-overlay,
+                                              seed → CLAUDE.md, draft → CLAUDE.local.md; refuses while
+                                              a Review block or a real CLAUDE.local.md is there
   gv init [--yes|--only <step>]               wizard: probe · confirm · connections board
                                               (workspace-aware: repo scope in a git repo,
                                               parent scope in a folder of sibling repos)
