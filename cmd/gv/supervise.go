@@ -20,6 +20,7 @@ import (
 
 	"github.com/JollyGrin/grove/internal/detect"
 	"github.com/JollyGrin/grove/internal/github"
+	"github.com/JollyGrin/grove/internal/memprof"
 	"github.com/JollyGrin/grove/internal/state"
 	"github.com/JollyGrin/grove/internal/supervise"
 	"github.com/JollyGrin/grove/internal/tmux"
@@ -74,6 +75,7 @@ func cmdSupervise(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer memprof.Install(stateDir(), "supervise", memprof.Report)() // grove-580: SIGUSR2 → heap profile
 
 	for {
 		evs, err := supervise.Poll(deps, mem, time.Now())

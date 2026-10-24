@@ -30,6 +30,9 @@ and polling guidance) lives in
   write it.
 - Go packages under `internal/` (this is not a linkable library).
 - tmux session/window/pane layout. Plugins never call tmux.
+- `<state>/profiles/` — heap profiles and goroutine dumps a `kill -USR2`
+  drops from a long-lived `gv`. Operator-local diagnostics; names and
+  shapes may change any release.
 
 ## Versioning: additive-only (the Terraform rule)
 

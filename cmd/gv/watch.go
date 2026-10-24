@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JollyGrin/grove/internal/memprof"
 	"github.com/JollyGrin/grove/internal/watch"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
@@ -75,6 +76,7 @@ func cmdWatch(args []string) error {
 	// landing (see the exit-code contract below).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer memprof.Install(stateDir(), "watch", memprof.Report)() // grove-580: SIGUSR2 → heap profile
 
 	// os.Stdout is unbuffered — every Write is a syscall — so an event is on
 	// the pipe the instant it is folded. The Claude Code Monitor tool turns

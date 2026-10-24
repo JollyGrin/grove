@@ -144,6 +144,13 @@ State lives in the workspace's `.grove/state/` (`tasks.json` view,
 outside a workspace, the global `~/.local/state/grove/` and
 `~/.config/grove/config.yaml` apply.
 
+A long-lived `gv` (dash, chat serve, supervise, watch) that looks heavy
+is profiled, never guessed at: `kill -USR2 <pid>` writes a heap profile
+and a goroutine dump to `<state>/profiles/<verb>-<pid>-<ts>.pprof` /
+`.goroutines` and the process carries on; read it with
+`go tool pprof -top ~/go/bin/gv <file>`. USR1 is the chat rail's wake —
+never send it to a dash. Operator-local diagnostics, not a contract.
+
 ## Monitoring — how to know a task changed state
 
 **Use `gv watch`. Never derive completion from pane text.**
