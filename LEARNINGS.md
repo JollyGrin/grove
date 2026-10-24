@@ -42,22 +42,6 @@
 
 ## Claude Code behavior (verified in ovs)
 
-- **2026-10-07 · Auto memory is keyed on the git REPO, not the cwd — every
-  worktree shares `<config dir>/projects/<encoded main checkout>/memory/`,
-  and `.claude/settings.local.json` never reaches a fresh worktree**
-  (grove-437). Rule: treat auto memory as one surface per repo;
-  `autoMemoryDirectory` must be absolute or `~/`-rooted, so the doctor row
-  reads the default location rather than relocating it. A headless
-  `claude -p` run carries the auto-memory system prompt, so it is a valid
-  probe of whether a kickoff makes workers write memory. Rule:
-  claude-code-facts §Profiles.
-- **2026-10-07 · Claude Code 2.1.292 injects Anthropic's Fable 5.1 autonomy
-  block itself, so a kickoff's "do not ask for confirmation" line is a
-  duplicate** (grove-433). Rule: templates state goals, constraints and
-  verification only; before ever adding the paragraph back, grep a real
-  worker transcript's `prompt_snapshot` for "operating autonomously".
-  Rule: claude-code-facts §System prompt.
-
 ## tmux / git / detector internals (verified against source)
 
 - 2026-10-19 (grove-531, tmux 3.6a): **A window with `window-size manual` ignores a client that attaches to it** — a 100x30 pty client attached straight to a slot-pinned 139x50 hidden chat sees a 139x50 window clipped to its screen; `set -wu window-size` makes it follow the client at once (100x29). A SESSION hook (`set-hook -t <@win> client-attached …`, no `-w`) fires for a direct attach; `client-session-changed` fires on attach AND on `switch-client` INTO the session, but nothing fires on the session a client switches AWAY from; `client-detached` fires on detach, and a `run-shell -b gv …` from it already reads `#{session_attached}` = 0. Hook values read as formats like any option (`#{m:*sync-sizes*,#{client-detached}}` tells grove's hook from an operator's global one), and a session-level hook shadows a global hook of the same name for that session. `show-hooks -g` lists every hook NAME, set or not — grep for a value, not the name. `set-hook <name> …` without an `[index]` replaces the whole array (a `[1]` set earlier is gone). Promoted: tmux-discipline §3 (per-session hooks).
@@ -135,6 +119,19 @@
 
 ## Field notes (ovs, kept for judgment)
 
+- **2026-10-24 · A `--brief-file` can grant grab/merge/land/issue-close for
+  one feature train, and a chat on today's seed acts on it despite the
+  supervision mandate's "out of scope however worded" list** (brain-overlay
+  drive, journal docs/plans/2026-10-24-brain-overlay-journal.md): 4 cars
+  grabbed, reviewed, squash-merged into the train, landed and closed in
+  ~4.5h with zero operator turns, one steer, ~$29. Three things broke:
+  review subagents spawned from the chat stalled twice (70+ min, no
+  report, cause undiagnosed) and the chat ended up running the gate
+  itself; the hand-kept journal diverged from the report PR within hours;
+  every chat-side `gh` mutation carries the operator's login, so a
+  closed duplicate car (#581) was unattributable. Rule: the drive's
+  journal must be appended by the binary, and review must be a watched
+  task, not a subagent — docs/plans/2026-10-24-feature-drive-design.md.
 - **2026-10-07 · Kickoff A/B (model-fit 02, #434): the de-choreographed
   template is cost-neutral and slightly more disciplined; `--effort
   medium` is the win on rote work.** Three rote tickets (#145 merge gate,
