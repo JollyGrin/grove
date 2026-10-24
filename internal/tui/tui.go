@@ -222,6 +222,17 @@ type Model struct {
 	fx           fxLevel
 	tick         uint64
 	celebrations map[string]int
+	// refreshAt / chatsAt are the tick on which the beat last dispatched
+	// its refreshCmd / chatsCmd and has not yet heard back (0 = idle;
+	// the first beat is tick 1). A beat whose fetch is still in flight
+	// skips the fetch, still advances the clock and re-arms (grove-579):
+	// under a tmux server that is not answering the old beat minted one
+	// blocked goroutine and one stuck tmux client per second, forever.
+	// Cleared by the fetch's own msg; beatStale is the safety valve
+	// should a msg never come, so a lost reply can delay the board but
+	// never freeze it.
+	refreshAt uint64
+	chatsAt   uint64
 
 	// focused is the ticket at the tmux-focused window, read once per
 	// refresh via the read-only tmux.ActiveWindow (grove-63 S2) — the
@@ -376,6 +387,19 @@ func (m Model) Init() tea.Cmd {
 }
 
 // --- commands ---
+
+// beatStale is how many beats an unanswered fetch holds its slot before
+// the beat dispatches again anyway (grove-579). Every tmux exec is bounded
+// at 5s, so a reply normally lands well inside it; the valve only matters
+// if a fetch is lost altogether, and then the cost is one more goroutine
+// per beatStale seconds — not one per second.
+const beatStale = 30
+
+// inFlight reports whether a fetch dispatched at tick `at` (0 = none) is
+// still owed its reply on tick `now`.
+func inFlight(at, now uint64) bool {
+	return at != 0 && now-at < beatStale
+}
 
 // tickEvery arms the single cockpit beat. It carries no data — the handler
 // fans out to refreshCmd — so it re-arms itself (via tickMsg) without the
@@ -827,14 +851,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the old refreshMsg-driven loop.
 		m.tick++
 		decayCelebrations(m.celebrations)
+		// grove-579: a fetch still in flight from an earlier beat is not
+		// doubled — the clock and the re-arm never wait on tmux.
+		var refresh, chats tea.Cmd
+		if !inFlight(m.refreshAt, m.tick) {
+			m.refreshAt = m.tick
+			refresh = refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote)
+		}
 		// grove-402: the CHATS box rides this beat — the cheap pass (one
 		// list-panes), the costly one only while the box is focused.
-		return m, tea.Batch(refreshCmd(m.folder, m.stateDir, m.sessionName(), m.remote), chatsCmd(m.label, m.focus == focusChats), tickEvery(time.Second))
+		if !inFlight(m.chatsAt, m.tick) {
+			m.chatsAt = m.tick
+			chats = chatsCmd(m.label, m.focus == focusChats)
+		}
+		return m, tea.Batch(refresh, chats, tickEvery(time.Second))
 
 	case refreshMsg:
 		// Data only — the clock lives on tickMsg now (grove-24). This handler
 		// runs both on the beat and on ad-hoc refreshes (answers, reviews,
 		// dones); it must never re-arm a timer or touch m.tick.
+		m.refreshAt = 0
 		var cmds []tea.Cmd
 		// Gauge refreshes every time, independent of msg.ok below. A failed
 		// read is a zero Mem (OK()==false) and simply hides the gauge.
@@ -1052,6 +1088,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatsMsg:
 		// Data only (grove-402): never re-arms anything.
+		m.chatsAt = 0
 		// The cursor follows its chat, not its index (grove-528).
 		sel := ""
 		if m.chatSel >= 0 && m.chatSel < len(m.chatRows) {

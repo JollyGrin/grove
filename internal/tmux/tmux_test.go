@@ -1,7 +1,13 @@
 package tmux
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestSessionName(t *testing.T) {
@@ -103,5 +109,98 @@ func TestCapturePaneNonexistent(t *testing.T) {
 	}
 	if out != "" {
 		t.Errorf("expected empty output, got %q", out)
+	}
+}
+
+// grove-579: every tmux exec is bounded. A tmux that never answers (the
+// stub execs into a 30s sleep after writing its pid) must fail within the
+// read bound and leave no child behind — the leak class was one parked
+// goroutine plus one stuck client per cockpit tick, forever.
+func TestRunBoundedKillsStuckClient(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	stub := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nexec sleep 30\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// 1s, not less: on macOS a fresh script's first exec can take a few
+	// hundred ms to reach its first line, and the pid must land first.
+	prevRead, prevWait := readTimeout, waitDelay
+	readTimeout, waitDelay = time.Second, 200*time.Millisecond
+	defer func() { readTimeout, waitDelay = prevRead, prevWait }()
+
+	start := time.Now()
+	_, err := run("list-sessions", "-F", "#{session_name}")
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("run against a stuck tmux returned nil, want a timeout error")
+	}
+	if !strings.Contains(err.Error(), "server not answering") {
+		t.Errorf("error does not name the bound: %v", err)
+	}
+	if took > 3*time.Second {
+		t.Errorf("run took %s, want well under the 30s the stub sleeps", took)
+	}
+
+	raw, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatalf("stub never wrote its pid: %v", rerr)
+	}
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if perr != nil {
+		t.Fatalf("bad pid %q: %v", raw, perr)
+	}
+	// Reaped means signal 0 fails with ESRCH; a zombie would still answer.
+	if kerr := syscall.Kill(pid, 0); kerr == nil {
+		t.Errorf("stub pid %d still alive after run returned — the child leaked", pid)
+	}
+}
+
+// has-session is the one exec that bypassed run; it rides the same bound.
+func TestSessionExistsBounded(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prevRead, prevWait := readTimeout, waitDelay
+	readTimeout, waitDelay = 200*time.Millisecond, 200*time.Millisecond
+	defer func() { readTimeout, waitDelay = prevRead, prevWait }()
+
+	start := time.Now()
+	if SessionExists("grove-579-nope") {
+		t.Error("stuck tmux read as an existing session")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("SessionExists took %s, want under the bound", took)
+	}
+}
+
+// Read verbs get the short bound, everything else the longer write one.
+func TestVerbTimeout(t *testing.T) {
+	cases := map[string]time.Duration{
+		"list-panes":      readTimeout,
+		"show-options":    readTimeout,
+		"display-message": readTimeout,
+		"capture-pane":    readTimeout,
+		"start-server":    readTimeout,
+		"has-session":     readTimeout,
+		"send-keys":       writeTimeout,
+		"paste-buffer":    writeTimeout,
+		"swap-pane":       writeTimeout,
+		"load-buffer":     writeTimeout,
+		"set-option":      writeTimeout,
+	}
+	for verb, want := range cases {
+		if got := verbTimeout([]string{verb, "-t", "x"}); got != want {
+			t.Errorf("verbTimeout(%s) = %s, want %s", verb, got, want)
+		}
+	}
+	if got := verbTimeout(nil); got != writeTimeout {
+		t.Errorf("verbTimeout(nil) = %s, want the write bound", got)
 	}
 }

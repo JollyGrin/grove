@@ -203,7 +203,13 @@ func (chatBackend) Turn(target string) chatweb.Turn {
 // RESOLUTION is shared — every caller still takes its own fresh capture, so
 // handleKeys' fresh-capture gate (grove-318) holds. Send, Keys and every
 // CLI verb still resolve through findChat.
-var paneRead = &reportCache{ttl: 900 * time.Millisecond}
+//
+// The report is computed OUTSIDE the lock (grove-579): held across
+// chatReport, one capture stuck on a tmux server that is not answering
+// parked every phone stream behind it. One caller computes; the others
+// wait for that report at most one TTL and then serve the last one, so no
+// stream's tick is ever blocked past the TTL.
+var paneRead = &reportCache{ttl: 900 * time.Millisecond, report: chatReport}
 
 type reportCache struct {
 	mu   sync.Mutex
@@ -211,6 +217,12 @@ type reportCache struct {
 	at   time.Time
 	recs []chatRecord
 	err  error
+	// report computes a fresh report; chatReport in production, a stub
+	// in tests.
+	report func() ([]chatRecord, error)
+	// inflight is non-nil while one caller is computing a report and is
+	// closed when that report lands.
+	inflight chan struct{}
 }
 
 func (c *reportCache) find(target string) (chatRecord, error) {
@@ -227,9 +239,26 @@ func (c *reportCache) find(target string) (chatRecord, error) {
 func (c *reportCache) lookup(target string, force bool) (chatRecord, bool, error) {
 	c.mu.Lock()
 	fresh := force || time.Since(c.at) > c.ttl
-	if fresh {
-		c.recs, c.err = chatReport()
-		c.at = time.Now()
+	if fresh && c.inflight == nil {
+		// This caller computes, with the lock released (grove-579).
+		done := make(chan struct{})
+		c.inflight = done
+		c.mu.Unlock()
+		recs, err := c.report()
+		c.mu.Lock()
+		c.recs, c.err, c.at = recs, err, time.Now()
+		c.inflight = nil
+		close(done)
+	} else if fresh {
+		// Another caller is computing: wait for its report, but never
+		// past one TTL — then whatever is cached is the answer.
+		done := c.inflight
+		c.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(c.ttl):
+		}
+		c.mu.Lock()
 	}
 	recs, err := c.recs, c.err
 	c.mu.Unlock()
