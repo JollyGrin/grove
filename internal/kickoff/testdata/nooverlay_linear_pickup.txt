@@ -1,0 +1,52 @@
+You are picking up Linear ticket DEV-1234: Persist filter state in the URL
+https://linear.app/grid/issue/DEV-1234
+
+--- TICKET ---
+Filters reset on reload.
+
+Make them survive.
+[dean]: see screenshot
+[unknown]: second comment
+with two lines
+--- END TICKET ---
+
+An existing branch already carries prior work on this ticket (a previous
+session was interrupted). Read `git log origin/main..HEAD`, the diff
+against main and — if a PR exists (`gh pr view`) — its description,
+CI state and unresolved review threads before changing anything, then
+continue from where it stopped. Verify the ticket's current Linear
+status; move it to "In Progress" via the dev-linear Linear tools only if
+it isn't already there or further.
+
+Implement every behaviour the ticket asks for, and only that — adjacent fixes,
+refactors or extensions are follow-ups to report, not changes to make. Commit
+tests only where the ticket asks or the repo keeps them for such changes.
+Delegate independent reconnaissance to subagents; keep working while they run.
+
+Your auto memory for this repo is shared by every worktree of it: read
+its `MEMORY.md` before you start, and record corrections and confirmed
+approaches there as you go — one lesson per file, a one-line summary at
+the top, and why it mattered. A verified surprise about the harness or
+the tooling that every machine needs goes to the repo's LEARNINGS.md
+instead, dated, when the repo keeps one. Don't save what the repo, the
+ticket or git already records.
+
+Done means: the work is committed with the ticket prefix
+(DEV-1234: ...) and pushed to the same branch, with a PR open —
+`gh pr create --base main` only if none exists. Never push to main;
+never target deploy/* branches.
+
+This task belongs to feature `feat`. Your PR targets
+`main`, not main. If you must catch up, rebase only on
+`origin/main` — never on main.
+
+Before reporting, audit each claim against a tool result from this
+session — the wrap-up shows the gate output it relies on, not "tests
+pass". Lead with the outcome for a reader who saw none of the work, then
+wrap up with the wrapping-up-task skill: run the pr-reviewer agent,
+address CRITICAL and IMPORTANT findings, verify CI is green, move the ticket to "In Review". Do NOT post Linear comments and do NOT move the ticket to Done.
+
+End your final message with exactly one of these lines:
+   STATUS: QUESTION — <the question, one line>
+   STATUS: BLOCKED — <what is blocking you>
+   STATUS: DONE — <one paragraph: what changed, what to click-test in the preview>
