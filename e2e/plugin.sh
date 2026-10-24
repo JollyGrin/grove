@@ -23,6 +23,7 @@ GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
 export HOME="$SCRATCH/home"
+. "$(dirname "$0")/gh-stub.sh"; install_gh_stub "$SCRATCH"   # grove-540: never reach the real gh
 # $TMUX beats TMUX_TMPDIR — without the unset, a run from inside a tmux
 # pane puts every tmux call (incl. cleanup's kill-server) on the REAL
 # server. See LEARNINGS.md (2026-07-07 grove-7 crash).

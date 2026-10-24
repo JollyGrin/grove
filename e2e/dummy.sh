@@ -24,6 +24,7 @@ GV="$SCRATCH/gv"
 (cd "$REPO_ROOT" && go build -o "$GV" ./cmd/gv)
 
 export HOME="$SCRATCH/home"
+. "$(dirname "$0")/gh-stub.sh"; install_gh_stub "$SCRATCH"   # grove-540: never reach the real gh
 export GROVE_STATE_DIR="$SCRATCH/state"
 mkdir -p "$HOME" "$GROVE_STATE_DIR"
 

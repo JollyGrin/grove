@@ -26,6 +26,7 @@ REAL_ENV_TMUX="${TMUX:-}"
 REAL_ENV_TMPDIR="${TMUX_TMPDIR:-}"
 
 export HOME="$SCRATCH/home"
+. "$(dirname "$0")/gh-stub.sh"; install_gh_stub "$SCRATCH"   # grove-540: never reach the real gh
 export HISTFILE=/dev/null
 export LESSHISTFILE=-
 # $TMUX beats TMUX_TMPDIR — without the unset every tmux call (incl.
