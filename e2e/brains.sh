@@ -19,6 +19,11 @@
 # grove-512: the first seed writes the CLAUDE.local.md stub (comments only,
 # `overlay: false`), a real overlay reports `overlay: true` + its line
 # count, and no sweep or refresh ever writes over an existing overlay.
+# grove-513: `gv brains --migrate` (dry run) drafts CLAUDE.local.md.draft
+# beside each edited brain whose seed the archive knows — an appended
+# section lands under Workspace duties, a DEV-X→grove-N brain becomes a
+# Glossary line, a tracked brain gets its two git commands PRINTED — and
+# every other file's bytes are unchanged; unknown stamps are reported.
 # tmux: never talks to a tmux server, so no tmux isolation needed.
 set -euo pipefail
 
@@ -306,10 +311,79 @@ if rows["edited"]["state"] != "stale" or rows["edited"]["pristine"]:
 sys.exit(0 if ok else 1)
 PY
 
+say "gv brains --migrate: drafts beside edited brains, nothing else written (grove-513)"
+# mig-add: THIS binary's seed (its stamp is in the archive by construction)
+# plus an own section appended after the stamp line → Workspace duties.
+MIGADD="$SCRATCH/mig-add"
+mkrepo "$MIGADD"
+( cd "$MIGADD" && "$GV" init --yes --label mig-add > /dev/null )
+MIGADD_BRAIN="$MIGADD/.grove/orchestrator/CLAUDE.md"
+[ -f "$MIGADD_BRAIN" ] || fail "init did not seed mig-add"
+printf '\n## Local pair testing\n\nRun both servers before any PR that touches the wire protocol.\n' >> "$MIGADD_BRAIN"
+# mig-subst: the seed with every DEV-X swapped for grove-N — the fleet's
+# commonest edit — and the brain force-added to git, as thegrid's is.
+MIGSUB="$SCRATCH/mig-subst"
+mkrepo "$MIGSUB"
+( cd "$MIGSUB" && "$GV" init --yes --label mig-subst > /dev/null )
+MIGSUB_BRAIN="$MIGSUB/.grove/orchestrator/CLAUDE.md"
+sed 's/DEV-X/grove-N/g' "$MIGSUB_BRAIN" > "$SCRATCH/subst.md" && mv "$SCRATCH/subst.md" "$MIGSUB_BRAIN"
+grep -q 'grove-N' "$MIGSUB_BRAIN" || fail "substitution fixture has no grove-N"
+git -C "$MIGSUB" add -f .grove/orchestrator/CLAUDE.md && git -C "$MIGSUB" commit -qm brain
+# Snapshot every file but the drafts: the dry run may add *.draft and
+# nothing else, and may change no existing byte.
+# -mindepth 2: the workspaces, HOME and state — not this script's own
+# capture files (and the gv binary) at the scratch root.
+snapshot() { find "$SCRATCH" -mindepth 2 -type f ! -name '*.draft' ! -path '*/.git/*' -exec cksum {} + | sort; }
+SNAP_BEFORE="$(snapshot)"
+"$GV" brains --migrate > "$SCRATCH/migrate.txt" || fail "gv brains --migrate exited non-zero:
+$(cat "$SCRATCH/migrate.txt")"
+cat "$SCRATCH/migrate.txt"
+[ "$(snapshot)" = "$SNAP_BEFORE" ] || fail "--migrate changed or added a file other than *.draft:
+$(diff <(printf '%s\n' "$SNAP_BEFORE") <(snapshot) || true)"
+DRAFTS="$(find "$SCRATCH" -name 'CLAUDE.local.md.draft' | sort)"
+[ "$DRAFTS" = "$(printf '%s\n%s' "$MIGADD/.grove/orchestrator/CLAUDE.local.md.draft" "$MIGSUB/.grove/orchestrator/CLAUDE.local.md.draft")" ] || fail "drafts must appear beside the two edited brains only, got:
+$DRAFTS"
+grep -q 'mig-add *draft *1 added / 0 substituted / 0 to review' "$SCRATCH/migrate.txt" || fail "mig-add must read 1 added / 0 / 0"
+grep -q 'mig-subst *draft *0 added / [1-9][0-9]* substituted / 0 to review' "$SCRATCH/migrate.txt" || fail "mig-subst must read 0 / n / 0"
+grep -q "cd $MIGSUB && git add -f .grove/orchestrator/CLAUDE.local.md" "$SCRATCH/migrate.txt" || fail "tracked brain: git add -f must be printed"
+grep -q "cd $MIGSUB && git rm --cached .grove/orchestrator/CLAUDE.md" "$SCRATCH/migrate.txt" || fail "tracked brain: git rm --cached must be printed"
+grep -q "cd $MIGADD && git" "$SCRATCH/migrate.txt" && fail "untracked brain must get no git commands" || true
+git -C "$MIGSUB" ls-files --error-unmatch .grove/orchestrator/CLAUDE.md > /dev/null || fail "--migrate ran git rm --cached — it must only print it"
+git -C "$MIGSUB" ls-files --error-unmatch .grove/orchestrator/CLAUDE.local.md > /dev/null 2>&1 && fail "--migrate ran git add — it must only print it" || true
+grep -q 'edited *unknown-base .*not in the archive' "$SCRATCH/migrate.txt" || fail "a stamp the archive lacks must be reported as unknown base"
+grep -q 'handmade *unknown-base .*no seed stamp' "$SCRATCH/migrate.txt" || fail "an unstamped brain must be reported as unknown base"
+grep -q 'gv init --only orchestrator-md. and merge by hand' "$SCRATCH/migrate.txt" || fail "unknown base must hand over today's merge path"
+grep -q 'ghost *missing-root' "$SCRATCH/migrate.txt" || fail "a vanished root is a row, not an error"
+grep -q '✓ 3 brains have nothing to migrate' "$SCRATCH/migrate.txt" || fail "seeded + pristine + (global) must collapse into the nothing-to-migrate count"
+grep -q '2 drafts drafted — dry run, nothing else written' "$SCRATCH/migrate.txt" || fail "summary line missing"
+grep -q 'Review before applying' "$SCRATCH/migrate.txt" && fail "no draft here needs review" || true
+grep -q "safe to delete" "$SCRATCH/migrate.txt" || fail "migrate must list leftovers too"
+grep -q "$EDITED_BRAIN.new" "$SCRATCH/migrate.txt" || fail "migrate must name the .new leftover"
+ADD_DRAFT="$MIGADD/.grove/orchestrator/CLAUDE.local.md.draft"
+grep -q '^# Workspace overlay: mig-add' "$ADD_DRAFT" || fail "draft header missing"
+grep -q '^## Workspace duties' "$ADD_DRAFT" || fail "appended section must land under Workspace duties"
+grep -q '^## Local pair testing' "$ADD_DRAFT" || fail "appended section must be copied verbatim"
+grep -q 'Review before applying' "$ADD_DRAFT" && fail "appended section must not need review" || true
+grep -q '## Glossary' "$ADD_DRAFT" && fail "mig-add has no substitutions" || true
+SUB_DRAFT="$MIGSUB/.grove/orchestrator/CLAUDE.local.md.draft"
+grep -q '^## Glossary' "$SUB_DRAFT" || fail "substitution draft must carry a Glossary"
+grep -q 'Wherever the seed writes `DEV-X`, read `grove-N`.' "$SUB_DRAFT" || fail "glossary line missing"
+grep -c 'Wherever the seed writes' "$SUB_DRAFT" | grep -qx 1 || fail "exactly one glossary line for one token map"
+grep -q 'Review before applying\|## Addenda\|## Workspace duties' "$SUB_DRAFT" && fail "substitution draft must be glossary only" || true
+
+say "--migrate --label limits the run; a second run rewrites the same draft"
+BEFORE_ADD_DRAFT="$(cksum < "$ADD_DRAFT")"
+"$GV" brains --migrate --label mig-add > "$SCRATCH/migrate-label.txt" || fail "--migrate --label exited non-zero"
+grep -q 'mig-add' "$SCRATCH/migrate-label.txt" || fail "--label mig-add must report mig-add"
+grep -q 'mig-subst\|handmade\|edited' "$SCRATCH/migrate-label.txt" && fail "--label must leave the other rows out" || true
+[ "$(cksum < "$ADD_DRAFT")" = "$BEFORE_ADD_DRAFT" ] || fail "re-running the dry run must render the same draft"
+"$GV" brains --migrate --label nope > "$SCRATCH/migrate-nope.txt" 2>&1 && fail "an unknown label must fail" || true
+[ "$(snapshot)" = "$SNAP_BEFORE" ] || fail "second --migrate changed a non-draft file"
+
 say "empty registry is a quiet, zero-exit line"
 mkdir -p "$SCRATCH/empty"
 HOME="$SCRATCH/empty" "$GV" brains > "$SCRATCH/empty.out" || fail "gv brains on an empty registry must exit 0"
 grep -q 'no workspaces registered' "$SCRATCH/empty.out" || fail "empty registry message missing:
 $(cat "$SCRATCH/empty.out")"
 
-printf '\n\033[32mbrains E2E: PASS\033[0m — sweep classifies, reports, mutates nothing; --refresh replaces only pristine brains\n'
+printf '\n\033[32mbrains E2E: PASS\033[0m — sweep classifies, reports, mutates nothing; --refresh replaces only pristine brains; --migrate writes drafts only\n'

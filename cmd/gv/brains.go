@@ -18,6 +18,12 @@
 // gets `CLAUDE.md.new` beside it for the human to diff (grove-190's
 // invariant); an unstamped one is still only reported. Leftover `.new` /
 // `.bak-*` files are listed per brain and never deleted.
+//
+// `gv brains --migrate [--label L]` (grove-513) is the one-time move of an
+// edited brain's edits into the overlay, dry run: it diffs each edited
+// brain against the archived seed its stamp names, classifies the hunks
+// and writes CLAUDE.local.md.draft beside the brain — the only file it
+// touches. `--apply` is car 04.
 package main
 
 import (
@@ -34,6 +40,7 @@ import (
 	"github.com/JollyGrin/grove/internal/update"
 	"github.com/JollyGrin/grove/internal/workspace"
 	"github.com/JollyGrin/grove/orchestrator"
+	"github.com/JollyGrin/grove/orchestrator/seeds"
 )
 
 // updateRefreshesBrains decides what `gv update` does after a real binary
@@ -47,7 +54,22 @@ func cmdBrains(args []string) error {
 	fs := flag.NewFlagSet("brains", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "machine-readable rows — one per registered workspace, plus the global brain")
 	refresh := fs.Bool("refresh", false, "replace every PRISTINE stale brain in place; an edited one gets CLAUDE.md.new, an unstamped one is only reported")
+	migrate := fs.Bool("migrate", false, "dry run: draft a CLAUDE.local.md.draft from each edited brain's edits (writes nothing else)")
+	label := fs.String("label", "", "with --migrate: only this workspace (or \"(global)\")")
 	parseAnywhere(fs, args)
+
+	if *migrate {
+		if *refresh {
+			return fmt.Errorf("--migrate and --refresh are separate runs — refresh first, then migrate")
+		}
+		if *asJSON {
+			return fmt.Errorf("--migrate has no --json form yet")
+		}
+		return cmdBrainsMigrate(*label)
+	}
+	if *label != "" {
+		return fmt.Errorf("--label only applies to --migrate")
+	}
 
 	probes, err := brainProbes()
 	if err != nil {
@@ -88,6 +110,108 @@ func brainProbes() ([]bootstrap.BrainProbe, error) {
 	}
 	probes = append(probes, bootstrap.ProbeGlobalBrain(globalOrchestratorDir()))
 	return probes, nil
+}
+
+// cmdBrainsMigrate is `gv brains --migrate [--label L]`: the dry run over
+// the registry plus the global brain, or one labelled row. The base for
+// each edited brain is the seed this binary carries when the stamps match,
+// else the archived seed under that stamp (orchestrator/seeds).
+func cmdBrainsMigrate(label string) error {
+	probes, err := brainProbes()
+	if err != nil {
+		return err
+	}
+	mprobes := make([]bootstrap.MigrateProbe, 0, len(probes))
+	for _, p := range probes {
+		if label != "" && p.Label != label {
+			continue
+		}
+		mp := bootstrap.MigrateProbe{BrainProbe: p}
+		if p.Label != bootstrap.GlobalBrainLabel && !p.RootGone && p.Exists {
+			mp.Tracked = brainTracked(p.Root)
+		}
+		mprobes = append(mprobes, mp)
+	}
+	if label != "" && len(mprobes) == 0 {
+		return fmt.Errorf("no workspace labelled %q (see `gv workspaces`; the global brain is %q)", label, bootstrap.GlobalBrainLabel)
+	}
+	rows, sweepErr := bootstrap.MigrateSweep(mprobes, orchestrator.ClaudeMd, seeds.Lookup)
+	printBrainMigrate(os.Stdout, rows)
+	return sweepErr
+}
+
+// brainTracked asks git whether the workspace repo versions its brain
+// (thegrid and waterhouse force-added theirs past `.grove/.gitignore`). No
+// git, no repo, or untracked all read false.
+func brainTracked(root string) bool {
+	rel := filepath.Join(".grove", "orchestrator", bootstrap.BrainFile)
+	cmd := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", rel)
+	return cmd.Run() == nil
+}
+
+// printBrainMigrate renders the dry run: one line per brain with a draft
+// or a problem, the nothing-to-migrate rows collapsed into a count. For a
+// tracked brain the two git commands --apply will leave pending are
+// printed, never run; leftovers are listed, never deleted.
+func printBrainMigrate(w io.Writer, rows []bootstrap.MigrateRow) {
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "no workspaces registered — `gv workspaces add <path>`")
+		return
+	}
+	label, nothing, drafts, review := 0, 0, 0, 0
+	for _, r := range rows {
+		if r.State == bootstrap.MigrateNothing {
+			nothing++
+			continue
+		}
+		if len(r.Label) > label {
+			label = len(r.Label)
+		}
+	}
+	for _, r := range rows {
+		if r.State == bootstrap.MigrateNothing {
+			continue
+		}
+		fmt.Fprintf(w, "  %-*s  %-12s  %s\n", label, r.Label, r.State, r.Note)
+		if r.State != bootstrap.MigrateDraft {
+			continue
+		}
+		drafts++
+		if r.Review > 0 {
+			review++
+		}
+		fmt.Fprintf(w, "  %-*s  %-12s  → %s\n", label, "", "", r.DraftPath)
+		if r.Tracked {
+			fmt.Fprintf(w, "  %-*s  %-12s  git tracks this brain — after --apply, run these yourself (grove never does):\n", label, "", "")
+			for _, c := range r.GitCommands {
+				fmt.Fprintf(w, "  %-*s  %-12s    cd %s && %s\n", label, "", "", r.Root, c)
+			}
+		}
+	}
+	if drafts > 0 {
+		fmt.Fprintf(w, "%d %s drafted — dry run, nothing else written; read each draft, then `%s<label>` (car 04) swaps it in.\n",
+			drafts, plural(drafts, "draft"), bootstrap.MigrateApplyCmd)
+		if review > 0 {
+			fmt.Fprintf(w, "%d %s a `%s` block — resolve it first; --apply refuses while it is there.\n",
+				review, map[bool]string{true: "draft carries", false: "drafts carry"}[review == 1], strings.TrimPrefix(bootstrap.ReviewHeading, "## "))
+		}
+	}
+	if nothing > 0 {
+		fmt.Fprintf(w, "✓ %d %s nothing to migrate (pristine or absent)\n", nothing, map[bool]string{true: "brain has", false: "brains have"}[nothing == 1])
+	}
+	first := true
+	for _, r := range rows {
+		if len(r.Leftovers) == 0 {
+			continue
+		}
+		if first {
+			fmt.Fprintln(w, "leftovers — safe to delete once you're happy (grove never removes them):")
+			first = false
+		}
+		for _, l := range r.Leftovers {
+			fmt.Fprintf(w, "  %s/%s\n", r.Dir, l)
+		}
+	}
 }
 
 // globalOrchestratorDir is `cfg.Orchestrator.Dir` from the GLOBAL config

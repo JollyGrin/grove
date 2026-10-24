@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/JollyGrin/grove/internal/bootstrap"
+	"github.com/JollyGrin/grove/orchestrator"
+	"github.com/JollyGrin/grove/orchestrator/seeds"
 )
 
 func sweepRows() []bootstrap.BrainRow {
@@ -205,5 +208,87 @@ func TestReportBrainSweepAfterUpdateNeverFails(t *testing.T) {
 	out := captureStdout(t, func() { reportBrainSweepAfterUpdate(stub) })
 	if out != "" {
 		t.Errorf("a failed sweep must print nothing on stdout, got %q", out)
+	}
+}
+
+// grove-513: the dry-run report names each draft and its path, prints a
+// tracked brain's two git commands (and runs none — this is a printer), and
+// collapses the nothing-to-migrate rows into a count.
+func TestPrintBrainMigrate(t *testing.T) {
+	base := "# seed\n\n## Guardrails\n\n- **Propose, then act.** Never grab without the operator's yes.\n- **Never post ticket comments** without the operator's sign-off.\n"
+	stamp := bootstrap.SeedStamp(base)
+	brain := func(body string) string { return body + "\n<!-- grove-seed: " + stamp + " -->\n" }
+	probe := func(label, content string, tracked bool) bootstrap.MigrateProbe {
+		return bootstrap.MigrateProbe{BrainProbe: bootstrap.BrainProbe{Label: label, Root: "/w/" + label,
+			Dir: "/w/" + label + "/.grove/orchestrator", Exists: content != "", Content: content}, Tracked: tracked}
+	}
+	rows := bootstrap.PlanMigrate([]bootstrap.MigrateProbe{
+		probe("pristine", bootstrap.StampSeed(base), false),
+		probe("thegrid", brain(strings.ReplaceAll(base, "the operator", "Dean")+"\n## Browser (CDP)\n\nnever open it unprompted\n"), true),
+		probe("unbrewed", brain(strings.Replace(base, "Never post ticket comments", "Comments are free", 1)), false),
+		probe("handmade", "# mine\n", false),
+		{BrainProbe: bootstrap.BrainProbe{Label: "(global)", Root: "/g", Dir: "/g", Exists: true,
+			Content: "other seed, edited\n<!-- grove-seed: 000000000000 -->\n", Leftovers: []string{"CLAUDE.md.new"}}},
+	}, "# newer seed\n", func(s string) (string, bool) {
+		if s == stamp {
+			return base, true
+		}
+		return "", false
+	})
+	var buf bytes.Buffer
+	printBrainMigrate(&buf, rows)
+	out := buf.String()
+	for _, want := range []string{
+		"thegrid", "draft", "1 added / 1 substituted / 0 to review → CLAUDE.local.md.draft",
+		"→ /w/thegrid/.grove/orchestrator/CLAUDE.local.md.draft",
+		"git tracks this brain",
+		"cd /w/thegrid && git add -f .grove/orchestrator/CLAUDE.local.md",
+		"cd /w/thegrid && git rm --cached .grove/orchestrator/CLAUDE.md",
+		"unbrewed", "0 added / 0 substituted / 1 to review",
+		"handmade", "unknown-base", "no seed stamp", bootstrap.UnknownBaseNote,
+		"(global)", "is not in the archive",
+		"2 drafts drafted — dry run, nothing else written",
+		"1 draft carries a `Review before applying` block",
+		"✓ 1 brain has nothing to migrate",
+		"leftovers — safe to delete", "/g/CLAUDE.md.new",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("migrate report missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\n  pristine") {
+		t.Errorf("a pristine brain collapses into the count:\n%s", out)
+	}
+	if strings.Contains(out, "cd /w/unbrewed && git") {
+		t.Errorf("an untracked brain gets no git commands:\n%s", out)
+	}
+}
+
+// grove-513, the realism check: the fleet's commonest edit — every `DEV-X`
+// in the REAL seed swapped for `grove-N`, every `the operator` for `Dean` —
+// must come out as glossary lines alone, no Review block. And the archive
+// finds the real seed's base by stamp.
+func TestMigrateRealSeedSubstitutionIsGlossaryOnly(t *testing.T) {
+	seed := orchestrator.ClaudeMd
+	stamp := bootstrap.SeedStamp(seed)
+	base, ok := seeds.Lookup(stamp)
+	if !ok {
+		t.Fatalf("archive lacks the embedded seed %s — run `go generate ./orchestrator/seeds`", stamp)
+	}
+	edited := strings.ReplaceAll(strings.ReplaceAll(seed, "DEV-X", "grove-N"), "the operator", "Dean")
+	brain := bootstrap.SeedBody(edited) + "\n\n<!-- grove-seed: " + stamp + " -->\n"
+	m := bootstrap.ClassifyBrain(brain, base)
+	a, s, r := m.Counts()
+	if a != 0 || r != 0 || s == 0 {
+		var reviews []string
+		for _, h := range m.Hunks {
+			if h.Class != bootstrap.HunkSubstituted {
+				reviews = append(reviews, fmt.Sprintf("%s [%s]\n  seed:  %q\n  brain: %q", h.Class, h.Heading, h.Seed, h.Brain))
+			}
+		}
+		t.Fatalf("counts %d/%d/%d, want 0/n/0; non-substituted hunks:\n%s", a, s, r, strings.Join(reviews, "\n"))
+	}
+	if len(m.Glossary) != 2 || m.Glossary[0].From != "DEV-X" || m.Glossary[1].From != "the operator" {
+		t.Errorf("glossary %+v", m.Glossary)
 	}
 }
