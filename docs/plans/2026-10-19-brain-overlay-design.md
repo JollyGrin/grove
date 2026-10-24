@@ -482,10 +482,86 @@ zero-merge refresh.
   per-workspace confirmation, and git commands are printed, never run. The
   seed's floor (above) carries the same rule into every overlay.
 
+## Done when
+
+The train is finished when every line below is checkable from
+`feature/brain-overlay`'s tip, by a throwaway build (`go build -o
+/tmp/gv-brain-overlay ./cmd/gv`) run against SCRATCH workspaces only
+(docs/seed-manifest.md §Dummy-data E2E). Nothing here touches a real
+brain, host, or config dir; the operator's own migration is §Operator step
+below and is not part of done.
+
+1. **All six cars landed.** `gv feature ls --json` shows `brain-overlay`
+   with 6/6 cars `landed` (#511–#515 and #568), each PR squash-merged into
+   `feature/brain-overlay` with a recorded review verdict of pass.
+2. **Gate and e2e green on the tip.** `go build ./... && go vet ./... &&
+   go test ./...` green, `gofmt -l .` empty, and `e2e/all.sh` red only on
+   rows that are red on `main` the same day (the macOS /private rows are
+   known; name any other red).
+3. **Pristine brains refresh in place.** In a scratch workspace seeded by
+   an older stamp, `gv brains --refresh` replaces `CLAUDE.md` with the
+   embedded seed, updates the stamp, and `gv brains --json` reports that
+   brain `refreshed`. Plain `gv brains` and `gv brains --json` write
+   nothing (a before/after checksum of the dir is identical).
+4. **Edited brains are never overwritten.** With one operator line added
+   to a scratch brain, `--refresh` leaves `CLAUDE.md` byte-identical,
+   writes `CLAUDE.md.new`, and reports the brain as edited. This holds for
+   the global brain dir as well as a workspace's.
+5. **The overlay exists and the stub counts as absent.** A first seed
+   (`gv init`) writes a `CLAUDE.local.md` holding only HTML comments;
+   `gv brains --json` reports the overlay absent for that workspace and
+   present once one non-comment line is added. Profile subdirs inherit
+   both files (the headless `-p` probe from §Behavioural check, run in
+   scratch).
+6. **Migration is dry-run and refusing by default.** `gv brains
+   --migrate` on an edited scratch brain prints a draft `CLAUDE.local.md`
+   with `Review` blocks and runs no git command; `--migrate --apply`
+   without the per-workspace confirmation changes no file; with it, the
+   seed becomes `CLAUDE.md`, the draft becomes `CLAUDE.local.md`, and the
+   git commands are printed, never run. A stub-only overlay does not
+   trigger `--apply`'s refusal.
+7. **The seed archive covers every historical stamp** named in §Inventory
+   (9afe65e → a6a0462), and the classifier places each of the 20
+   inventoried brains in the class the inventory table gives it (a table
+   test, not a live run).
+8. **Seed text.** `grep -c 'DEV-' orchestrator/CLAUDE.md` prints 0;
+   `seed_test` asserts the override section, the floor sentence, the
+   LEARNINGS-at-start line, the `--refresh`/`--migrate` tools lines, and
+   the numbered duty names; the two promoted rules from car 05(c) are
+   present.
+9. **Contracts additive.** The key set of `gv brains --json` on the tip is
+   a superset of `main`'s, existing `state` values keep their meaning, and
+   `events.jsonl` gains no new record type without a line in
+   docs/plugins.md.
+10. **Docs landed with the code.** claude-code-facts §Sessions carries
+    facts 4–7, root `CLAUDE.md` §Layout has the overlay line, LEARNINGS.md
+    has the dated entry, and this design's Status reads IMPLEMENTED with
+    the measured round: the number of brains that refresh with zero
+    merges on the scratch fixture.
+11. **Kickoff overlay (car 06, #568).** With no `prompt_overlay:` every
+    embedded kickoff template renders byte-identical to `main`'s (golden
+    test); a scratch repo with `prompt_overlay:` renders the fragment at
+    the slot once; `gv brains --json` carries the additive `kickoffs`
+    rows (`default` / `overlay` / `override`) and `gv doctor` warns only
+    on an `override`.
+12. **Report.** The draft PR `feature/brain-overlay` → `main` carries the
+    report in the shape of docs/briefs/feature-drive.md §Report, with §Open
+    questions for the operator resolved or listed as still open, and the
+    §Operator step as a post-merge checklist.
+
+### Operator step (after merge, not part of done)
+
+On each host: `gv update --yes`, `gv brains --migrate`, read the drafts,
+reconcile host drift, `--migrate --apply --label X` per workspace, run the
+printed git commands in thegrid and waterhouse, then the GLM smoke test.
+`gv update --yes` afterwards reports `refreshed` for every brain and no
+new `.new` appears.
+
 ## Tickets (filed 2026-10-19 as feature train `brain-overlay`)
 
 Filed as #511 (01), #512 (02), #513 (03), #514 (04) and #515 (05), each
-depending on the one before. The operator chose a **feature train**
+depending on the one before; #568 (06, kickoff overlay) was added
+2026-10-24 from the train review and depends on #515. The operator chose a **feature train**
 instead of the merge train argued below. That removes the seed freeze.
 All five cars, the seed text in 05 included, reach main in one landing.
 The archive (#513) holds every historical stamp, so after the release
@@ -662,6 +738,41 @@ Labels: `rote`. The seed wording is fully specified in this design.
 **Optional, not drafted:** a `gv doctor` row that runs a headless `-p`
 probe to confirm that a profile subdir loads the overlay. Only worth it if
 the Claude Code loader changes.
+
+### 06 kickoff: overlay slot in the embedded templates, whole-file overrides reported (depends on 05) — #568
+
+Body: the kickoff template has the brain's two-authors problem, unreported.
+A repo's `prompt:` replaces the embedded template wholesale; thegrid's four
+`kickoff*.tmpl` are frozen at Aug 2026 and missed three template moves
+(feature-train PR base f564158, goals-not-choreography 276473f, auto-memory
+3df30b9), so its workers are still told to PR against `main`.
+(a) Every embedded template (`internal/kickoff/*.tmpl`, six) gets one
+`{{template "overlay" .}}` line after the auto-memory paragraph; empty
+unless an overlay is given.
+(b) `Repo.PromptOverlay` (`prompt_overlay:`), a fragment rendered with the
+same data; `prompt:` keeps its whole-file meaning and wins when both are set
+(stderr note at grab).
+(c) `gv brains --json` gains additive `kickoffs` rows per repo: `repo`,
+`state` ∈ `default`|`overlay`|`override`, `path`, `note`; plain `gv brains`
+prints them only when one is not `default`; `gv doctor` warns on an
+`override`, silent at zero.
+(d) Docs: plugins.md field, root `CLAUDE.md` §Layout line, TASKS.md.
+Not in this car: migrating thegrid's templates (operator step after
+landing) or a kickoff `--migrate` (possible car 07).
+Files: `internal/kickoff/{kickoff.go,*.tmpl,kickoff_test.go}`,
+`internal/config/config.go`, the `gv brains` package, doctor, `cmd/gv`
+pass-through, docs/plugins.md, `CLAUDE.md`, TASKS.md.
+Acceptance:
+- Golden test: six templates byte-identical to `main` with no overlay.
+- A `prompt_overlay:` fragment renders at the slot once with
+  `{{.Identifier}}` substituted; with `prompt:` also set, the override
+  renders and no overlay.
+- Scratch workspace with default/overlay/override repos → three
+  `kickoffs` rows; pre-existing key sets unchanged.
+- `gv doctor` warn row only with an `override`.
+- Gate green; `e2e/dummy.sh` green.
+
+Not labelled rote: a new config key and a report shape.
 
 ## Open questions for the operator
 
