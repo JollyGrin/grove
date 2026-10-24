@@ -5,7 +5,6 @@ package tmux
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -197,8 +196,10 @@ func PasteText(target, text string) (warn string, err error) {
 		return "", err
 	}
 	buf := relayBufferName()
-	load := exec.Command("tmux", "load-buffer", "-b", buf, "-")
-	load.Stdin = strings.NewReader(text)
+	// Bounded like every other exec here (grove-579); a write verb, so it
+	// gets the longer bound — see tmux.go.
+	load, _, cancel := command(strings.NewReader(text), "load-buffer", "-b", buf, "-")
+	defer cancel()
 	if out, err := load.CombinedOutput(); err != nil {
 		return "", &execError{op: "load-buffer", out: string(out), err: err}
 	}

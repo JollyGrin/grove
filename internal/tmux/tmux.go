@@ -3,21 +3,97 @@ package tmux
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// Every tmux exec is bounded (grove-579). A tmux client talks to a local
+// socket and a healthy server answers in milliseconds; the only way a call
+// takes seconds is a server that is not serving — busy on a huge paste,
+// SIGSTOP'd, or an exec slowed by EDR. Unbounded, every such call parks a
+// goroutine AND a ~2 MB tmux client process forever, and the cockpit's 1s
+// beat mints a new pair every second (five cockpits were resident when
+// this was found). The bound turns that into one error per call.
+//
+// Two bounds, by verb. READ verbs (list-*, show-*, display-message,
+// capture-pane, has-session, start-server) get readTimeout: they are the
+// per-tick calls, nothing is lost when one is cut short, and the next beat
+// re-reads. Every other verb is a WRITE and gets writeTimeout, longer on
+// purpose: a half-applied sequence (swap without its re-tile, a paste
+// without its Enter) is worse than a slow one, and writes are one-shot
+// operator actions, not a loop — a stuck write costs a client, not a
+// leak. tmux itself executes one client's command line atomically on the
+// server side, so killing the client cannot leave ONE command half done;
+// the longer bound protects the multi-call sequences in this package.
+//
+// When the deadline passes the child is SIGKILLed (exec.CommandContext's
+// default) and WaitDelay closes the pipes after waitDelay, so a grandchild
+// holding stdout (tmux forks none, but the test stub proves the shape)
+// cannot keep Wait parked either.
+var (
+	readTimeout  = 5 * time.Second
+	writeTimeout = 20 * time.Second
+	waitDelay    = time.Second
+)
+
+// readVerbs are the tmux commands that only observe the server.
+var readVerbs = map[string]bool{
+	"capture-pane":        true,
+	"display-message":     true,
+	"has-session":         true,
+	"list-buffers":        true,
+	"list-clients":        true,
+	"list-keys":           true,
+	"list-panes":          true,
+	"list-sessions":       true,
+	"list-windows":        true,
+	"show-buffer":         true,
+	"show-environment":    true,
+	"show-hooks":          true,
+	"show-options":        true,
+	"show-window-options": true,
+	"start-server":        true,
+}
+
+// verbTimeout picks the bound for a tmux argv: read or write by its first
+// verb. A multi-command line ("start-server ; show-options …") is judged
+// by its first verb; this package only chains reads behind start-server.
+func verbTimeout(args []string) time.Duration {
+	if len(args) > 0 && readVerbs[args[0]] {
+		return readTimeout
+	}
+	return writeTimeout
+}
+
+// command builds the bounded tmux exec every call in this package goes
+// through. The caller runs it, then calls cancel; a ctx error after the
+// run means the bound, not tmux, ended it.
+func command(stdin io.Reader, args ...string) (*exec.Cmd, context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), verbTimeout(args))
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = waitDelay
+	cmd.Stdin = stdin
+	return cmd, ctx, cancel
+}
 
 // run executes tmux with the given args, returning trimmed stdout.
 func run(args ...string) (string, error) {
-	cmd := exec.Command("tmux", args...)
+	cmd, ctx, cancel := command(nil, args...)
+	defer cancel()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("tmux %s: %w after %s (server not answering)", strings.Join(args, " "), err, verbTimeout(args))
+		}
 		return "", fmt.Errorf("tmux %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
@@ -51,8 +127,9 @@ func PaneTarget(repo, worktree string, pane int) string {
 // Returns false (not an error) if the tmux server is not running.
 // Exact-anchored (grove-78): a bare -t can match window names too.
 func SessionExists(name string) bool {
-	err := exec.Command("tmux", "has-session", "-t", Exact(name)).Run()
-	return err == nil
+	cmd, _, cancel := command(nil, "has-session", "-t", Exact(name))
+	defer cancel()
+	return cmd.Run() == nil
 }
 
 // CreateSession creates a detached tmux session in the given directory.
