@@ -7,6 +7,10 @@
 // seed THIS binary embeds, print the brains that need attention and
 // collapse the rest into a count.
 //
+// Each row also says whether an operator-owned `CLAUDE.local.md` overlay
+// sits beside the brain and how many real lines it holds (grove-512) —
+// a stub holding only HTML comments counts as none.
+//
 // Plain `gv brains [--json]` is a pure read, always. `gv brains --refresh`
 // (grove-511) is the writing flag: a stale brain that is PRISTINE — its
 // stamp is the hash of its own body, so grove wrote it and nobody edited
@@ -135,7 +139,11 @@ func printBrainSweep(w io.Writer, rows []bootstrap.BrainRow, refreshed bool) {
 		if r.Acted() {
 			mark = "✓"
 		}
-		fmt.Fprintf(w, "%s %-*s  %-*s  %s\n", mark, label, r.Label, state, r.State, r.Note)
+		note := r.Note
+		if r.Overlay {
+			note += fmt.Sprintf(" · overlay: %d %s", r.OverlayLines, plural(r.OverlayLines, "line"))
+		}
+		fmt.Fprintf(w, "%s %-*s  %-*s  %s\n", mark, label, r.Label, state, r.State, note)
 		switch {
 		case r.Command == "":
 		case strings.HasPrefix(r.Command, bootstrap.RefreshSweepCmd):
@@ -175,7 +183,24 @@ func printBrainSweep(w io.Writer, rows []bootstrap.BrainRow, refreshed bool) {
 	if current > 0 {
 		fmt.Fprintf(w, "✓ %d %s current\n", current, plural(current, "brain"))
 	}
+	printBrainOverlays(w, rows)
 	printBrainLeftovers(w, rows)
+}
+
+// printBrainOverlays counts the brains that carry a real CLAUDE.local.md
+// (grove-512) — the operator's customizations, which a refresh never
+// touches. A stub-only or absent overlay is not counted. Silent when none.
+func printBrainOverlays(w io.Writer, rows []bootstrap.BrainRow) {
+	n := 0
+	for _, r := range rows {
+		if r.Overlay {
+			n++
+		}
+	}
+	if n > 0 {
+		fmt.Fprintf(w, "%d %s %s a %s overlay (operator-owned; the refresh never touches it)\n",
+			n, plural(n, "brain"), map[bool]string{true: "carries", false: "carry"}[n == 1], bootstrap.OverlayFile)
+	}
 }
 
 // printBrainLeftovers names every CLAUDE.md.new / .bak-* beside a brain.

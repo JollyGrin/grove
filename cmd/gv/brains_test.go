@@ -56,6 +56,34 @@ func TestPrintBrainSweepCollapsesCurrentWorkspaces(t *testing.T) {
 	}
 }
 
+// grove-512: a real overlay shows on its brain's row and in a fleet count;
+// the comments-only stub shows nowhere.
+func TestPrintBrainSweepShowsOverlays(t *testing.T) {
+	rows := bootstrap.PlanSweep([]bootstrap.BrainProbe{
+		{Label: "edited", Root: "/w/edited", Exists: true, Content: bootstrap.StampSeed("old") + "\n## mine\n",
+			Overlay: bootstrap.OverlayStub + "- The operator is Dean.\n- Backend: GitHub.\n"},
+		{Label: "stubbed", Root: "/w/stubbed", Exists: true, Content: "# hand\n", Overlay: bootstrap.OverlayStub},
+	}, "new")
+	var buf bytes.Buffer
+	printBrainSweep(&buf, rows, false)
+	out := buf.String()
+	for _, want := range []string{"overlay: 2 lines", "1 brain carries a CLAUDE.local.md overlay", "gv brains --migrate"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sweep output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "overlay:") != 1 {
+		t.Errorf("the stub-only brain must not show an overlay:\n%s", out)
+	}
+	var quiet bytes.Buffer
+	printBrainSweep(&quiet, bootstrap.PlanSweep([]bootstrap.BrainProbe{
+		{Label: "a", Root: "/w/a", Exists: true, Content: bootstrap.StampSeed("s"), Overlay: bootstrap.OverlayStub},
+	}, "s"), false)
+	if got := quiet.String(); got != "✓ 1 brain current\n" {
+		t.Errorf("stub-only fleet must stay one line, got %q", got)
+	}
+}
+
 // The never-overwrite invariant has to be visible in the report itself —
 // the operator reads this, not grove-190's source comments.
 func TestPrintBrainSweepStatesTheNeverOverwriteInvariant(t *testing.T) {

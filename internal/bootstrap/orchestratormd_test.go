@@ -215,3 +215,119 @@ func TestStampSeedIdempotent(t *testing.T) {
 		t.Error("unstamped content must report no stamp")
 	}
 }
+
+// grove-512: the first seed drops the overlay stub beside the brain —
+// and never over a CLAUDE.local.md that is already there.
+func TestSeedWritesOverlayStubOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(dir string) error
+	}{
+		{"SeedBrain", func(dir string) error { _, err := bootstrap.SeedBrain(dir, seedV1); return err }},
+		{"RefreshBrain", func(dir string) error { _, _, err := bootstrap.RefreshBrain(dir, seedV1, false); return err }},
+	} {
+		t.Run(tc.name+"/absent", func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "orchestrator")
+			if err := tc.seed(dir); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, bootstrap.OverlayFile))
+			if err != nil {
+				t.Fatalf("stub not written: %v", err)
+			}
+			if string(b) != bootstrap.OverlayStub {
+				t.Errorf("stub bytes = %q, want OverlayStub", b)
+			}
+		})
+		t.Run(tc.name+"/existing", func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "orchestrator")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mine := "- The operator is Dean.\n"
+			if err := os.WriteFile(filepath.Join(dir, bootstrap.OverlayFile), []byte(mine), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.seed(dir); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			b, _ := os.ReadFile(filepath.Join(dir, bootstrap.OverlayFile))
+			if string(b) != mine {
+				t.Errorf("an existing overlay was rewritten: %q", b)
+			}
+			if !exists(t, filepath.Join(dir, "CLAUDE.md")) {
+				t.Error("the brain itself must still be seeded")
+			}
+		})
+	}
+	// A current brain with no overlay: no stub appears after the fact —
+	// the stub is a first-seed courtesy, not a nag.
+	dir := filepath.Join(t.TempDir(), "orchestrator")
+	if _, _, err := bootstrap.RefreshBrain(dir, seedV1, false); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, bootstrap.OverlayFile))
+	if _, _, err := bootstrap.RefreshBrain(dir, seedV1, false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(t, filepath.Join(dir, bootstrap.OverlayFile)) {
+		t.Error("a no-op refresh must not write the stub")
+	}
+}
+
+// grove-512: Claude Code strips block HTML comments, so the stub must be
+// nothing but comments — zero context cost, and `overlay: false`.
+func TestOverlayStubIsOnlyComments(t *testing.T) {
+	if rest := strings.TrimSpace(bootstrap.StripHTMLComments(bootstrap.OverlayStub)); rest != "" {
+		t.Errorf("stub leaks past comment stripping: %q", rest)
+	}
+	if bootstrap.HasOverlay(bootstrap.OverlayStub) || bootstrap.OverlayLines(bootstrap.OverlayStub) != 0 {
+		t.Error("the stub must count as no overlay")
+	}
+	for _, h := range []string{"Glossary", "Overrides", "Addenda", "Workspace duties", bootstrap.OverlayDocURL} {
+		if !strings.Contains(bootstrap.OverlayStub, h) {
+			t.Errorf("stub missing %q", h)
+		}
+	}
+	// One comment per line: a shell `grep -v '^<!--'` finds nothing.
+	for _, ln := range strings.Split(strings.TrimRight(bootstrap.OverlayStub, "\n"), "\n") {
+		if !strings.HasPrefix(ln, "<!--") || !strings.HasSuffix(ln, "-->") {
+			t.Errorf("stub line is not a self-contained comment: %q", ln)
+		}
+	}
+}
+
+func TestOverlayLines(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+	}{
+		{"", 0},
+		{"\n\n  \n", 0},
+		{bootstrap.OverlayStub, 0},
+		{"<!-- a\nmulti-line\ncomment -->\n", 0},
+		{bootstrap.OverlayStub + "- The operator is Dean.\n", 1},
+		{"- one\n<!-- hidden -->\n- two <!-- trailing --> still counts\n\n", 2},
+		{"<!-- unterminated\n- not a comment line", 2}, // no closing marker: nothing is stripped
+	} {
+		if got := bootstrap.OverlayLines(tc.in); got != tc.want {
+			t.Errorf("OverlayLines(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+		if got := bootstrap.HasOverlay(tc.in); got != (tc.want > 0) {
+			t.Errorf("HasOverlay(%q) = %v", tc.in, got)
+		}
+	}
+}
+
+// grove-512: the edited-stale note names the migrate verb; the pristine
+// one does not (nothing of the operator's is in that file).
+func TestPlanBrainEditedStaleNamesMigrate(t *testing.T) {
+	edited := bootstrap.PlanBrain(bootstrap.StampSeed(seedV1)+"\n## mine\n", true, seedV2, false)
+	if !strings.Contains(edited.Note, "gv brains --migrate") || !strings.Contains(edited.Note, bootstrap.OverlayFile) {
+		t.Errorf("edited stale note must point at the overlay + migrate: %q", edited.Note)
+	}
+	pristine := bootstrap.PlanBrain(bootstrap.StampSeed(seedV1), true, seedV2, false)
+	if strings.Contains(pristine.Note, "--migrate") {
+		t.Errorf("pristine stale note has nothing to migrate: %q", pristine.Note)
+	}
+}

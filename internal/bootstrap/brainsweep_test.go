@@ -328,3 +328,102 @@ func TestProbeBrainListsLeftovers(t *testing.T) {
 		t.Errorf("leftovers = %v, want %v", p.Leftovers, want)
 	}
 }
+
+// grove-512: overlay fields. A stub-only CLAUDE.local.md is no overlay; one
+// real line beside the comments is `overlay: true, overlay_lines: 1`.
+func TestPlanSweepReportsOverlay(t *testing.T) {
+	seed := "seed"
+	rows := bootstrap.PlanSweep([]bootstrap.BrainProbe{
+		{Label: "none", Root: "/w/none", Exists: true, Content: bootstrap.StampSeed(seed)},
+		{Label: "stub", Root: "/w/stub", Exists: true, Content: bootstrap.StampSeed(seed), Overlay: bootstrap.OverlayStub},
+		{Label: "real", Root: "/w/real", Exists: true, Content: bootstrap.StampSeed(seed), Overlay: bootstrap.OverlayStub + "- The operator is Dean.\n"},
+		{Label: "many", Root: "/w/many", Exists: true, Content: "# hand\n", Overlay: "# Workspace overlay\n\n## Glossary\n- a\n- b\n"},
+		{Label: "ghost", Root: "/w/ghost", RootGone: true, Overlay: "- never read\n"},
+	}, seed)
+	want := map[string][2]int{"none": {0, 0}, "stub": {0, 0}, "real": {1, 1}, "many": {1, 4}, "ghost": {1, 1}}
+	for _, r := range rows {
+		w := want[r.Label]
+		if r.Overlay != (w[0] == 1) || r.OverlayLines != w[1] {
+			t.Errorf("%s: overlay=%v lines=%d, want overlay=%v lines=%d", r.Label, r.Overlay, r.OverlayLines, w[0] == 1, w[1])
+		}
+	}
+}
+
+// grove-512: the probe reads CLAUDE.local.md beside the brain, and
+// --refresh seeds the stub only where no overlay file exists.
+func TestRefreshSweepSeedsOverlayStubNeverOverExisting(t *testing.T) {
+	base := t.TempDir()
+	fresh := filepath.Join(base, "fresh")
+	kept := filepath.Join(base, "kept")
+	keptDir := bootstrap.OrchestratorDirAt(kept)
+	for _, d := range []string{fresh, keptDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mine := "- The operator is Dean.\n"
+	if err := os.WriteFile(filepath.Join(keptDir, bootstrap.OverlayFile), []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	globalDir := filepath.Join(base, "cfg", "orchestrator")
+	probes := []bootstrap.BrainProbe{
+		bootstrap.ProbeBrain("fresh", fresh),
+		bootstrap.ProbeBrain("kept", kept),
+		bootstrap.ProbeGlobalBrain(globalDir),
+	}
+	if probes[1].Overlay != mine {
+		t.Fatalf("probe did not read the overlay: %q", probes[1].Overlay)
+	}
+	rows, err := bootstrap.RefreshSweep(probes, "seed")
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	read := func(dir string) string {
+		b, _ := os.ReadFile(filepath.Join(dir, bootstrap.OverlayFile))
+		return string(b)
+	}
+	if got := read(bootstrap.OrchestratorDirAt(fresh)); got != bootstrap.OverlayStub {
+		t.Errorf("fresh: overlay = %q, want the stub", got)
+	}
+	if got := read(globalDir); got != bootstrap.OverlayStub {
+		t.Errorf("global: overlay = %q, want the stub", got)
+	}
+	if got := read(keptDir); got != mine {
+		t.Errorf("kept: existing overlay rewritten: %q", got)
+	}
+	for _, r := range rows {
+		if r.Action != string(bootstrap.ActionSeed) {
+			t.Errorf("%s: action %q, want seed", r.Label, r.Action)
+		}
+		wantStub := r.Label != "kept"
+		if strings.Contains(r.Note, "stub") != wantStub {
+			t.Errorf("%s: note %q (stub mention wanted: %v)", r.Label, r.Note, wantStub)
+		}
+		// Rows report what the probe FOUND: kept's real overlay, nothing
+		// for the two that had none before the seed.
+		if r.Overlay != !wantStub {
+			t.Errorf("%s: overlay=%v", r.Label, r.Overlay)
+		}
+	}
+	// Re-probing after the refresh: the stub is no overlay.
+	again := bootstrap.PlanSweep([]bootstrap.BrainProbe{bootstrap.ProbeBrain("fresh", fresh)}, "seed")
+	if again[0].Overlay || again[0].OverlayLines != 0 {
+		t.Errorf("stub-only overlay must read as none: %+v", again[0])
+	}
+}
+
+// grove-512: every edited-stale note points at the migrate verb.
+func TestPlanSweepEditedNotesNameMigrate(t *testing.T) {
+	edited := bootstrap.StampSeed("old") + "\n## mine\n"
+	rows := bootstrap.PlanSweep([]bootstrap.BrainProbe{
+		{Label: "ws", Root: "/w/ws", Exists: true, Content: edited},
+		{Label: bootstrap.GlobalBrainLabel, Root: "/g", Dir: "/g", Exists: true, Content: edited},
+		{Label: "pristine", Root: "/w/p", Exists: true, Content: bootstrap.StampSeed("old")},
+	}, "new")
+	for _, r := range rows {
+		has := strings.Contains(r.Note, "gv brains --migrate")
+		if want := !r.Pristine; has != want {
+			t.Errorf("%s: note %q, migrate hint wanted: %v", r.Label, r.Note, want)
+		}
+	}
+}

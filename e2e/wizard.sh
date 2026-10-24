@@ -6,6 +6,7 @@
 # agents-md run, --agents-md with a stub worker writes AGENTS.md, the
 # orchestrator brain refresh seeds/stamps/never-overwrites (grove-190) and
 # `gv brains --refresh` replaces only a pristine brain in place (grove-511),
+# the first seed writes the CLAUDE.local.md stub and no refresh touches it (grove-512),
 # and doctor --json renders the connections board.
 # tmux: never talks to a tmux server (doctor only checks tmux is on PATH), so no tmux isolation needed.
 set -euo pipefail
@@ -115,6 +116,19 @@ BRAIN="$ROOT/.grove/orchestrator/CLAUDE.md"
 [ -f "$BRAIN" ] || fail "init should have seeded the orchestrator brain"
 [ "$(grep -c 'grove-seed' "$BRAIN")" = 1 ] || fail "brain must carry exactly one seed stamp:
 $(tail -3 "$BRAIN")"
+# grove-512: the first seed drops the overlay stub beside the brain — only
+# HTML comments (zero context), never rewritten once it exists.
+OVERLAY="$ROOT/.grove/orchestrator/CLAUDE.local.md"
+[ -f "$OVERLAY" ] || fail "first seed must write the CLAUDE.local.md stub"
+grep -v '^<!--' "$OVERLAY" > "$SCRATCH/overlay.rest" || true
+[ ! -s "$SCRATCH/overlay.rest" ] || fail "stub must be HTML comments only:
+$(cat "$OVERLAY")"
+grep -q 'docs/orchestrator-overlay.md' "$OVERLAY" || fail "stub must point at the convention doc"
+for h in Glossary Overrides Addenda 'Workspace duties'; do
+  grep -q "$h" "$OVERLAY" || fail "stub missing the $h heading"
+done
+printf -- '- The operator is Dean.\n' >> "$OVERLAY"
+OVERLAY_BEFORE="$(cat "$OVERLAY")"
 "$GV" init --only orchestrator-md --yes > "$SCRATCH/orch1.out" 2>&1
 grep -q 'up to date' "$SCRATCH/orch1.out" || fail "matching stamp must be a no-op:
 $(cat "$SCRATCH/orch1.out")"
@@ -174,6 +188,16 @@ $(cat "$SCRATCH/orch3.out")"
 "$GV" init --only orchestrator-md --yes --force-orchestrator-md > /dev/null 2>&1
 [ -f "$BRAIN.new" ] || fail "--force-orchestrator-md must write .new for an unstamped brain"
 [ "$(cat "$BRAIN")" = "# my own brain" ] || fail "forced run overwrote the brain"
+# grove-512: every refresh above (seed, .new, pristine replace, forced .new)
+# left the overlay alone, and gv brains reports it.
+[ "$(cat "$OVERLAY")" = "$OVERLAY_BEFORE" ] || fail "a refresh touched CLAUDE.local.md"
+"$GV" brains --json > "$SCRATCH/orchbrains.json" || fail "gv brains --json exited non-zero"
+python3 - "$SCRATCH/orchbrains.json" "$ROOT" <<'PY2' || fail "overlay fields wrong (see above)"
+import json, os, sys
+rows = {os.path.realpath(r["root"]): r for r in json.load(open(sys.argv[1]))["brains"]}
+r = rows[os.path.realpath(sys.argv[2])]
+assert r["overlay"] is True and r["overlay_lines"] == 1, r
+PY2
 
 say "doctor renders the connections board"
 "$GV" doctor --json > "$SCRATCH/doctor.json" 2>&1 || true   # exit 1 = expected (scratch gh auth)
