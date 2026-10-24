@@ -1,11 +1,16 @@
 # Brain overlay: seed + `CLAUDE.local.md`, so a seed move needs no merge
 
-**Status:** REVISED 2026-10-19 after a design review (2 blockers, 6 majors,
-11 minors, all folded in; see §Review log). For the operator's review.
+**Status:** IMPLEMENTED 2026-10-24 on `feature/brain-overlay` (PRs #582 #589
+#590 #591 #592 #594 #595: cars #511–#515, #568 and the follow-up #593); the
+2026-10-19 design review is in §Review log. Measured round (`e2e/brains.sh`,
+`gv brains --refresh` section, 6 scratch brains): 1 pristine brain refreshed
+in place with no `.new`, plus the absent global brain seeded; 1 edited brain
+left for `gv brains --migrate` (a `.new` to diff, no three-way merge); 0
+three-way merges anywhere.
 Investigation for issue #508. No brain, seed or code was edited to write it.
 **Train:** feature train `brain-overlay` (`feature/brain-overlay`, label
 `brain-overlay`), cars #511–#515. The operator chose a feature train over
-the merge train drafted below, and deferred the work. Inside a train, the
+the merge train drafted below; the train has landed. Inside a train, the
 seed freeze in §Seed freeze is unnecessary (see §Tickets).
 **Goal:** keep per-workspace customization, and make a seed move a
 replace-in-place with zero hand merges on every host.
