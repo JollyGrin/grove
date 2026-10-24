@@ -39,6 +39,7 @@ import (
 	"github.com/JollyGrin/grove/internal/learnings"
 	"github.com/JollyGrin/grove/internal/ledger"
 	"github.com/JollyGrin/grove/internal/linear"
+	"github.com/JollyGrin/grove/internal/memprof"
 	"github.com/JollyGrin/grove/internal/probe"
 	"github.com/JollyGrin/grove/internal/provider"
 	"github.com/JollyGrin/grove/internal/remote"
@@ -793,6 +794,10 @@ func cmdDashboard() error {
 	if err != nil {
 		return err
 	}
+	// grove-580: SIGUSR2 writes a heap profile + goroutine dump under
+	// <state>/profiles/ — the only way to see what a cockpit holds after
+	// days up. No report: stderr is the TUI's terminal.
+	memprof.Install(stateDir(), "dash", nil)
 	tui.FinishTask = finishTask
 	tui.SpawnOrchestrator = spawnOrchestrator
 	tui.ApplyLayout = applyCockpitLayout

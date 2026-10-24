@@ -62,6 +62,15 @@ dated log behind it. Four that no skill carries:
 - The state/tmux/git/worktree/detect/transcript packages were copied into
   ovs from parkranger and have survived two tools — treat them as the
   most-proven code in the tree.
+- **A cockpit's memory is measured, not guessed** (grove-580). Every
+  long-lived verb (dash, chat serve, supervise, watch) arms
+  `internal/memprof`: `kill -USR2 <pid>` writes
+  `<state>/profiles/<verb>-<pid>-<ts>.pprof` + `.goroutines` and the
+  process keeps running — `go tool pprof -top ~/go/bin/gv <file>` reads
+  it, `less` the goroutine dump (debug=2: every goroutine with how long
+  it has waited). USR1 is the rail's wake; a binary older than the seam
+  (≤ v0.1.84) dies on USR2 — check `gv version` first. Footprint is
+  `vmmap -summary <pid>` ("Physical footprint"), never `ps rss`.
 
 ## Train in flight: focus-mode
 

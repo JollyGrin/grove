@@ -36,6 +36,7 @@ import (
 	"github.com/JollyGrin/grove/internal/chat"
 	"github.com/JollyGrin/grove/internal/chatweb"
 	"github.com/JollyGrin/grove/internal/config"
+	"github.com/JollyGrin/grove/internal/memprof"
 	"github.com/JollyGrin/grove/internal/tmux"
 	"github.com/JollyGrin/grove/internal/workspace"
 )
@@ -76,6 +77,7 @@ func cmdChatServe(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer memprof.Install(stateDir(), "chat-serve", memprof.Report)() // grove-580: SIGUSR2 → heap profile
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 3*time.Second)
