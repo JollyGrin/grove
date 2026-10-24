@@ -185,6 +185,9 @@ func fixtureModel(t *testing.T) Model {
 	m.prs = map[string]*github.PR{"grove-18": {Number: 18, State: "MERGED", CI: "pass"}}
 	m.mem = resource.Mem{AvailBytes: 8 << 30, TotalBytes: 16 << 30}
 	m.workers = 2
+	// A millisecond PR beat: tests that EXECUTE the re-armed prTick cmd
+	// would otherwise sleep github.BeatNormal (30 s) each (grove-572).
+	m.prInterval = time.Millisecond
 	return m
 }
 

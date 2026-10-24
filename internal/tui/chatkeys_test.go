@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/bubbles/cursor"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -303,6 +304,9 @@ func TestChatReplySwallowsHotkeys(t *testing.T) {
 	LiveChats = func(string) []string { t.Error("X reached the park modal"); return nil }
 
 	m := chatsFocused(t, 120, 40, 0, chatHiddenRow(1), chatHiddenRow(2))
+	// Static cursor: each key's cmd below is executed, and with a blinking
+	// cursor that cmd is a ~530 ms real sleep per key (grove-572).
+	m.input.Cursor.SetMode(cursor.CursorStatic)
 	m, cmd := chatPress(t, m, "a")
 	if cmd != nil || m.mode != modeChatReply {
 		t.Fatalf("a on a hidden row: mode=%d, want the inline reply", m.mode)

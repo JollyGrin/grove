@@ -13,6 +13,7 @@ import (
 
 func TestPRTickReArmsAtPlannedInterval(t *testing.T) {
 	m := fixtureModel(t)
+	m.prInterval = 0 // the fixture pins a fast beat (grove-572); this asserts the unplanned default
 	if got := m.prBeat(); got != github.BeatNormal {
 		t.Errorf("default beat = %v, want %v", got, github.BeatNormal)
 	}
